@@ -1085,6 +1085,7 @@ async def upload_session_file(
 
         workspace_dir = _Path(_WORKSPACE_DIR) / session_id
         workspace_dir.mkdir(parents=True, exist_ok=True)
+        workspace_dir.chmod(0o777)
 
         safe_filename = _Path(file.filename or "upload").name
         if not safe_filename or safe_filename in {".", ".."}:

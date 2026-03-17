@@ -3,7 +3,7 @@ set -euo pipefail
 
 # 启用 BuildKit（Dockerfile 中 apt/pip/npm 缓存挂载需要）
 export DOCKER_BUILDKIT=1
-VERSION="v0.0.2"
+VERSION="v0.0.3"
 
 # 构建 ScienceClaw 下所有带 Dockerfile 的子目录镜像
 # 镜像标签 = release-${VERSION}

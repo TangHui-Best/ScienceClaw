@@ -32,7 +32,7 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     && python3 -c "import matplotlib.font_manager; matplotlib.font_manager._load_fontmanager(try_read_cache=False)"
 
 ENV CC=clang NODE_PATH="/usr/lib/node_modules"
-
+RUN mkdir -p /home/scienceclaw && chmod -R 777 /home/scienceclaw
 # ── 3. 项目文件 ────────────────────────────────────────────────────────
 COPY ./seekr_sdk.py /opt/python3.12/lib/python3.12/site-packages/seekr_sdk.py
 COPY tool_runner.py /app/_tool_runner.py

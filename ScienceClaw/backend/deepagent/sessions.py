@@ -180,6 +180,7 @@ async def async_create_science_session(
 
     vm_root = _session_workspace(session_id)
     vm_root.mkdir(parents=True, exist_ok=True)
+    vm_root.chmod(0o777)
 
     now = int(time.time())
     session = ScienceSession(
@@ -236,6 +237,7 @@ async def async_get_science_session(session_id: str) -> ScienceSession:
 
     vm_root = Path(doc.get("vm_root_dir") or str(_session_workspace(session_id)))
     vm_root.mkdir(parents=True, exist_ok=True)
+    vm_root.chmod(0o777)
 
     session = ScienceSession(
         session_id=session_id,

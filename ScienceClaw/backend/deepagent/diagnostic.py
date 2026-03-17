@@ -87,6 +87,7 @@ class DiagnosticLogger:
         self._call_summaries: List[Dict] = []
         self._start_time = time.time()
         os.makedirs(self.dir, exist_ok=True)
+        os.chmod(self.dir, 0o777)
         logger.info(f"[Diagnostic] 诊断模式已启用 → {self.dir}")
 
     # ── 系统提示词 ──────────────────────────────────────────────

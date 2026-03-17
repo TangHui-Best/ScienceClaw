@@ -416,6 +416,7 @@ async def deep_agent(
     _mem_user = user_id or "default_user"
     _mem_dir = os.path.join(_WORKSPACE_DIR, "_memory", _mem_user)
     os.makedirs(_mem_dir, exist_ok=True)
+    os.chmod(_mem_dir, 0o777)
     _global_mem = os.path.join(_mem_dir, "AGENTS.md")
     if not os.path.isfile(_global_mem):
         with open(_global_mem, "w") as f:
