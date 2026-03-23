@@ -55,6 +55,7 @@
 
         <!-- QR Code Display -->
         <div
+          ref="qrCodeRef"
           v-if="ws.qr_image"
           class="p-5 bg-white dark:bg-gray-800/50 border border-gray-100 dark:border-gray-700/50 rounded-2xl shadow-sm">
           <div class="flex flex-col items-center gap-4">
@@ -68,8 +69,10 @@
           </div>
         </div>
 
-        <!-- Controls -->
-        <div class="p-5 bg-white dark:bg-gray-800/50 border border-gray-100 dark:border-gray-700/50 rounded-2xl shadow-sm">
+        <!-- Controls (hidden while QR is displayed awaiting scan) -->
+        <div
+          v-if="!(ws.is_logging_in && !ws.is_running)"
+          class="p-5 bg-white dark:bg-gray-800/50 border border-gray-100 dark:border-gray-700/50 rounded-2xl shadow-sm">
           <span class="text-sm font-bold text-gray-700 dark:text-gray-200">连接控制</span>
           <div class="mt-3 flex items-center gap-2 flex-wrap">
             <!-- Start (QR Login) -->
@@ -149,6 +152,7 @@ const operating = ref(false);
 const outputLines = ref<string[]>([]);
 const outputOffset = ref(0);
 const outputRef = ref<HTMLElement | null>(null);
+const qrCodeRef = ref<HTMLElement | null>(null);
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 const ws = reactive<WeChatBridgeStatus>({
@@ -261,6 +265,9 @@ const startLogin = async () => {
       ws.qr_content = result.qr_content;
       ws.qr_image = result.qr_image;
       startPolling();
+      nextTick(() => {
+        qrCodeRef.value?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      });
     }
   } catch (error: any) {
     showErrorToast(error?.response?.data?.detail || error?.message || '启动失败');

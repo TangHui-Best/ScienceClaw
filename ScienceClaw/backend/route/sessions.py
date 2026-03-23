@@ -1479,7 +1479,11 @@ async def _agent_background_worker(
     language: Optional[str] = None,
 ) -> None:
     """Run agent in a background task. Results are saved to DB and pushed to SSE."""
+    from backend.notifications import publish as _notify
+
     user_attachments = attachments or []
+    _is_im = getattr(session, "source", None) in ("wechat", "lark")
+    _im_user_id = getattr(session, "user_id", None)
 
     if message.strip():
         user_event = _wrap_event("message", {
@@ -1491,6 +1495,12 @@ async def _agent_background_worker(
         })
         _append_session_event(session, user_event)
         await session.save()
+        if _is_im and _im_user_id:
+            _notify("session_updated", {
+                "session_id": session_id,
+                "user_id": _im_user_id,
+                "session_event": user_event,
+            })
 
     session.reset_cancel()
     setattr(session, "status", SessionStatus.RUNNING)
@@ -1504,6 +1514,12 @@ async def _agent_background_worker(
 
     def _emit(evt_name: str, data_json: str) -> None:
         _emit_to_sse(session_id, {"event": evt_name, "data": data_json})
+        if _is_im and _im_user_id:
+            _notify("session_updated", {
+                "session_id": session_id,
+                "user_id": _im_user_id,
+                "session_event": {"event": evt_name, "data": json.loads(data_json)},
+            })
 
     # Generate title after the first user message
     if message.strip() and not (getattr(session, "title", None) or "").strip():

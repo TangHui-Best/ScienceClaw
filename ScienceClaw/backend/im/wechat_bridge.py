@@ -19,17 +19,12 @@ import httpx
 import shortuuid
 from loguru import logger
 
-from backend.deepagent.runner import arun_science_task_stream
 from backend.deepagent.sessions import async_get_science_session
 from backend.im.base import IMPlatform
 from backend.im.session_manager import IMSessionManager
 from backend.im.user_binding import IMUserBindingManager
 from backend.mongodb.db import db
-from backend.notifications import publish as notify
-from backend.route.sessions import (
-    _map_science_stream_to_agent_event,
-    _append_session_event,
-)
+from backend.route.sessions import _agent_background_worker
 
 WEIXIN_BASE_URL = "https://ilinkai.weixin.qq.com"
 CHANNEL_VERSION = "scienceclaw-1.0.0"
@@ -506,118 +501,28 @@ class WeChatBridge:
         try:
             sci_session = await async_get_science_session(session.science_session_id)
 
-            now_ts = int(time.time())
-            user_event = {
-                "event": "message",
-                "data": {
-                    "event_id": shortuuid.uuid(),
-                    "timestamp": now_ts,
-                    "content": text,
-                    "role": "user",
-                    "attachments": [],
-                },
-            }
-            _append_session_event(sci_session, user_event)
-            sci_session.status = "running"
-            await sci_session.save()
-            notify("session_updated", {
-                "session_id": session.science_session_id,
-                "user_id": binding.science_user_id,
-                "session_event": user_event,
-            })
+            latest_mc = await self._session_mgr.model_config_service.get_current_model_config(
+                binding.science_user_id,
+            )
+            if latest_mc and latest_mc != sci_session.model_config:
+                sci_session.model_config = latest_mc
+                await sci_session.save()
 
-            reply_chunks: list[str] = []
-            last_tool_result: Optional[str] = None
-            _chunk_buffer: list[str] = []
-            _notify_base = {
-                "session_id": session.science_session_id,
-                "user_id": binding.science_user_id,
-            }
+            event_count_before = len(getattr(sci_session, "events", []) or [])
 
-            def _emit_event(session_event: dict) -> None:
-                """Push an individual event to web clients in real-time."""
-                notify("session_updated", {
-                    **_notify_base,
-                    "session_event": session_event,
-                })
+            await _agent_background_worker(
+                sci_session, session.science_session_id, text, [],
+            )
 
-            async for evt in arun_science_task_stream(session=sci_session, query=text):
-                raw_ev = evt.get("event")
-                raw_data = evt.get("data", {})
+            events = getattr(sci_session, "events", []) or []
+            reply_parts: list[str] = []
+            for evt in events[event_count_before:]:
+                if evt.get("event") == "message":
+                    data = evt.get("data", {})
+                    if data.get("role") == "assistant" and data.get("content"):
+                        reply_parts.append(data["content"])
 
-                if raw_ev in ("message_chunk", "planning_message"):
-                    c = raw_data.get("content")
-                    if c:
-                        reply_chunks.append(str(c))
-                elif raw_ev == "tool_result":
-                    c = raw_data.get("content")
-                    if isinstance(c, (dict, list)):
-                        last_tool_result = json.dumps(c, ensure_ascii=False, indent=2)
-                    elif c:
-                        last_tool_result = str(c)
-
-                mapped = _map_science_stream_to_agent_event(evt)
-                if mapped is None:
-                    continue
-                evt_name = mapped.get("event")
-                if evt_name == "statistics":
-                    continue
-
-                if evt_name == "message_chunk":
-                    _chunk_buffer.append(mapped.get("data", {}).get("content", ""))
-                    _emit_event(mapped)
-                    continue
-
-                if evt_name == "message_chunk_done":
-                    _emit_event(mapped)
-                    if _chunk_buffer:
-                        full_content = "".join(_chunk_buffer)
-                        persist_msg = {
-                            "event": "message",
-                            "data": {
-                                "event_id": shortuuid.uuid(),
-                                "timestamp": int(time.time()),
-                                "content": full_content,
-                                "role": "assistant",
-                                "attachments": [],
-                            },
-                        }
-                        _append_session_event(sci_session, persist_msg)
-                        await sci_session.save()
-                        _chunk_buffer.clear()
-                    continue
-
-                _append_session_event(sci_session, mapped)
-                if evt_name in ("message", "tool", "step", "plan"):
-                    await sci_session.save()
-                _emit_event(mapped)
-
-            if reply_chunks:
-                full = _merge_chunks(reply_chunks)
-            elif last_tool_result:
-                full = f"任务已完成。结果如下：\n{last_tool_result}"
-            else:
-                full = "任务已完成。"
-
-            done_event = {
-                "event": "done",
-                "data": {
-                    "event_id": shortuuid.uuid(),
-                    "timestamp": int(time.time()),
-                    "status": "completed",
-                    "statistics": {},
-                    "round_files": [],
-                },
-            }
-            _append_session_event(sci_session, done_event)
-            sci_session.status = "completed"
-            sci_session.latest_message = full[:200]
-            sci_session.latest_message_at = int(time.time())
-            if not sci_session.title:
-                sci_session.title = text[:50]
-            await sci_session.save()
-            _emit_event(done_event)
-
+            full = _merge_chunks(reply_parts) if reply_parts else "任务已完成。"
             plain = _strip_markdown(full)
             parts = _split_text(plain, 4000)
             for part in parts:

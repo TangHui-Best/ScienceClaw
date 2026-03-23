@@ -11,10 +11,7 @@
           ? 'text-blue-600 dark:text-blue-400'
           : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'"
       >
-        <div class="flex items-center gap-2">
-          <component :is="tab.icon" :size="15" />
-          <span>{{ tab.label }}</span>
-        </div>
+        <span>{{ tab.label }}</span>
         <div
           v-if="activeSubTab === tab.key"
           class="absolute bottom-0 left-2 right-2 h-0.5 bg-blue-500 dark:bg-blue-400 rounded-full"
@@ -210,8 +207,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, markRaw, onMounted, reactive, ref } from 'vue';
-import { Loader2, MessageCircle, Bird } from 'lucide-vue-next';
+import { computed, onMounted, reactive, ref } from 'vue';
+import { Loader2 } from 'lucide-vue-next';
 import { getIMSystemSettings, updateIMSystemSettings, type IMSystemSettings, type UpdateIMSystemSettingsRequest } from '@/api/im';
 import { showErrorToast, showSuccessToast } from '@/utils/toast';
 import WeChatClawBotSettings from './WeChatClawBotSettings.vue';
@@ -219,8 +216,8 @@ import WeChatClawBotSettings from './WeChatClawBotSettings.vue';
 type SubTabKey = 'wechat' | 'feishu';
 
 const subTabs = [
-  { key: 'wechat' as SubTabKey, label: '微信', icon: markRaw(MessageCircle) },
-  { key: 'feishu' as SubTabKey, label: '飞书', icon: markRaw(Bird) },
+  { key: 'wechat' as SubTabKey, label: '微信' },
+  { key: 'feishu' as SubTabKey, label: '飞书' },
 ];
 
 const activeSubTab = ref<SubTabKey>('wechat');

@@ -555,8 +555,6 @@ async def _arun_deep_agent_stream(
                         continue
 
                     if isinstance(msg_chunk, AIMessageChunk):
-                        logger.info(f"[DeepAgent] AIMessageChunk: {msg_chunk}")
-
                         reasoning = (msg_chunk.additional_kwargs or {}).get("reasoning_content", "")
                         if isinstance(reasoning, str) and reasoning:
                             _chunks_had_reasoning = True
