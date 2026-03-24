@@ -402,7 +402,7 @@ ScienceClaw is built on the shoulders of excellent open-source projects. We woul
 
 <div align="center">
 
-[![Star History Chart](https://api.star-history.com/svg?repos=ScienceClaw/ScienceClaw&type=Date)](https://star-history.com/#ScienceClaw/ScienceClaw&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=AgentTeam-TaichuAI/ScienceClaw&type=Date)](https://star-history.com/#AgentTeam-TaichuAI/ScienceClaw&Date)
 
 </div>
 
