@@ -1,12 +1,15 @@
+import json
 import logging
 from typing import Dict, Any, Optional, List
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends
 from pydantic import BaseModel
+from sse_starlette.sse import EventSourceResponse
 
 from backend.rpa.manager import rpa_manager
 from backend.rpa.generator import PlaywrightGenerator
 from backend.rpa.executor import ScriptExecutor
 from backend.rpa.skill_exporter import SkillExporter
+from backend.rpa.assistant import RPAAssistant
 from backend.user.dependencies import get_current_user, User
 
 logger = logging.getLogger(__name__)
@@ -15,6 +18,7 @@ router = APIRouter(tags=["RPA"])
 generator = PlaywrightGenerator()
 executor = ScriptExecutor(rpa_manager.sandbox_url)
 exporter = SkillExporter()
+assistant = RPAAssistant(rpa_manager.sandbox_url)
 
 
 class StartSessionRequest(BaseModel):
@@ -29,6 +33,10 @@ class SaveSkillRequest(BaseModel):
     skill_name: str
     description: str
     params: Dict[str, Any] = {}
+
+
+class ChatRequest(BaseModel):
+    message: str
 
 
 @router.post("/session/start")
@@ -134,6 +142,51 @@ async def save_skill(
 
     session.status = "saved"
     return {"status": "success", "skill_dir": skill_dir}
+
+
+@router.post("/session/{session_id}/chat")
+async def chat_with_assistant(
+    session_id: str,
+    request: ChatRequest,
+    current_user: User = Depends(get_current_user),
+):
+    session = await rpa_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.user_id != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    steps = [step.model_dump() for step in session.steps]
+
+    async def event_generator():
+        try:
+            async for event in assistant.chat(
+                session_id=session_id,
+                sandbox_session_id=session.sandbox_session_id,
+                message=request.message,
+                steps=steps,
+            ):
+                evt_type = event.get("event", "message")
+                evt_data = event.get("data", {})
+
+                # If execution succeeded and returned a step, add it to session
+                if evt_type == "result" and evt_data.get("success") and evt_data.get("step"):
+                    step_data = evt_data["step"]
+                    await rpa_manager.add_step(session_id, step_data)
+
+                yield {
+                    "event": evt_type,
+                    "data": json.dumps(evt_data, ensure_ascii=False),
+                }
+        except Exception as e:
+            logger.error(f"Chat error: {e}")
+            yield {
+                "event": "error",
+                "data": json.dumps({"message": str(e)}, ensure_ascii=False),
+            }
+            yield {"event": "done", "data": "{}"}
+
+    return EventSourceResponse(event_generator())
 
 
 @router.websocket("/session/{session_id}/steps")
