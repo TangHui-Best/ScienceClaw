@@ -95,6 +95,7 @@ def create_app() -> FastAPI:
         from backend.config import settings
         return {
             "sandbox_public_url": settings.sandbox_public_url or "",
+            "storage_backend": settings.storage_backend,
         }
 
     app.include_router(auth_router, prefix="/api/v1")
