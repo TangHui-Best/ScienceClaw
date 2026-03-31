@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from loguru import logger
 from deepagents import create_deep_agent
 from deepagents.backends import CompositeBackend, FilesystemBackend
+from deepagents.backends.local_shell import LocalShellBackend
 from deepagents.middleware.subagents import GENERAL_PURPOSE_SUBAGENT, DEFAULT_SUBAGENT_PROMPT
 from backend.deepagent.engine import get_llm_model
 from backend.deepagent.tools import propose_skill_save, propose_tool_save, eval_skill, grade_eval
@@ -74,14 +75,9 @@ _SANDBOX_WORKSPACE_DIR = os.environ.get("SANDBOX_WORKSPACE_DIR", "/home/sciencec
 # ───────────────────────────────────────────────────────────────────
 
 
-def _build_backend(session_id: str, sandbox: FullSandboxBackend,
+def _build_backend(session_id: str, sandbox,
                     user_id: str | None = None, blocked_skills: Set[str] | None = None):
-    """
-    构建 CompositeBackend 工厂函数（会话级隔离）：
-      - 默认: 传入的 FullSandboxBackend 实例
-      - /builtin-skills/ 路由: FilesystemBackend（内置 skills，始终加载）
-      - /skills/          路由: MongoSkillBackend（MongoDB 多租户 skills）
-    """
+    """构建 CompositeBackend（会话级隔离）。"""
     routes = {}
 
     if os.path.isdir(_BUILTIN_SKILLS_DIR):
@@ -91,7 +87,15 @@ def _build_backend(session_id: str, sandbox: FullSandboxBackend,
             virtual_mode=True,
         )
 
-    if user_id:
+    if settings.storage_backend == "local":
+        _ext_skills_dir = os.environ.get("EXTERNAL_SKILLS_DIR", "./Skills")
+        if os.path.isdir(_ext_skills_dir):
+            logger.info(f"[Skills] 本地 skills: {_ext_skills_dir} → {_EXTERNAL_SKILLS_ROUTE}")
+            routes[_EXTERNAL_SKILLS_ROUTE] = FilesystemBackend(
+                root_dir=_ext_skills_dir,
+                virtual_mode=True,
+            )
+    elif user_id:
         logger.info(f"[Skills] MongoDB skills for user={user_id} → {_EXTERNAL_SKILLS_ROUTE}"
                      f" (blocked: {blocked_skills or set()})")
         routes[_EXTERNAL_SKILLS_ROUTE] = MongoSkillBackend(
@@ -384,28 +388,39 @@ async def deep_agent(
         verbose=False,
     )
 
-    # 1. 实例化 FullSandboxBackend 并获取环境上下文
-    sandbox = FullSandboxBackend(
-        session_id=session_id,
-        user_id=user_id or "default_user",
-        base_dir=_WORKSPACE_DIR,
-        sandbox_base_dir=_SANDBOX_WORKSPACE_DIR,
-        execute_timeout=ts.sandbox_exec_timeout,
-        max_output_chars=ts.max_output_chars,
-    )
+    # 1. 实例化后端：local 模式用 LocalShellBackend，云端用 FullSandboxBackend
+    is_local = settings.storage_backend == "local"
 
     sandbox_info = None
-    # sandbox_workspace: 沙箱内路径（如 /home/scienceclaw/{sid}），用于 system prompt、exec_dir
-    # local_workspace:   backend 本地路径（如 D:\...\workspace\{sid}），用于本地文件 I/O
-    sandbox_workspace = sandbox.workspace
-    local_workspace = os.path.join(_WORKSPACE_DIR, session_id)
-    
-    ctx = await sandbox.get_context()
-    if ctx.get("success"):
-        sandbox_info = ctx.get("data")
+    if is_local:
+        local_workspace = os.path.join(_WORKSPACE_DIR, session_id)
+        os.makedirs(local_workspace, exist_ok=True)
+        sandbox = LocalShellBackend(
+            root_dir=local_workspace,
+            virtual_mode=False,
+            timeout=ts.sandbox_exec_timeout,
+            inherit_env=True,
+        )
+        sandbox_workspace = local_workspace
+    else:
+        sandbox = FullSandboxBackend(
+            session_id=session_id,
+            user_id=user_id or "default_user",
+            base_dir=_WORKSPACE_DIR,
+            sandbox_base_dir=_SANDBOX_WORKSPACE_DIR,
+            execute_timeout=ts.sandbox_exec_timeout,
+            max_output_chars=ts.max_output_chars,
+        )
+        # sandbox_workspace: 沙箱内路径（如 /home/scienceclaw/{sid}），用于 system prompt、exec_dir
+        # local_workspace:   backend 本地路径（如 D:\...\workspace\{sid}），用于本地文件 I/O
+        sandbox_workspace = sandbox.workspace
+        local_workspace = os.path.join(_WORKSPACE_DIR, session_id)
+        ctx = await sandbox.get_context()
+        if ctx.get("success"):
+            sandbox_info = ctx.get("data")
 
-    # 1.5 将用户技能文件注入沙箱（使 execute 能找到 skill.py）
-    if user_id:
+    # 1.5 将用户技能文件注入沙箱（仅云端模式）
+    if not is_local and user_id:
         try:
             await _inject_skills_to_sandbox(
                 sandbox, sandbox_workspace, user_id, blocked_skills,
@@ -568,20 +583,32 @@ async def deep_agent_eval(
         verbose=False,
     )
 
-    sandbox = FullSandboxBackend(
-        session_id=session_id,
-        user_id="eval_runner",
-        base_dir=_WORKSPACE_DIR,
-        sandbox_base_dir=_SANDBOX_WORKSPACE_DIR,
-        execute_timeout=ts.sandbox_exec_timeout,
-        max_output_chars=ts.max_output_chars,
-    )
+    is_local = settings.storage_backend == "local"
 
-    sandbox_workspace = sandbox.workspace
     sandbox_info = None
-    ctx = await sandbox.get_context()
-    if ctx.get("success"):
-        sandbox_info = ctx.get("data")
+    if is_local:
+        local_workspace = os.path.join(_WORKSPACE_DIR, session_id)
+        os.makedirs(local_workspace, exist_ok=True)
+        sandbox = LocalShellBackend(
+            root_dir=local_workspace,
+            virtual_mode=False,
+            timeout=ts.sandbox_exec_timeout,
+            inherit_env=True,
+        )
+        sandbox_workspace = local_workspace
+    else:
+        sandbox = FullSandboxBackend(
+            session_id=session_id,
+            user_id="eval_runner",
+            base_dir=_WORKSPACE_DIR,
+            sandbox_base_dir=_SANDBOX_WORKSPACE_DIR,
+            execute_timeout=ts.sandbox_exec_timeout,
+            max_output_chars=ts.max_output_chars,
+        )
+        sandbox_workspace = sandbox.workspace
+        ctx = await sandbox.get_context()
+        if ctx.get("success"):
+            sandbox_info = ctx.get("data")
 
     system_prompt = _get_eval_system_prompt(sandbox_workspace, sandbox_info)
 
@@ -604,17 +631,33 @@ async def deep_agent_eval(
                 )
                 resolved_sources.append(_BUILTIN_SKILLS_ROUTE)
             elif src == _EXTERNAL_SKILLS_ROUTE:
-                routes[_EXTERNAL_SKILLS_ROUTE] = MongoSkillBackend(
-                    user_id="eval_runner",
-                    blocked_skills=set(),
+                if is_local:
+                    _ext_skills_dir = os.environ.get("EXTERNAL_SKILLS_DIR", "./Skills")
+                    if os.path.isdir(_ext_skills_dir):
+                        routes[_EXTERNAL_SKILLS_ROUTE] = FilesystemBackend(
+                            root_dir=_ext_skills_dir, virtual_mode=True,
+                        )
+                        resolved_sources.append(_EXTERNAL_SKILLS_ROUTE)
+                else:
+                    routes[_EXTERNAL_SKILLS_ROUTE] = MongoSkillBackend(
+                        user_id="eval_runner",
+                        blocked_skills=set(),
+                    )
+                    resolved_sources.append(_EXTERNAL_SKILLS_ROUTE)
+    else:
+        if is_local:
+            _ext_skills_dir = os.environ.get("EXTERNAL_SKILLS_DIR", "./Skills")
+            if os.path.isdir(_ext_skills_dir):
+                routes[_EXTERNAL_SKILLS_ROUTE] = FilesystemBackend(
+                    root_dir=_ext_skills_dir, virtual_mode=True,
                 )
                 resolved_sources.append(_EXTERNAL_SKILLS_ROUTE)
-    else:
-        routes[_EXTERNAL_SKILLS_ROUTE] = MongoSkillBackend(
-            user_id="eval_runner",
-            blocked_skills=set(),
-        )
-        resolved_sources.append(_EXTERNAL_SKILLS_ROUTE)
+        else:
+            routes[_EXTERNAL_SKILLS_ROUTE] = MongoSkillBackend(
+                user_id="eval_runner",
+                blocked_skills=set(),
+            )
+            resolved_sources.append(_EXTERNAL_SKILLS_ROUTE)
 
     if routes:
         agent_kwargs["backend"] = lambda rt: CompositeBackend(default=sandbox, routes=routes)
