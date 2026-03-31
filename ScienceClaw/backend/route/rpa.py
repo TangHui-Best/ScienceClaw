@@ -10,7 +10,8 @@ from backend.rpa.generator import PlaywrightGenerator
 from backend.rpa.executor import ScriptExecutor
 from backend.rpa.skill_exporter import SkillExporter
 from backend.rpa.assistant import RPAAssistant
-from backend.rpa.cdp_connector import cdp_connector
+from backend.rpa.cdp_connector import get_cdp_connector
+from backend.rpa.screencast import ScreencastService
 from backend.user.dependencies import get_current_user, User
 from backend.config import settings
 from backend.storage import get_repository
@@ -140,7 +141,7 @@ async def test_script(
     script = generator.generate_script(steps, request.params)
 
     logs = []
-    browser = await cdp_connector.get_browser()
+    browser = await get_cdp_connector().get_browser()
     result = await executor.execute(
         browser,
         script,
@@ -251,3 +252,42 @@ async def steps_stream(websocket: WebSocket, session_id: str):
         pass
     finally:
         rpa_manager.unregister_ws(session_id, websocket)
+
+
+@router.websocket("/screencast/{session_id}")
+async def rpa_screencast(websocket: WebSocket, session_id: str):
+    """CDP screencast: push browser frames + receive input events.
+    Only used in local mode (STORAGE_BACKEND=local).
+    """
+    await websocket.accept()
+
+    session = await rpa_manager.get_session(session_id)
+    if not session:
+        await websocket.close(code=1008, reason="Session not found")
+        return
+
+    page = rpa_manager.get_page(session_id)
+    if not page:
+        await websocket.close(code=1008, reason="No active page")
+        return
+
+    try:
+        cdp_session = await page.context.new_cdp_session(page)
+    except Exception as e:
+        logger.error(f"Failed to create CDP session: {e}")
+        await websocket.close(code=1011, reason="CDP session failed")
+        return
+
+    screencast = ScreencastService(cdp_session)
+    try:
+        await screencast.start(websocket)
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.error(f"Screencast error: {e}")
+    finally:
+        await screencast.stop()
+        try:
+            await cdp_session.detach()
+        except Exception:
+            pass
