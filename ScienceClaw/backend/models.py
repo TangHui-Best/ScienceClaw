@@ -5,7 +5,7 @@ import uuid
 import time
 from loguru import logger
 
-from backend.mongodb.db import db
+from backend.storage import get_repository
 from backend.config import settings
 
 class ModelConfig(BaseModel):
@@ -56,11 +56,12 @@ async def init_system_models():
     otherwise cleans up any existing system model with empty key.
     """
     now = int(time.time())
+    repo = get_repository("models")
 
-    await db.get_collection("models").delete_one({"_id": "system-qwen", "is_system": True})
+    await repo.delete_one({"_id": "system-qwen", "is_system": True})
 
     if not settings.model_ds_api_key:
-        await db.get_collection("models").delete_one({"_id": "system-default", "is_system": True})
+        await repo.delete_one({"_id": "system-default", "is_system": True})
         logger.info("DS_API_KEY not set, skipping system model creation")
         return
 
@@ -79,16 +80,17 @@ async def init_system_models():
     ]
 
     for doc in system_definitions:
-        existing = await db.get_collection("models").find_one({"_id": doc["_id"]})
+        existing = await repo.find_one({"_id": doc["_id"]})
         doc = {**doc, "updated_at": now}
         if not existing:
             doc["created_at"] = now
-            await db.get_collection("models").insert_one(doc)
+            await repo.insert_one(doc)
         else:
-            await db.get_collection("models").update_one({"_id": doc["_id"]}, {"$set": doc})
+            await repo.update_one({"_id": doc["_id"]}, {"$set": doc})
 
 async def get_model_config(model_id: str) -> Optional[ModelConfig]:
-    doc = await db.get_collection("models").find_one({"_id": model_id})
+    repo = get_repository("models")
+    doc = await repo.find_one({"_id": model_id})
     if not doc:
         return None
     # Remap _id to id
@@ -97,15 +99,13 @@ async def get_model_config(model_id: str) -> Optional[ModelConfig]:
 
 async def list_user_models(user_id: str) -> List[ModelConfig]:
     # Return System models + User models
-    cursor = db.get_collection("models").find({
-        "$or": [
-            {"is_system": True},
-            {"user_id": user_id}
-        ]
-    }).sort("created_at", -1)
-    
+    repo = get_repository("models")
+    docs = await repo.find_many(
+        {"$or": [{"is_system": True}, {"user_id": user_id}]},
+        sort=[("created_at", -1)],
+    )
     models = []
-    async for doc in cursor:
+    for doc in docs:
         doc["id"] = doc["_id"]
         models.append(ModelConfig(**doc))
     return models

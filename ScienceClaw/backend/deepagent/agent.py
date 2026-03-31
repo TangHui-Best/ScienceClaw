@@ -116,9 +116,8 @@ async def _inject_skills_to_sandbox(
     这样 agent 执行 skill.py 时可以在沙箱文件系统中找到文件。
     返回成功注入的技能数量。
     """
-    from backend.mongodb.db import db as _db
-
-    col = _db.get_collection("skills")
+    from backend.storage import get_repository
+    col_repo = get_repository("skills")
     filt = {"user_id": user_id, "blocked": {"$ne": True}}
     if blocked_skills:
         filt["name"] = {"$nin": list(blocked_skills)}
@@ -126,7 +125,8 @@ async def _inject_skills_to_sandbox(
     skills_dir = f"{workspace}/{_SKILLS_SUBDIR}"
     injected = 0
 
-    async for doc in col.find(filt, {"name": 1, "files": 1}):
+    docs = await col_repo.find_many(filt, projection={"name": 1, "files": 1})
+    for doc in docs:
         skill_name = doc.get("name", "")
         files = doc.get("files", {})
         if not skill_name or not files:
@@ -314,8 +314,13 @@ def _collect_tools(blocked_tools: Set[str] | None = None) -> List:
 async def get_blocked_skills(user_id: str) -> Set[str]:
     """从 MongoDB skills 集合查询用户屏蔽的 skills 列表。"""
     try:
-        from backend.mongodb.db import get_blocked_skill_names
-        return await get_blocked_skill_names(user_id)
+        from backend.storage import get_repository
+        repo = get_repository("skills")
+        docs = await repo.find_many(
+            {"user_id": user_id, "blocked": True},
+            projection={"name": 1},
+        )
+        return {doc["name"] for doc in docs if doc.get("name")}
     except Exception as exc:
         logger.warning(f"[Skills] 查询屏蔽列表失败: {exc}")
         return set()
@@ -324,15 +329,13 @@ async def get_blocked_skills(user_id: str) -> Set[str]:
 async def get_blocked_tools(user_id: str) -> Set[str]:
     """从 MongoDB 查询用户屏蔽的 tools 列表。"""
     try:
-        from backend.mongodb.db import db
-        col = db.get_collection("blocked_tools")
-        cursor = col.find({"user_id": user_id}, {"tool_name": 1})
-        blocked = set()
-        async for doc in cursor:
-            name = doc.get("tool_name")
-            if name:
-                blocked.add(name)
-        return blocked
+        from backend.storage import get_repository
+        repo = get_repository("blocked_tools")
+        docs = await repo.find_many(
+            {"user_id": user_id},
+            projection={"tool_name": 1},
+        )
+        return {doc["tool_name"] for doc in docs if doc.get("tool_name")}
     except Exception as exc:
         logger.warning(f"[Tools] 查询屏蔽列表失败: {exc}")
         return set()

@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     mongodb_username: str = os.environ.get("MONGODB_USER", "")
     mongodb_password: str = os.environ.get("MONGODB_PASSWORD", "")
 
+    # Storage backend: "mongo" (cloud) or "local" (edge)
+    storage_backend: str = os.environ.get("STORAGE_BACKEND", "mongo")
+    local_data_dir: str = os.environ.get("LOCAL_DATA_DIR", "./data")
+
     xelatex_cmd: str = os.environ.get("XELATEX_CMD", "/usr/local/texlive/2025/bin/universal-darwin/xelatex")
     pandoc_cmd: str = os.environ.get("PANDOC_CMD", "/usr/local/bin/pandoc")
 

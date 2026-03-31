@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Any
 import time
 
 from loguru import logger
-from backend.mongodb.db import db
+from backend.storage import get_repository
 from backend.deepagent.plan_types import PlanStep
 
 _BASE_WORKSPACE = os.environ.get("WORKSPACE_DIR", "/home/scienceclaw")
@@ -126,7 +126,8 @@ class ScienceSession:
             "events": self.events,
             "pinned": self.pinned,
         }
-        await db.get_collection("sessions").update_one(
+        repo = get_repository("sessions")
+        await repo.update_one(
             {"_id": self.session_id},
             {"$set": update_data},
             upsert=True
@@ -209,7 +210,8 @@ async def async_create_science_session(
     }
     if source:
         session_doc["source"] = source
-    await db.get_collection("sessions").insert_one(session_doc)
+    repo = get_repository("sessions")
+    await repo.insert_one(session_doc)
 
     async with _sessions_lock:
         _sessions[session_id] = session
@@ -229,7 +231,8 @@ async def async_get_science_session(session_id: str) -> ScienceSession:
     if session:
         return session
 
-    doc = await db.get_collection("sessions").find_one({"_id": session_id})
+    repo = get_repository("sessions")
+    doc = await repo.find_one({"_id": session_id})
     if not doc:
         raise ScienceSessionNotFoundError(f"session {session_id} not found")
 
@@ -268,13 +271,14 @@ async def async_list_science_sessions(user_id: Optional[str] = None) -> List[Sci
     if user_id:
         query["user_id"] = user_id
 
-    cursor = db.get_collection("sessions").find(query).sort("updated_at", -1)
+    repo = get_repository("sessions")
+    docs = await repo.find_many(query, sort=[("updated_at", -1)])
     sessions = []
 
     async with _sessions_lock:
         cached_snapshot = dict(_sessions)
 
-    async for doc in cursor:
+    for doc in docs:
         cached = cached_snapshot.get(doc["_id"])
 
         if cached:
@@ -306,8 +310,9 @@ async def async_list_science_sessions(user_id: Optional[str] = None) -> List[Sci
 
 
 async def async_delete_science_session(session_id: str) -> None:
-    res = await db.get_collection("sessions").delete_one({"_id": session_id})
-    if res.deleted_count == 0:
+    repo = get_repository("sessions")
+    deleted = await repo.delete_one({"_id": session_id})
+    if deleted == 0:
         raise ScienceSessionNotFoundError(f"session {session_id} not found")
 
     async with _sessions_lock:

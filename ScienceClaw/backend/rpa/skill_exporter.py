@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Dict, Any
 
-from backend.mongodb.db import db
+from backend.storage import get_repository
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ See `skill.py` for the Playwright implementation.
 """
 
         now = datetime.now(timezone.utc)
-        col = db.get_collection("skills")
+        col = get_repository("skills")
         await col.update_one(
             {"user_id": user_id, "name": skill_name},
             {

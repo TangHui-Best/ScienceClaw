@@ -679,7 +679,7 @@ async def list_sessions(current_user: User = Depends(require_user)) -> ApiRespon
 # 外置 Skills 管理（必须放在 /{session_id} 路由之前，否则 "skills" 会被当作 session_id）
 # ═══════════════════════════════════════════════════════════════════
 
-from backend.mongodb.db import db as _db
+from backend.storage import get_repository as _get_repo
 
 _BUILTIN_SKILLS_DIR = os.environ.get("BUILTIN_SKILLS_DIR", "/app/builtin_skills")
 _WORKSPACE_DIR = os.environ.get("WORKSPACE_DIR", "/home/scienceclaw")
@@ -732,13 +732,13 @@ async def list_skills(current_user: User = Depends(require_user)) -> ApiResponse
         builtin = _list_skill_dirs(_BUILTIN_SKILLS_DIR, builtin=True)
 
         # User's external skills from MongoDB
-        col = _db.get_collection("skills")
-        cursor = col.find(
+        col = _get_repo("skills")
+        docs = await col.find_many(
             {"user_id": current_user.id},
-            {"name": 1, "description": 1, "files": 1, "blocked": 1}
+            projection={"name": 1, "description": 1, "files": 1, "blocked": 1}
         )
         external = []
-        async for doc in cursor:
+        for doc in docs:
             files = list(doc.get("files", {}).keys())
             external.append({
                 "name": doc.get("name", ""),
@@ -765,12 +765,12 @@ async def toggle_block_skill(
 ) -> ApiResponse:
     """屏蔽或取消屏蔽一个外置 skill。"""
     try:
-        col = _db.get_collection("skills")
-        result = await col.update_one(
+        col = _get_repo("skills")
+        modified = await col.update_one(
             {"user_id": current_user.id, "name": skill_name},
             {"$set": {"blocked": body.blocked}},
         )
-        if result.matched_count == 0:
+        if modified == 0:
             raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
         return ApiResponse(data={"skill_name": skill_name, "blocked": body.blocked})
     except HTTPException:
@@ -787,11 +787,11 @@ async def delete_skill(
 ) -> ApiResponse:
     """彻底删除一个外置 skill。"""
     try:
-        col = _db.get_collection("skills")
-        result = await col.delete_one(
+        col = _get_repo("skills")
+        deleted = await col.delete_one(
             {"user_id": current_user.id, "name": skill_name}
         )
-        if result.deleted_count == 0:
+        if deleted == 0:
             raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
         return ApiResponse(data={"skill_name": skill_name, "deleted": True})
     except HTTPException:
@@ -832,14 +832,14 @@ async def save_skill_from_session(
             None,
         )
 
-        col = _db.get_collection("skills")
+        col = _get_repo("skills")
 
         if src is None:
             # Agent 可能通过 MongoSkillBackend 直接写入了 MongoDB（in-place 编辑），
             # 此时 workspace 里没有副本，但 MongoDB 已经是最新版本
             existing = await col.find_one(
                 {"user_id": current_user.id, "name": skill_name},
-                {"_id": 1}
+                projection={"_id": 1}
             )
             if existing:
                 return ApiResponse(data={"skill_name": skill_name, "saved": True})
@@ -912,10 +912,10 @@ async def list_skill_files(
 ) -> ApiResponse:
     """列出某个外置 skill 内部的文件结构。"""
     try:
-        col = _db.get_collection("skills")
+        col = _get_repo("skills")
         doc = await col.find_one(
             {"user_id": current_user.id, "name": skill_name},
-            {"files": 1}
+            projection={"files": 1}
         )
         if not doc:
             raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
@@ -947,10 +947,10 @@ async def read_skill_file(
 ) -> ApiResponse:
     """读取某个外置 skill 内的文件内容。"""
     try:
-        col = _db.get_collection("skills")
+        col = _get_repo("skills")
         doc = await col.find_one(
             {"user_id": current_user.id, "name": skill_name},
-            {"files": 1}
+            projection={"files": 1}
         )
         if not doc:
             raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
@@ -1010,10 +1010,10 @@ async def list_tools(current_user: User = Depends(require_user)) -> ApiResponse:
     """列出所有外置 tools，包含屏蔽状态。"""
     try:
         tools = _list_external_tools()
-        col = _db.get_collection("blocked_tools")
-        blocked_docs = col.find({"user_id": current_user.id}, {"tool_name": 1})
+        col = _get_repo("blocked_tools")
+        blocked_docs = await col.find_many({"user_id": current_user.id}, projection={"tool_name": 1})
         blocked_names: set = set()
-        async for doc in blocked_docs:
+        for doc in blocked_docs:
             name = doc.get("tool_name")
             if name:
                 blocked_names.add(name)
@@ -1033,7 +1033,7 @@ async def toggle_block_tool(
 ) -> ApiResponse:
     """屏蔽或取消屏蔽一个外置 tool。"""
     try:
-        col = _db.get_collection("blocked_tools")
+        col = _get_repo("blocked_tools")
         filt = {"user_id": current_user.id, "tool_name": tool_name}
         if body.blocked:
             await col.update_one(filt, {"$set": filt}, upsert=True)
@@ -1060,7 +1060,7 @@ async def delete_tool(
         if not str(resolved).startswith(str(base_resolved)):
             raise HTTPException(status_code=403, detail="Invalid tool path")
         resolved.unlink()
-        col = _db.get_collection("blocked_tools")
+        col = _get_repo("blocked_tools")
         await col.delete_many({"tool_name": tool_name})
         return ApiResponse(data={"tool_name": tool_name, "deleted": True})
     except HTTPException:
@@ -1395,7 +1395,7 @@ async def cleanup_orphaned_sessions() -> int:
     Brand-new PENDING sessions (no events) are left intact.
     """
     now = _now_ts()
-    result = await _db.get_collection("sessions").update_many(
+    modified = await _get_repo("sessions").update_many(
         {"$or": [
             {"status": SessionStatus.RUNNING},
             {"status": SessionStatus.PENDING, "events.0": {"$exists": True}},
@@ -1413,12 +1413,12 @@ async def cleanup_orphaned_sessions() -> int:
             }},
         },
     )
-    if result.modified_count:
+    if modified:
         logger.info(
-            f"[Startup] Cleaned up {result.modified_count} orphaned session(s) "
+            f"[Startup] Cleaned up {modified} orphaned session(s) "
             "(running/pending → completed)"
         )
-    return result.modified_count
+    return modified
 
 
 async def graceful_shutdown_agents() -> None:
@@ -1442,7 +1442,7 @@ async def graceful_shutdown_agents() -> None:
     _agent_queues.clear()
 
     now = _now_ts()
-    result = await _db.get_collection("sessions").update_many(
+    orphaned = await _get_repo("sessions").update_many(
         {"status": {"$in": [SessionStatus.RUNNING, SessionStatus.PENDING]}},
         {
             "$set": {"status": SessionStatus.COMPLETED, "updated_at": now},
@@ -1458,7 +1458,6 @@ async def graceful_shutdown_agents() -> None:
         },
     )
     cancelled = len(tasks_to_cancel)
-    orphaned = result.modified_count
     if cancelled or orphaned:
         logger.info(
             f"[Shutdown] Cancelled {cancelled} agent task(s), "
@@ -1597,9 +1596,10 @@ async def _agent_background_worker(
 
         # Auto-detect skills
         try:
-            col = _db.get_collection("skills")
+            col = _get_repo("skills")
             saved_skills = set()
-            async for doc in col.find({"user_id": session.user_id}, {"name": 1}):
+            skill_docs = await col.find_many({"user_id": session.user_id}, projection={"name": 1})
+            for doc in skill_docs:
                 if doc.get("name"):
                     saved_skills.add(doc["name"])
             detected_skills: set = set()

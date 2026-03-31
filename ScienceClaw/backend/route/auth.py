@@ -10,7 +10,7 @@ from fastapi import APIRouter, Response, Request, HTTPException, Depends
 from pydantic import BaseModel, Field
 import bcrypt
 
-from backend.mongodb.db import db
+from backend.storage import get_repository
 from backend.config import settings
 from backend.user.dependencies import get_current_user, require_user, User
 
@@ -101,7 +101,7 @@ async def check_default_password() -> ApiResponse:
     username = str(getattr(settings, "bootstrap_admin_username", "admin") or "admin").strip()
     default_pwd = str(getattr(settings, "bootstrap_admin_password", "admin123") or "admin123")
 
-    user_doc = await db.get_collection("users").find_one({"username": username})
+    user_doc = await get_repository("users").find_one({"username": username})
     if not user_doc:
         return ApiResponse(data={"is_default": False})
 
@@ -118,7 +118,7 @@ async def check_default_password() -> ApiResponse:
 
 @router.post("/login", response_model=ApiResponse)
 async def login(body: LoginRequest, response: Response):
-    user_doc = await db.get_collection("users").find_one({"username": body.username})
+    user_doc = await get_repository("users").find_one({"username": body.username})
     if not user_doc:
         return ApiResponse(code=401, msg="Invalid username or password")
     
@@ -139,7 +139,7 @@ async def login(body: LoginRequest, response: Response):
     expires_at = int(time.time()) + settings.session_max_age
     refresh_expires_at = int(time.time()) + settings.session_max_age * 4
     
-    await db.get_collection("user_sessions").insert_one({
+    await get_repository("user_sessions").insert_one({
         "_id": access_token,
         "user_id": str(user_doc["_id"]),
         "username": user_doc["username"],
@@ -151,7 +151,7 @@ async def login(body: LoginRequest, response: Response):
     })
 
     now = int(time.time())
-    await db.get_collection("users").update_one(
+    await get_repository("users").update_one(
         {"_id": str(user_doc["_id"])},
         {"$set": {"last_login_at": datetime.fromtimestamp(now).isoformat(), "updated_at": now}},
     )
@@ -181,7 +181,7 @@ async def register(body: RegisterRequest):
     if not username:
         return ApiResponse(code=400, msg="Username/email required")
 
-    existing = await db.get_collection("users").find_one({"username": username})
+    existing = await get_repository("users").find_one({"username": username})
     if existing:
         return ApiResponse(code=400, msg="Username already exists")
 
@@ -204,13 +204,13 @@ async def register(body: RegisterRequest):
         "last_login_at": None,
     }
     
-    await db.get_collection("users").insert_one(new_user)
+    await get_repository("users").insert_one(new_user)
 
     access_token = secrets.token_urlsafe(32)
     refresh_token = secrets.token_urlsafe(48)
     expires_at = int(time.time()) + settings.session_max_age
     refresh_expires_at = int(time.time()) + settings.session_max_age * 4
-    await db.get_collection("user_sessions").insert_one(
+    await get_repository("user_sessions").insert_one(
         {
             "_id": access_token,
             "user_id": user_id,
@@ -256,14 +256,14 @@ async def get_auth_status(current_user: Optional[User] = Depends(get_current_use
     if not current_user:
         return ApiResponse(data=AuthStatusData(authenticated=False, auth_provider=auth_provider).model_dump())
 
-    user_doc = await db.get_collection("users").find_one({"_id": str(current_user.id)})
+    user_doc = await get_repository("users").find_one({"_id": str(current_user.id)})
     user = _user_doc_to_auth_user(user_doc or {"_id": current_user.id, "username": current_user.username, "email": "", "role": current_user.role})
     return ApiResponse(data=AuthStatusData(authenticated=True, auth_provider=auth_provider, user=user).model_dump())
 
 
 @router.get("/me", response_model=ApiResponse)
 async def me(current_user: User = Depends(require_user)) -> ApiResponse:
-    user_doc = await db.get_collection("users").find_one({"_id": str(current_user.id)})
+    user_doc = await get_repository("users").find_one({"_id": str(current_user.id)})
     if not user_doc:
         raise HTTPException(status_code=404, detail="User not found")
     return ApiResponse(data=_user_doc_to_auth_user(user_doc).model_dump())
@@ -271,19 +271,19 @@ async def me(current_user: User = Depends(require_user)) -> ApiResponse:
 
 @router.post("/refresh", response_model=ApiResponse)
 async def refresh(body: RefreshTokenRequest) -> ApiResponse:
-    doc = await db.get_collection("user_sessions").find_one({"refresh_token": body.refresh_token})
+    doc = await get_repository("user_sessions").find_one({"refresh_token": body.refresh_token})
     if not doc:
         raise HTTPException(status_code=401, detail="Invalid refresh token")
     if int(doc.get("refresh_expires_at") or 0) < int(time.time()):
-        await db.get_collection("user_sessions").delete_one({"_id": doc.get("_id")})
+        await get_repository("user_sessions").delete_one({"_id": doc.get("_id")})
         raise HTTPException(status_code=401, detail="Refresh token expired")
 
     old_session_id = doc.get("_id")
-    await db.get_collection("user_sessions").delete_one({"_id": old_session_id})
+    await get_repository("user_sessions").delete_one({"_id": old_session_id})
 
     access_token = secrets.token_urlsafe(32)
     expires_at = int(time.time()) + settings.session_max_age
-    await db.get_collection("user_sessions").insert_one(
+    await get_repository("user_sessions").insert_one(
         {
             "_id": access_token,
             "user_id": str(doc.get("user_id")),
@@ -300,7 +300,7 @@ async def refresh(body: RefreshTokenRequest) -> ApiResponse:
 
 @router.post("/change-password", response_model=ApiResponse)
 async def change_password(body: ChangePasswordRequest, current_user: User = Depends(require_user)) -> ApiResponse:
-    user_doc = await db.get_collection("users").find_one({"_id": str(current_user.id)})
+    user_doc = await get_repository("users").find_one({"_id": str(current_user.id)})
     if not user_doc:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -311,7 +311,7 @@ async def change_password(body: ChangePasswordRequest, current_user: User = Depe
         raise HTTPException(status_code=400, detail="Invalid old password")
 
     hashed = bcrypt.hashpw(body.new_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-    await db.get_collection("users").update_one(
+    await get_repository("users").update_one(
         {"_id": str(current_user.id)},
         {"$set": {"password_hash": hashed, "updated_at": int(time.time())}},
     )
@@ -324,18 +324,18 @@ async def change_fullname(body: ChangeFullnameRequest, current_user: User = Depe
     if not fullname:
         raise HTTPException(status_code=400, detail="fullname required")
 
-    await db.get_collection("users").update_one(
+    await get_repository("users").update_one(
         {"_id": str(current_user.id)},
         {"$set": {"fullname": fullname, "updated_at": int(time.time())}},
     )
-    user_doc = await db.get_collection("users").find_one({"_id": str(current_user.id)})
+    user_doc = await get_repository("users").find_one({"_id": str(current_user.id)})
     return ApiResponse(data=_user_doc_to_auth_user(user_doc or {"_id": current_user.id, "fullname": fullname, "email": "", "role": current_user.role}).model_dump())
 
 @router.post("/logout", response_model=ApiResponse)
 async def logout(request: Request, response: Response):
     session_id = request.cookies.get(settings.session_cookie)
     if session_id:
-        await db.get_collection("user_sessions").delete_one({"_id": session_id})
+        await get_repository("user_sessions").delete_one({"_id": session_id})
     
     response.delete_cookie(settings.session_cookie)
     return ApiResponse(data={"ok": True})

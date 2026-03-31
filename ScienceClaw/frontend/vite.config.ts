@@ -27,7 +27,7 @@ export default defineConfig({
         ws: true,
       },
       '/task-service': {
-        target: process.env.TASK_SERVICE_URL || 'http://localhost:12002',
+        target: process.env.TASK_SERVICE_URL || 'http://localhost:8001',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/task-service/, ''),
       },

@@ -7,7 +7,7 @@ import bcrypt
 from loguru import logger
 
 from backend.config import settings
-from backend.mongodb.db import db
+from backend.storage import get_repository
 
 
 async def ensure_admin_user() -> None:
@@ -22,7 +22,7 @@ async def ensure_admin_user() -> None:
     if not username:
         return
 
-    users = db.get_collection("users")
+    users = get_repository("users")
     existing = await users.find_one({"username": username})
     now = int(time.time())
 

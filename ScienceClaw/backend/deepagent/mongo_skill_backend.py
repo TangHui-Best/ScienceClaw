@@ -37,8 +37,8 @@ class MongoSkillBackend:
         self._blocked = set(blocked_skills or [])
 
     def _get_col(self):
-        from backend.mongodb.db import db
-        return db.get_collection("skills")
+        from backend.storage import get_repository
+        return get_repository("skills")
 
     def _base_filter(self) -> dict:
         return {"user_id": self._user_id}
@@ -67,12 +67,12 @@ class MongoSkillBackend:
 
         if not skill_name:
             # Root listing: return all skills as directories
-            cursor = col.find(
-                self._active_filter(),
-                {"name": 1, "description": 1}
-            )
             entries = []
-            async for doc in cursor:
+            docs = await col.find_many(
+                self._active_filter(),
+                projection={"name": 1, "description": 1}
+            )
+            for doc in docs:
                 entries.append({
                     "path": f"/{doc['name']}",
                     "name": doc["name"],
@@ -237,9 +237,9 @@ class MongoSkillBackend:
     async def aglob_info(self, pattern: str, path: str = "/") -> list[FileInfo]:
         # Get all files, then filter by glob pattern
         col = self._get_col()
-        cursor = col.find(self._active_filter(), {"name": 1, "files": 1})
+        docs = await col.find_many(self._active_filter(), projection={"name": 1, "files": 1})
         results = []
-        async for doc in cursor:
+        for doc in docs:
             skill_name = doc["name"]
             for fname in doc.get("files", {}):
                 full_path = f"/{skill_name}/{fname}"
@@ -268,14 +268,14 @@ class MongoSkillBackend:
             if skill_name:
                 filt["name"] = skill_name
 
-        cursor = col.find(filt, {"name": 1, "files": 1})
         results = []
         try:
             regex = re.compile(pattern)
         except re.error:
             return f"Invalid regex: {pattern}"
 
-        async for doc in cursor:
+        docs = await col.find_many(filt, projection={"name": 1, "files": 1})
+        for doc in docs:
             skill_name = doc["name"]
             for fname, content in doc.get("files", {}).items():
                 full_path = f"/{skill_name}/{fname}"

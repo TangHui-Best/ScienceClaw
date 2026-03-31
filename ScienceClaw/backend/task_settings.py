@@ -1,7 +1,7 @@
 from typing import Optional
 from pydantic import BaseModel, Field
 
-from backend.mongodb.db import db
+from backend.storage import get_repository
 
 # Defaults tuned for 128K context window models (e.g. DeepSeek v3.2):
 #   max_tokens      = 8K    — output ceiling, sufficient for most single-step replies
@@ -59,7 +59,8 @@ class UpdateTaskSettingsRequest(BaseModel):
 
 
 async def get_task_settings(user_id: str) -> TaskSettings:
-    doc = await db.get_collection("task_settings").find_one({"_id": user_id})
+    repo = get_repository("task_settings")
+    doc = await repo.find_one({"_id": user_id})
     if not doc:
         return TaskSettings()
     doc.pop("_id", None)
@@ -71,7 +72,8 @@ async def update_task_settings(user_id: str, updates: UpdateTaskSettingsRequest)
     if not update_data:
         return await get_task_settings(user_id)
 
-    await db.get_collection("task_settings").update_one(
+    repo = get_repository("task_settings")
+    await repo.update_one(
         {"_id": user_id},
         {"$set": update_data},
         upsert=True,

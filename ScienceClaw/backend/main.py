@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from contextlib import asynccontextmanager
 
-from backend.mongodb.db import db
+from backend.storage import init_storage, close_storage, get_repository
 from backend.route.auth import router as auth_router
 from backend.route.sessions import router as sessions_router, cleanup_orphaned_sessions, graceful_shutdown_agents
 from backend.route.file import router as file_router
@@ -27,7 +27,7 @@ from backend.user.bootstrap import ensure_admin_user
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await db.connect()
+    await init_storage()
     try:
         await init_system_models()
     except Exception as e:
@@ -45,7 +45,12 @@ async def lifespan(app: FastAPI):
         await graceful_shutdown_agents()
     except Exception as e:
         logger.error(f"Failed to gracefully shutdown agents: {e}")
-    await db.close()
+    try:
+        from backend.rpa.cdp_connector import cdp_connector
+        await cdp_connector.close()
+    except Exception as e:
+        logger.error(f"Failed to close CDP connector: {e}")
+    await close_storage()
 
 
 def create_app() -> FastAPI:
@@ -74,13 +79,14 @@ def create_app() -> FastAPI:
     @app.get("/ready")
     async def ready():
         try:
-            await db.get_collection("sessions").find_one({}, {"_id": 1})
-            return {"status": "ready", "mongodb": "ok"}
+            repo = get_repository("sessions")
+            await repo.find_one({})
+            return {"status": "ready", "storage": "ok"}
         except Exception as exc:
             from fastapi.responses import JSONResponse
             return JSONResponse(
                 status_code=503,
-                content={"status": "not_ready", "mongodb": str(exc)},
+                content={"status": "not_ready", "storage": str(exc)},
             )
 
     app.include_router(auth_router, prefix="/api/v1")

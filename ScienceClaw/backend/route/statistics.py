@@ -16,12 +16,10 @@ from fastapi import APIRouter, Depends, Query
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from backend.mongodb.db import db
+from backend.storage import get_repository
 from backend.user.dependencies import require_user, User
 
 router = APIRouter(prefix="/statistics", tags=["Statistics"])
-
-_db = db
 
 # 汇率常量 (1 USD = ? CNY)
 USD_TO_CNY = 7.3  # 美元兑人民币汇率
@@ -391,7 +389,7 @@ async def _aggregate_statistics(
         "updated_at": {"$gte": start_ts, "$lte": end_ts}
     }
 
-    sessions = await _db.get_collection("sessions").find(query).to_list(length=None)
+    sessions = await get_repository("sessions").find_many(query)
     logger.info(f"[Statistics] Found {len(sessions)} sessions for user")
 
     total_input_tokens = 0
@@ -625,11 +623,11 @@ async def get_statistics_sessions(
         }
 
         # 获取总数
-        total = await _db.get_collection("sessions").count_documents(query)
+        total = await get_repository("sessions").count(query)
 
         # 分页查询
         skip = (page - 1) * page_size
-        sessions = await _db.get_collection("sessions").find(query).sort("updated_at", -1).skip(skip).limit(page_size).to_list(length=page_size)
+        sessions = await get_repository("sessions").find_many(query, sort=[("updated_at", -1)], skip=skip, limit=page_size)
 
         session_list = []
         for session in sessions:

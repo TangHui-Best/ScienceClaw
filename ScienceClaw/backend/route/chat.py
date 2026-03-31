@@ -20,7 +20,7 @@ from backend.config import settings
 from backend.deepagent.engine import get_llm_model
 from backend.deepagent.runner import arun_science_task_stream
 from backend.deepagent.sessions import async_create_science_session
-from backend.mongodb.db import db
+from backend.storage import get_repository
 
 router = APIRouter(tags=["chat"])
 
@@ -217,10 +217,12 @@ async def _resolve_any_model_config() -> Optional[dict]:
     """
     if (getattr(settings, "model_ds_api_key", None) or "").strip():
         return {"_use_default": True}
-    doc = await db.get_collection("models").find_one(
+    docs = await get_repository("models").find_many(
         {"is_active": True, "api_key": {"$nin": ["", None]}},
         sort=[("created_at", -1)],
+        limit=1,
     )
+    doc = docs[0] if docs else None
     if doc:
         return {
             "model_name": doc.get("model_name"),

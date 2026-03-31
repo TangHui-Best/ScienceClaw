@@ -7,7 +7,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
 
 from backend.user.dependencies import get_current_user, require_user, User
-from backend.mongodb.db import db
+from backend.storage import get_repository
 from backend.models import ModelConfig, CreateModelRequest, UpdateModelRequest, list_user_models
 
 router = APIRouter(prefix="/models", tags=["models"])
@@ -128,7 +128,7 @@ async def create_model(body: CreateModelRequest, current_user: User = Depends(re
     doc = new_model.model_dump()
     doc["_id"] = doc.pop("id")
     
-    await db.get_collection("models").insert_one(doc)
+    await get_repository("models").insert_one(doc)
     
     # Return with id
     return ApiResponse(data=new_model.model_dump())
@@ -195,7 +195,7 @@ async def detect_context_window(body: DetectContextWindowRequest, current_user: 
     api_key = body.api_key
     base_url = body.base_url
     if body.model_id and (not api_key):
-        existing = await db.get_collection("models").find_one({"_id": body.model_id})
+        existing = await get_repository("models").find_one({"_id": body.model_id})
         if existing:
             api_key = api_key or existing.get("api_key")
             base_url = base_url or existing.get("base_url")
@@ -213,32 +213,32 @@ async def detect_context_window(body: DetectContextWindowRequest, current_user: 
 @router.put("/{model_id}", response_model=ApiResponse)
 async def update_model(model_id: str, body: UpdateModelRequest, current_user: User = Depends(require_user)):
     """Update a user defined model"""
-    existing = await db.get_collection("models").find_one({"_id": model_id})
+    existing = await get_repository("models").find_one({"_id": model_id})
     if not existing:
         raise HTTPException(status_code=404, detail="Model not found")
-        
+
     if existing.get("is_system"):
         if current_user.role != "admin":
             raise HTTPException(status_code=403, detail="Cannot edit this model")
     else:
         if existing.get("user_id") != current_user.id:
             raise HTTPException(status_code=403, detail="Cannot edit this model")
-        
+
     update_data = body.model_dump(exclude_unset=True)
     if not update_data:
         return ApiResponse(data={"id": model_id})
-    
+
     merged_base_url = update_data.get("base_url", existing.get("base_url"))
     merged_api_key = update_data.get("api_key", existing.get("api_key"))
     merged_model_name = update_data.get("model_name", existing.get("model_name"))
     merged_provider = existing.get("provider")
-    
+
     if any(k in update_data for k in ["base_url", "api_key", "model_name"]):
         await verify_model_connection(merged_provider, merged_base_url, merged_api_key, merged_model_name)
 
     update_data["updated_at"] = int(time.time())
-    
-    await db.get_collection("models").update_one(
+
+    await get_repository("models").update_one(
         {"_id": model_id},
         {"$set": update_data}
     )
@@ -249,16 +249,16 @@ async def update_model(model_id: str, body: UpdateModelRequest, current_user: Us
 @router.delete("/{model_id}", response_model=ApiResponse)
 async def delete_model(model_id: str, current_user: User = Depends(require_user)):
     """Delete a user defined model"""
-    existing = await db.get_collection("models").find_one({"_id": model_id})
+    existing = await get_repository("models").find_one({"_id": model_id})
     if not existing:
         raise HTTPException(status_code=404, detail="Model not found")
-        
+
     if existing.get("is_system"):
         if current_user.role != "admin":
             raise HTTPException(status_code=403, detail="Cannot delete this model")
     else:
         if existing.get("user_id") != current_user.id:
             raise HTTPException(status_code=403, detail="Cannot delete this model")
-        
-    await db.get_collection("models").delete_one({"_id": model_id})
+
+    await get_repository("models").delete_one({"_id": model_id})
     return ApiResponse(data={"ok": True})

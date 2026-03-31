@@ -84,13 +84,10 @@ db = MongoDB
 
 async def get_blocked_skill_names(user_id: str) -> set[str]:
     """Query blocked skill names for a user from the skills collection."""
-    col = MongoDB.get_collection("skills")
-    cursor = col.find(
+    from backend.storage import get_repository
+    repo = get_repository("skills")
+    docs = await repo.find_many(
         {"user_id": user_id, "blocked": True},
-        {"name": 1}
+        projection={"name": 1},
     )
-    names = set()
-    async for doc in cursor:
-        if doc.get("name"):
-            names.add(doc["name"])
-    return names
+    return {doc["name"] for doc in docs if doc.get("name")}
