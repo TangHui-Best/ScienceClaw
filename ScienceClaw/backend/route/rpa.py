@@ -251,6 +251,9 @@ async def chat_with_assistant(
 
     async def event_generator():
         try:
+            # Pause recording during AI execution
+            rpa_manager.pause_recording(session_id)
+
             async for event in assistant.chat(
                 session_id=session_id,
                 page=page,
@@ -277,6 +280,9 @@ async def chat_with_assistant(
                 "data": json.dumps({"message": str(e)}, ensure_ascii=False),
             }
             yield {"event": "done", "data": "{}"}
+        finally:
+            # Resume recording after AI execution
+            rpa_manager.resume_recording(session_id)
 
     return EventSourceResponse(event_generator())
 

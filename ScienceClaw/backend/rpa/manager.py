@@ -35,6 +35,7 @@ class RPASession(BaseModel):
     status: str = "recording"  # recording, stopped, testing, saved
     steps: List[RPAStep] = []
     sandbox_session_id: str
+    paused: bool = False  # pause event recording during AI execution
 
 
 # ── CAPTURE_JS: injected into pages to capture user events ──────────
@@ -525,13 +526,24 @@ class RPASessionManager:
         session.steps.pop(step_index)
         return True
 
+    def pause_recording(self, session_id: str):
+        """Pause event recording (used during AI execution)."""
+        if session_id in self.sessions:
+            self.sessions[session_id].paused = True
+
+    def resume_recording(self, session_id: str):
+        """Resume event recording."""
+        if session_id in self.sessions:
+            self.sessions[session_id].paused = False
+
     def get_page(self, session_id: str) -> Optional[Page]:
         return self._pages.get(session_id)
 
     async def _handle_event(self, session_id: str, evt: dict):
         if session_id not in self.sessions:
             return
-        if self.sessions[session_id].status != "recording":
+        session = self.sessions[session_id]
+        if session.status != "recording" or session.paused:
             return
 
         if evt.get("action") == "navigate":
