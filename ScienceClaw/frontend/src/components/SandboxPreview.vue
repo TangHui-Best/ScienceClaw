@@ -63,22 +63,27 @@
 
       <!-- Browser VNC view -->
       <iframe
-        v-else-if="activeTab === 'browser'"
+        v-else-if="activeTab === 'browser' && !localMode"
         :src="vncUrl"
         class="w-full h-full border-0"
         sandbox="allow-same-origin allow-scripts allow-popups"
         referrerpolicy="no-referrer"
+      />
+      <canvas
+        v-else-if="activeTab === 'browser' && localMode"
+        ref="canvasRef"
+        class="w-full h-full object-contain bg-black"
       />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onBeforeUnmount } from 'vue';
 import { X as XIcon, ChevronRight as ChevronRightIcon, Monitor as MonitorIcon } from 'lucide-vue-next';
 import { useI18n } from 'vue-i18n';
 import SandboxTerminal from './SandboxTerminal.vue';
-import { getSandboxVncUrl, type SandboxPreviewMode } from '@/utils/sandbox';
+import { getSandboxVncUrl, isLocalMode, type SandboxPreviewMode } from '@/utils/sandbox';
 
 const { t } = useI18n();
 
@@ -93,6 +98,7 @@ const props = defineProps<{
   mode: SandboxPreviewMode;
   isLive: boolean;
   history?: SandboxExecEntry[];
+  sessionId?: string;
 }>();
 
 const emit = defineEmits<{
@@ -103,6 +109,9 @@ const expanded = ref(true);
 const activeTab = ref<'terminal' | 'browser'>('browser');
 const terminalRef = ref<InstanceType<typeof SandboxTerminal> | null>(null);
 const visible = ref(false);
+const localMode = ref(isLocalMode());
+const canvasRef = ref<HTMLCanvasElement | null>(null);
+let screencastWs: WebSocket | null = null;
 
 const vncUrl = computed(() => getSandboxVncUrl());
 
@@ -112,6 +121,48 @@ const availableTabs = computed(() => {
   tabs.push({ id: 'browser', label: 'Browser' });
   return tabs;
 });
+
+const drawFrame = (base64Data: string, metadata: { width: number; height: number }) => {
+  const canvas = canvasRef.value;
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  const img = new Image();
+  img.onload = () => {
+    if (canvas.width !== img.naturalWidth) canvas.width = img.naturalWidth;
+    if (canvas.height !== img.naturalHeight) canvas.height = img.naturalHeight;
+    ctx.drawImage(img, 0, 0);
+  };
+  img.src = `data:image/jpeg;base64,${base64Data}`;
+};
+
+const connectScreencast = (sessionId: string) => {
+  if (screencastWs) return;
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${proto}//${window.location.host}/api/v1/rpa/screencast/${sessionId}`;
+  screencastWs = new WebSocket(wsUrl);
+
+  screencastWs.onmessage = (ev) => {
+    try {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === 'frame') {
+        drawFrame(msg.data, msg.metadata);
+      }
+    } catch { /* ignore */ }
+  };
+
+  screencastWs.onclose = () => {
+    screencastWs = null;
+  };
+};
+
+const disconnectScreencast = () => {
+  if (screencastWs) {
+    screencastWs.close();
+    screencastWs = null;
+  }
+};
 
 // Auto-show if history exists on mount (panel reopen case)
 if (props.history && props.history.length > 0) {
@@ -129,29 +180,43 @@ watch(() => props.mode, (mode) => {
     activeTab.value = 'browser';
     visible.value = true;
     expanded.value = true;
+    if (localMode.value && props.sessionId) {
+      connectScreencast(props.sessionId);
+    }
+  } else if (mode === 'none') {
+    disconnectScreencast();
   }
 });
 
 const handleClose = () => {
   visible.value = false;
+  disconnectScreencast();
   emit('close');
 };
 
-const show = (mode?: SandboxPreviewMode) => {
+const show = (mode?: SandboxPreviewMode, sessionId?: string) => {
   visible.value = true;
   expanded.value = true;
   if (mode === 'terminal' || mode === 'browser') {
     activeTab.value = mode;
   }
+  if (localMode.value && mode === 'browser' && sessionId) {
+    connectScreencast(sessionId);
+  }
 };
 
 const hide = () => {
   visible.value = false;
+  disconnectScreencast();
 };
 
 const writeExecution = (toolName: string, command: string, output?: string, status?: string) => {
   terminalRef.value?.writeExecution(toolName, command, output, status);
 };
+
+onBeforeUnmount(() => {
+  disconnectScreencast();
+});
 
 defineExpose({ show, hide, visible, writeExecution });
 </script>

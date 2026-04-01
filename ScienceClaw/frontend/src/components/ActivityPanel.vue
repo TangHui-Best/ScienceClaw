@@ -227,6 +227,7 @@
           :mode="activeSandboxMode"
           :isLive="isSandboxLive"
           :history="sandboxHistory"
+          :sessionId="props.sessionId"
           @close="activeSandboxMode = 'none'"
         />
 
@@ -265,6 +266,7 @@ const props = withDefaults(defineProps<{
   plan?: PlanEventData;
   isLoading: boolean;
   lastTurnHadError?: boolean;
+  sessionId?: string;
 }>(), { lastTurnHadError: false });
 
 const emit = defineEmits<{

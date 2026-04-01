@@ -16,6 +16,8 @@ class ScriptExecutor:
         script: str,
         on_log: Optional[Callable[[str], None]] = None,
         timeout: float = 90.0,
+        session_id: Optional[str] = None,
+        page_registry: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """Execute script in a new BrowserContext via CDP.
 
@@ -33,6 +35,10 @@ class ScriptExecutor:
             context = await browser.new_context(no_viewport=True)
             page = await context.new_page()
             page.set_default_timeout(15000)
+
+            # Register page for screencast in local mode
+            if session_id and page_registry:
+                page_registry[session_id] = page
 
             if on_log:
                 on_log("Executing script...")
@@ -72,6 +78,10 @@ class ScriptExecutor:
             return {"success": False, "output": output, "error": str(e)}
 
         finally:
+            # Unregister page
+            if session_id and page_registry and session_id in page_registry:
+                page_registry.pop(session_id, None)
+
             if context:
                 try:
                     await context.close()

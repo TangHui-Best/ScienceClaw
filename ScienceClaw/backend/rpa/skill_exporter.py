@@ -1,15 +1,18 @@
 import json
 import logging
+import os
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Dict, Any
 
 from backend.storage import get_repository
+from backend.config import settings
 
 logger = logging.getLogger(__name__)
 
 
 class SkillExporter:
-    """Export recorded RPA skills to MongoDB."""
+    """Export recorded RPA skills to MongoDB or local filesystem."""
 
     async def export_skill(
         self,
@@ -19,7 +22,7 @@ class SkillExporter:
         script: str,
         params: Dict[str, Any],
     ) -> str:
-        """Export skill to MongoDB skills collection.
+        """Export skill to MongoDB or local filesystem based on storage_backend.
 
         Returns the skill name on success.
         """
@@ -46,6 +49,16 @@ description: {description}
 
 {description}
 
+## Usage
+
+To execute this skill, run:
+
+```bash
+python3 skill.py
+```
+
+The skill uses Playwright to automate browser interactions based on the recorded steps.
+
 ## Input Schema
 
 ```json
@@ -54,33 +67,44 @@ description: {description}
 
 ## Implementation
 
-See `skill.py` for the Playwright implementation.
+The skill is implemented in `skill.py` using Playwright for browser automation.
 """
 
-        now = datetime.now(timezone.utc)
-        col = get_repository("skills")
-        await col.update_one(
-            {"user_id": user_id, "name": skill_name},
-            {
-                "$set": {
-                    "files": {
-                        "SKILL.md": skill_md,
-                        "skill.py": script,
-                    },
-                    "description": description,
-                    "params": params,
-                    "updated_at": now,
-                },
-                "$setOnInsert": {
-                    "user_id": user_id,
-                    "name": skill_name,
-                    "source": "rpa",
-                    "blocked": False,
-                    "created_at": now,
-                },
-            },
-            upsert=True,
-        )
+        if settings.storage_backend == "local":
+            # Save to filesystem
+            skill_dir = Path(settings.external_skills_dir) / skill_name
+            skill_dir.mkdir(parents=True, exist_ok=True)
 
-        logger.info(f"Skill '{skill_name}' exported to MongoDB for user {user_id}")
+            (skill_dir / "SKILL.md").write_text(skill_md, encoding="utf-8")
+            (skill_dir / "skill.py").write_text(script, encoding="utf-8")
+
+            logger.info(f"Skill '{skill_name}' exported to {skill_dir}")
+        else:
+            # Save to MongoDB
+            now = datetime.now(timezone.utc)
+            col = get_repository("skills")
+            await col.update_one(
+                {"user_id": user_id, "name": skill_name},
+                {
+                    "$set": {
+                        "files": {
+                            "SKILL.md": skill_md,
+                            "skill.py": script,
+                        },
+                        "description": description,
+                        "params": params,
+                        "updated_at": now,
+                    },
+                    "$setOnInsert": {
+                        "user_id": user_id,
+                        "name": skill_name,
+                        "source": "rpa",
+                        "blocked": False,
+                        "created_at": now,
+                    },
+                },
+                upsert=True,
+            )
+            logger.info(f"Skill '{skill_name}' exported to MongoDB for user {user_id}")
+
         return skill_name

@@ -156,6 +156,7 @@
         :plan="displayActivityPlan"
         :isLoading="isLoading && selectedActivityTurn === -1"
         :lastTurnHadError="lastTurnHadError"
+        :sessionId="sessionId"
         @toolClick="handleToolClick"
         @close="() => {}"
       />

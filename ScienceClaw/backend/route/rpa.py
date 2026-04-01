@@ -146,6 +146,8 @@ async def test_script(
         browser,
         script,
         on_log=lambda msg: logs.append(msg),
+        session_id=session_id,
+        page_registry=rpa_manager._pages,
     )
 
     return {"status": "success", "result": result, "logs": logs, "script": script}

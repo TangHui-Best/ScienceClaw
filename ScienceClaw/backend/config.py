@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     storage_backend: str = os.environ.get("STORAGE_BACKEND", "mongo")
     local_data_dir: str = os.environ.get("LOCAL_DATA_DIR", "./data")
 
+    # Skills directories
+    external_skills_dir: str = os.environ.get("EXTERNAL_SKILLS_DIR", "./Skills")
+    builtin_skills_dir: str = os.environ.get("BUILTIN_SKILLS_DIR", "./builtin_skills")
+
     xelatex_cmd: str = os.environ.get("XELATEX_CMD", "/usr/local/texlive/2025/bin/universal-darwin/xelatex")
     pandoc_cmd: str = os.environ.get("PANDOC_CMD", "/usr/local/bin/pandoc")
 

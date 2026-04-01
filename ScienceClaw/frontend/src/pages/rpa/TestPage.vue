@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, onBeforeUnmount, computed } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { Play, Save, CheckCircle, XCircle, Loader2, Terminal, Code, ArrowLeft, RotateCcw } from 'lucide-vue-next';
 import { apiClient } from '@/api/client';
-import { getRpaVncUrl } from '@/utils/sandbox';
+import { getRpaVncUrl, isLocalMode } from '@/utils/sandbox';
 
 const router = useRouter();
 const route = useRoute();
@@ -20,6 +20,9 @@ const params = computed(() => {
 });
 
 const vncUrl = computed(() => getRpaVncUrl());
+const localMode = ref(isLocalMode());
+const canvasRef = ref<HTMLCanvasElement | null>(null);
+let screencastWs: WebSocket | null = null;
 
 const testing = ref(false);
 const testDone = ref(false);
@@ -32,6 +35,53 @@ const saved = ref(false);
 const showScript = ref(false);
 const error = ref<string | null>(null);
 
+const drawFrame = (base64Data: string, metadata: { width: number; height: number }) => {
+  const canvas = canvasRef.value;
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  const img = new Image();
+  img.onload = () => {
+    if (canvas.width !== img.naturalWidth) canvas.width = img.naturalWidth;
+    if (canvas.height !== img.naturalHeight) canvas.height = img.naturalHeight;
+    ctx.drawImage(img, 0, 0);
+  };
+  img.src = `data:image/jpeg;base64,${base64Data}`;
+};
+
+const connectScreencast = (sid: string) => {
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${proto}//${window.location.host}/api/v1/rpa/screencast/${sid}`;
+  console.log('[TestPage] Connecting screencast:', wsUrl);
+  screencastWs = new WebSocket(wsUrl);
+
+  screencastWs.onopen = () => {
+    console.log('[TestPage] Screencast connected');
+  };
+
+  screencastWs.onmessage = (ev) => {
+    try {
+      const msg = JSON.parse(ev.data);
+      console.log('[TestPage] Screencast message:', msg.type);
+      if (msg.type === 'frame') {
+        drawFrame(msg.data, msg.metadata);
+      }
+    } catch (e) {
+      console.error('[TestPage] Parse error:', e);
+    }
+  };
+
+  screencastWs.onerror = (e) => {
+    console.error('[TestPage] Screencast error:', e);
+  };
+
+  screencastWs.onclose = (e) => {
+    console.log('[TestPage] Screencast closed:', e.code, e.reason);
+    screencastWs = null;
+  };
+};
+
 const runTest = async () => {
   if (!sessionId.value) {
     error.value = '缺少 sessionId';
@@ -42,11 +92,20 @@ const runTest = async () => {
   testLogs.value = ['正在生成并执行 Playwright 脚本...'];
 
   try {
-    const resp = await apiClient.post(`/rpa/session/${sessionId.value}/test`, {
+    // Start test execution (non-blocking)
+    const testPromise = apiClient.post(`/rpa/session/${sessionId.value}/test`, {
       params: params.value,
     }, {
-      timeout: 120000, // Script execution can take a while
+      timeout: 120000,
     });
+
+    // Connect screencast after a short delay to let backend create page
+    if (localMode.value) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      connectScreencast(sessionId.value);
+    }
+
+    const resp = await testPromise;
 
     const result = resp.data.result || {};
     testOutput.value = result.output || '';
@@ -99,6 +158,13 @@ const saveSkill = async () => {
 onMounted(() => {
   runTest();
 });
+
+onBeforeUnmount(() => {
+  if (screencastWs) {
+    screencastWs.close();
+    screencastWs = null;
+  }
+});
 </script>
 
 <template>
@@ -140,9 +206,15 @@ onMounted(() => {
           </div>
           <div class="flex-1 relative bg-black overflow-hidden">
             <iframe
+              v-if="!localMode"
               :src="vncUrl"
               class="w-full h-full border-0"
               allow="clipboard-read; clipboard-write"
+            />
+            <canvas
+              v-else
+              ref="canvasRef"
+              class="w-full h-full object-contain"
             />
           </div>
         </div>

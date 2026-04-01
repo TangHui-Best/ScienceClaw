@@ -48,6 +48,7 @@ from backend.deepagent.sessions import (
 )
 from backend.user.dependencies import get_current_user, require_user, User
 from backend.models import get_model_config
+from backend.config import settings
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -731,22 +732,26 @@ async def list_skills(current_user: User = Depends(require_user)) -> ApiResponse
     try:
         builtin = _list_skill_dirs(_BUILTIN_SKILLS_DIR, builtin=True)
 
-        # User's external skills from MongoDB
-        col = _get_repo("skills")
-        docs = await col.find_many(
-            {"user_id": current_user.id},
-            projection={"name": 1, "description": 1, "files": 1, "blocked": 1}
-        )
         external = []
-        for doc in docs:
-            files = list(doc.get("files", {}).keys())
-            external.append({
-                "name": doc.get("name", ""),
-                "description": doc.get("description", ""),
-                "files": files,
-                "builtin": False,
-                "blocked": doc.get("blocked", False),
-            })
+        if settings.storage_backend == "local":
+            # Load external skills from filesystem
+            external = _list_skill_dirs(settings.external_skills_dir, builtin=False)
+        else:
+            # Load external skills from MongoDB
+            col = _get_repo("skills")
+            docs = await col.find_many(
+                {"user_id": current_user.id},
+                projection={"name": 1, "description": 1, "files": 1, "blocked": 1}
+            )
+            for doc in docs:
+                files = list(doc.get("files", {}).keys())
+                external.append({
+                    "name": doc.get("name", ""),
+                    "description": doc.get("description", ""),
+                    "files": files,
+                    "builtin": False,
+                    "blocked": doc.get("blocked", False),
+                })
 
         for s in builtin:
             s["blocked"] = False
@@ -765,14 +770,18 @@ async def toggle_block_skill(
 ) -> ApiResponse:
     """屏蔽或取消屏蔽一个外置 skill。"""
     try:
-        col = _get_repo("skills")
-        modified = await col.update_one(
-            {"user_id": current_user.id, "name": skill_name},
-            {"$set": {"blocked": body.blocked}},
-        )
-        if modified == 0:
-            raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
-        return ApiResponse(data={"skill_name": skill_name, "blocked": body.blocked})
+        if settings.storage_backend == "local":
+            # In local mode, blocking is not supported (single user)
+            raise HTTPException(status_code=400, detail="Blocking skills is not supported in local mode")
+        else:
+            col = _get_repo("skills")
+            modified = await col.update_one(
+                {"user_id": current_user.id, "name": skill_name},
+                {"$set": {"blocked": body.blocked}},
+            )
+            if modified == 0:
+                raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+            return ApiResponse(data={"skill_name": skill_name, "blocked": body.blocked})
     except HTTPException:
         raise
     except Exception as exc:
@@ -787,13 +796,22 @@ async def delete_skill(
 ) -> ApiResponse:
     """彻底删除一个外置 skill。"""
     try:
-        col = _get_repo("skills")
-        deleted = await col.delete_one(
-            {"user_id": current_user.id, "name": skill_name}
-        )
-        if deleted == 0:
-            raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
-        return ApiResponse(data={"skill_name": skill_name, "deleted": True})
+        if settings.storage_backend == "local":
+            # Delete from filesystem
+            import shutil
+            skill_dir = _Path(settings.external_skills_dir) / skill_name
+            if not skill_dir.is_dir():
+                raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+            shutil.rmtree(skill_dir)
+            return ApiResponse(data={"skill_name": skill_name, "deleted": True})
+        else:
+            col = _get_repo("skills")
+            deleted = await col.delete_one(
+                {"user_id": current_user.id, "name": skill_name}
+            )
+            if deleted == 0:
+                raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+            return ApiResponse(data={"skill_name": skill_name, "deleted": True})
     except HTTPException:
         raise
     except Exception as exc:
@@ -912,22 +930,38 @@ async def list_skill_files(
 ) -> ApiResponse:
     """列出某个外置 skill 内部的文件结构。"""
     try:
-        col = _get_repo("skills")
-        doc = await col.find_one(
-            {"user_id": current_user.id, "name": skill_name},
-            projection={"files": 1}
-        )
-        if not doc:
-            raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
-
-        items = []
-        for fname in sorted(doc.get("files", {}).keys()):
-            items.append({
-                "name": fname,
-                "path": fname,
-                "type": "file",
-            })
-        return ApiResponse(data=items)
+        if settings.storage_backend == "local":
+            # List from filesystem
+            skill_dir = _Path(settings.external_skills_dir) / skill_name
+            if not skill_dir.is_dir():
+                raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+            items = []
+            for file_path in sorted(skill_dir.rglob("*")):
+                if file_path.is_file():
+                    rel_path = str(file_path.relative_to(skill_dir))
+                    items.append({
+                        "name": file_path.name,
+                        "path": rel_path,
+                        "type": "file",
+                    })
+            return ApiResponse(data=items)
+        else:
+            # List from MongoDB
+            col = _get_repo("skills")
+            doc = await col.find_one(
+                {"user_id": current_user.id, "name": skill_name},
+                projection={"files": 1}
+            )
+            if not doc:
+                raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+            items = []
+            for fname in sorted(doc.get("files", {}).keys()):
+                items.append({
+                    "name": fname,
+                    "path": fname,
+                    "type": "file",
+                })
+            return ApiResponse(data=items)
     except HTTPException:
         raise
     except Exception as exc:
@@ -947,17 +981,27 @@ async def read_skill_file(
 ) -> ApiResponse:
     """读取某个外置 skill 内的文件内容。"""
     try:
-        col = _get_repo("skills")
-        doc = await col.find_one(
-            {"user_id": current_user.id, "name": skill_name},
-            projection={"files": 1}
-        )
-        if not doc:
-            raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
-        content = doc.get("files", {}).get(body.file)
-        if content is None:
-            raise HTTPException(status_code=404, detail="File not found")
-        return ApiResponse(data={"file": body.file, "content": content})
+        if settings.storage_backend == "local":
+            # Read from filesystem
+            skill_dir = _Path(settings.external_skills_dir) / skill_name
+            file_path = skill_dir / body.file
+            if not file_path.is_file():
+                raise HTTPException(status_code=404, detail="File not found")
+            content = file_path.read_text(encoding="utf-8")
+            return ApiResponse(data={"file": body.file, "content": content})
+        else:
+            # Read from MongoDB
+            col = _get_repo("skills")
+            doc = await col.find_one(
+                {"user_id": current_user.id, "name": skill_name},
+                projection={"files": 1}
+            )
+            if not doc:
+                raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+            content = doc.get("files", {}).get(body.file)
+            if content is None:
+                raise HTTPException(status_code=404, detail="File not found")
+            return ApiResponse(data={"file": body.file, "content": content})
     except HTTPException:
         raise
     except Exception as exc:
