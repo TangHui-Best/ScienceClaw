@@ -15,7 +15,7 @@ async def ensure_admin_user() -> None:
         return
 
     username = str(getattr(settings, "bootstrap_admin_username", "admin") or "admin").strip()
-    password = str(getattr(settings, "bootstrap_admin_password", "admin123") or "admin123")
+    password = str(getattr(settings, "bootstrap_admin_password", "") or "")
     fullname = str(getattr(settings, "bootstrap_admin_fullname", "Administrator") or "Administrator")
     email = str(getattr(settings, "bootstrap_admin_email", "admin@localhost") or "admin@localhost")
 
@@ -25,6 +25,16 @@ async def ensure_admin_user() -> None:
     users = get_repository("users")
     existing = await users.find_one({"username": username})
     now = int(time.time())
+
+    # Only create admin if password is explicitly set in environment
+    if not password:
+        if not existing:
+            logger.warning(
+                "Admin user '{}' does not exist and no bootstrap_admin_password is set. "
+                "Please set BOOTSTRAP_ADMIN_PASSWORD environment variable to create the admin user.",
+                username
+            )
+        return
 
     hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 

@@ -6,19 +6,17 @@
 
 </div>
 
-ScienceClaw is a personal research assistant built with [LangChain DeepAgents](https://github.com/langchain-ai/deepagents) and [AIO Sandbox](https://github.com/agent-infra/sandbox) infrastructure, adopting a completely new architecture beyond OpenClaw. It offers stronger security, better transparency, and a more user-friendly experience.
+ScienceClaw is a privacy-first personal assistant with RPA (Robotic Process Automation) capabilities, built on [LangChain DeepAgents](https://github.com/langchain-ai/deepagents) and [AIO Sandbox](https://github.com/agent-infra/sandbox) infrastructure. It offers 1,900+ built-in tools, multi-format document generation, sandboxed code execution, and browser automation recording.
 
 <div align="center">
 
-*1,900+ built-in scientific tools · Multi-format content generation · Fully local & privacy-first*
+*RPA Recording & Playback · 1,900+ Built-in Tools · Multi-format Generation · Fully Local & Privacy-First*
 
 [![Tools](https://img.shields.io/badge/Tools-e74c3c.svg)](./Tools) [![Skills](https://img.shields.io/badge/Skills-f39c12.svg)](./Skills) [![Frontend](https://img.shields.io/badge/Frontend-2ecc71.svg)](./ScienceClaw/frontend) [![Backend](https://img.shields.io/badge/Backend-3498db.svg)](./ScienceClaw/backend) [![Scheduler](https://img.shields.io/badge/Scheduler-9b59b6.svg)](./ScienceClaw/task-service) [![Sandbox](https://img.shields.io/badge/Sandbox-1abc9c.svg)](./ScienceClaw/sandbox) [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ---
 
-<video src="https://github.com/user-attachments/assets/2680110c-e9f6-4007-9c56-b923c35f9992" controls width="800" autoplay muted loop></video>
-
-[Why ScienceClaw](#why-scienceclaw) · [Architecture](#architecture) · [News](#news) · [Quick Start](#quick-start) · [Demo](#demo) · [Free API Credits](#free-api-credits) · [Tools & Skills](#tools-skills) · [Features](#practical-features) · [Project Structure](#project-structure) · [Commands](#commands) · [Community](#community) · [Acknowledgements](#acknowledgements)
+[Why ScienceClaw](#why-scienceclaw) · [Architecture](#architecture) · [News](#news) · [Quick Start](#quick-start) · [Local Setup](#local-setup) · [Free API Credits](#free-api-credits) · [Tools & Skills](#tools-skills) · [Features](#practical-features) · [Project Structure](#project-structure) · [Commands](#commands) · [Community](#community) · [Acknowledgements](#acknowledgements)
 
 </div>
 
@@ -32,23 +30,23 @@ ScienceClaw is a personal research assistant built with [LangChain DeepAgents](h
 <tr>
 <td width="37%" valign="top">
 
-### 🔒 Security First
+### 🤖 RPA Recording & Automation
 
-ScienceClaw runs entirely inside **Docker containers**. The agent cannot access your host system, personal files, or environment variables. All code execution happens in an **isolated sandbox**, and generated data stays in a local `./workspace` directory — nothing is uploaded to external servers. Deploy with confidence on your own machine.
+Record browser interactions and generate **Playwright scripts** automatically. ScienceClaw captures your actions, generates smart locators, and creates reusable automation skills. Supports both Docker sandbox mode and local mode for flexible deployment.
 
 </td>
 <td width="32%" valign="top">
 
-### 👁️ Full Transparency
+### 🔒 Security First
 
-Every step of the agent's workflow is **visible and traceable** — from web search and data crawling, to reasoning and tool invocation, to final report generation. You always know where results come from, what actions were taken, and how conclusions were reached. Inspect any step at any time.
+Runs entirely in **Docker containers** with isolated sandbox execution. The agent cannot access your host system or personal files. All data stays in local `./workspace` directory — nothing uploaded to external servers. Deploy with confidence.
 
 </td>
 <td width="31%" valign="top">
 
 ### 🚀 Ready Out of the Box
 
-No tedious configuration needed. ScienceClaw ships with curated tools and skill packages — launch the entire environment with **a single command**. Whether you're a researcher, developer, or student, you can get started immediately. Focus on real tasks, not setup.
+No tedious configuration needed. Launch with **a single command** using pre-built Docker images. 1,900+ tools and skill packages included. Whether you're automating workflows or building AI agents, get started immediately.
 
 </td>
 </tr>
@@ -78,25 +76,7 @@ No tedious configuration needed. ScienceClaw ships with curated tools and skill 
 
 ## 📦 Quick Start
 
-###  Windows Users — Desktop App (One-Click Install)
-
-No Docker required, no command-line needed. Download the desktop installer and get started instantly.
-
-**1. Download the installer**
-
-👉 [ScienceClaw Desktop v0.0.4 (.tar.gz)](https://gitee.com/zidongtaichu_beijing/scienceclaw/releases/download/v0.0.4/ScienceClaw-Desktop-Setup-0.0.4.tar.gz)
-
-**2. Extract and install**
-
-After downloading, extract the archive and run the installer. Follow the setup wizard to complete installation.
-
-**3. Launch**
-
-Once installed, double-click the desktop shortcut to start ScienceClaw — ready to use out of the box.
-
----
-
-###  macOS / Linux Users — Docker Deployment
+### Docker Deployment (Recommended)
 
 #### Prerequisites
 
@@ -112,14 +92,13 @@ git clone https://github.com/AgentTeam-TaichuAI/ScienceClaw.git
 cd ScienceClaw
 ```
 
-**2. First launch (recommended) — pull pre-built images**
+**2. Pull pre-built images and start**
 
 ```bash
 docker compose -f docker-compose-release.yml up -d
 ```
 
 > Pulls pre-built images directly — no local compilation needed. Ready in a few minutes.
-
 
 **3. Open in browser**
 
@@ -129,23 +108,9 @@ http://localhost:5173
 
 **4. Login**
 
-<table>
-<tr>
-<td width="60%">
-<img src="images/login.jpeg" alt="Login Page" width="100%" />
-</td>
-<td width="40%" valign="middle" style="padding-left: 24px;">
-<br/><br/>
-<p><strong>Default admin credentials:</strong></p>
-<table>
-<tr><td><strong>Field</strong></td><td><strong>Value</strong></td></tr>
-<tr><td>Username</td><td><code>admin</code></td></tr>
-<tr><td>Password</td><td><code>admin123</code></td></tr>
-</table>
-<blockquote>⚠️ Please change the default password after your first login.</blockquote>
-</td>
-</tr>
-</table>
+Default admin username: `admin`
+
+> ⚠️ Please set your password on first login.
 
 ---
 
@@ -155,15 +120,127 @@ http://localhost:5173
 docker compose up -d --build
 ```
 
-> Builds all images from source code. Ideal for developers who need to modify the code. The first build downloads dependencies and may take longer.
+> Builds all images from source code. Ideal for developers who need to modify the code.
 
 ---
 
-<a id="demo"></a>
+<a id="local-setup"></a>
 
-## 🎬 Demo
+## 🖥️ Local Development Setup
 
-<video src="https://github.com/user-attachments/assets/9cf07107-4820-4a0e-af3d-e95a17417156" controls width="800" autoplay muted loop></video>
+For developers who want to run services locally without Docker:
+
+### Prerequisites
+
+- Python 3.13+
+- Node.js 18+
+- MongoDB (optional, for database features)
+- Redis (optional, for task scheduling)
+
+### Backend Setup
+
+**1. Navigate to backend directory**
+
+```bash
+cd ScienceClaw/backend
+```
+
+**2. Create and configure environment**
+
+```bash
+cp .env.example .env
+```
+
+**3. Edit `.env` file with your configuration:**
+
+```bash
+# LLM Configuration
+DS_API_KEY=your_deepseek_api_key
+DS_URL=https://api.deepseek.com
+DS_MODEL=deepseek-chat
+
+# Storage Mode: 'local' or 'docker'
+STORAGE_BACKEND=local
+
+# MongoDB (optional - only needed for user management and sessions)
+MONGODB_HOST=localhost
+MONGODB_PORT=27017
+MONGODB_USER=
+MONGODB_PASSWORD=
+
+# Sandbox (for Docker mode RPA)
+SANDBOX_MCP_URL=http://localhost:18080/mcp
+
+# Skills and Workspace
+EXTERNAL_SKILLS_DIR=./Skills
+BUILTIN_SKILLS_DIR=./builtin_skills
+WORKSPACE_DIR=./workspace
+```
+
+**4. Install dependencies and run**
+
+```bash
+# Using uv (recommended)
+uv run uvicorn main:app --host 0.0.0.0 --port 8000
+
+# Or using pip
+pip install -r requirements.txt
+python -m uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+### Frontend Setup
+
+**1. Navigate to frontend directory**
+
+```bash
+cd ScienceClaw/frontend
+```
+
+**2. Install dependencies**
+
+```bash
+npm install
+```
+
+**3. Run development server**
+
+```bash
+npm run dev
+```
+
+**4. Open browser**
+
+```
+http://localhost:5173
+```
+
+### RPA Modes
+
+#### Local Mode (No Docker Required)
+
+Set `STORAGE_BACKEND=local` in `.env`. RPA recording uses CDP (Chrome DevTools Protocol) screencast instead of VNC. Playwright runs directly on your host machine.
+
+**Advantages:**
+- No Docker sandbox needed
+- Faster performance
+- Direct access to host browser
+
+**Limitations:**
+- Less isolation
+- Requires Playwright installation on host
+
+#### Docker Mode (Sandbox Isolation)
+
+Set `STORAGE_BACKEND=docker` in `.env`. Requires sandbox container running. RPA uses VNC for display.
+
+**Advantages:**
+- Full isolation
+- Consistent environment
+- Safer execution
+
+**Requirements:**
+- Sandbox container must be running
+- Access to `SANDBOX_MCP_URL`
 
 ---
 
@@ -186,20 +263,9 @@ To lower the barrier for new users, a limited batch of LLM API resources:
 
 ## 🔧 Tools & Skills System
 
-### 🧪 1,900+ Built-in Scientific Tools
+### 🧪 1,900+ Built-in Tools
 
-ScienceClaw integrates **ToolUniverse**, a unified ecosystem of 1,900+ scientific tools spanning **multiple disciplines**:
-
-| Domain | Capabilities |
-|---|---|
-| 💊 **Drug Discovery & Biomedicine** | Target identification (OpenTargets), ADMET prediction, drug safety (FAERS), protein analysis (UniProt, PDB, AlphaFold), genomics (GWAS, GTEx), clinical trials |
-| 🔭 **Astronomy & Space Science** | SIMBAD astronomical objects, SDSS sky survey, NASA exoplanet archive, JPL Horizons ephemeris, NASA DONKI solar events, small body database |
-| 🌍 **Earth & Environmental Science** | USGS earthquakes & hydrology, ERDDAP ocean/climate data, SoilGrids, air quality (WAQI), OpenMeteo weather/climate, marine regions |
-| ⚗️ **Chemistry & Materials** | COD crystal structures, molecular property prediction, SMILES-based analysis, compound similarity, chemical computation |
-| 🌱 **Biodiversity & Ecology** | GBIF species records, OBIS marine biodiversity, POWO plant taxonomy, WoRMS marine species, eBird taxonomy, paleobiology database |
-| 📊 **Social Science & Statistics** | World Bank indicators, Eurostat, US Census population data, Wikidata knowledge graph, DBpedia |
-| 📚 **Academic Literature** | Multi-source search (PubMed, arXiv, OpenAlex, Semantic Scholar, DBLP, INSPIRE-HEP, Crossref, DOAJ, CORE) |
-| 🤖 **Data Science & Computing** | HuggingFace models/datasets, OpenML, GitHub repositories, scientific computing software, image processing |
+ScienceClaw integrates **ToolUniverse**, providing 1,900+ tools across multiple domains for automation, data processing, and AI-powered workflows.
 
 ### 🛠️ Four-Layer Tool Architecture
 
@@ -225,23 +291,24 @@ Skills are **structured instruction documents (SKILL.md)** that guide the Agent 
 
 | Skill | Purpose |
 |---|---|
-| 📄 **pdf** | Read, create, merge, split, OCR, and generate professional PDF research reports |
-| 📝 **docx** | Create and edit Word documents with cover pages, TOC, tables, and charts |
-| 📊 **pptx** | Generate and edit PowerPoint slide decks |
-| 📈 **xlsx** | Create and manipulate Excel spreadsheets, CSV/TSV data processing |
-| 🛠️ **tool-creator** | Create & upgrade custom @tool functions (write → test → save) |
-| 📝 **skill-creator** | Create & refine skills with draft → test → review → iterate |
-| 🔍 **find-skills** | Search, discover & install community skills from the open ecosystem |
-| 🧪 **tooluniverse** | Unified access to 1,900+ scientific tools |
+| 🤖 **RPA Recording** | Record browser interactions and generate Playwright automation scripts |
+| 📄 **pdf** | Read, create, merge, split, OCR, and generate PDF documents |
+| 📝 **docx** | Create and edit Word documents with formatting, tables, and charts |
+| 📊 **pptx** | Generate and edit PowerPoint presentations |
+| 📈 **xlsx** | Create and manipulate Excel spreadsheets, process CSV/TSV data |
+| 🛠️ **tool-creator** | Create custom @tool functions (write → test → save) |
+| 📝 **skill-creator** | Create and refine skills with iterative workflow |
+| 🔍 **find-skills** | Search and install community skills |
+| 🧪 **tooluniverse** | Access to 1,900+ built-in tools |
 
-#### Multi-Format Report Generation
+#### Multi-Format Document Generation
 
-ScienceClaw can produce professional research deliverables in **4 document formats**:
+ScienceClaw can produce professional documents in **4 formats**:
 
 | Format | Features |
 |---|---|
-| **PDF** | Cover page, table of contents, charts (bar/pie/line), in-text citations, references, academic styling |
-| **DOCX** | Cover page, TOC, tables, images, blue-superscript citations, Word-native formatting |
+| **PDF** | Cover page, table of contents, charts, citations, references |
+| **DOCX** | Cover page, TOC, tables, images, Word-native formatting |
 | **PPTX** | Slide decks with titles, bullet points, images, speaker notes |
 | **XLSX** | Data tables, charts, multi-sheet workbooks, CSV/TSV export |
 
@@ -259,10 +326,11 @@ ScienceClaw can produce professional research deliverables in **4 document forma
 
 | Feature | Description |
 |---|---|
-| 📨 **One-Click Feishu (Lark) Integration** | Configure Feishu webhook notifications in settings — receive task results, alerts, and reports directly in your Feishu group chat. |
-| ⏰ **Scheduled Tasks** | Set up recurring or one-time tasks with cron-like scheduling. The agent runs automatically at the specified time and delivers results via Feishu or in-app notifications. |
-| 📁 **File Management System** | Built-in file panel for browsing, previewing, and downloading all workspace files generated during agent sessions — no need to dig through directories. |
-| 📊 **Resource Monitoring** | Real-time system resource dashboard showing LLM resource consumption and service health — stay informed about your deployment status at a glance. |
+| 🤖 **RPA Recording & Playback** | Record browser interactions and generate reusable Playwright automation scripts. Supports both Docker sandbox mode and local mode. |
+| 📨 **Feishu (Lark) Integration** | Configure webhook notifications in settings — receive task results and alerts directly in Feishu group chat. |
+| ⏰ **Scheduled Tasks** | Set up recurring or one-time tasks with cron-like scheduling. Results delivered via Feishu or in-app notifications. |
+| 📁 **File Management** | Built-in file panel for browsing, previewing, and downloading workspace files generated during sessions. |
+| 📊 **Resource Monitoring** | Real-time dashboard showing LLM resource consumption and service health status. |
 
 ---
 
@@ -272,27 +340,24 @@ ScienceClaw can produce professional research deliverables in **4 document forma
 
 ```
 ScienceClaw/
-├── docker-compose.yml              # 10-service orchestration
-├── docker-compose-release.yml      # Pre-built image orchestration (for end users)
-├── docker-compose-china.yml        # China mirror acceleration
+├── docker-compose.yml              # Development orchestration
+├── docker-compose-release.yml      # Pre-built image orchestration
 ├── images/                         # Static assets (logo, screenshots)
-├── videos/                         # Demo videos
 ├── Tools/                          # Custom tools (hot-reload)
 ├── Skills/                         # User & community skill packages
-├── workspace/                      # 🔒 Local workspace (data never leaves your machine)
+├── workspace/                      # 🔒 Local workspace (data stays local)
 └── ScienceClaw/
     ├── backend/                    # FastAPI backend
     │   ├── deepagent/              # Core AI agent engine (LangGraph)
-    │   ├── builtin_skills/         # 9 built-in skills (pdf, docx, pptx, xlsx, tooluniverse, ...)
+    │   ├── builtin_skills/         # Built-in skills (pdf, docx, pptx, xlsx, etc.)
+    │   ├── rpa/                    # RPA recording/playback engine
     │   ├── route/                  # REST API routes
-    │   ├── im/                     # IM integrations (Feishu / Lark)
+    │   ├── im/                     # IM integrations (Feishu/Lark)
     │   ├── mongodb/                # Database access layer
-    │   ├── user/                   # User management
-    │   ├── scripts/                # Utility scripts (Feishu setup, etc.)
-    │   └── translations/           # i18n language packs
+    │   └── user/                   # User management
     ├── frontend/                   # Vue 3 + Tailwind frontend
     ├── sandbox/                    # Isolated code execution environment
-    ├── task-service/               # Scheduled task service (cron jobs)
+    ├── task-service/               # Scheduled task service
     └── websearch/                  # Search & crawl microservice
 ```
 
@@ -303,27 +368,24 @@ ScienceClaw/
 ## 🧑‍💻 Useful Commands
 
 ```bash
-# First launch (recommended for most users) — pull pre-built images, no local compilation
-docker compose -f docker-compose-release.yaml up -d
+# Pull pre-built images and start (recommended for most users)
+docker compose -f docker-compose-release.yml up -d
 
-# First launch (for developers) — build from source and start all services
+# Build from source and start (for developers)
 docker compose up -d --build
 
-# First launch (for developers in China) — build with Chinese mirror sources for faster downloads
-docker compose -f docker-compose-china.yml up -d --build
-
-# Daily launch — fast startup, no rebuild needed
+# Daily launch — fast startup, no rebuild
 docker compose up -d
 
 # Check service status
 docker compose ps
 
 # View logs (-f to follow in real time)
-docker compose logs -f backend     # Backend logs
-docker compose logs -f frontend    # Frontend logs
-docker compose logs -f sandbox     # Sandbox logs
+docker compose logs -f backend
+docker compose logs -f frontend
+docker compose logs -f sandbox
 
-# Restart a single service
+# Restart a service
 docker compose restart backend
 
 # Stop all services
