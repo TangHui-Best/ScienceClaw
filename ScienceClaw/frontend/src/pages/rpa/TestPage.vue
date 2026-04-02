@@ -3,7 +3,8 @@ import { ref, onMounted, onBeforeUnmount, computed } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { Play, Save, CheckCircle, XCircle, Loader2, Terminal, Code, ArrowLeft, RotateCcw } from 'lucide-vue-next';
 import { apiClient } from '@/api/client';
-import { getRpaVncUrl, isLocalMode } from '@/utils/sandbox';
+import { getBackendWsUrl, isLocalMode } from '@/utils/sandbox';
+import VNCViewer from '@/components/VNCViewer.vue';
 
 const router = useRouter();
 const route = useRoute();
@@ -19,7 +20,7 @@ const params = computed(() => {
   }
 });
 
-const vncUrl = computed(() => getRpaVncUrl());
+const vncWsUrl = computed(() => getBackendWsUrl(`/rpa/vnc/${encodeURIComponent(sessionId.value || 'sandbox')}`));
 const localMode = ref(isLocalMode());
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 let screencastWs: WebSocket | null = null;
@@ -35,7 +36,7 @@ const saved = ref(false);
 const showScript = ref(false);
 const error = ref<string | null>(null);
 
-const drawFrame = (base64Data: string, metadata: { width: number; height: number }) => {
+const drawFrame = (base64Data: string, _metadata: { width: number; height: number }) => {
   const canvas = canvasRef.value;
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
@@ -51,8 +52,7 @@ const drawFrame = (base64Data: string, metadata: { width: number; height: number
 };
 
 const connectScreencast = (sid: string) => {
-  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${proto}//${window.location.host}/api/v1/rpa/screencast/${sid}`;
+  const wsUrl = getBackendWsUrl(`/rpa/screencast/${sid}`);
   console.log('[TestPage] Connecting screencast:', wsUrl);
   screencastWs = new WebSocket(wsUrl);
 
@@ -205,11 +205,12 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <div class="flex-1 relative bg-black overflow-hidden">
-            <iframe
+            <VNCViewer
               v-if="!localMode"
-              :src="vncUrl"
-              class="w-full h-full border-0"
-              allow="clipboard-read; clipboard-write"
+              :session-id="sessionId || 'sandbox'"
+              :direct-ws-url="vncWsUrl"
+              :enabled="true"
+              :view-only="false"
             />
             <canvas
               v-else

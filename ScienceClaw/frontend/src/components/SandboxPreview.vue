@@ -62,12 +62,12 @@
       />
 
       <!-- Browser VNC view -->
-      <iframe
+      <VNCViewer
         v-else-if="activeTab === 'browser' && !localMode"
-        :src="vncUrl"
-        class="w-full h-full border-0"
-        sandbox="allow-same-origin allow-scripts allow-popups"
-        referrerpolicy="no-referrer"
+        :session-id="props.sessionId || 'sandbox'"
+        :direct-ws-url="vncWsUrl"
+        :enabled="visible && expanded && activeTab === 'browser'"
+        :view-only="true"
       />
       <canvas
         v-else-if="activeTab === 'browser' && localMode"
@@ -83,7 +83,8 @@ import { ref, computed, watch, onBeforeUnmount } from 'vue';
 import { X as XIcon, ChevronRight as ChevronRightIcon, Monitor as MonitorIcon } from 'lucide-vue-next';
 import { useI18n } from 'vue-i18n';
 import SandboxTerminal from './SandboxTerminal.vue';
-import { getSandboxVncUrl, isLocalMode, type SandboxPreviewMode } from '@/utils/sandbox';
+import VNCViewer from './VNCViewer.vue';
+import { getBackendWsUrl, isLocalMode, type SandboxPreviewMode } from '@/utils/sandbox';
 
 const { t } = useI18n();
 
@@ -113,7 +114,7 @@ const localMode = ref(isLocalMode());
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 let screencastWs: WebSocket | null = null;
 
-const vncUrl = computed(() => getSandboxVncUrl());
+const vncWsUrl = computed(() => getBackendWsUrl(`/rpa/vnc/${encodeURIComponent(props.sessionId || 'sandbox')}`));
 
 const availableTabs = computed(() => {
   const tabs: { id: 'terminal' | 'browser'; label: string }[] = [];
@@ -122,7 +123,7 @@ const availableTabs = computed(() => {
   return tabs;
 });
 
-const drawFrame = (base64Data: string, metadata: { width: number; height: number }) => {
+const drawFrame = (base64Data: string, _metadata: { width: number; height: number }) => {
   const canvas = canvasRef.value;
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
@@ -139,8 +140,7 @@ const drawFrame = (base64Data: string, metadata: { width: number; height: number
 
 const connectScreencast = (sessionId: string) => {
   if (screencastWs) return;
-  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${proto}//${window.location.host}/api/v1/rpa/screencast/${sessionId}`;
+  const wsUrl = getBackendWsUrl(`/rpa/screencast/${sessionId}`);
   screencastWs = new WebSocket(wsUrl);
 
   screencastWs.onmessage = (ev) => {

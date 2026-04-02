@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
-import { Pause, Camera, Terminal, CheckCircle, Radio, Send, Wand2, Bot, Code, X } from 'lucide-vue-next';
+import { Camera, Terminal, CheckCircle, Radio, Send, Wand2, Bot, Code, X } from 'lucide-vue-next';
 import { apiClient } from '@/api/client';
-import { getRpaVncUrl, isLocalMode } from '@/utils/sandbox';
+import { getBackendWsUrl, isLocalMode } from '@/utils/sandbox';
+import VNCViewer from '@/components/VNCViewer.vue';
 
 const router = useRouter();
 const route = useRoute();
@@ -21,9 +22,9 @@ let screencastWs: WebSocket | null = null;
 let lastMoveTime = 0;
 const MOVE_THROTTLE = 50; // 50ms 节流
 
-// VNC URL: try direct 6080 first, fallback to 18080 proxy
-const vncUrl = computed(() => {
-  return getRpaVncUrl();
+const vncWsUrl = computed(() => {
+  const sid = sessionId.value || 'sandbox';
+  return getBackendWsUrl(`/rpa/vnc/${encodeURIComponent(sid)}`);
 });
 
 const steps = ref<any[]>([
@@ -129,7 +130,7 @@ const getModifiers = (e: MouseEvent | KeyboardEvent | WheelEvent): number => {
   return mask;
 };
 
-const drawFrame = (base64Data: string, metadata: { width: number; height: number }) => {
+const drawFrame = (base64Data: string, _metadata: { width: number; height: number }) => {
   const canvas = canvasRef.value;
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
@@ -146,8 +147,7 @@ const drawFrame = (base64Data: string, metadata: { width: number; height: number
 };
 
 const connectScreencast = (sid: string) => {
-  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${proto}//${window.location.host}/api/v1/rpa/screencast/${sid}`;
+  const wsUrl = getBackendWsUrl(`/rpa/screencast/${sid}`);
   screencastWs = new WebSocket(wsUrl);
 
   screencastWs.onmessage = (ev) => {
@@ -430,11 +430,12 @@ const sendMessage = async () => {
           </div>
 
           <div class="flex-1 relative bg-black overflow-hidden">
-            <iframe
+            <VNCViewer
               v-if="sessionId && !localMode"
-              :src="vncUrl"
-              class="w-full h-full border-0"
-              allow="clipboard-read; clipboard-write"
+              :session-id="sessionId"
+              :direct-ws-url="vncWsUrl"
+              :enabled="true"
+              :view-only="false"
             />
             <canvas
               v-else-if="sessionId && localMode"
