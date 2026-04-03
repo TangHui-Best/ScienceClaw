@@ -58,11 +58,19 @@ export function getSandboxBaseUrl(): string {
   return getSandboxBaseUrlSync();
 }
 
-export function getSandboxVncUrl(): string {
+export function getSandboxVncUrl(sessionId?: string, viewOnly = true): string {
+  const viewOnlyParam = viewOnly ? 'true' : 'false';
+  if (sessionId) {
+    const wsPath = encodeURIComponent(`api/v1/runtime/session/${sessionId}/http/websockify`);
+    return `/api/v1/runtime/session/${sessionId}/http/vnc/index.html?autoconnect=true&resize=scale&view_only=${viewOnlyParam}&path=${wsPath}`;
+  }
   return `${getSandboxBaseUrl()}/vnc/index.html?autoconnect=true&resize=scale&view_only=true`;
 }
 
-export function getRpaVncUrl(): string {
+export function getRpaVncUrl(sessionId?: string): string {
+  if (sessionId) {
+    return getSandboxVncUrl(sessionId, false);
+  }
   return `${getSandboxBaseUrl()}/vnc/index.html?autoconnect=true&resize=scale&view_only=false`;
 }
 

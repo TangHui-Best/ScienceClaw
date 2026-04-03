@@ -162,7 +162,10 @@ async def test_script(
     script = generator.generate_script(steps, request.params, is_local=(settings.storage_backend == "local"))
 
     logs = []
-    browser = await get_cdp_connector().get_browser()
+    browser = await get_cdp_connector().get_browser(
+        session_id=session.sandbox_session_id,
+        user_id=str(current_user.id),
+    )
 
     # 本地模式：先创建 page 并注册，等待前端连接 screencast
     if settings.storage_backend == "local":

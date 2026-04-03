@@ -505,7 +505,10 @@ class RPASessionManager:
         )
         self.sessions[session_id] = session
 
-        browser = await get_cdp_connector().get_browser()
+        browser = await get_cdp_connector().get_browser(
+            session_id=sandbox_session_id,
+            user_id=user_id,
+        )
         context = await browser.new_context(no_viewport=True)
         page = await context.new_page()
         page.set_default_timeout(RPA_PAGE_TIMEOUT_MS)
@@ -592,6 +595,12 @@ class RPASessionManager:
 
     def get_page(self, session_id: str) -> Optional[Page]:
         return self._pages.get(session_id)
+
+    def owns_sandbox_session(self, user_id: str, sandbox_session_id: str) -> bool:
+        return any(
+            session.user_id == user_id and session.sandbox_session_id == sandbox_session_id
+            for session in self.sessions.values()
+        )
 
     async def _handle_event(self, session_id: str, evt: dict):
         if session_id not in self.sessions:

@@ -67,7 +67,7 @@ const localMode = computed(() => isLocalMode());
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 let screencastWs: WebSocket | null = null;
 
-const sandboxVncUrl = computed(() => getSandboxVncUrl());
+const sandboxVncUrl = computed(() => getSandboxVncUrl(props.sessionId));
 
 const drawFrame = (base64Data: string) => {
   const canvas = canvasRef.value;

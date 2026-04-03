@@ -1,16 +1,17 @@
 <template>
-  <div
-    ref="vncContainer"
-    class="vnc-container"
-    style="display: flex; width: 100%; height: 100%; overflow: auto; background: rgb(40, 40, 40);">
-  </div>
+  <iframe
+    v-if="enabled && iframeSrc"
+    :src="iframeSrc"
+    class="vnc-frame"
+    frameborder="0"
+    scrolling="no"
+    @load="handleLoad"
+    @error="handleError"
+  />
 </template>
 
 <script setup lang="ts">
-import { ref, onBeforeUnmount, watch } from 'vue';
-import { getVNCUrl } from '@/api/agent';
-// @ts-ignore
-import RFB from '@novnc/novnc/lib/rfb';
+import { computed, watch } from 'vue';
 
 const props = defineProps<{
   sessionId: string;
@@ -25,94 +26,59 @@ const emit = defineEmits<{
   credentialsRequired: [];
 }>();
 
-const vncContainer = ref<HTMLDivElement | null>(null);
-let rfb: RFB | null = null;
+function buildIframeSrc(): string {
+  const viewOnlyParam = props.viewOnly ? 'true' : 'false';
 
-const initVNCConnection = async () => {
-  if (!vncContainer.value || !props.enabled) return;
-
-  // Disconnect existing connection
-  if (rfb) {
-    rfb.disconnect();
-    rfb = null;
+  if (props.directWsUrl) {
+    const wsUrl = new URL(props.directWsUrl, window.location.origin);
+    const params = new URLSearchParams({
+      autoconnect: 'true',
+      resize: 'scale',
+      view_only: viewOnlyParam,
+      path: wsUrl.pathname.replace(/^\/+/, ''),
+    });
+    return `/vnc/vnc_lite.html?${params.toString()}`;
   }
 
-  try {
-    let wsUrl: string;
-    if (props.directWsUrl) {
-      wsUrl = props.directWsUrl;
-    } else {
-      wsUrl = await getVNCUrl(props.sessionId);
+  const params = new URLSearchParams({
+    autoconnect: 'true',
+    resize: 'scale',
+    view_only: viewOnlyParam,
+    path: `api/v1/runtime/session/${props.sessionId}/http/websockify`,
+  });
+  return `/api/v1/runtime/session/${props.sessionId}/http/vnc/vnc_lite.html?${params.toString()}`;
+}
+
+const iframeSrc = computed(() => {
+  if (!props.enabled || !props.sessionId) return '';
+  return buildIframeSrc();
+});
+
+const handleLoad = () => {
+  emit('connected');
+};
+
+const handleError = (event: Event) => {
+  emit('disconnected', event);
+};
+
+watch(
+  () => props.enabled,
+  (enabled, prev) => {
+    if (prev && !enabled) {
+      emit('disconnected');
     }
-
-    // Create NoVNC connection
-    rfb = new RFB(vncContainer.value, wsUrl, {
-      credentials: { password: '' },
-      shared: true,
-      repeaterID: '',
-      wsProtocols: ['binary'],
-      // Scaling options
-      scaleViewport: true,  // Automatically scale to fit container
-      //resizeSession: true   // Request server to adjust resolution
-    });
-
-    // Set viewOnly based on props, default to false (interactive)
-    rfb.viewOnly = props.viewOnly ?? false;
-    rfb.scaleViewport = true;
-    //rfb.resizeSession = true;
-
-    rfb.addEventListener('connect', () => {
-      console.log('VNC connection successful');
-      emit('connected');
-    });
-
-    rfb.addEventListener('disconnect', (e: any) => {
-      console.log('VNC connection disconnected', e);
-      emit('disconnected', e);
-    });
-
-    rfb.addEventListener('credentialsrequired', () => {
-      console.log('VNC credentials required');
-      emit('credentialsRequired');
-    });
-  } catch (error) {
-    console.error('Failed to initialize VNC connection:', error);
   }
-};
-
-const disconnect = () => {
-  if (rfb) {
-    rfb.disconnect();
-    rfb = null;
-  }
-};
-
-// Watch for session ID or enabled state changes
-watch([() => props.sessionId, () => props.enabled], () => {
-  if (props.enabled && vncContainer.value) {
-    initVNCConnection();
-  } else {
-    disconnect();
-  }
-}, { immediate: true });
-
-// Watch for container availability
-watch(vncContainer, () => {
-  if (vncContainer.value && props.enabled) {
-    initVNCConnection();
-  }
-});
-
-onBeforeUnmount(() => {
-  disconnect();
-});
-
-// Expose methods for parent component
-defineExpose({
-  disconnect,
-  initConnection: initVNCConnection
-});
+);
 </script>
 
 <style scoped>
+.vnc-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: rgb(40, 40, 40);
+  border: 0;
+}
 </style>

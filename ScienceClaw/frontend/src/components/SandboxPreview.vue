@@ -113,7 +113,7 @@ const localMode = ref(isLocalMode());
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 let screencastWs: WebSocket | null = null;
 
-const vncUrl = computed(() => getSandboxVncUrl());
+const vncUrl = computed(() => getSandboxVncUrl(props.sessionId));
 
 const availableTabs = computed(() => {
   const tabs: { id: 'terminal' | 'browser'; label: string }[] = [];

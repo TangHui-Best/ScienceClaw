@@ -46,6 +46,7 @@ from backend.deepagent.sessions import (
     async_get_science_session,
     async_list_science_sessions,
 )
+from backend.runtime.session_runtime_manager import get_session_runtime_manager
 from backend.user.dependencies import get_current_user, require_user, User
 from backend.models import get_model_config
 from backend.config import settings
@@ -1343,6 +1344,12 @@ async def remove_session(session_id: str, current_user: User = Depends(require_u
         if session.user_id != current_user.id:
             raise HTTPException(status_code=403, detail="Access denied")
         await async_delete_science_session(session_id)
+        try:
+            await get_session_runtime_manager().destroy_runtime(session_id)
+        except Exception as cleanup_exc:
+            logger.warning(
+                f"Failed to destroy runtime for deleted session {session_id}: {cleanup_exc}"
+            )
         return ApiResponse(data={"ok": True})
     except ScienceSessionNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
