@@ -93,3 +93,7 @@ Desktop.ini
 workspace
 .plan
 sync-to-huawei-swr-docker.sh
+
+# Local project data
+ScienceClaw/data/
+ScienceClaw/Skills/

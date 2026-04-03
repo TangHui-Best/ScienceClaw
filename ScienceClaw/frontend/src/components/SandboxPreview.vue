@@ -63,11 +63,10 @@
 
       <!-- Browser VNC view -->
       <iframe
-        v-else-if="activeTab === 'browser' && !localMode"
-        :src="vncUrl"
-        class="w-full h-full border-0"
-        sandbox="allow-same-origin allow-scripts allow-popups"
-        referrerpolicy="no-referrer"
+        v-else-if="activeTab === 'browser' && !localMode && props.sessionId"
+        :src="vncPageUrl"
+        class="w-full h-full border-0 bg-black"
+        allow="clipboard-read; clipboard-write"
       />
       <canvas
         v-else-if="activeTab === 'browser' && localMode"
@@ -83,7 +82,7 @@ import { ref, computed, watch, onBeforeUnmount } from 'vue';
 import { X as XIcon, ChevronRight as ChevronRightIcon, Monitor as MonitorIcon } from 'lucide-vue-next';
 import { useI18n } from 'vue-i18n';
 import SandboxTerminal from './SandboxTerminal.vue';
-import { getSandboxVncUrl, isLocalMode, type SandboxPreviewMode } from '@/utils/sandbox';
+import { getBackendVncPageUrl, getBackendWsUrl, isLocalMode, type SandboxPreviewMode } from '@/utils/sandbox';
 
 const { t } = useI18n();
 
@@ -113,7 +112,7 @@ const localMode = ref(isLocalMode());
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 let screencastWs: WebSocket | null = null;
 
-const vncUrl = computed(() => getSandboxVncUrl());
+const vncPageUrl = computed(() => getBackendVncPageUrl(props.sessionId || 'sandbox', true));
 
 const availableTabs = computed(() => {
   const tabs: { id: 'terminal' | 'browser'; label: string }[] = [];
@@ -140,7 +139,11 @@ const drawFrame = (base64Data: string) => {
 const connectScreencast = (sessionId: string) => {
   if (screencastWs) return;
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${proto}//${window.location.host}/api/v1/sessions/${sessionId}/browser/screencast`;
+  const token = new URL(getBackendWsUrl('/noop')).searchParams.get('token');
+  const wsUrl = new URL(`${proto}//${window.location.host}/api/v1/sessions/${sessionId}/browser/screencast`);
+  if (token) {
+    wsUrl.searchParams.set('token', token);
+  }
   screencastWs = new WebSocket(wsUrl);
 
   screencastWs.onmessage = (ev) => {
@@ -211,7 +214,7 @@ const handleClose = () => {
   emit('close');
 };
 
-const show = (mode?: SandboxPreviewMode, sessionId?: string) => {
+const show = (mode?: SandboxPreviewMode) => {
   visible.value = true;
   expanded.value = true;
   if (mode === 'terminal' || mode === 'browser') {

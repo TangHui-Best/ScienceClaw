@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
-import { Pause, Camera, Terminal, CheckCircle, Radio, Send, Wand2, Bot, Code, X } from 'lucide-vue-next';
+import { Camera, Terminal, CheckCircle, Radio, Send, Wand2, Bot, Code, X } from 'lucide-vue-next';
 import { apiClient } from '@/api/client';
-import { getRpaVncUrl, isLocalMode } from '@/utils/sandbox';
+import { getBackendVncPageUrl, getBackendWsUrl, isLocalMode } from '@/utils/sandbox';
 
 const router = useRouter();
 const route = useRoute();
@@ -21,10 +21,7 @@ let screencastWs: WebSocket | null = null;
 let lastMoveTime = 0;
 const MOVE_THROTTLE = 50; // 50ms 节流
 
-// VNC URL: try direct 6080 first, fallback to 18080 proxy
-const vncUrl = computed(() => {
-  return getRpaVncUrl();
-});
+const vncPageUrl = computed(() => getBackendVncPageUrl(sessionId.value || 'sandbox', false));
 
 const steps = ref<any[]>([
   { id: '0', title: '初始化环境', description: '正在配置沙箱录制环境...', status: 'active' }
@@ -139,7 +136,7 @@ const getModifiers = (e: MouseEvent | KeyboardEvent | WheelEvent): number => {
   return mask;
 };
 
-const drawFrame = (base64Data: string, metadata: { width: number; height: number }) => {
+const drawFrame = (base64Data: string, _metadata: { width: number; height: number }) => {
   const canvas = canvasRef.value;
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
@@ -156,8 +153,7 @@ const drawFrame = (base64Data: string, metadata: { width: number; height: number
 };
 
 const connectScreencast = (sid: string) => {
-  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${proto}//${window.location.host}/api/v1/rpa/screencast/${sid}`;
+  const wsUrl = getBackendWsUrl(`/rpa/screencast/${sid}`);
   screencastWs = new WebSocket(wsUrl);
 
   screencastWs.onmessage = (ev) => {
@@ -449,8 +445,8 @@ const sendMessage = async () => {
           <div class="flex-1 relative bg-black overflow-hidden">
             <iframe
               v-if="sessionId && !localMode"
-              :src="vncUrl"
-              class="w-full h-full border-0"
+              :src="vncPageUrl"
+              class="w-full h-full border-0 bg-black"
               allow="clipboard-read; clipboard-write"
             />
             <canvas

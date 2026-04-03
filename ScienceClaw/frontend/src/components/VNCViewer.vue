@@ -8,7 +8,7 @@
 
 <script setup lang="ts">
 import { ref, onBeforeUnmount, watch } from 'vue';
-import { getVNCUrl } from '@/api/agent';
+import { getBackendWsUrl } from '@/utils/sandbox';
 // @ts-ignore
 import RFB from '@novnc/novnc/lib/rfb';
 
@@ -42,7 +42,7 @@ const initVNCConnection = async () => {
     if (props.directWsUrl) {
       wsUrl = props.directWsUrl;
     } else {
-      wsUrl = await getVNCUrl(props.sessionId);
+      wsUrl = getBackendWsUrl(`/rpa/vnc/${encodeURIComponent(props.sessionId)}`);
     }
 
     // Create NoVNC connection

@@ -7,6 +7,7 @@
  */
 
 import { apiClient } from '@/api/client';
+import { getStoredToken } from '@/api/auth';
 
 const DEFAULT_SANDBOX_PORT = 18080;
 
@@ -28,7 +29,7 @@ async function fetchSandboxPublicUrl(): Promise<string> {
     .then((res) => {
       _sandboxBaseUrl = res.data?.sandbox_public_url || '';
       _storageBackend = res.data?.storage_backend || 'mongo';
-      return _sandboxBaseUrl;
+      return _sandboxBaseUrl ?? '';
     })
     .catch(() => {
       _sandboxBaseUrl = '';
@@ -36,7 +37,7 @@ async function fetchSandboxPublicUrl(): Promise<string> {
       return '';
     });
 
-  return _fetchPromise;
+  return _fetchPromise ?? Promise.resolve('');
 }
 
 /**
@@ -72,6 +73,36 @@ export function getSandboxTerminalWsUrl(): string {
   // Extract host from base URL
   const url = new URL(base);
   return `${proto}//${url.host}/v1/shell/ws`;
+}
+
+export function getBackendWsUrl(path: string): string {
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url = new URL(`${proto}//${window.location.host}/api/v1${path}`);
+  const token = getStoredToken();
+  if (token) {
+    url.searchParams.set('token', token);
+  }
+  return url.toString();
+}
+
+export function getBackendVncPageUrl(sessionId: string, viewOnly = true): string {
+  const token = getStoredToken();
+  const proxyPathBase = `api/v1/rpa/vnc/page/${encodeURIComponent(sessionId)}/websockify`;
+  const proxyPath = token
+    ? `${proxyPathBase}?token=${encodeURIComponent(token)}`
+    : proxyPathBase;
+  const url = new URL(
+    `${window.location.protocol}//${window.location.host}/api/v1/rpa/vnc/page/${encodeURIComponent(sessionId)}/index.html`,
+  );
+  url.searchParams.set('autoconnect', 'true');
+  url.searchParams.set('resize', 'scale');
+  url.searchParams.set('view_only', viewOnly ? 'true' : 'false');
+  url.searchParams.set('path', proxyPath);
+
+  if (token) {
+    url.searchParams.set('token', token);
+  }
+  return url.toString();
 }
 
 export function getSandboxScreenshotUrl(): string {

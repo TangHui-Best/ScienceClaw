@@ -1,10 +1,15 @@
 import json
 import logging
 import asyncio
+from urllib.parse import urlparse
 from typing import Dict, Any
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends, Request
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
+import websockets
+from websockets.exceptions import ConnectionClosed
+import httpx
+from fastapi.responses import Response as FastAPIResponse
 
 from backend.rpa.manager import rpa_manager
 from backend.rpa.generator import PlaywrightGenerator
@@ -45,6 +50,170 @@ class SaveSkillRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
+
+
+async def _get_ws_user(websocket: WebSocket) -> User | None:
+    """Resolve the current user for a WebSocket request.
+
+    Browser WebSocket APIs cannot attach custom Authorization headers in the
+    same way axios does, so we accept a bearer token via query param as a
+    fallback and keep the existing local-mode shortcut.
+    """
+    if settings.storage_backend == "local":
+        return User(id="local_admin", username="admin", role="admin")
+
+    if getattr(settings, "auth_provider", "local") == "none":
+        return User(id="anonymous", username="Anonymous", role="user")
+
+    session_id = (
+        websocket.query_params.get("token")
+        or websocket.cookies.get(settings.session_cookie)
+    )
+    if not session_id:
+        return None
+
+    repo = get_repository("user_sessions")
+    session_doc = await repo.find_one({"_id": session_id})
+    if not session_doc:
+        return None
+
+    import time
+    if session_doc.get("expires_at", 0) < time.time():
+        await repo.delete_one({"_id": session_id})
+        return None
+
+    return User(
+        id=str(session_doc["user_id"]),
+        username=session_doc["username"],
+        role=session_doc.get("role", "user"),
+    )
+
+
+async def _get_http_user(request: Request) -> User | None:
+    """Resolve the current user for normal HTTP requests.
+
+    This mirrors websocket auth so iframe-based noVNC pages can use either
+    the session cookie or a `token` query param.
+    """
+    if settings.storage_backend == "local":
+        return User(id="local_admin", username="admin", role="admin")
+
+    if getattr(settings, "auth_provider", "local") == "none":
+        return User(id="anonymous", username="Anonymous", role="user")
+
+    session_id = (
+        request.query_params.get("token")
+        or request.cookies.get(settings.session_cookie)
+    )
+    if not session_id:
+        return None
+
+    repo = get_repository("user_sessions")
+    session_doc = await repo.find_one({"_id": session_id})
+    if not session_doc:
+        return None
+
+    import time
+    if session_doc.get("expires_at", 0) < time.time():
+        await repo.delete_one({"_id": session_id})
+        return None
+
+    return User(
+        id=str(session_doc["user_id"]),
+        username=session_doc["username"],
+        role=session_doc.get("role", "user"),
+    )
+
+
+def _get_sandbox_vnc_ws_url() -> str:
+    """Build the upstream sandbox VNC WebSocket URL for backend proxying.
+
+    Priority:
+      1. SANDBOX_VNC_WS_URL explicit override
+      2. Derive raw VNC websocket from SANDBOX_MCP_URL
+      3. Fallback to nginx/noVNC websockify path
+    """
+    explicit = (getattr(settings, "sandbox_vnc_ws_url", "") or "").strip()
+    if explicit:
+        return explicit
+
+    sandbox_base = settings.sandbox_mcp_url.replace("/mcp", "")
+    parsed = urlparse(sandbox_base)
+    ws_scheme = "wss" if parsed.scheme == "https" else "ws"
+
+    port = parsed.port
+    if port == 8080:
+        return parsed._replace(scheme=ws_scheme, netloc=f"{parsed.hostname}:6080", path="", query="", fragment="").geturl()
+    if port == 18080:
+        return parsed._replace(scheme=ws_scheme, netloc=f"{parsed.hostname}:16080", path="", query="", fragment="").geturl()
+
+    # Fallback for custom deployments that expose websockify behind the HTTP server.
+    return parsed._replace(scheme=ws_scheme, path="/vnc/websockify", query="", fragment="").geturl()
+
+
+def _get_sandbox_vnc_http_url(path: str) -> str:
+    sandbox_base = settings.sandbox_mcp_url.replace("/mcp", "").rstrip("/")
+    return f"{sandbox_base}/vnc/{path.lstrip('/')}"
+
+
+def _get_sandbox_novnc_ws_url() -> str:
+    sandbox_base = settings.sandbox_mcp_url.replace("/mcp", "").rstrip("/")
+    parsed = urlparse(sandbox_base)
+    ws_scheme = "wss" if parsed.scheme == "https" else "ws"
+    return parsed._replace(scheme=ws_scheme, path="/websockify", query="", fragment="").geturl()
+
+
+def _get_sandbox_proxy_headers() -> list[tuple[str, str]] | None:
+    """Parse optional proxy request headers from env.
+
+    Expected format:
+      SANDBOX_PROXY_HEADERS={"Authorization":"Bearer xxx","X-API-Key":"yyy"}
+    """
+    raw = (getattr(settings, "sandbox_proxy_headers", "") or "").strip()
+    if not raw:
+        return None
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("Invalid SANDBOX_PROXY_HEADERS JSON; ignoring proxy headers")
+        return None
+
+    if not isinstance(parsed, dict):
+        logger.warning("SANDBOX_PROXY_HEADERS must be a JSON object; ignoring proxy headers")
+        return None
+
+    headers: list[tuple[str, str]] = []
+    for key, value in parsed.items():
+        if value is None:
+            continue
+        headers.append((str(key), str(value)))
+    return headers or None
+
+
+def _get_sandbox_proxy_headers_dict() -> dict[str, str]:
+    headers = _get_sandbox_proxy_headers() or []
+    return {key: value for key, value in headers}
+
+
+def _filter_proxy_query(params: dict[str, str] | Any) -> dict[str, str]:
+    return {str(k): str(v) for k, v in dict(params).items() if k != "token"}
+
+
+def _rewrite_vnc_html(html: str, session_id: str) -> str:
+    proxy_prefix = f"/api/v1/rpa/vnc/page/{session_id}/"
+    rewritten = html.replace('href="/vnc/', f'href="{proxy_prefix}')
+    rewritten = rewritten.replace('src="/vnc/', f'src="{proxy_prefix}')
+    rewritten = rewritten.replace('action="/vnc/', f'action="{proxy_prefix}')
+    rewritten = rewritten.replace('url: "/vnc/', f'url: "{proxy_prefix}')
+    rewritten = rewritten.replace("url: '/vnc/", f"url: '{proxy_prefix}")
+    rewritten = rewritten.replace('path: "websockify"', f'path: "{proxy_prefix}websockify"')
+    rewritten = rewritten.replace("path: 'websockify'", f"path: '{proxy_prefix}websockify'")
+    rewritten = rewritten.replace('path = "websockify"', f'path = "{proxy_prefix}websockify"')
+    rewritten = rewritten.replace("path = 'websockify'", f"path = '{proxy_prefix}websockify'")
+    if "<head>" in rewritten:
+        rewritten = rewritten.replace("<head>", f'<head><base href="{proxy_prefix}">', 1)
+    return rewritten
 
 
 async def _resolve_user_model_config(user_id: str) -> dict | None:
@@ -320,11 +489,18 @@ async def rpa_screencast(websocket: WebSocket, session_id: str):
     """CDP screencast: push browser frames + receive input events.
     Only used in local mode (STORAGE_BACKEND=local).
     """
+    user = await _get_ws_user(websocket)
     await websocket.accept()
+    if not user:
+        await websocket.close(code=1008, reason="Not authenticated")
+        return
 
     session = await rpa_manager.get_session(session_id)
     if not session:
         await websocket.close(code=1008, reason="Session not found")
+        return
+    if session.user_id != str(user.id):
+        await websocket.close(code=1008, reason="Not authorized")
         return
 
     page = rpa_manager.get_page(session_id)
@@ -350,5 +526,258 @@ async def rpa_screencast(websocket: WebSocket, session_id: str):
         await screencast.stop()
         try:
             await cdp_session.detach()
+        except Exception:
+            pass
+
+
+@router.get("/vnc/page/{session_id}")
+@router.get("/vnc/page/{session_id}/{path:path}")
+async def proxy_vnc_page(session_id: str, request: Request, path: str = "index.html"):
+    logger.info(
+        "noVNC page proxy request session=%s path=%s query=%s",
+        session_id,
+        path or "index.html",
+        dict(request.query_params),
+    )
+    user = await _get_http_user(request)
+    if not user:
+        logger.warning("noVNC page proxy unauthenticated session=%s", session_id)
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    session = await rpa_manager.get_session(session_id)
+    if session and session.user_id != str(user.id):
+        logger.warning(
+            "noVNC page proxy forbidden session=%s request_user=%s owner=%s",
+            session_id,
+            user.id,
+            session.user_id,
+        )
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    upstream_url = _get_sandbox_vnc_http_url(path or "index.html")
+    query = _filter_proxy_query(request.query_params)
+    logger.info(
+        "noVNC page proxy upstream session=%s upstream=%s filtered_query=%s",
+        session_id,
+        upstream_url,
+        query,
+    )
+
+    async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+        upstream = await client.get(
+            upstream_url,
+            params=query,
+            headers=_get_sandbox_proxy_headers_dict(),
+        )
+    logger.info(
+        "noVNC page proxy response session=%s status=%s content_type=%s",
+        session_id,
+        upstream.status_code,
+        upstream.headers.get("content-type", ""),
+    )
+
+    excluded_headers = {"content-length", "transfer-encoding", "connection", "content-encoding"}
+    headers = {
+        key: value
+        for key, value in upstream.headers.items()
+        if key.lower() not in excluded_headers
+    }
+
+    content_type = upstream.headers.get("content-type", "")
+    content = upstream.content
+    if "text/html" in content_type:
+        content = _rewrite_vnc_html(upstream.text, session_id).encode("utf-8")
+        headers["content-type"] = "text/html; charset=utf-8"
+
+    return FastAPIResponse(
+        content=content,
+        status_code=upstream.status_code,
+        headers=headers,
+        media_type=None,
+    )
+
+
+@router.websocket("/vnc/page/{session_id}/websockify")
+async def proxy_vnc_page_websocket(websocket: WebSocket, session_id: str):
+    logger.info(
+        "noVNC websocket proxy request session=%s query=%s client=%s",
+        session_id,
+        dict(websocket.query_params),
+        getattr(websocket.client, "host", None),
+    )
+    user = await _get_ws_user(websocket)
+
+    requested_protocols = [
+        p.strip()
+        for p in (websocket.headers.get("sec-websocket-protocol") or "").split(",")
+        if p.strip()
+    ]
+    accepted_subprotocol = requested_protocols[0] if requested_protocols else None
+
+    await websocket.accept(subprotocol=accepted_subprotocol)
+    if not user:
+        logger.warning("noVNC websocket proxy unauthenticated session=%s", session_id)
+        await websocket.close(code=1008, reason="Not authenticated")
+        return
+
+    session = await rpa_manager.get_session(session_id)
+    if session and session.user_id != str(user.id):
+        logger.warning(
+            "noVNC websocket proxy forbidden session=%s request_user=%s owner=%s",
+            session_id,
+            user.id,
+            session.user_id,
+        )
+        await websocket.close(code=1008, reason="Not authorized")
+        return
+
+    upstream_url = _get_sandbox_novnc_ws_url()
+    query = _filter_proxy_query(websocket.query_params)
+    if query:
+        from urllib.parse import urlencode
+        upstream_url = f"{upstream_url}?{urlencode(query)}"
+
+    logger.info(
+        "Opening proxied noVNC websocket for user=%s session=%s upstream=%s subprotocols=%s",
+        user.username,
+        session_id,
+        upstream_url,
+        requested_protocols,
+    )
+
+    try:
+        async with websockets.connect(
+            upstream_url,
+            subprotocols=requested_protocols or None,
+            additional_headers=_get_sandbox_proxy_headers(),
+            ping_interval=20,
+            ping_timeout=20,
+            max_size=None,
+        ) as upstream:
+            logger.info(
+                "Proxied noVNC websocket upstream connected session=%s upstream_subprotocol=%s",
+                session_id,
+                getattr(upstream, "subprotocol", None),
+            )
+
+            async def client_to_upstream():
+                while True:
+                    message = await websocket.receive()
+                    if message["type"] == "websocket.disconnect":
+                        logger.info("noVNC websocket client disconnected session=%s", session_id)
+                        break
+                    if message.get("bytes") is not None:
+                        await upstream.send(message["bytes"])
+                    elif message.get("text") is not None:
+                        await upstream.send(message["text"])
+
+            async def upstream_to_client():
+                async for message in upstream:
+                    if isinstance(message, bytes):
+                        await websocket.send_bytes(message)
+                    else:
+                        await websocket.send_text(message)
+
+            relay_tasks = {
+                asyncio.create_task(client_to_upstream()),
+                asyncio.create_task(upstream_to_client()),
+            }
+            done, pending = await asyncio.wait(
+                relay_tasks,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            await asyncio.gather(*done, return_exceptions=True)
+    except ConnectionClosed as exc:
+        logger.info("Proxied noVNC websocket closed session=%s detail=%s", session_id, exc)
+    except WebSocketDisconnect:
+        logger.info("Proxied noVNC websocket local disconnect session=%s", session_id)
+        pass
+    except Exception as exc:
+        logger.exception("Proxied noVNC websocket error session=%s: %s", session_id, exc)
+        try:
+            await websocket.close(code=1011, reason="noVNC proxy failed")
+        except Exception:
+            pass
+
+
+@router.websocket("/vnc/{session_id}")
+async def vnc_proxy(websocket: WebSocket, session_id: str):
+    """Proxy frontend VNC WebSocket traffic through the backend.
+
+    This keeps the sandbox or local browser endpoint private to the backend,
+    so the browser only talks to `/api/v1/rpa/vnc/...`.
+    """
+    user = await _get_ws_user(websocket)
+
+    requested_protocols = [
+        p.strip()
+        for p in (websocket.headers.get("sec-websocket-protocol") or "").split(",")
+        if p.strip()
+    ]
+    accepted_subprotocol = requested_protocols[0] if requested_protocols else None
+
+    await websocket.accept(subprotocol=accepted_subprotocol)
+    if not user:
+        await websocket.close(code=1008, reason="Not authenticated")
+        return
+
+    upstream_url = _get_sandbox_vnc_ws_url()
+    logger.info(
+        "Opening VNC proxy for user=%s session=%s upstream=%s",
+        user.username,
+        session_id,
+        upstream_url,
+    )
+
+    try:
+        async with websockets.connect(
+            upstream_url,
+            subprotocols=requested_protocols or None,
+            additional_headers=_get_sandbox_proxy_headers(),
+            ping_interval=20,
+            ping_timeout=20,
+            max_size=None,
+        ) as upstream:
+
+            async def client_to_upstream():
+                while True:
+                    message = await websocket.receive()
+                    if message["type"] == "websocket.disconnect":
+                        break
+                    if message.get("bytes") is not None:
+                        await upstream.send(message["bytes"])
+                    elif message.get("text") is not None:
+                        await upstream.send(message["text"])
+
+            async def upstream_to_client():
+                async for message in upstream:
+                    if isinstance(message, bytes):
+                        await websocket.send_bytes(message)
+                    else:
+                        await websocket.send_text(message)
+
+            relay_tasks = {
+                asyncio.create_task(client_to_upstream()),
+                asyncio.create_task(upstream_to_client()),
+            }
+            done, pending = await asyncio.wait(
+                relay_tasks,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            await asyncio.gather(*done, return_exceptions=True)
+    except ConnectionClosed as exc:
+        logger.info("VNC proxy closed: %s", exc)
+    except WebSocketDisconnect:
+        pass
+    except Exception as exc:
+        logger.exception("VNC proxy error: %s", exc)
+        try:
+            await websocket.close(code=1011, reason="VNC proxy failed")
         except Exception:
             pass
