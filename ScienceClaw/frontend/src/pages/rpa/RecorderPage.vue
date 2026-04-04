@@ -1,27 +1,25 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, computed } from 'vue';
+import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { Camera, Terminal, CheckCircle, Radio, Send, Wand2, Bot, Code, X } from 'lucide-vue-next';
 import { apiClient } from '@/api/client';
-import { getBackendVncPageUrl, getBackendWsUrl, isLocalMode } from '@/utils/sandbox';
+import { getBackendWsUrl } from '@/utils/sandbox';
 
 const router = useRouter();
 const route = useRoute();
 
 const sessionId = ref<string | null>(null);
+const sandboxSessionId = ref<string>('');
 const isRecording = ref(true);
 const recordingTime = ref('00:00');
 const timerInterval = ref<any>(null);
 const loading = ref(true);
 const error = ref<string | null>(null);
 
-const localMode = ref(isLocalMode());
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 let screencastWs: WebSocket | null = null;
 let lastMoveTime = 0;
 const MOVE_THROTTLE = 50; // 50ms 节流
-
-const vncPageUrl = computed(() => getBackendVncPageUrl(sessionId.value || 'sandbox', false));
 
 const steps = ref<any[]>([
   { id: '0', title: '初始化环境', description: '正在配置沙箱录制环境...', status: 'active' }
@@ -55,7 +53,12 @@ const cleanupAssistantText = (text: string, script = '') => {
 const initSession = async () => {
   try {
     loading.value = true;
-    const sandboxId = (route.query.sandboxId as string) || 'default-test-sandbox';
+    const sandboxId =
+      (route.query.sandboxId as string) ||
+      (typeof crypto !== 'undefined' && crypto.randomUUID
+        ? `rpa-${crypto.randomUUID()}`
+        : `rpa-${Date.now()}`);
+    sandboxSessionId.value = sandboxId;
 
     const resp = await apiClient.post('/rpa/session/start', {
       sandbox_session_id: sandboxId
@@ -68,9 +71,8 @@ const initSession = async () => {
       ];
       startTimer();
       startPollingSteps();
-      if (localMode.value) {
-        connectScreencast(resp.data.session.id);
-      }
+      await nextTick();
+      connectScreencast(resp.data.session.id);
     }
   } catch (err: any) {
     console.error('Failed to start RPA session:', err);
@@ -153,6 +155,10 @@ const drawFrame = (base64Data: string, _metadata: { width: number; height: numbe
 };
 
 const connectScreencast = (sid: string) => {
+  if (screencastWs) {
+    screencastWs.close();
+    screencastWs = null;
+  }
   const wsUrl = getBackendWsUrl(`/rpa/screencast/${sid}`);
   screencastWs = new WebSocket(wsUrl);
 
@@ -168,6 +174,14 @@ const connectScreencast = (sid: string) => {
   screencastWs.onclose = () => {
     screencastWs = null;
   };
+
+  screencastWs.onerror = () => {
+    error.value = '无法连接录制画面流，请检查后端 screencast 服务。';
+  };
+};
+
+const focusCanvas = () => {
+  canvasRef.value?.focus();
 };
 
 const sendInputEvent = (e: Event) => {
@@ -427,7 +441,7 @@ const sendMessage = async () => {
         </div>
       </aside>
 
-      <!-- Center: VNC Viewport -->
+      <!-- Center: Screencast Viewport -->
       <main class="flex-1 bg-[#f5f6f7] p-8 flex flex-col min-w-0">
         <div class="flex-1 bg-[#1e1e1e] rounded-2xl shadow-2xl relative overflow-hidden flex flex-col border border-gray-800">
           <div class="h-10 bg-[#dadddf] flex items-center px-4 gap-2 flex-shrink-0">
@@ -443,17 +457,12 @@ const sendMessage = async () => {
           </div>
 
           <div class="flex-1 relative bg-black overflow-hidden">
-            <iframe
-              v-if="sessionId && !localMode"
-              :src="vncPageUrl"
-              class="w-full h-full border-0 bg-black"
-              allow="clipboard-read; clipboard-write"
-            />
             <canvas
-              v-else-if="sessionId && localMode"
+              v-if="sessionId"
               ref="canvasRef"
               class="w-full h-full object-contain cursor-default"
               tabindex="0"
+              @click="focusCanvas"
               @mousedown="sendInputEvent"
               @mouseup="sendInputEvent"
               @mousemove="sendInputEvent"
@@ -470,7 +479,7 @@ const sendMessage = async () => {
 
             <div v-if="sessionId" class="absolute bottom-6 left-1/2 -translate-x-1/2 bg-white/10 backdrop-blur-md border border-white/20 px-4 py-2 rounded-full flex items-center gap-3">
               <Radio class="text-red-400 animate-pulse" :size="14" />
-              <span class="text-white text-[10px] font-bold tracking-wider uppercase">{{ localMode ? '实时 CDP 串流' : '实时 VNC 串流' }}</span>
+              <span class="text-white text-[10px] font-bold tracking-wider uppercase">实时 CDP 串流</span>
             </div>
           </div>
         </div>

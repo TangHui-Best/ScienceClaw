@@ -4,6 +4,7 @@ FastAPI 应用入口 — 精简版。
 挂载路由：auth / models / sessions / file / rpa / chat / statistics
 启动时：连接 MongoDB → 初始化系统模型 → 创建默认 admin
 """
+import asyncio
 import os
 
 from fastapi import FastAPI
@@ -21,12 +22,36 @@ from backend.route.memory import router as memory_router
 from backend.route.chat import router as chat_router
 from backend.route.statistics import router as statistics_router
 from backend.route.rpa import router as rpa_router
+from backend.route.runtime_proxy import router as runtime_proxy_router
+from backend.runtime.session_runtime_manager import get_session_runtime_manager
 from backend.models import init_system_models
 from backend.user.bootstrap import ensure_admin_user
 
 
+async def _runtime_cleanup_loop(stop_event: asyncio.Event) -> None:
+    from backend.config import settings
+
+    interval_seconds = max(30, min(settings.runtime_idle_ttl_seconds // 2, 300))
+    manager = get_session_runtime_manager()
+
+    while not stop_event.is_set():
+        try:
+            cleaned = await manager.cleanup_expired()
+            if cleaned:
+                logger.info(f"Cleaned up {cleaned} expired runtime(s)")
+        except Exception as exc:
+            logger.error(f"Failed to cleanup expired runtimes: {exc}")
+
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
+        except asyncio.TimeoutError:
+            continue
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    runtime_cleanup_stop = asyncio.Event()
+    runtime_cleanup_task: asyncio.Task | None = None
     await init_storage()
     try:
         await init_system_models()
@@ -40,11 +65,30 @@ async def lifespan(app: FastAPI):
         await cleanup_orphaned_sessions()
     except Exception as e:
         logger.error(f"Failed to cleanup orphaned sessions: {e}")
+    try:
+        cleaned = await get_session_runtime_manager().cleanup_orphans()
+        if cleaned:
+            logger.info(f"Cleaned up {cleaned} orphaned runtime(s) on startup")
+    except Exception as e:
+        logger.error(f"Failed to cleanup orphaned runtimes: {e}")
+    runtime_cleanup_task = asyncio.create_task(_runtime_cleanup_loop(runtime_cleanup_stop))
     yield
+    runtime_cleanup_stop.set()
+    if runtime_cleanup_task is not None:
+        try:
+            await runtime_cleanup_task
+        except Exception as e:
+            logger.error(f"Failed to stop runtime cleanup loop: {e}")
     try:
         await graceful_shutdown_agents()
     except Exception as e:
         logger.error(f"Failed to gracefully shutdown agents: {e}")
+    try:
+        cleaned = await get_session_runtime_manager().cleanup_orphans()
+        if cleaned:
+            logger.info(f"Cleaned up {cleaned} runtime(s) on shutdown")
+    except Exception as e:
+        logger.error(f"Failed to cleanup runtimes on shutdown: {e}")
     try:
         from backend.rpa.cdp_connector import cdp_connector
         await cdp_connector.close()
@@ -107,6 +151,7 @@ def create_app() -> FastAPI:
     app.include_router(chat_router, prefix="/api/v1")
     app.include_router(statistics_router, prefix="/api/v1")
     app.include_router(rpa_router, prefix="/api/v1/rpa")
+    app.include_router(runtime_proxy_router, prefix="/api/v1")
 
     logger.info("FastAPI initialized with /api/v1 endpoints")
     return app

@@ -7,6 +7,7 @@ import httpx
 from playwright.async_api import async_playwright, Browser, Playwright
 
 from backend.config import settings
+from backend.runtime.session_runtime_manager import get_session_runtime_manager
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +21,8 @@ class CDPConnector:
     """
 
     def __init__(self):
-        self._playwright: Optional[Playwright] = None
-        self._browser: Optional[Browser] = None
+        self._playwrights: dict[str, Playwright] = {}
+        self._browsers: dict[str, Browser] = {}
         self._sandbox_base_url = settings.sandbox_mcp_url.replace("/mcp", "")
         self._lock = asyncio.Lock()
         # Dedicated event loop + thread for Playwright (Windows compat)
@@ -49,21 +50,25 @@ class CDPConnector:
         # Await in current loop without blocking
         return await asyncio.wrap_future(future)
 
-    async def get_browser(self) -> Browser:
+    async def get_browser(self, session_id: Optional[str] = None, user_id: Optional[str] = None) -> Browser:
         """Get or create a CDP browser connection."""
+        session_key = session_id or "__shared__"
         async with self._lock:
-            if self._browser and self._browser.is_connected():
-                return self._browser
+            existing = self._browsers.get(session_key)
+            if existing and existing.is_connected():
+                return existing
 
-            cdp_url = await self._fetch_cdp_url()
+            cdp_url = await self._fetch_cdp_url(session_id=session_id, user_id=user_id)
             logger.info(f"Connecting to browser via CDP: {cdp_url}")
 
             # Start Playwright and connect in the dedicated thread/loop
-            self._playwright, self._browser = await self._run_in_pw_loop(
+            playwright, browser = await self._run_in_pw_loop(
                 self._connect(cdp_url)
             )
+            self._playwrights[session_key] = playwright
+            self._browsers[session_key] = browser
             logger.info("CDP browser connection established")
-            return self._browser
+            return browser
 
     @staticmethod
     async def _connect(cdp_url: str):
@@ -72,14 +77,27 @@ class CDPConnector:
         browser = await pw.chromium.connect_over_cdp(cdp_url)
         return pw, browser
 
-    async def _fetch_cdp_url(self) -> str:
+    async def _fetch_cdp_url(
+        self,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> str:
         """Fetch CDP WebSocket URL from sandbox API.
 
         The sandbox returns a cdp_url with its own internal host:port.
         We replace the host:port with the one from SANDBOX_MCP_URL so
         the backend can reach it (works for both local dev and Docker).
         """
-        url = f"{self._sandbox_base_url}/v1/browser/info"
+        if session_id:
+            runtime = await get_session_runtime_manager().ensure_runtime(
+                session_id,
+                user_id or "system",
+            )
+            url = f"{runtime.rest_base_url}/v1/browser/info"
+            sandbox_base = runtime.rest_base_url
+        else:
+            url = f"{self._sandbox_base_url}/v1/browser/info"
+            sandbox_base = self._sandbox_base_url
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(url)
             resp.raise_for_status()
@@ -89,28 +107,24 @@ class CDPConnector:
                 raise RuntimeError(f"No cdp_url in response from {url}: {data}")
             # Rewrite host:port to match our sandbox base URL
             from urllib.parse import urlparse
-            sandbox_parsed = urlparse(self._sandbox_base_url)
+            sandbox_parsed = urlparse(sandbox_base)
             cdp_parsed = urlparse(cdp_url)
             cdp_url = cdp_parsed._replace(netloc=sandbox_parsed.netloc).geturl()
             return cdp_url
 
     async def close(self):
         """Clean up connections."""
-        if self._browser:
-            try:
-                self._browser = None
-            except Exception:
-                pass
-        if self._playwright:
+        self._browsers.clear()
+        for playwright in list(self._playwrights.values()):
             try:
                 if self._pw_loop and self._pw_loop.is_running():
                     future = asyncio.run_coroutine_threadsafe(
-                        self._playwright.stop(), self._pw_loop
+                        playwright.stop(), self._pw_loop
                     )
                     future.result(timeout=5)
-                self._playwright = None
             except Exception:
                 pass
+        self._playwrights.clear()
         if self._pw_loop:
             self._pw_loop.call_soon_threadsafe(self._pw_loop.stop)
             self._pw_loop = None
@@ -152,7 +166,7 @@ class LocalCDPConnector:
         future = asyncio.run_coroutine_threadsafe(coro, self._pw_loop)
         return await asyncio.wrap_future(future)
 
-    async def get_browser(self) -> Browser:
+    async def get_browser(self, session_id: Optional[str] = None, user_id: Optional[str] = None) -> Browser:
         """Get or create a local headful browser."""
         async with self._lock:
             if self._browser and self._browser.is_connected():

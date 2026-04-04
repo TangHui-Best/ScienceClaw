@@ -85,9 +85,9 @@ export async function viewFile(sessionId: string, filePath: string): Promise<{fi
   return response.data.data;
 }
 
-export async function getVNCUrl(sessionId: string, expireMinutes: number = 15): Promise<{signed_url: string, expires_in: number}> {
-  const response = await apiClient.post<ApiResponse<{signed_url: string, expires_in: number}>>(`/sessions/${sessionId}/vnc/signed-url`, { expire_minutes: expireMinutes });
-  return response.data.data;
+export async function getVNCUrl(sessionId: string): Promise<string> {
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${proto}//${window.location.host}/api/v1/runtime/session/${sessionId}/http/websockify`;
 }
 
 export const getSessionFiles = async (session_id: string): Promise<FileInfo[]> => {

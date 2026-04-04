@@ -102,7 +102,7 @@ class FullSandboxBackend(SandboxBackendProtocol):
     ) -> None:
         self._session_id = session_id
         self._user_id = user_id
-        self._sandbox_url = sandbox_url
+        self._sandbox_url = sandbox_url.rstrip("/")
         self._base_dir = base_dir
         # _remote_workspace 是沙箱内的路径，用于 exec_dir / system prompt 等
         # 当 backend 与 sandbox 不共享文件系统时，这个路径与 base_dir 不同

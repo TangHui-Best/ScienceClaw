@@ -31,48 +31,36 @@ let rfb: RFB | null = null;
 const initVNCConnection = async () => {
   if (!vncContainer.value || !props.enabled) return;
 
-  // Disconnect existing connection
   if (rfb) {
     rfb.disconnect();
     rfb = null;
   }
 
   try {
-    let wsUrl: string;
-    if (props.directWsUrl) {
-      wsUrl = props.directWsUrl;
-    } else {
-      wsUrl = getBackendWsUrl(`/rpa/vnc/${encodeURIComponent(props.sessionId)}`);
-    }
+    const wsUrl = props.directWsUrl
+      ? props.directWsUrl
+      : getBackendWsUrl(`/rpa/vnc/${encodeURIComponent(props.sessionId)}`);
 
-    // Create NoVNC connection
     rfb = new RFB(vncContainer.value, wsUrl, {
       credentials: { password: '' },
       shared: true,
       repeaterID: '',
       wsProtocols: ['binary'],
-      // Scaling options
-      scaleViewport: true,  // Automatically scale to fit container
-      //resizeSession: true   // Request server to adjust resolution
+      scaleViewport: true,
     });
 
-    // Set viewOnly based on props, default to false (interactive)
     rfb.viewOnly = props.viewOnly ?? false;
     rfb.scaleViewport = true;
-    //rfb.resizeSession = true;
 
     rfb.addEventListener('connect', () => {
-      console.log('VNC connection successful');
       emit('connected');
     });
 
     rfb.addEventListener('disconnect', (e: any) => {
-      console.log('VNC connection disconnected', e);
       emit('disconnected', e);
     });
 
     rfb.addEventListener('credentialsrequired', () => {
-      console.log('VNC credentials required');
       emit('credentialsRequired');
     });
   } catch (error) {
@@ -87,7 +75,6 @@ const disconnect = () => {
   }
 };
 
-// Watch for session ID or enabled state changes
 watch([() => props.sessionId, () => props.enabled], () => {
   if (props.enabled && vncContainer.value) {
     initVNCConnection();
@@ -96,7 +83,6 @@ watch([() => props.sessionId, () => props.enabled], () => {
   }
 }, { immediate: true });
 
-// Watch for container availability
 watch(vncContainer, () => {
   if (vncContainer.value && props.enabled) {
     initVNCConnection();
@@ -107,7 +93,6 @@ onBeforeUnmount(() => {
   disconnect();
 });
 
-// Expose methods for parent component
 defineExpose({
   disconnect,
   initConnection: initVNCConnection

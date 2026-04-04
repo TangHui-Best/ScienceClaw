@@ -40,6 +40,7 @@ from backend.deepagent.sse_middleware import SSEMonitoringMiddleware
 from backend.deepagent.offload_middleware import ToolResultOffloadMiddleware
 from backend.deepagent.diagnostic import DIAGNOSTIC_ENABLED, DiagnosticLogger
 from backend.config import settings
+from backend.runtime.session_runtime_manager import get_session_runtime_manager
 
 # ───────────────────────────────────────────────────────────────────
 # 外部扩展工具（Tools 目录自动扫描，支持热加载）
@@ -410,9 +411,14 @@ async def deep_agent(
         )
         sandbox_workspace = local_workspace
     else:
+        runtime = await get_session_runtime_manager().ensure_runtime(
+            session_id,
+            user_id or "default_user",
+        )
         sandbox = FullSandboxBackend(
             session_id=session_id,
             user_id=user_id or "default_user",
+            sandbox_url=runtime.rest_base_url,
             base_dir=_WORKSPACE_DIR,
             sandbox_base_dir=_SANDBOX_WORKSPACE_DIR,
             execute_timeout=ts.sandbox_exec_timeout,
