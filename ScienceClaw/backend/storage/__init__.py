@@ -41,7 +41,7 @@ async def init_storage() -> None:
         for name in (
             "users", "user_sessions", "sessions", "models",
             "skills", "blocked_tools", "task_settings", "session_events",
-            "session_runtimes",
+            "session_runtimes", "credentials",
         ):
             repo = FileRepository(name)
             await repo.load()

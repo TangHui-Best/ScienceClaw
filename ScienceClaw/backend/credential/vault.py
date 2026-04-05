@@ -132,6 +132,31 @@ class CredentialVault:
         return self.decrypt(doc["encrypted_password"])
 
 
+async def inject_credentials(user_id: str, params: dict, kwargs: dict) -> dict:
+    """Resolve credential_id references in params and inject into kwargs.
+
+    Args:
+        user_id: The user who owns the credentials.
+        params: Parameter config dict, e.g. {"password": {"sensitive": true, "credential_id": "cred_xxx"}}.
+        kwargs: The kwargs dict that will be passed to execute_skill.
+
+    Returns:
+        Updated kwargs with decrypted credential values injected.
+    """
+    vault = get_vault()
+    result = dict(kwargs)
+    for param_name, param_info in params.items():
+        if not isinstance(param_info, dict):
+            continue
+        cred_id = param_info.get("credential_id")
+        if not cred_id:
+            continue
+        plaintext = await vault.decrypt_credential(user_id, cred_id)
+        if plaintext is not None:
+            result[param_name] = plaintext
+    return result
+
+
 _vault: Optional[CredentialVault] = None
 
 

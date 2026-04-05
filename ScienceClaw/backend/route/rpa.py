@@ -21,6 +21,7 @@ from backend.rpa.screencast import ScreencastService
 from backend.user.dependencies import get_current_user, User
 from backend.config import settings
 from backend.storage import get_repository
+from backend.credential.vault import inject_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -360,7 +361,16 @@ async def test_script(
             if "execute_skill" not in namespace:
                 result = {"success": False, "output": "", "error": "No execute_skill() function in script"}
             else:
-                _skill_result = await asyncio.wait_for(namespace["execute_skill"](page), timeout=RPA_TEST_TIMEOUT_S)
+                # Inject credentials into kwargs for sensitive params
+                test_kwargs: Dict[str, Any] = {}
+                if request.params:
+                    test_kwargs = await inject_credentials(
+                        str(current_user.id), request.params, {}
+                    )
+                _skill_result = await asyncio.wait_for(
+                    namespace["execute_skill"](page, **test_kwargs),
+                    timeout=RPA_TEST_TIMEOUT_S,
+                )
                 await page.wait_for_timeout(3000)
                 if _skill_result:
                     data_line = "SKILL_DATA:" + json.dumps(_skill_result, ensure_ascii=False, default=str) + "\n"
