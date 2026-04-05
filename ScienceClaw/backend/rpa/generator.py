@@ -313,6 +313,9 @@ if __name__ == "__main__":
         """Check if value should be a parameter."""
         for param_name, param_info in params.items():
             if param_info.get("original_value") == value:
+                if param_info.get("sensitive"):
+                    # No default value for sensitive params
+                    return f"kwargs['{param_name}']"
                 return f"kwargs.get('{param_name}', '{value}')"
         safe = value.replace("'", "\\'")
         return f"'{safe}'"
