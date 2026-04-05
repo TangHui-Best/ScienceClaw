@@ -107,6 +107,7 @@ const startPollingSteps = () => {
             description: s.source === 'ai' ? (s.prompt || s.description || 'AI 操作') : `${s.action} → ${s.target || s.label || ''}`,
             status: 'completed',
             source: s.source || 'record',
+            sensitive: s.sensitive || false,
           }))
         ];
       }
@@ -282,6 +283,7 @@ const deleteStep = async (stepIndex: number) => {
         description: s.source === 'ai' ? (s.prompt || s.description || 'AI 操作') : `${s.action} → ${s.target || s.label || ''}`,
         status: 'completed',
         source: s.source || 'record',
+        sensitive: s.sensitive || false,
       }))
     ];
   } catch (err) {
@@ -385,6 +387,7 @@ const sendMessage = async () => {
                   description: s.prompt || s.description || 'AI 操作',
                   status: 'completed',
                   source: 'ai',
+                  sensitive: s.sensitive || false,
                 });
               }
               // Show output if present
