@@ -235,7 +235,7 @@ async def register(body: RegisterRequest):
 @router.get("/status", response_model=ApiResponse)
 async def get_auth_status(current_user: Optional[User] = Depends(get_current_user)) -> ApiResponse:
     auth_provider = getattr(settings, "auth_provider", "local")
-    if auth_provider == "none":
+    if auth_provider == "none" or getattr(settings, "storage_backend", "mongo") == "local":
         return ApiResponse(
             data=AuthStatusData(
                 authenticated=True,
