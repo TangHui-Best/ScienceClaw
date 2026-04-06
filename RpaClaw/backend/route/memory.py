@@ -7,10 +7,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from backend.user.dependencies import require_user, User
+from backend.config import settings
 
 router = APIRouter(prefix="/memory", tags=["memory"])
 
-_WORKSPACE_DIR = os.environ.get("WORKSPACE_DIR", "/home/rpaclaw")
+_WORKSPACE_DIR = settings.workspace_dir
 
 _DEFAULT_CONTENT = (
     "# Global Memory (persists across all sessions)\n\n"

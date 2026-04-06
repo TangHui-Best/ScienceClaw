@@ -33,8 +33,10 @@ from deepagents.backends.protocol import (
 logger = logging.getLogger(__name__)
 
 _SANDBOX_URL = os.environ.get("SANDBOX_REST_URL", "http://localhost:18080").rstrip("/")
-_BASE_WORKSPACE = os.environ.get("WORKSPACE_DIR", "/home/rpaclaw")
-_SANDBOX_WORKSPACE = os.environ.get("SANDBOX_WORKSPACE_DIR", "/home/rpaclaw")
+
+from backend.config import settings
+_BASE_WORKSPACE = settings.workspace_dir
+_SANDBOX_WORKSPACE = settings.sandbox_workspace_dir
 _EXECUTE_TIMEOUT = 600
 _MAX_OUTPUT_CHARS = 50000
 _CIRCUIT_BREAKER_THRESHOLD = 3

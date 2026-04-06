@@ -1,7 +1,28 @@
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
+
+
+def _resolve_home() -> str:
+    """Return RPA_CLAW_HOME, falling back to ./rpaclaw_home."""
+    return os.environ.get("RPA_CLAW_HOME", "")
+
+
+def _resolve_sandbox_home() -> str:
+    """Return SANDBOX_RPA_CLAW_HOME, falling back to /home/rpaclaw."""
+    return os.environ.get("SANDBOX_RPA_CLAW_HOME", "/home/rpaclaw")
+
+
+def _sub(env_key: str, home: str, sub_dir: str, fallback: str) -> str:
+    """If *env_key* is set explicitly, use it; otherwise derive from *home*."""
+    explicit = os.environ.get(env_key)
+    if explicit:
+        return explicit
+    if home:
+        return str(Path(home) / sub_dir)
+    return fallback
 
 
 class Settings(BaseSettings):
@@ -36,11 +57,20 @@ class Settings(BaseSettings):
 
     # Storage backend: "mongo" (cloud) or "local" (edge)
     storage_backend: str = os.environ.get("STORAGE_BACKEND", "mongo")
-    local_data_dir: str = os.environ.get("LOCAL_DATA_DIR", "./data")
 
-    # Skills directories
-    external_skills_dir: str = os.environ.get("EXTERNAL_SKILLS_DIR", "./Skills")
-    builtin_skills_dir: str = os.environ.get("BUILTIN_SKILLS_DIR", "./builtin_skills")
+    # ── RPA_CLAW_HOME: 统一根目录，子目录自动派生 ──
+    # 本地后端使用 RPA_CLAW_HOME，沙箱内使用 SANDBOX_RPA_CLAW_HOME（默认 /home/rpaclaw）
+    rpa_claw_home: str = _resolve_home()
+    sandbox_rpa_claw_home: str = _resolve_sandbox_home()
+
+    # 以下四个目录优先读取各自环境变量，未设置时从 rpa_claw_home 派生
+    workspace_dir: str = _sub("WORKSPACE_DIR", _resolve_home(), "workspace", "/home/rpaclaw")
+    external_skills_dir: str = _sub("EXTERNAL_SKILLS_DIR", _resolve_home(), "external_skills", "./Skills")
+    builtin_skills_dir: str = _sub("BUILTIN_SKILLS_DIR", _resolve_home(), "builtin_skills", "./builtin_skills")
+    local_data_dir: str = _sub("LOCAL_DATA_DIR", _resolve_home(), "data", "./data")
+
+    # 沙箱内 workspace 路径（与后端共享卷）
+    sandbox_workspace_dir: str = _sub("SANDBOX_WORKSPACE_DIR", _resolve_sandbox_home(), "workspace", "/home/rpaclaw")
 
     xelatex_cmd: str = os.environ.get("XELATEX_CMD", "/usr/local/texlive/2025/bin/universal-darwin/xelatex")
     pandoc_cmd: str = os.environ.get("PANDOC_CMD", "/usr/local/bin/pandoc")

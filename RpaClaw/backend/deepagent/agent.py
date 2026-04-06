@@ -64,12 +64,12 @@ except ImportError:
 # 路径配置
 # ───────────────────────────────────────────────────────────────────
 
-_BUILTIN_SKILLS_DIR = os.environ.get("BUILTIN_SKILLS_DIR", "/app/builtin_skills")
+_BUILTIN_SKILLS_DIR = settings.builtin_skills_dir
 _BUILTIN_SKILLS_ROUTE = "/builtin-skills/"
 _EXTERNAL_SKILLS_ROUTE = "/skills/"
-_WORKSPACE_DIR = os.environ.get("WORKSPACE_DIR", "/home/rpaclaw")
+_WORKSPACE_DIR = settings.workspace_dir
 _SKILLS_SUBDIR = ".skills"  # session-local skill files for sandbox execution
-_SANDBOX_WORKSPACE_DIR = os.environ.get("SANDBOX_WORKSPACE_DIR", "/home/rpaclaw")  # 沙箱内 workspace 路径（与后端共享卷）
+_SANDBOX_WORKSPACE_DIR = settings.sandbox_workspace_dir
 
 # ───────────────────────────────────────────────────────────────────
 # Backend 构建
@@ -89,11 +89,10 @@ def _build_backend(session_id: str, sandbox,
         )
 
     if settings.storage_backend == "local":
-        _ext_skills_dir = os.environ.get("EXTERNAL_SKILLS_DIR", "./Skills")
-        if os.path.isdir(_ext_skills_dir):
-            logger.info(f"[Skills] 本地 skills: {_ext_skills_dir} → {_EXTERNAL_SKILLS_ROUTE}")
+        if os.path.isdir(settings.external_skills_dir):
+            logger.info(f"[Skills] 本地 skills: {settings.external_skills_dir} → {_EXTERNAL_SKILLS_ROUTE}")
             routes[_EXTERNAL_SKILLS_ROUTE] = FilesystemBackend(
-                root_dir=_ext_skills_dir,
+                root_dir=settings.external_skills_dir,
                 virtual_mode=True,
             )
     elif user_id:
@@ -670,10 +669,9 @@ async def deep_agent_eval(
                 resolved_sources.append(_BUILTIN_SKILLS_ROUTE)
             elif src == _EXTERNAL_SKILLS_ROUTE:
                 if is_local:
-                    _ext_skills_dir = os.environ.get("EXTERNAL_SKILLS_DIR", "./Skills")
-                    if os.path.isdir(_ext_skills_dir):
+                    if os.path.isdir(settings.external_skills_dir):
                         routes[_EXTERNAL_SKILLS_ROUTE] = FilesystemBackend(
-                            root_dir=_ext_skills_dir, virtual_mode=True,
+                            root_dir=settings.external_skills_dir, virtual_mode=True,
                         )
                         resolved_sources.append(_EXTERNAL_SKILLS_ROUTE)
                 else:
@@ -684,10 +682,9 @@ async def deep_agent_eval(
                     resolved_sources.append(_EXTERNAL_SKILLS_ROUTE)
     else:
         if is_local:
-            _ext_skills_dir = os.environ.get("EXTERNAL_SKILLS_DIR", "./Skills")
-            if os.path.isdir(_ext_skills_dir):
+            if os.path.isdir(settings.external_skills_dir):
                 routes[_EXTERNAL_SKILLS_ROUTE] = FilesystemBackend(
-                    root_dir=_ext_skills_dir, virtual_mode=True,
+                    root_dir=settings.external_skills_dir, virtual_mode=True,
                 )
                 resolved_sources.append(_EXTERNAL_SKILLS_ROUTE)
         else:

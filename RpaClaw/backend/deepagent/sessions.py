@@ -8,10 +8,11 @@ from typing import Dict, List, Optional, Any
 import time
 
 from loguru import logger
+from backend.config import settings
 from backend.storage import get_repository
 from backend.deepagent.plan_types import PlanStep
 
-_BASE_WORKSPACE = os.environ.get("WORKSPACE_DIR", "/home/rpaclaw")
+_BASE_WORKSPACE = settings.workspace_dir
 
 
 def _render_planner_md(plan: List[PlanStep]) -> str:

@@ -685,8 +685,8 @@ async def list_sessions(current_user: User = Depends(require_user)) -> ApiRespon
 
 from backend.storage import get_repository as _get_repo
 
-_BUILTIN_SKILLS_DIR = os.environ.get("BUILTIN_SKILLS_DIR", "/app/builtin_skills")
-_WORKSPACE_DIR = os.environ.get("WORKSPACE_DIR", "/home/rpaclaw")
+_BUILTIN_SKILLS_DIR = settings.builtin_skills_dir
+_WORKSPACE_DIR = settings.workspace_dir
 
 
 def _parse_skill_frontmatter(skill_dir: _Path) -> Dict[str, Any]:
