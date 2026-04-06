@@ -1,7 +1,7 @@
 """
 Asyncio-based task scheduler — replaces Celery beat + worker.
 
-Runs inside the FastAPI process: a background loop checks MongoDB every 60s
+Runs inside the FastAPI process: a background loop checks storage every 60s
 for tasks whose crontab matches the current minute, then executes them
 concurrently via asyncio tasks.
 """
@@ -15,7 +15,7 @@ from croniter import croniter
 from loguru import logger
 
 from app.core.config import settings
-from app.core.db import db
+from app.core.storage import get_storage_instance
 from app.services.chat_client import run_task_chat
 from app.services.feishu import notify_task_failed, notify_task_success, notify_task_started
 from app.services.webhook_sender import send_webhook
@@ -59,7 +59,7 @@ class TaskScheduler:
             logger.info("TaskScheduler stopped")
 
     async def _loop(self) -> None:
-        # Wait a few seconds on startup so MongoDB is ready
+        # Wait a few seconds on startup so storage is ready
         await asyncio.sleep(3)
         while True:
             try:
@@ -72,12 +72,16 @@ class TaskScheduler:
 
     async def _check_due_tasks(self) -> None:
         now = datetime.now(_display_tz()).replace(second=0, microsecond=0)
-        cursor = db.get_collection("tasks").find({"status": "enabled"})
-        async for doc in cursor:
-            crontab_str = doc.get("crontab") or ""
+        storage = get_storage_instance()
+        task_repo = storage.get_task_repo()
+        tasks = await task_repo.list_tasks()
+        for task in tasks:
+            if task.status != "enabled":
+                continue
+            crontab_str = task.crontab or ""
             if not crontab_str:
                 continue
-            task_id = str(doc["_id"])
+            task_id = task.id
             try:
                 if croniter.match(crontab_str, now):
                     if task_id in self._running_tasks:
@@ -96,34 +100,31 @@ class TaskScheduler:
             self._running_tasks.discard(task_id)
 
     async def _execute_task(self, task_id: str) -> None:
-        doc = await db.get_collection("tasks").find_one({"_id": task_id})
-        if not doc:
+        storage = get_storage_instance()
+        task_repo = storage.get_task_repo()
+        run_repo = storage.get_run_repo()
+
+        task = await task_repo.get_task(task_id)
+        if not task:
             logger.warning("run_task: task {} not found", task_id)
             return
 
-        name = doc.get("name", "未命名")
-        prompt = doc.get("prompt", "")
-        webhook = doc.get("webhook") or ""
-        webhook_ids = doc.get("webhook_ids") or []
-        event_config = doc.get("event_config") or []
-        model_config_id = (doc.get("model_config_id") or "").strip() or None
+        name = task.name or "未命名"
+        prompt = task.prompt or ""
+        webhook = task.webhook or ""
+        webhook_ids = task.webhook_ids or []
+        event_config = task.event_config or []
+        model_config_id = task.model_config_id
         notify_start = "notify_on_start" in event_config
-        user_id = (doc.get("user_id") or "").strip() or None
+        user_id = task.user_id
 
         start_time = datetime.now(timezone.utc)
-        runs_coll = db.get_collection("task_runs")
 
-        run_doc: Dict[str, Any] = {
-            "task_id": task_id,
-            "status": "running",
-            "chat_id": None,
-            "start_time": start_time,
-            "end_time": None,
-            "result": None,
-            "error": None,
-        }
-        ins = await runs_coll.insert_one(run_doc)
-        run_id = ins.inserted_id
+        run = await run_repo.create_run(
+            task_id=task_id,
+            status="running",
+        )
+        run_id = run.id
 
         try:
             if notify_start:
@@ -135,31 +136,25 @@ class TaskScheduler:
             end_time = datetime.now(timezone.utc)
 
             if "error" in result:
-                await runs_coll.update_one(
-                    {"_id": run_id},
-                    {"$set": {"status": "failed", "end_time": end_time, "error": result["error"]}},
+                await run_repo.update_run(
+                    run_id, status="failed", error=result["error"]
                 )
                 await self._notify_finish(webhook, webhook_ids, name, start_time, end_time, False, result["error"])
                 return
 
-            await runs_coll.update_one(
-                {"_id": run_id},
-                {"$set": {
-                    "status": "success",
-                    "chat_id": result.get("chat_id"),
-                    "end_time": end_time,
-                    "result": result.get("output", ""),
-                    "error": None,
-                }},
+            await run_repo.update_run(
+                run_id,
+                status="success",
+                chat_id=result.get("chat_id"),
+                result=result.get("output", ""),
             )
             await self._notify_finish(webhook, webhook_ids, name, start_time, end_time, True, result.get("output", ""))
 
         except Exception as e:
             logger.exception("run_task failed for {}", task_id)
             end_time = datetime.now(timezone.utc)
-            await runs_coll.update_one(
-                {"_id": run_id},
-                {"$set": {"status": "failed", "end_time": end_time, "error": str(e)}},
+            await run_repo.update_run(
+                run_id, status="failed", error=str(e)
             )
             await self._notify_finish(webhook, webhook_ids, name, start_time, end_time, False, str(e))
 
@@ -171,6 +166,10 @@ class TaskScheduler:
         start_str = _fmt_time(start_time)
         if webhook and webhook.strip():
             await notify_task_started(webhook, task_name, start_str)
+        # Managed webhooks only available in docker (MongoDB) mode
+        if not webhook_ids or settings.storage_backend == "local":
+            return
+        from app.core.db import db
         for wid in webhook_ids:
             try:
                 wh_doc = await db.get_collection("webhooks").find_one({"_id": wid})
@@ -194,9 +193,10 @@ class TaskScheduler:
                 await notify_task_success(webhook, task_name, start_str, end_str, result_or_error)
             else:
                 await notify_task_failed(webhook, task_name, start_str, end_str, result_or_error)
-        # Managed webhooks
-        if not webhook_ids:
+        # Managed webhooks only available in docker (MongoDB) mode
+        if not webhook_ids or settings.storage_backend == "local":
             return
+        from app.core.db import db
         truncated = result_or_error[:500] + "..." if len(result_or_error) > 500 else result_or_error
         label = "执行结果" if success else "错误信息"
         title = f"{'✅ 任务执行成功' if success else '❌ 任务执行失败'}：{task_name}"

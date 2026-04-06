@@ -7,17 +7,19 @@ from loguru import logger
 
 from app.api.tasks import router as tasks_router
 from app.api.webhooks import router as webhooks_router
-from app.core.db import db
+from app.core.storage import get_storage_instance
 from app.scheduler import scheduler
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await db.connect()
+    storage = get_storage_instance()
+    logger.info(f"Storage backend: {storage.__class__.__name__}")
+    await storage.connect()
     scheduler.start()
     yield
     scheduler.stop()
-    await db.close()
+    await storage.close()
 
 
 def create_app() -> FastAPI:

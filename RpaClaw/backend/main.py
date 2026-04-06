@@ -161,6 +161,14 @@ def create_app() -> FastAPI:
 
 app = create_app()
 
+# Serve frontend static files (for Electron packaged app)
+from fastapi.staticfiles import StaticFiles
+
+frontend_dist = os.environ.get("FRONTEND_DIST_DIR")
+if frontend_dist and os.path.exists(frontend_dist):
+    app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")
+    logger.info(f"Serving frontend static files from: {frontend_dist}")
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

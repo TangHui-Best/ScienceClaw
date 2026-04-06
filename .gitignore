@@ -53,6 +53,10 @@ dist/
 build/
 *.local
 
+# Electron build artifacts
+electron-app/dist/
+electron-app/release/
+
 # Logs
 logs/
 *.log

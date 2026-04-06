@@ -7,3 +7,4 @@ shortuuid>=1.0.0
 httpx>=0.26.0
 croniter>=2.0.0
 loguru>=0.7.0
+filelock>=3.13.0

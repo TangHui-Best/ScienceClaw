@@ -1,0 +1,74 @@
+{
+  "name": "rpaclaw-desktop",
+  "version": "1.0.0",
+  "description": "RpaClaw Desktop Application",
+  "main": "dist/main.js",
+  "scripts": {
+    "dev": "npm run build && electron .",
+    "build": "tsc && npm run copy-assets",
+    "copy-assets": "node -e \"const fs = require('fs'); fs.mkdirSync('dist/wizard', {recursive: true}); fs.cpSync('src/wizard/wizard.html', 'dist/wizard/wizard.html'); fs.cpSync('src/wizard/wizard.css', 'dist/wizard/wizard.css')\"",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "author": "RpaClaw Team",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "electron": "^28.2.0",
+    "electron-builder": "^24.9.1",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "tree-kill": "^1.2.2"
+  },
+  "build": {
+    "appId": "com.rpaclaw.app",
+    "productName": "RpaClaw",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "resources/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../build/python",
+        "to": "python",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "../RpaClaw/backend",
+        "to": "backend",
+        "filter": ["**/*", "!**/__pycache__", "!**/*.pyc"]
+      },
+      {
+        "from": "../RpaClaw/task-service",
+        "to": "task-service",
+        "filter": ["**/*", "!**/__pycache__", "!**/*.pyc"]
+      },
+      {
+        "from": "../RpaClaw/backend/builtin_skills",
+        "to": "builtin_skills",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "../RpaClaw/frontend/dist",
+        "to": "frontend-dist",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "resources/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "installerIcon": "resources/icon.ico",
+      "uninstallerIcon": "resources/icon.ico"
+    }
+  }
+}

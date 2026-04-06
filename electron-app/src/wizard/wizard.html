@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>RpaClaw Setup</title>
+  <link rel="stylesheet" href="wizard.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Page 1: Welcome -->
+    <div id="page-welcome" class="page active">
+      <h1>Welcome to RpaClaw</h1>
+      <p>Your privacy-first personal research assistant powered by AI.</p>
+      <ul>
+        <li>1,900+ built-in scientific tools</li>
+        <li>Multi-format document generation</li>
+        <li>RPA skill recording system</li>
+        <li>All data stays local</li>
+      </ul>
+      <button id="btn-start" class="primary">Get Started</button>
+    </div>
+
+    <!-- Page 2: Home Directory Selection -->
+    <div id="page-home-dir" class="page">
+      <h1>Choose Home Directory</h1>
+      <p>Select where RpaClaw will store your data and workspace.</p>
+      <div class="form-group">
+        <label>Home Directory:</label>
+        <div class="input-group">
+          <input type="text" id="input-home-dir" readonly>
+          <button id="btn-browse">Browse...</button>
+        </div>
+        <small>Estimated space required: ~500MB</small>
+      </div>
+      <div id="validation-error" class="error hidden"></div>
+      <div class="button-group">
+        <button id="btn-back-1" class="secondary">Back</button>
+        <button id="btn-next" class="primary">Next</button>
+      </div>
+    </div>
+
+    <!-- Page 3: Initialization Progress -->
+    <div id="page-progress" class="page">
+      <h1>Setting Up RpaClaw</h1>
+      <p id="progress-status">Initializing...</p>
+      <div class="progress-bar">
+        <div id="progress-fill" class="progress-fill"></div>
+      </div>
+      <div id="progress-log" class="log"></div>
+    </div>
+
+    <!-- Page 4: Completion -->
+    <div id="page-complete" class="page">
+      <h1>Setup Complete!</h1>
+      <p>RpaClaw is ready to use.</p>
+      <button id="btn-launch" class="primary">Launch RpaClaw</button>
+    </div>
+  </div>
+
+  <script src="wizard.js"></script>
+</body>
+</html>

@@ -11,15 +11,13 @@ from pydantic import BaseModel
 from loguru import logger
 
 from app.core.config import settings
-from app.core.db import db
+from app.core.storage import get_storage_instance
 from app.models.task import (
     TaskCreate,
     TaskOut,
     TaskRunOut,
     TaskRunsPage,
     TaskUpdate,
-    task_doc_to_out,
-    task_run_doc_to_out,
 )
 from app.services.feishu import send_webhook_test
 from app.services.schedule_parser import parse_schedule_to_crontab, ScheduleParseError
@@ -119,54 +117,43 @@ async def create_task(body: TaskCreate) -> TaskOut:
             raise HTTPException(status_code=400, detail=detail)
         if not crontab:
             raise HTTPException(status_code=400, detail="Could not parse schedule description to crontab")
-    now = datetime.now(timezone.utc)
-    task_id = shortuuid.uuid()
-    doc: Dict[str, Any] = {
-        "_id": task_id,
-        "name": body.name,
-        "prompt": body.prompt,
-        "schedule_desc": body.schedule_desc,
-        "crontab": crontab or "",
-        "webhook": body.webhook,
-        "webhook_ids": body.webhook_ids or [],
-        "event_config": body.event_config or [],
-        "model_config_id": (body.model_config_id or "").strip() or None,
-        "status": body.status or "enabled",
-        "user_id": (body.user_id or "").strip() or None,
-        "created_at": now,
-        "updated_at": now,
-    }
-    await db.get_collection("tasks").insert_one(doc)
-    logger.info(f"Task created: {task_id} crontab={crontab}")
-    return task_doc_to_out(doc)
+    # Inject resolved crontab back into body before delegating to repo
+    body_with_crontab = body.model_copy(update={"crontab": crontab or ""})
+    storage = get_storage_instance()
+    task_repo = storage.get_task_repo()
+    task = await task_repo.create_task(body_with_crontab)
+    logger.info(f"Task created: {task.id} crontab={crontab}")
+    return task
 
 
 @router.get("", response_model=List[TaskOut])
 async def list_tasks() -> List[TaskOut]:
     """List all tasks with stats: next_run, total_runs, success_rate, recent_runs."""
-    cursor = db.get_collection("tasks").find({}).sort("created_at", -1)
-    runs_coll = db.get_collection("task_runs")
-    webhooks_coll = db.get_collection("webhooks")
+    storage = get_storage_instance()
+    task_repo = storage.get_task_repo()
+    run_repo = storage.get_run_repo()
+    # Webhook filtering is only relevant for docker (MongoDB) backend
     valid_wh_ids: set | None = None
+    if settings.storage_backend != "local":
+        from app.core.db import db
+        webhooks_coll = db.get_collection("webhooks")
+        valid_wh_ids = {doc["_id"] async for doc in webhooks_coll.find({}, {"_id": 1})}
+    tasks = await task_repo.list_tasks()
     result = []
-    async for d in cursor:
-        out = task_doc_to_out(d)
-        data = out.model_dump()
-        tid = str(d.get("_id", ""))
-        # Filter out deleted webhook_ids (lazy-load valid set once)
+    for task in tasks:
+        data = task.model_dump()
+        tid = task.id
+        # Filter out deleted webhook_ids when running in docker mode
         raw_wh_ids = data.get("webhook_ids") or []
-        if raw_wh_ids:
-            if valid_wh_ids is None:
-                valid_wh_ids = {doc["_id"] async for doc in webhooks_coll.find({}, {"_id": 1})}
+        if raw_wh_ids and valid_wh_ids is not None:
             data["webhook_ids"] = [wid for wid in raw_wh_ids if wid in valid_wh_ids]
-        data["next_run"] = _compute_next_run_str(d.get("crontab") or "")
-        total = await runs_coll.count_documents({"task_id": tid})
-        success = await runs_coll.count_documents({"task_id": tid, "status": "success"})
+        data["next_run"] = _compute_next_run_str(task.crontab or "")
+        total = await run_repo.count_runs(tid)
+        success = await run_repo.count_runs(tid, status="success")
         data["total_runs"] = total
         data["success_runs"] = success
         data["success_rate"] = f"{round(success * 100 / total)}%" if total > 0 else ""
-        recent_cursor = runs_coll.find({"task_id": tid}).sort("start_time", -1).limit(7)
-        data["recent_runs"] = [doc.get("status", "failed") async for doc in recent_cursor]
+        data["recent_runs"] = await run_repo.get_recent_run_statuses(tid, limit=7)
         result.append(TaskOut(**data))
     return result
 
@@ -174,61 +161,46 @@ async def list_tasks() -> List[TaskOut]:
 @router.get("/{task_id}", response_model=TaskOut)
 async def get_task(task_id: str) -> TaskOut:
     """Get a task by id."""
-    doc = await db.get_collection("tasks").find_one({"_id": task_id})
-    if not doc:
+    storage = get_storage_instance()
+    task_repo = storage.get_task_repo()
+    task = await task_repo.get_task(task_id)
+    if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    return task_doc_to_out(doc)
+    return task
 
 
 @router.put("/{task_id}", response_model=TaskOut)
 async def update_task(task_id: str, body: TaskUpdate) -> TaskOut:
     """Update a task."""
-    doc = await db.get_collection("tasks").find_one({"_id": task_id})
-    if not doc:
+    storage = get_storage_instance()
+    task_repo = storage.get_task_repo()
+    existing = await task_repo.get_task(task_id)
+    if existing is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    now = datetime.now(timezone.utc)
-    update: Dict[str, Any] = {"updated_at": now}
-    if body.name is not None:
-        update["name"] = body.name
-    if body.prompt is not None:
-        update["prompt"] = body.prompt
+    # Resolve crontab from schedule_desc when needed
+    resolved_crontab = body.crontab
     if body.schedule_desc is not None:
-        update["schedule_desc"] = body.schedule_desc
-        if body.crontab is not None:
-            update["crontab"] = body.crontab
-        else:
+        if body.crontab is None:
             try:
-                mid = body.model_config_id or doc.get("model_config_id")
-                crontab = await parse_schedule_to_crontab(body.schedule_desc, model_config_id=mid)
-                if crontab:
-                    update["crontab"] = crontab
+                mid = body.model_config_id or existing.model_config_id
+                resolved_crontab = await parse_schedule_to_crontab(body.schedule_desc, model_config_id=mid)
             except ScheduleParseError as e:
                 detail = {"message": e.message, "suggestions": e.suggestions} if e.suggestions else e.message
                 raise HTTPException(status_code=400, detail=detail)
-    elif body.crontab is not None:
-        update["crontab"] = body.crontab
-    if body.webhook is not None:
-        update["webhook"] = body.webhook
-    if body.webhook_ids is not None:
-        update["webhook_ids"] = body.webhook_ids
-    if body.event_config is not None:
-        update["event_config"] = body.event_config
-    if body.model_config_id is not None:
-        update["model_config_id"] = (body.model_config_id or "").strip() or None
-    if body.status is not None:
-        update["status"] = body.status
-    if body.user_id is not None:
-        update["user_id"] = (body.user_id or "").strip() or None
-    await db.get_collection("tasks").update_one({"_id": task_id}, {"$set": update})
-    doc = await db.get_collection("tasks").find_one({"_id": task_id})
-    return task_doc_to_out(doc)
+    update_model = body.model_copy(update={"crontab": resolved_crontab})
+    updated = await task_repo.update_task(task_id, update_model)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return updated
 
 
 @router.delete("/{task_id}")
 async def delete_task(task_id: str) -> None:
     """Delete a task."""
-    res = await db.get_collection("tasks").delete_one({"_id": task_id})
-    if res.deleted_count == 0:
+    storage = get_storage_instance()
+    task_repo = storage.get_task_repo()
+    deleted = await task_repo.delete_task(task_id)
+    if not deleted:
         raise HTTPException(status_code=404, detail="Task not found")
     logger.info(f"Task deleted: {task_id}")
 
@@ -242,13 +214,8 @@ async def list_task_runs(
     """Get execution history for a task with pagination. Default 20 per page."""
     limit = max(1, min(100, limit))
     offset = max(0, offset)
-    coll = db.get_collection("task_runs")
-    total = await coll.count_documents({"task_id": task_id})
-    cursor = (
-        coll.find({"task_id": task_id})
-        .sort("start_time", -1)
-        .skip(offset)
-        .limit(limit)
-    )
-    items = [task_run_doc_to_out(d) async for d in cursor]
+    storage = get_storage_instance()
+    run_repo = storage.get_run_repo()
+    total = await run_repo.count_runs(task_id)
+    items = await run_repo.list_runs(task_id, skip=offset, limit=limit)
     return TaskRunsPage(items=items, total=total)

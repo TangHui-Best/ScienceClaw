@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     # 展示用时间（下次执行、执行记录等）的时区，默认北京时间
     display_timezone: str = os.environ.get("DISPLAY_TIMEZONE", "Asia/Shanghai")
 
+    # Storage backend: "local" or "docker" (MongoDB)
+    storage_backend: str = os.environ.get("STORAGE_BACKEND", "docker")
+    local_data_dir: str = os.environ.get("LOCAL_DATA_DIR", "./data")
+
     # MongoDB (same as main backend or dedicated)
     mongodb_host: str = os.environ.get("MONGODB_HOST", "localhost")
     mongodb_port: int = int(os.environ.get("MONGODB_PORT", "27014"))

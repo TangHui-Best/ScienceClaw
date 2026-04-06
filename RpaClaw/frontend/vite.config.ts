@@ -17,17 +17,21 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['lucide-vue-next'],
   },
+  build: {
+    outDir: 'dist',
+    emptyOutDir: true,
+  },
   server: {
     host: true,
     port: 5173,
     proxy: {
       '/api': {
-        target: process.env.BACKEND_URL || 'http://localhost:8000',
+        target: process.env.BACKEND_URL || 'http://localhost:12001',
         changeOrigin: true,
         ws: true,
       },
       '/task-service': {
-        target: process.env.TASK_SERVICE_URL || 'http://localhost:8001',
+        target: process.env.TASK_SERVICE_URL || 'http://localhost:12002',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/task-service/, ''),
       },
