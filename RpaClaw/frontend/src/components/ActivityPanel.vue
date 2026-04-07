@@ -272,6 +272,7 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   (e: 'toolClick', tool: ToolContent): void;
   (e: 'close'): void;
+  (e: 'visibilityChange', visible: boolean): void;
 }>();
 
 const panelRef = ref<HTMLElement>();
@@ -407,6 +408,7 @@ const handleToolClick = (tool: ToolContent) => {
 
 const handleClose = () => {
   isShow.value = false;
+  emit('visibilityChange', false);
   emit('close');
 };
 
@@ -506,18 +508,24 @@ const show = () => {
   eventBus.emit(EVENT_SHOW_ACTIVITY_PANEL);
   visible.value = true;
   isShow.value = true;
+  emit('visibilityChange', true);
 };
 
 const hide = () => {
   isShow.value = false;
+  emit('visibilityChange', false);
 };
 
 onMounted(() => {
   eventBus.on(EVENT_SHOW_FILE_PANEL, () => {
     visible.value = false;
+    isShow.value = false;
+    emit('visibilityChange', false);
   });
   eventBus.on(EVENT_SHOW_TOOL_PANEL, () => {
     visible.value = false;
+    isShow.value = false;
+    emit('visibilityChange', false);
   });
 });
 

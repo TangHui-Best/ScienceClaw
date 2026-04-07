@@ -15,9 +15,19 @@
               </span>
             </div>
             <div class="flex items-center gap-2 flex-shrink-0">
+              <button @click="handleActivityPanelShow"
+                class="h-8 w-8 rounded-xl inline-flex items-center justify-center border transition-all duration-200"
+                :class="isActivityPanelOpen
+                  ? 'border-blue-200 bg-blue-50 text-blue-600 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-400 shadow-sm'
+                  : 'border-gray-200 text-[var(--icon-secondary)] dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 hover:shadow-sm'">
+                <PanelLeft :size="16" />
+              </button>
               <button @click="handleFileListShow"
-                class="h-8 w-8 rounded-xl inline-flex items-center justify-center border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 hover:shadow-sm transition-all duration-200">
-                <FileSearch class="text-[var(--icon-secondary)]" :size="16" />
+                class="h-8 w-8 rounded-xl inline-flex items-center justify-center border transition-all duration-200"
+                :class="isFilePanelOpen
+                  ? 'border-blue-200 bg-blue-50 text-blue-600 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-400 shadow-sm'
+                  : 'border-gray-200 text-[var(--icon-secondary)] dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 hover:shadow-sm'">
+                <FileSearch :size="16" />
               </button>
 
             </div>
@@ -158,6 +168,7 @@
         :lastTurnHadError="lastTurnHadError"
         :sessionId="sessionId"
         @toolClick="handleToolClick"
+        @visibilityChange="isActivityPanelOpen = $event"
         @close="() => {}"
       />
       <!-- Tool Detail Panel (opens on top when a tool is clicked) -->
@@ -211,7 +222,7 @@ import type { ActivityItem } from '../components/ActivityPanel.vue';
 
 const router = useRouter()
 const { t, locale } = useI18n()
-const { hideFilePanel, showFileListPanel } = useFilePanel()
+const { hideFilePanel, showFileListPanel, isShow: isFilePanelOpen } = useFilePanel()
 const { currentUser } = useAuth()
 const { updateSessionTitle } = useSessionListUpdate()
 const { onSessionUpdated } = useSessionNotifications()
@@ -314,6 +325,7 @@ const lastTurnHadError = ref(false);
 // Non-state refs that don't need reset
 const toolPanel = ref<InstanceType<typeof ToolPanel>>()
 const activityPanelRef = ref<InstanceType<typeof ActivityPanel>>()
+const isActivityPanelOpen = ref(false)
 const simpleBarRef = ref<InstanceType<typeof SimpleBar>>();
 const observerRef = ref<HTMLDivElement>();
 const chatContainerRef = ref<HTMLDivElement>();
@@ -354,6 +366,8 @@ const showActivityForTurn = (turnIndex: number) => {
     return;
   }
 
+  // Prefer direct switching between the file drawer and reasoning drawer.
+  hideFilePanel();
   selectedActivityTurn.value = targetTurn;
   activityPanelRef.value?.show();
 };
@@ -1195,6 +1209,11 @@ const handleStop = () => {
 
 const handleFileListShow = () => {
   showFileListPanel()
+}
+
+const handleActivityPanelShow = () => {
+  const latestTurnIndex = activitySnapshots.value.length > 0 ? activitySnapshots.value.length - 1 : -1;
+  showActivityForTurn(isLoading.value ? -1 : latestTurnIndex);
 }
 
 const formatStatsDuration = (ms: number): string => {
