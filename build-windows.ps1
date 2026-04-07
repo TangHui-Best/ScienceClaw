@@ -106,6 +106,46 @@ if (-not $SkipPython) {
     Write-Host ""
 }
 
+# Step 2.5: Compile Python source to bytecode
+Write-Host "[2.5/3] Compiling Python to bytecode..." -ForegroundColor Green
+
+$StagingDir = Join-Path $BuildDir "staging"
+if (Test-Path $StagingDir) {
+    Write-Host "  Removing old staging directory..." -ForegroundColor Yellow
+    Remove-Item -Recurse -Force $StagingDir
+}
+New-Item -ItemType Directory -Path $StagingDir | Out-Null
+
+# Copy source to staging
+Write-Host "  Copying backend source to staging..." -ForegroundColor Yellow
+Copy-Item -Recurse (Join-Path $RootDir "RpaClaw\backend") (Join-Path $StagingDir "backend")
+Copy-Item -Recurse (Join-Path $RootDir "RpaClaw\task-service") (Join-Path $StagingDir "task-service")
+Copy-Item -Recurse (Join-Path $RootDir "RpaClaw\backend\builtin_skills") (Join-Path $StagingDir "builtin_skills")
+
+# Remove unnecessary files from staging
+Write-Host "  Cleaning up non-runtime files..." -ForegroundColor Yellow
+$UnwantedFiles = @("README.md", "Dockerfile", "Dockerfile.china", "requirements.txt", "requirements-dev.txt", ".env.template", ".env", ".env.example")
+foreach ($fileName in $UnwantedFiles) {
+    Get-ChildItem -Recurse -Filter $fileName $StagingDir | Remove-Item -Force
+}
+
+# Compile .py to .pyc in-place (-b writes .pyc next to .py)
+$PythonExe = Join-Path $PythonDir "python.exe"
+Write-Host "  Compiling backend to .pyc..." -ForegroundColor Yellow
+& $PythonExe -m compileall -b -q (Join-Path $StagingDir "backend")
+Write-Host "  Compiling task-service to .pyc..." -ForegroundColor Yellow
+& $PythonExe -m compileall -b -q (Join-Path $StagingDir "task-service")
+Write-Host "  Compiling builtin_skills to .pyc..." -ForegroundColor Yellow
+& $PythonExe -m compileall -b -q (Join-Path $StagingDir "builtin_skills")
+
+# Remove .py source files and __pycache__ directories
+Write-Host "  Removing .py source files..." -ForegroundColor Yellow
+Get-ChildItem -Recurse -Filter "*.py" $StagingDir | Remove-Item -Force
+Get-ChildItem -Recurse -Directory -Filter "__pycache__" $StagingDir | Remove-Item -Recurse -Force
+
+Write-Host "  Bytecode compilation complete!" -ForegroundColor Green
+Write-Host ""
+
 # Step 3: Build Electron Application
 if (-not $SkipElectron) {
     Write-Host "[3/3] Building Electron Application..." -ForegroundColor Green

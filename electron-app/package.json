@@ -38,17 +38,17 @@
         "filter": ["**/*"]
       },
       {
-        "from": "../RpaClaw/backend",
+        "from": "../build/staging/backend",
         "to": "backend",
-        "filter": ["**/*", "!**/__pycache__", "!**/*.pyc"]
+        "filter": ["**/*"]
       },
       {
-        "from": "../RpaClaw/task-service",
+        "from": "../build/staging/task-service",
         "to": "task-service",
-        "filter": ["**/*", "!**/__pycache__", "!**/*.pyc"]
+        "filter": ["**/*"]
       },
       {
-        "from": "../RpaClaw/backend/builtin_skills",
+        "from": "../build/staging/builtin_skills",
         "to": "builtin_skills",
         "filter": ["**/*"]
       },
