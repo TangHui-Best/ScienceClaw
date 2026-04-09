@@ -38,6 +38,11 @@ class RPAStep(BaseModel):
     tab_id: Optional[str] = None
     source_tab_id: Optional[str] = None
     target_tab_id: Optional[str] = None
+    result_key: Optional[str] = None
+    collection_hint: Dict[str, Any] = Field(default_factory=dict)
+    item_hint: Dict[str, Any] = Field(default_factory=dict)
+    ordinal: Optional[str] = None
+    assistant_diagnostics: Dict[str, Any] = Field(default_factory=dict)
 
 
 class RPATab(BaseModel):
@@ -1053,6 +1058,9 @@ class RPASessionManager:
             current_frame = getattr(current_frame, "parent_frame", None)
         path.reverse()
         return path
+
+    async def build_frame_path(self, frame) -> List[str]:
+        return await self._build_frame_path(frame)
 
     async def _describe_frame_selector(self, frame) -> str:
         frame_element = await frame.frame_element()

@@ -1,7 +1,7 @@
 import json
 import logging
 import re
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +116,7 @@ if __name__ == "__main__":
         deduped = self._infer_missing_tab_transitions(deduped)
         root_tab_id = deduped[0].get("tab_id") if deduped else None
         root_tab_id = root_tab_id or "tab-1"
+        used_result_keys: Dict[str, int] = {}
 
         lines = [
             "",
@@ -138,7 +139,7 @@ if __name__ == "__main__":
                 lines.append("")
                 prev_url = first_url
 
-        for step in deduped:
+        for step_index, step in enumerate(deduped, 1):
             action = step.get("action", "")
             target = step.get("target", "")
             value = step.get("value", "")
@@ -155,6 +156,7 @@ if __name__ == "__main__":
                 if ai_code:
                     converted = self._sync_to_async(ai_code)
                     converted = self._inject_result_capture(converted)
+                    converted = self._strip_locator_result_capture(converted)
                     for code_line in converted.split("\n"):
                         lines.append(f"    {code_line}" if code_line.strip() else "")
                 lines.append("")
@@ -215,8 +217,11 @@ if __name__ == "__main__":
                     )
                     frame_parent = "frame_scope"
 
-            # Parse the locator object from target (stored as JSON string)
-            locator = self._build_locator_for_page(target, scope_var)
+            # Prefer adaptive collection locators for AI steps like "click the first item".
+            locator = self._build_adaptive_locator_for_step(step, scope_var)
+            if not locator:
+                # Parse the locator object from target (stored as JSON string)
+                locator = self._build_locator_for_page(target, scope_var)
 
             if action == "open_tab_click":
                 target_tab_id = step.get("target_tab_id") or step.get("tab_id") or "tab-new"
@@ -252,6 +257,11 @@ if __name__ == "__main__":
             elif action == "fill":
                 fill_value = self._maybe_parameterize(value, params)
                 lines.append(f"    await {locator}.fill({fill_value})")
+            elif action == "extract_text":
+                result_var = f"extract_text_value_{step_index}"
+                result_key = self._build_extract_result_key(step, used_result_keys)
+                lines.append(f"    {result_var} = await {locator}.inner_text()")
+                lines.append(f'    _results["{result_key}"] = {result_var}')
             elif action == "press":
                 lines.append(f'    await {locator}.press("{value}")')
             elif action == "select":
@@ -270,6 +280,31 @@ if __name__ == "__main__":
             default_timeout_ms=RPA_PLAYWRIGHT_TIMEOUT_MS,
             navigation_timeout_ms=RPA_NAVIGATION_TIMEOUT_MS,
         )
+
+    def _build_extract_result_key(self, step: Dict[str, Any], used_result_keys: Dict[str, int]) -> str:
+        key = self._normalize_result_key(step.get("result_key"))
+        if not key:
+            fallback_count = used_result_keys.get("extract_text", 0) + 1
+            used_result_keys["extract_text"] = fallback_count
+            return f"extract_text_{fallback_count}"
+
+        count = used_result_keys.get(key, 0) + 1
+        used_result_keys[key] = count
+        if count == 1:
+            return key
+        return f"{key}_{count}"
+
+    def _normalize_result_key(self, raw_key: Any) -> str:
+        text = str(raw_key or "").strip().lower()
+        if not text:
+            return ""
+        text = re.sub(r"[^a-z0-9_]+", "_", text)
+        text = re.sub(r"_+", "_", text).strip("_")
+        if not text:
+            return ""
+        if text[0].isdigit():
+            text = f"extract_{text}"
+        return text[:64]
 
     @staticmethod
     def _infer_missing_tab_transitions(steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -367,6 +402,17 @@ if __name__ == "__main__":
 
         method = loc.get("method", "css")
 
+        if method == "collection_item":
+            collection = loc.get("collection", {"method": "css", "value": "body"})
+            item = loc.get("item", {"method": "css", "value": "body"})
+            ordinal = str(loc.get("ordinal") or "first")
+            collection_loc = self._build_locator(json.dumps(collection) if isinstance(collection, dict) else str(collection))
+            scoped_collection = self._apply_ordinal_to_locator(collection_loc, ordinal)
+            item_loc = self._build_locator(json.dumps(item) if isinstance(item, dict) else str(item))
+            if item_loc.startswith("page."):
+                return f'{scoped_collection}{item_loc[len("page"):]}'
+            return f'{scoped_collection}.locator("{self._escape(str(item))}")'
+
         if method == "role":
             role = loc.get("role", "button")
             name = self._escape(loc.get("name", ""))
@@ -425,6 +471,49 @@ if __name__ == "__main__":
             return f"{page_var}.{locator[len('page.'):]}"
         return locator
 
+    def _build_adaptive_locator_for_step(self, step: Dict[str, Any], page_var: str) -> Optional[str]:
+        ordinal = step.get("ordinal")
+        if not ordinal:
+            return None
+
+        collection_hint = step.get("collection_hint") or {}
+        item_hint = step.get("item_hint") or {}
+        collection_locator = (collection_hint.get("container_hint") or {}).get("locator")
+        item_locator = item_hint.get("locator")
+        adaptive_target: Optional[Dict[str, Any]] = None
+        if collection_locator and item_locator:
+            adaptive_target = {
+                "method": "collection_item",
+                "collection": collection_locator,
+                "item": item_locator,
+                "ordinal": str(ordinal),
+            }
+        elif item_locator:
+            adaptive_target = item_locator
+        elif item_hint.get("role"):
+            adaptive_target = {"method": "role", "role": item_hint["role"]}
+
+        if not adaptive_target:
+            return None
+
+        locator = self._build_locator_for_page(json.dumps(adaptive_target), page_var)
+        if adaptive_target.get("method") == "collection_item":
+            return locator
+        return self._apply_ordinal_to_locator(locator, str(ordinal))
+
+    @staticmethod
+    def _apply_ordinal_to_locator(locator: str, ordinal: str) -> str:
+        normalized = (ordinal or "first").strip().lower()
+        if normalized == "first":
+            return f"{locator}.first"
+        if normalized == "last":
+            return f"{locator}.last"
+        try:
+            index = max(int(normalized) - 1, 0)
+        except Exception:
+            index = 0
+        return f"{locator}.nth({index})"
+
     @staticmethod
     def _escape(s: str) -> str:
         """Escape and normalize a string for embedding in Python source code."""
@@ -454,11 +543,15 @@ if __name__ == "__main__":
             stripped = line.lstrip()
             indent = line[:len(line) - len(stripped)]
             if stripped and not stripped.startswith("#") and not stripped.startswith("def "):
-                if _re.search(r'\bpage\.', stripped):
+                if stripped.startswith("page.") or _re.match(r'^(\w[\w\s,]*=\s*)(await\s+)?(page\..+)$', stripped):
                     if not stripped.startswith("await "):
                         # Check for assignment: var = page.xxx or var = await page.xxx
                         assign_match = _re.match(r'^(\w[\w\s,]*=\s*)(await\s+)?(page\..+)$', stripped)
                         if assign_match:
+                            last_call = _re.search(r'\.(\w+)\([^)]*\)\s*$', assign_match.group(3))
+                            if last_call and last_call.group(1) in PlaywrightGenerator._LOCATOR_BUILDER_METHODS:
+                                result.append(f"{indent}{assign_match.group(1)}{assign_match.group(3)}")
+                                continue
                             # If already has await, keep as-is; otherwise add await
                             if assign_match.group(2):  # already has await
                                 result.append(line)
@@ -483,7 +576,16 @@ if __name__ == "__main__":
         'add_init_script', 'expose_function', 'route', 'unroute',
     })
 
+    _LOCATOR_BUILDER_METHODS = frozenset({
+        'locator', 'frame_locator',
+        'get_by_role', 'get_by_text', 'get_by_label', 'get_by_placeholder',
+        'get_by_alt_text', 'get_by_title', 'get_by_test_id',
+        'nth', 'first', 'last', 'filter',
+    })
+
     _ASSIGN_RE = re.compile(r'^(\w+)\s*=\s*(?:await\s+)?page\.')
+    _GENERIC_ASSIGN_RE = re.compile(r'^(?P<var>\w+)\s*=\s*(?:await\s+)?(?P<rhs>.+)$')
+    _RESULT_CAPTURE_RE = re.compile(r'^_results\["[^"]+"\]\s*=\s*(?P<var>\w+)\s*$')
 
     @classmethod
     def _inject_result_capture(cls, code: str) -> str:
@@ -499,8 +601,35 @@ if __name__ == "__main__":
             var_name = m.group(1)
             # Find the last method call in the line
             last_call = re.search(r'\.(\w+)\([^)]*\)\s*$', stripped)
+            if last_call and last_call.group(1) in cls._LOCATOR_BUILDER_METHODS:
+                continue
             if last_call and last_call.group(1) in cls._ACTION_METHODS:
                 continue
             indent = line[:len(line) - len(line.lstrip())]
             result.append(f'{indent}_results["{var_name}"] = {var_name}')
+        return '\n'.join(result)
+
+    @classmethod
+    def _strip_locator_result_capture(cls, code: str) -> str:
+        """Drop `_results[...] = var` lines when `var` still points to a locator builder."""
+        lines = code.split('\n')
+        result = []
+        locator_vars = set()
+        for line in lines:
+            stripped = line.strip()
+            assign_match = cls._GENERIC_ASSIGN_RE.match(stripped)
+            if assign_match:
+                var_name = assign_match.group("var")
+                rhs = assign_match.group("rhs")
+                last_call = re.search(r'\.(\w+)\([^)]*\)\s*$', rhs)
+                if last_call and last_call.group(1) in cls._LOCATOR_BUILDER_METHODS:
+                    locator_vars.add(var_name)
+                else:
+                    locator_vars.discard(var_name)
+
+            capture_match = cls._RESULT_CAPTURE_RE.match(stripped)
+            if capture_match and capture_match.group("var") in locator_vars:
+                continue
+
+            result.append(line)
         return '\n'.join(result)

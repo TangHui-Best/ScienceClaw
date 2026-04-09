@@ -94,6 +94,10 @@ interface ChatMessage {
   error?: string;
   showCode?: boolean;
   actions?: Array<{ description: string; code: string; showCode?: boolean }>;  // Track agent actions
+  frameSummary?: string;
+  locatorSummary?: string;
+  collectionSummary?: string;
+  diagnostics?: string[];
 }
 
 const chatMessages = ref<ChatMessage[]>([]);
@@ -484,6 +488,15 @@ const sendMessage = async () => {
                 chatMessages.value[msgIdx].text,
                 data.code || '',
               );
+            } else if (eventType === 'resolution') {
+              const resolved = data.intent?.resolved || {};
+              chatMessages.value[msgIdx].frameSummary = (resolved.frame_path || []).length
+                ? (resolved.frame_path || []).join(' -> ')
+                : 'Main frame';
+              chatMessages.value[msgIdx].locatorSummary = resolved.selected_locator_kind || resolved.locator?.method || '';
+              if (resolved.collection_hint?.kind) {
+                chatMessages.value[msgIdx].collectionSummary = `${resolved.collection_hint.kind}${resolved.ordinal ? ` / ${resolved.ordinal}` : ''}`;
+              }
             } else if (eventType === 'executing') {
               chatMessages.value[msgIdx].status = 'executing';
               if (!chatMessages.value[msgIdx].text.trim()) {
@@ -492,6 +505,9 @@ const sendMessage = async () => {
             } else if (eventType === 'result') {
               chatMessages.value[msgIdx].status = data.success ? 'done' : 'error';
               if (data.error) chatMessages.value[msgIdx].error = data.error;
+              if (data.output && data.output !== 'ok' && data.output !== 'None') {
+                chatMessages.value[msgIdx].text += `${chatMessages.value[msgIdx].text ? '\n' : ''}输出: ${data.output}`;
+              }
             } else if (eventType === 'agent_thought') {
               chatMessages.value[msgIdx].text += (chatMessages.value[msgIdx].text ? '\n' : '') + `💭 ${data.text || ''}`;
             } else if (eventType === 'agent_action') {
@@ -809,6 +825,20 @@ const sendMessage = async () => {
               </div>
               <div v-if="msg.status === 'error' && msg.error" class="mt-2 text-[10px] text-red-500 bg-red-50 p-2 rounded-lg">
                 {{ msg.error }}
+              </div>
+              <div v-if="msg.frameSummary || msg.collectionSummary || msg.locatorSummary" class="mt-2 space-y-1 text-[10px] text-gray-500">
+                <div v-if="msg.frameSummary">
+                  <span class="font-semibold text-gray-600">Frame:</span>
+                  <span class="ml-1 font-mono">{{ msg.frameSummary }}</span>
+                </div>
+                <div v-if="msg.collectionSummary">
+                  <span class="font-semibold text-gray-600">Collection:</span>
+                  <span class="ml-1">{{ msg.collectionSummary }}</span>
+                </div>
+                <div v-if="msg.locatorSummary">
+                  <span class="font-semibold text-gray-600">Locator:</span>
+                  <span class="ml-1">{{ msg.locatorSummary }}</span>
+                </div>
               </div>
               <div v-if="msg.status === 'done' && msg.role === 'assistant' && !agentMode" class="mt-2 flex items-center gap-1 text-[10px] text-green-600 font-medium">
                 <CheckCircle :size="10" /> 执行成功

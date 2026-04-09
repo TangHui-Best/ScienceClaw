@@ -305,6 +305,167 @@ class PlaywrightGeneratorTests(unittest.TestCase):
         self.assertIn('frame_scope = frame_scope.frame_locator("iframe[title=\'editor\']")', script)
         self.assertIn('await frame_scope.get_by_role("button", name="Save", exact=True).click()', script)
 
+    def test_generate_script_does_not_await_frame_locator_assignments_inside_ai_script(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "ai_script",
+                "source": "ai",
+                "description": "点击菜鸟笔记",
+                "value": '\n'.join([
+                    'preview = page.frame_locator("iframe[title=\'运行结果预览\']").frame_locator("iframe")',
+                    '_results["preview"] = preview',
+                    'await preview.get_by_role("link", name="菜鸟笔记").click()',
+                ]),
+                "url": "https://www.runoob.com/try/try.php?filename=tryhtml_iframe",
+                "tab_id": "tab-1",
+            }
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertIn('preview = page.frame_locator("iframe[title=\'运行结果预览\']").frame_locator("iframe")', script)
+        self.assertNotIn('preview = await page.frame_locator("iframe[title=\'运行结果预览\']").frame_locator("iframe")', script)
+        self.assertNotIn('_results["preview"] = preview', script)
+
+
+    def test_generate_script_keeps_result_capture_after_locator_variable_is_reassigned_to_data(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "ai_script",
+                "source": "ai",
+                "description": "鑾峰彇 iframe 鏍囬",
+                "value": '\n'.join([
+                    'preview = page.frame_locator("iframe[title=\'杩愯缁撴灉棰勮\']").frame_locator("iframe")',
+                    'preview = await preview.locator("h1").inner_text()',
+                    '_results["preview"] = preview',
+                ]),
+                "url": "https://www.runoob.com/try/try.php?filename=tryhtml_iframe",
+                "tab_id": "tab-1",
+            }
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertIn('preview = page.frame_locator("iframe[title=\'杩愯缁撴灉棰勮\']").frame_locator("iframe")', script)
+        self.assertIn('preview = await preview.locator("h1").inner_text()', script)
+        self.assertEqual(script.count('_results["preview"] = preview'), 1)
+
+
+    def test_generate_script_does_not_prefix_for_loop_over_page_frames_with_await(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "ai_script",
+                "source": "ai",
+                "description": "loop frames",
+                "value": '\n'.join([
+                    'for frame in page.frames:',
+                    '    if "preview" in frame.url:',
+                    '        await frame.get_by_role("link", name="docs").click()',
+                    '        break',
+                ]),
+                "url": "https://example.com",
+                "tab_id": "tab-1",
+            }
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertIn('for frame in page.frames:', script)
+        self.assertNotIn('await for frame in page.frames:', script)
+
+    def test_generate_script_uses_collection_item_locator_for_first_structured_collection(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "click",
+                "target": json.dumps(
+                    {
+                        "method": "collection_item",
+                        "collection": {"method": "css", "value": "main article.card"},
+                        "item": {"method": "css", "value": "h2 a"},
+                        "ordinal": "first",
+                    }
+                ),
+                "description": "点击列表中的第一个项目",
+                "url": "https://example.com/list",
+                "source": "ai",
+                "collection_hint": {"kind": "repeated_items", "container_hint": {"locator": {"method": "css", "value": "main article.card"}}},
+                "item_hint": {"role": "link", "locator": {"method": "css", "value": "h2 a"}},
+                "ordinal": "first",
+            }
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertIn('await current_page.locator("main article.card").first.locator("h2 a").click()', script)
+        self.assertNotIn('forrestchang / andrej-karpathy-skills', script)
+
+    def test_generate_script_extract_text_step_reads_text_and_persists_result(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "extract_text",
+                "target": json.dumps({"method": "role", "role": "link", "name": "Issue Title"}),
+                "description": "提取最近一条 issue 的标题",
+                "result_key": "latest_issue_title",
+                "url": "https://example.com/repo/issues",
+                "source": "ai",
+            }
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertIn(
+            'extract_text_value_1 = await current_page.get_by_role("link", name="Issue Title", exact=True).inner_text()',
+            script,
+        )
+        self.assertIn('_results["latest_issue_title"] = extract_text_value_1', script)
+
+    def test_generate_script_extract_text_step_uses_stable_suffix_for_duplicate_result_keys(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "extract_text",
+                "target": json.dumps({"method": "role", "role": "link", "name": "Issue Title A"}),
+                "description": "提取最近一条 issue 的标题",
+                "result_key": "latest_issue_title",
+                "url": "https://example.com/repo/issues",
+                "source": "ai",
+            },
+            {
+                "action": "extract_text",
+                "target": json.dumps({"method": "role", "role": "link", "name": "Issue Title B"}),
+                "description": "提取最近一条 issue 的标题",
+                "result_key": "latest_issue_title",
+                "url": "https://example.com/repo/issues",
+                "source": "ai",
+            }
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertIn('_results["latest_issue_title"] = extract_text_value_1', script)
+        self.assertIn('_results["latest_issue_title_2"] = extract_text_value_2', script)
+
+    def test_generate_script_extract_text_step_falls_back_to_default_key_without_result_key(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "extract_text",
+                "target": json.dumps({"method": "role", "role": "link", "name": "Issue Title"}),
+                "description": "提取最近一条 issue 的标题",
+                "url": "https://example.com/repo/issues",
+                "source": "ai",
+            }
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertIn('_results["extract_text_1"] = extract_text_value_1', script)
+
 
 if __name__ == "__main__":
     unittest.main()
