@@ -36,10 +36,6 @@ def _resolve_sandbox_base_url() -> str:
     if explicit_base:
         return explicit_base.rstrip("/")
 
-    explicit_rest = (os.environ.get("SANDBOX_REST_URL") or "").strip()
-    if explicit_rest:
-        return explicit_rest.rstrip("/")
-
     explicit_mcp = (os.environ.get("SANDBOX_MCP_URL") or "").strip()
     if explicit_mcp:
         parsed = urlparse(explicit_mcp)
@@ -54,28 +50,10 @@ def _resolve_sandbox_base_url() -> str:
     return "http://sandbox:8080"
 
 
-def _resolve_sandbox_rest_url() -> str:
-    return _env_or_default("SANDBOX_REST_URL", _resolve_sandbox_base_url()).rstrip("/")
-
-
 def _resolve_sandbox_mcp_url() -> str:
     return _env_or_default(
         "SANDBOX_MCP_URL",
         f"{_resolve_sandbox_base_url()}/mcp",
-    ).rstrip("/")
-
-
-def _resolve_shared_sandbox_rest_url() -> str:
-    return _env_or_default(
-        "SHARED_SANDBOX_REST_URL",
-        _resolve_sandbox_base_url(),
-    ).rstrip("/")
-
-
-def _resolve_sandbox_public_url() -> str:
-    return _env_or_default(
-        "SANDBOX_PUBLIC_URL",
-        _resolve_sandbox_base_url(),
     ).rstrip("/")
 
 
@@ -112,7 +90,7 @@ def _derive_sandbox_vnc_ws_url(base_url: str) -> str:
 def _resolve_sandbox_vnc_ws_url() -> str:
     return _env_or_default(
         "SANDBOX_VNC_WS_URL",
-        _derive_sandbox_vnc_ws_url(_resolve_sandbox_public_url()),
+        _derive_sandbox_vnc_ws_url(_resolve_sandbox_base_url()),
     ).rstrip("/")
 
 
@@ -172,13 +150,7 @@ class Settings(BaseSettings):
     # 沙盒服务（MCP 协议）
     sandbox_mcp_url: str = _resolve_sandbox_mcp_url()
 
-    # 沙盒服务（REST 协议）
-    sandbox_rest_url: str = _resolve_sandbox_rest_url()
-
-    # 前端可访问的沙盒地址。默认从 SANDBOX_BASE_URL 派生，可单独覆盖。
-    sandbox_public_url: str = _resolve_sandbox_public_url()
-
-    # 后端代理 VNC 时使用的 WebSocket 地址。默认从 SANDBOX_PUBLIC_URL 派生，可单独覆盖。
+    # 后端代理 VNC 时使用的 WebSocket 地址。默认从 SANDBOX_BASE_URL 派生，可单独覆盖。
     sandbox_vnc_ws_url: str = _resolve_sandbox_vnc_ws_url()
 
     # 后端代理到沙盒/浏览器时附带的额外请求头，JSON 对象格式
@@ -217,7 +189,6 @@ class Settings(BaseSettings):
     k8s_runtime_workspace_pvc_claim: str = os.environ.get("K8S_RUNTIME_WORKSPACE_PVC_CLAIM", "")
     k8s_runtime_extra_volumes_json: str = os.environ.get("K8S_RUNTIME_EXTRA_VOLUMES_JSON", "")
     k8s_runtime_extra_volume_mounts_json: str = os.environ.get("K8S_RUNTIME_EXTRA_VOLUME_MOUNTS_JSON", "")
-    shared_sandbox_rest_url: str = _resolve_shared_sandbox_rest_url()
 
     # class Config:
     #     env_prefix = 'APP_'

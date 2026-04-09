@@ -398,7 +398,7 @@ _OPEN_WRITE_RE = re.compile(
 
 def _get_sandbox_rest_base() -> str:
     """Return the configured sandbox REST base URL."""
-    return settings.sandbox_rest_url.rstrip("/")
+    return settings.sandbox_base_url.rstrip("/")
 
 
 def _extract_sandbox_file_paths(events: List[Dict[str, Any]]) -> Set[str]:

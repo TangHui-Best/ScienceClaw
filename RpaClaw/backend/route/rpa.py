@@ -146,12 +146,12 @@ def _get_sandbox_vnc_ws_url() -> str:
 
 
 def _get_sandbox_vnc_http_url(path: str) -> str:
-    sandbox_base = settings.sandbox_public_url.rstrip("/")
+    sandbox_base = settings.sandbox_base_url.rstrip("/")
     return f"{sandbox_base}/vnc/{path.lstrip('/')}"
 
 
 def _get_sandbox_novnc_ws_url() -> str:
-    sandbox_base = settings.sandbox_public_url.rstrip("/")
+    sandbox_base = settings.sandbox_base_url.rstrip("/")
     parsed = urlparse(sandbox_base)
     ws_scheme = "wss" if parsed.scheme == "https" else "ws"
     return parsed._replace(scheme=ws_scheme, path="/websockify", query="", fragment="").geturl()

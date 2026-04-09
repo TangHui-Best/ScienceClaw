@@ -28,9 +28,8 @@ _package_dir = str(Path(__file__).resolve().parent)
 _lock = threading.Lock()
 _cached_tools: list[StructuredTool] = []
 
-_SANDBOX_REST_URL = (
-    (os.environ.get("SANDBOX_REST_URL") or "").strip()
-    or (os.environ.get("SANDBOX_BASE_URL") or "").strip()
+_SANDBOX_BASE_URL = (
+    (os.environ.get("SANDBOX_BASE_URL") or "").strip()
     or "http://sandbox:8080"
 )
 _TOOL_RUNNER_PATH = "/app/_tool_runner.py"
@@ -55,7 +54,7 @@ def _ensure_sandbox_session() -> str:
         if _sandbox_session_id:
             return _sandbox_session_id
         resp = httpx.post(
-            f"{_SANDBOX_REST_URL}/v1/shell/sessions/create",
+            f"{_SANDBOX_BASE_URL}/v1/shell/sessions/create",
             json={"exec_dir": "/"},
             timeout=10,
         )
@@ -71,7 +70,7 @@ def _execute_in_sandbox(command: str, timeout: int = _EXECUTE_TIMEOUT) -> str:
 
     def _do_exec(sid: str) -> str:
         resp = httpx.post(
-            f"{_SANDBOX_REST_URL}/v1/shell/exec",
+            f"{_SANDBOX_BASE_URL}/v1/shell/exec",
             json={"id": sid, "command": command, "async_mode": False},
             timeout=timeout + 5,
         )

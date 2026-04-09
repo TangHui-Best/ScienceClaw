@@ -32,7 +32,7 @@ from deepagents.backends.protocol import (
 logger = logging.getLogger(__name__)
 
 from backend.config import settings
-_SANDBOX_URL = settings.sandbox_rest_url.rstrip("/")
+_SANDBOX_URL = settings.sandbox_base_url.rstrip("/")
 _BASE_WORKSPACE = settings.workspace_dir
 _SANDBOX_WORKSPACE = settings.sandbox_workspace_dir
 _EXECUTE_TIMEOUT = 600

@@ -139,7 +139,7 @@ def create_app() -> FastAPI:
         """Return configuration needed by the frontend."""
         from backend.config import settings
         return {
-            "sandbox_public_url": settings.sandbox_public_url or "",
+            "sandbox_public_url": settings.sandbox_base_url or "",
             "storage_backend": settings.storage_backend,
         }
 
