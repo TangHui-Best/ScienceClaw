@@ -724,7 +724,6 @@ onMounted(() => {
               <Code :size="18" />
               脚本预览
             </DialogTitle>
-            <p class="text-sm text-white/60">这里展示根据当前配置生成的 Playwright 脚本，不再占用页面主区域高度。</p>
           </DialogHeader>
 
           <div class="flex-1 overflow-auto px-6 py-5">
