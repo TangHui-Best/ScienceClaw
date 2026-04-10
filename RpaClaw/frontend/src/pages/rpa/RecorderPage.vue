@@ -61,7 +61,9 @@ const formatLocator = (raw: unknown): string => {
     return `${formatLocator(locator.parent)} >> ${formatLocator(locator.child)}`;
   }
   if (locator.method === 'nth') {
-    return `${formatLocator(locator.base)} >> nth=${locator.index}`;
+    const baseLocator = locator.locator || locator.base;
+    const prefix = baseLocator ? `${formatLocator(baseLocator)} >> ` : '';
+    return `${prefix}nth=${locator.index}`;
   }
   if (locator.method === 'css') return locator.value || 'css';
   return `${locator.method || 'locator'}:${locator.value || locator.name || ''}`;

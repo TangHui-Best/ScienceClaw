@@ -30,6 +30,7 @@ interface ParsedLocator {
   child?: ParsedLocator;
   base?: ParsedLocator;
   index?: number;
+  locator?: ParsedLocator;
 }
 
 interface LocatorCandidate {
@@ -106,6 +107,8 @@ const shortenText = (value: string, max = 48): string => {
   return value.length > max ? `${value.slice(0, Math.max(0, max - 1))}…` : value;
 };
 
+const getNthBaseLocator = (locator: ParsedLocator) => locator.locator || locator.base;
+
 const formatLocator = (raw: unknown): string => {
   const locator = parseLocator(raw);
   if (!locator) return '无定位器';
@@ -116,7 +119,9 @@ const formatLocator = (raw: unknown): string => {
     return `${formatLocator(locator.parent)} >> ${formatLocator(locator.child)}`;
   }
   if (locator.method === 'nth') {
-    return `${formatLocator(locator.base)} >> nth=${locator.index}`;
+    const baseLocator = getNthBaseLocator(locator);
+    const prefix = baseLocator ? `${formatLocator(baseLocator)} >> ` : '';
+    return `${prefix}nth=${locator.index}`;
   }
   if (locator.method === 'css') return locator.value || 'css';
   return `${locator.method || 'locator'}:${locator.value || locator.name || ''}`;
