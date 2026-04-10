@@ -630,6 +630,22 @@ CAPTURE_JS = r"""
     var _lastAction = null;  // {action, time}
     var _lastClick = null;   // {locatorJson, time} for click dedup
     var _eventSequence = 0;
+    var _activeTarget = null;
+
+    function rememberActiveTarget(el) {
+        if (!el) return null;
+        _activeTarget = retarget(el);
+        return _activeTarget;
+    }
+
+    function resolveActiveTarget(fallbackEl) {
+        if (fallbackEl) return rememberActiveTarget(fallbackEl);
+        if (_activeTarget && _activeTarget.isConnected) return _activeTarget;
+        if (document.activeElement && document.activeElement !== document.body) {
+            return rememberActiveTarget(document.activeElement);
+        }
+        return null;
+    }
 
     function emit(evt) {
         evt.timestamp = Date.now();
@@ -646,6 +662,7 @@ CAPTURE_JS = r"""
         if (!e.isTrusted) return;
         if (window.__rpa_paused) return;
         var el = e.target;
+        rememberActiveTarget(el);
         // Skip clicks on SELECT/OPTION (handled by change event)
         if (el.tagName==='SELECT'||el.tagName==='OPTION') return;
         var locatorBundle = buildLocatorBundle(el);
@@ -666,22 +683,30 @@ CAPTURE_JS = r"""
         });
     }, true);
 
+    document.addEventListener('focusin', function(e) {
+        if (window.__rpa_paused) return;
+        rememberActiveTarget(e.target);
+    }, true);
+
+    document.addEventListener('focusout', function(e) {
+        if (_activeTarget === e.target) _activeTarget = null;
+    }, true);
+
     document.addEventListener('input', function(e) {
         if (!e.isTrusted) return;
         if (window.__rpa_paused) return;
-        var el = e.target;
-        clearTimeout(el.__rpa_timer);
-        el.__rpa_timer = setTimeout(function() {
-            var isPassword = (el.type === 'password');
-            var locatorBundle = buildLocatorBundle(el);
-            emit({action:'fill', locator:locatorBundle.primary,
-                  locator_candidates:locatorBundle.candidates,
-                  validation:locatorBundle.validation,
-                  element_snapshot:buildElementSnapshot(el),
-                  value: isPassword ? '{{credential}}' : (el.value||''),
-                  tag:el.tagName,
-                  sensitive: isPassword});
-        }, 1500);
+        var el = resolveActiveTarget(e.target);
+        if (!el) return;
+        var isPassword = (el.tagName === 'INPUT' && el.type === 'password');
+        var rawValue = (typeof el.value === 'string') ? el.value : (el.textContent || '');
+        var locatorBundle = buildLocatorBundle(el);
+        emit({action:'fill', locator:locatorBundle.primary,
+              locator_candidates:locatorBundle.candidates,
+              validation:locatorBundle.validation,
+              element_snapshot:buildElementSnapshot(el),
+              value: isPassword ? '{{credential}}' : rawValue,
+              tag:el.tagName,
+              sensitive: isPassword});
     }, true);
 
     document.addEventListener('change', function(e) {
@@ -702,7 +727,8 @@ CAPTURE_JS = r"""
         if (!e.isTrusted) return;
         if (window.__rpa_paused) return;
         if (e.key === 'Enter') {
-            var el = e.target;
+            var el = resolveActiveTarget(e.target);
+            if (!el) return;
             var locatorBundle = buildLocatorBundle(el);
             emit({action:'press', locator:locatorBundle.primary,
                   locator_candidates:locatorBundle.candidates,

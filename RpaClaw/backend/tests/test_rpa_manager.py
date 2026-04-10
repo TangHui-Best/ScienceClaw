@@ -297,6 +297,15 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("evt.sequence", MANAGER_MODULE.CAPTURE_JS)
         self.assertIn("_eventSequence", MANAGER_MODULE.CAPTURE_JS)
 
+    def test_capture_js_records_fill_without_debounce_timer(self):
+        self.assertNotIn("setTimeout(function()", MANAGER_MODULE.CAPTURE_JS)
+        self.assertNotIn("}, 1500);", MANAGER_MODULE.CAPTURE_JS)
+
+    def test_capture_js_tracks_active_target_state_for_fill_and_press(self):
+        self.assertIn("focusin", MANAGER_MODULE.CAPTURE_JS)
+        self.assertIn("resolveActiveTarget", MANAGER_MODULE.CAPTURE_JS)
+        self.assertIn("rememberActiveTarget", MANAGER_MODULE.CAPTURE_JS)
+
     async def test_register_page_bootstraps_context_recorder_once(self):
         context = _FakeContext()
         first_page = _FakePage("https://example.com", "Example", context=context)
@@ -547,6 +556,39 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.session.steps[0].action, "navigate_press")
         self.assertEqual(self.session.steps[0].event_timestamp_ms, 1000)
         self.assertEqual(self.session.steps[1].action, "click")
+
+    async def test_sequence_order_keeps_fill_before_press_for_same_target(self):
+        page = _FakePage("https://example.com", "Example")
+        tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+        locator = {"method": "role", "role": "textbox", "name": "Search"}
+
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "press",
+                "tab_id": tab_id,
+                "tag": "INPUT",
+                "timestamp": 2002,
+                "sequence": 30,
+                "value": "Enter",
+                "locator": locator,
+            },
+        )
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "fill",
+                "tab_id": tab_id,
+                "tag": "INPUT",
+                "timestamp": 2001,
+                "sequence": 20,
+                "value": "cat",
+                "locator": locator,
+            },
+        )
+
+        self.assertEqual([step.action for step in self.session.steps], ["fill", "press"])
+        self.assertEqual(self.session.steps[0].target, self.session.steps[1].target)
 
     async def test_register_context_page_upgrades_recent_click_to_open_tab_click(self):
         source_page = _FakePage("https://example.com", "Example")
