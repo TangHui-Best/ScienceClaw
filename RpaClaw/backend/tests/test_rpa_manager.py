@@ -460,6 +460,24 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("strict_match_count: primaryMatchCount", fallback_block)
         self.assertNotIn("strict_match_count: 1", fallback_block)
 
+    def test_capture_js_click_listener_does_not_dedupe_same_locator_clicks(self):
+        js = MANAGER_MODULE.CAPTURE_JS
+        click_block = js.split("document.addEventListener('click'", 1)[1].split(
+            "document.addEventListener('focusin'", 1
+        )[0]
+        self.assertNotIn("_lastClick", js)
+        self.assertNotIn("now-_lastClick.time<1000", click_block)
+        self.assertNotIn("Deduplicate rapid clicks on the same element", click_block)
+
+    def test_capture_js_prefers_strict_candidate_primary_when_generated_locator_is_ambiguous(self):
+        js = MANAGER_MODULE.CAPTURE_JS
+        build_locator_block = js.split("function buildLocatorBundle(el)", 1)[1].split(
+            "function buildElementSnapshot", 1
+        )[0]
+        self.assertIn("if (primaryMatchCount !== 1)", build_locator_block)
+        self.assertIn("if (candidate.strict_match_count === 1)", build_locator_block)
+        self.assertIn("primary = strictCandidate.locator;", build_locator_block)
+
     async def test_register_page_bootstraps_context_recorder_once(self):
         context = _FakeContext()
         first_page = _FakePage("https://example.com", "Example", context=context)

@@ -415,6 +415,22 @@ CAPTURE_JS = r"""
         var primary = generateLocator(el);
         var candidatePayloads = collectLocatorCandidates(el);
         var primaryMatchCount = countLocatorMatches(primary);
+        if (primaryMatchCount !== 1) {
+            var strictCandidate = null;
+            for (var si = 0; si < candidatePayloads.length; si++) {
+                var candidate = candidatePayloads[si];
+                if (candidate.strict_match_count === 1) {
+                    if (candidate.locator) {
+                        strictCandidate = candidate;
+                        break;
+                    }
+                }
+            }
+            if (strictCandidate) {
+                primary = strictCandidate.locator;
+                primaryMatchCount = strictCandidate.strict_match_count;
+            }
+        }
         var primaryJson = JSON.stringify(primary);
         var selectedPayload = null;
 
@@ -728,7 +744,6 @@ CAPTURE_JS = r"""
 
     // ── Navigation deduplication ────────────────────────────────────
     var _lastAction = null;  // {action, time}
-    var _lastClick = null;   // {locatorJson, time} for click dedup
     var _eventSequence = 0;
     var _activeTarget = null;
 
@@ -765,13 +780,6 @@ CAPTURE_JS = r"""
         // Skip clicks on SELECT/OPTION (handled by change event)
         if (el.tagName==='SELECT'||el.tagName==='OPTION') return;
         var locatorBundle = buildLocatorBundle(el);
-        var locJson = JSON.stringify(locatorBundle.primary);
-        var now = Date.now();
-        // Deduplicate rapid clicks on the same element (within 1s)
-        if (_lastClick && _lastClick.locatorJson===locJson && now-_lastClick.time<1000) {
-            return;
-        }
-        _lastClick = {locatorJson:locJson, time:now};
         emit({
             action:'click',
             locator:locatorBundle.primary,
