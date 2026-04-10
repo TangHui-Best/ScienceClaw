@@ -75,6 +75,48 @@ class PlaywrightGeneratorTests(unittest.TestCase):
             'page.locator("#hero").get_by_role("button", name="Sign up for GitHub", exact=True)',
         )
 
+    def test_build_locator_supports_nth_locator_payload(self):
+        generator = PlaywrightGenerator()
+        target = json.dumps(
+            {
+                "method": "nth",
+                "locator": {"method": "role", "role": "button", "name": "Save"},
+                "index": 2,
+            }
+        )
+
+        locator = generator._build_locator(target)
+
+        self.assertEqual(
+            locator,
+            'page.get_by_role("button", name="Save", exact=True).nth(2)',
+        )
+
+    def test_generate_script_click_with_nth_locator_uses_nth_chain(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "click",
+                "target": json.dumps(
+                    {
+                        "method": "nth",
+                        "locator": {"method": "role", "role": "button", "name": "Save"},
+                        "index": 1,
+                    }
+                ),
+                "description": "Click second Save button",
+                "tag": "BUTTON",
+                "url": "https://example.com",
+            }
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertIn(
+            'await current_page.get_by_role("button", name="Save", exact=True).nth(1).click()',
+            script,
+        )
+
     def test_generate_script_tracks_current_page_for_open_tab_click(self):
         generator = PlaywrightGenerator()
         steps = [
@@ -157,6 +199,24 @@ class PlaywrightGeneratorTests(unittest.TestCase):
 
         self.assertIn("async with current_page.expect_navigation", script)
         self.assertIn('await current_page.get_by_role("link", name="Search", exact=True).click()', script)
+
+    def test_generate_script_uses_expect_navigation_for_navigate_press(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "navigate_press",
+                "target": json.dumps({"method": "role", "role": "textbox", "name": "Search"}),
+                "description": "Press Enter and navigate",
+                "tag": "INPUT",
+                "value": "Enter",
+                "url": "https://example.com/search",
+            }
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertIn("async with current_page.expect_navigation", script)
+        self.assertIn('await current_page.get_by_role("textbox", name="Search", exact=True).press("Enter")', script)
 
     def test_generate_script_infers_open_tab_click_from_tab_id_change(self):
         generator = PlaywrightGenerator()

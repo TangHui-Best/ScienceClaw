@@ -10,6 +10,122 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 logger = logging.getLogger(__name__)
 
+_KEY_TO_VIRTUAL_KEY_CODE: Dict[str, int] = {
+    "Backspace": 8,
+    "Space": 32,
+    "Tab": 9,
+    "Enter": 13,
+    "Escape": 27,
+    "ArrowLeft": 37,
+    "ArrowUp": 38,
+    "ArrowRight": 39,
+    "ArrowDown": 40,
+    "Delete": 46,
+}
+
+_CODE_TO_VIRTUAL_KEY_CODE: Dict[str, int] = {
+    "Space": 32,
+    "Backquote": 192,
+    "Minus": 189,
+    "Equal": 187,
+    "BracketLeft": 219,
+    "BracketRight": 221,
+    "Backslash": 220,
+    "Semicolon": 186,
+    "Quote": 222,
+    "Comma": 188,
+    "Period": 190,
+    "Slash": 191,
+}
+
+_CODE_TO_UNMODIFIED_TEXT: Dict[str, str] = {
+    "Space": " ",
+    "Backquote": "`",
+    "Minus": "-",
+    "Equal": "=",
+    "BracketLeft": "[",
+    "BracketRight": "]",
+    "Backslash": "\\",
+    "Semicolon": ";",
+    "Quote": "'",
+    "Comma": ",",
+    "Period": ".",
+    "Slash": "/",
+    "Enter": "\r",
+    "NumpadEnter": "\r",
+}
+
+
+def _infer_virtual_key_code(key: str, code: str) -> int:
+    if code.startswith("Key") and len(code) == 4:
+        return ord(code[-1].upper())
+    if code.startswith("Digit") and len(code) == 6 and code[-1].isdigit():
+        return ord(code[-1])
+    if code in _CODE_TO_VIRTUAL_KEY_CODE:
+        return _CODE_TO_VIRTUAL_KEY_CODE[code]
+    if key in _KEY_TO_VIRTUAL_KEY_CODE:
+        return _KEY_TO_VIRTUAL_KEY_CODE[key]
+    if len(key) == 1:
+        return ord(key.upper())
+    return 0
+
+
+def _infer_unmodified_text(key: str, code: str) -> Optional[str]:
+    if code.startswith("Key") and len(code) == 4:
+        return code[-1].lower()
+    if code.startswith("Digit") and len(code) == 6 and code[-1].isdigit():
+        return code[-1]
+    if code in _CODE_TO_UNMODIFIED_TEXT:
+        return _CODE_TO_UNMODIFIED_TEXT[code]
+    if key == "Enter":
+        return "\r"
+    return None
+
+
+def _build_cdp_key_event(event: Dict[str, Any]) -> Dict[str, Any]:
+    action = event.get("action", "keyDown")
+    key = event.get("key", "") or ""
+    code = event.get("code", "") or ""
+    modifiers = event.get("modifiers", 0)
+    text = event.get("text")
+    vk_code = int(event.get("windowsVirtualKeyCode") or event.get("nativeVirtualKeyCode") or 0)
+    if vk_code <= 0:
+        vk_code = _infer_virtual_key_code(key, code)
+
+    payload: Dict[str, Any] = {
+        "type": action,
+        "key": key,
+        "code": code,
+        "modifiers": modifiers,
+    }
+    if vk_code > 0:
+        payload["windowsVirtualKeyCode"] = vk_code
+        payload["nativeVirtualKeyCode"] = vk_code
+
+    if action != "keyUp":
+        has_text = False
+        key_text: Optional[str] = None
+        unmodified_text: Optional[str] = None
+        if not (modifiers & 0b0111):
+            if isinstance(text, str) and text:
+                key_text = text
+                unmodified_text = _infer_unmodified_text(key, code) or key_text
+                has_text = True
+            else:
+                inferred_unmodified = _infer_unmodified_text(key, code)
+                if inferred_unmodified is not None:
+                    key_text = inferred_unmodified
+                    unmodified_text = inferred_unmodified
+                    has_text = True
+
+        if has_text and key_text is not None and unmodified_text is not None:
+            payload["type"] = "keyDown"
+            payload["text"] = key_text
+            payload["unmodifiedText"] = unmodified_text
+        else:
+            payload["type"] = "rawKeyDown"
+    return payload
+
 
 class SessionScreencastController:
     """Streams the currently active tab and switches targets when active tab changes."""
@@ -252,13 +368,7 @@ class SessionScreencastController:
     async def _dispatch_key(self, event: Dict[str, Any]) -> None:
         if not self._cdp:
             return
-        params: Dict[str, Any] = {
-            "type": event.get("action", "keyDown"),
-            "key": event.get("key", ""),
-            "code": event.get("code", ""),
-            "text": event.get("text", ""),
-            "modifiers": event.get("modifiers", 0),
-        }
+        params = _build_cdp_key_event(event)
         try:
             await self._cdp.send("Input.dispatchKeyEvent", params)
         except Exception as exc:
@@ -402,13 +512,7 @@ class ScreencastService:
     async def _dispatch_key(self, event: Dict[str, Any]) -> None:
         if not self._cdp:
             return
-        params: Dict[str, Any] = {
-            "type": event.get("action", "keyDown"),
-            "key": event.get("key", ""),
-            "code": event.get("code", ""),
-            "text": event.get("text", ""),
-            "modifiers": event.get("modifiers", 0),
-        }
+        params = _build_cdp_key_event(event)
         try:
             await self._cdp.send("Input.dispatchKeyEvent", params)
         except Exception as exc:

@@ -60,6 +60,11 @@ const formatLocator = (raw: unknown): string => {
   if (locator.method === 'nested') {
     return `${formatLocator(locator.parent)} >> ${formatLocator(locator.child)}`;
   }
+  if (locator.method === 'nth') {
+    const baseLocator = locator.locator || locator.base;
+    const prefix = baseLocator ? `${formatLocator(baseLocator)} >> ` : '';
+    return `${prefix}nth=${locator.index}`;
+  }
   if (locator.method === 'css') return locator.value || 'css';
   return `${locator.method || 'locator'}:${locator.value || locator.name || ''}`;
 };
@@ -67,6 +72,32 @@ const formatLocator = (raw: unknown): string => {
 const formatFramePath = (framePath?: string[]) => {
   if (!framePath?.length) return 'Main frame';
   return framePath.join(' -> ');
+};
+
+const VALIDATION_LABELS: Record<string, string> = {
+  ok: 'Strict match',
+  ambiguous: 'Ambiguous / not unique',
+  fallback: 'Fallback',
+  warning: 'Warning',
+  broken: 'Broken',
+};
+
+const VALIDATION_CLASS_MAP: Record<string, string> = {
+  ok: 'bg-emerald-100 text-emerald-700',
+  ambiguous: 'bg-amber-100 text-amber-700',
+  fallback: 'bg-amber-100 text-amber-700',
+  warning: 'bg-amber-100 text-amber-700',
+  broken: 'bg-rose-100 text-rose-700',
+};
+
+const getValidationLabel = (status?: string) => {
+  if (!status) return 'Unknown';
+  return VALIDATION_LABELS[status] || status.replace(/_/g, ' ');
+};
+
+const getValidationClass = (status?: string) => {
+  if (!status) return 'bg-gray-100 text-gray-700';
+  return VALIDATION_CLASS_MAP[status] || 'bg-gray-100 text-gray-700';
 };
 
 const mapServerSteps = (serverSteps: any[]) => ([
@@ -655,9 +686,9 @@ const sendMessage = async () => {
                 <span class="font-semibold text-gray-600">Validation:</span>
                 <span
                   class="ml-1 px-1.5 py-0.5 rounded-full"
-                  :class="step.validationStatus === 'ok' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'"
+                  :class="getValidationClass(step.validationStatus)"
                 >
-                  {{ step.validationStatus }}
+                  {{ getValidationLabel(step.validationStatus) }}
                 </span>
                 <span v-if="step.validationDetails" class="ml-1">{{ step.validationDetails }}</span>
               </p>

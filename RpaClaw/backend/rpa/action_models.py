@@ -10,14 +10,16 @@ class LocatorValidation(BaseModel):
 
 class LocatorCandidate(BaseModel):
     kind: str
-    selector: str
-    playwright_locator: str
     score: int
     strict_match_count: int
     visible_match_count: int
-    actionability: Dict[str, Any] = Field(default_factory=dict)
     selected: bool = False
+    locator: Dict[str, Any] = Field(default_factory=dict)
     reason: str = ""
+    nth: Optional[int] = None
+    selector: Optional[str] = None
+    playwright_locator: Optional[str] = None
+    actionability: Dict[str, Any] = Field(default_factory=dict)
 
 
 class ActionSignal(BaseModel):

@@ -2,6 +2,7 @@ import json
 import logging
 import uuid
 import asyncio
+import re
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 from urllib.parse import urlparse
@@ -43,6 +44,8 @@ class RPAStep(BaseModel):
     item_hint: Dict[str, Any] = Field(default_factory=dict)
     ordinal: Optional[str] = None
     assistant_diagnostics: Dict[str, Any] = Field(default_factory=dict)
+    sequence: Optional[int] = None
+    event_timestamp_ms: Optional[int] = None
 
 
 class RPATab(BaseModel):
@@ -286,6 +289,7 @@ CAPTURE_JS = r"""
     function collectLocatorCandidates(el) {
         el = retarget(el);
         var candidates = [];
+        var candidatePayloads = [];
         var tag = el.tagName;
         var role = getRole(el);
         var name = accessibleName(el);
@@ -349,27 +353,60 @@ CAPTURE_JS = r"""
         }
 
         candidates.sort(function(a,b){ return a.s - b.s; });
-        return candidates.map(function(c) { return buildCandidateMeta(c); });
+        for (var i = 0; i < candidates.length; i++) {
+            var payloads = buildCandidateMeta(candidates[i], el);
+            for (var j = 0; j < payloads.length; j++) {
+                candidatePayloads.push(payloads[j]);
+            }
+        }
+        return candidatePayloads;
     }
 
-    function buildCandidateMeta(c) {
-        var matchCount = countCandidateMatches(c);
-        return {
+    function buildCandidateMeta(c, targetEl) {
+        var matchInfo = collectCandidateMatchInfo(c, targetEl);
+        var payloads = [{
             kind: c.m,
             score: c.s,
-            strict_match_count: matchCount,
-            visible_match_count: matchCount,
+            strict_match_count: matchInfo.count,
+            visible_match_count: matchInfo.count,
             selected: false,
             locator: formatCandidate(c),
-            reason: matchCount === 1 ? 'strict unique match' : ('strict matches = ' + matchCount)
-        };
+            reason: matchInfo.count === 1 ? 'strict unique match' : ('strict matches = ' + matchInfo.count)
+        }];
+
+        if (matchInfo.count > 1 && matchInfo.targetIndex >= 0) {
+            payloads.push({
+                kind: 'nth',
+                score: c.s + S_NTH + matchInfo.targetIndex,
+                strict_match_count: 1,
+                visible_match_count: 1,
+                selected: false,
+                locator: buildNthLocator(c, matchInfo.targetIndex),
+                nth: matchInfo.targetIndex,
+                reason: 'strict nth match (' + (matchInfo.targetIndex + 1) + ' of ' + matchInfo.count + ')'
+            });
+        }
+
+        return payloads;
     }
 
-    function countCandidateMatches(c) {
+    function collectCandidateMatchInfo(c, targetEl) {
+        var all = document.querySelectorAll('*');
+        var count = 0;
+        var targetIndex = -1;
+        for (var i = 0; i < all.length; i++) {
+            if (!matchesCandidate(all[i], c)) continue;
+            if (all[i] === targetEl) targetIndex = count;
+            count++;
+        }
+        return {count: count, targetIndex: targetIndex};
+    }
+
+    function countLocatorMatches(locator) {
         var all = document.querySelectorAll('*');
         var count = 0;
         for (var i = 0; i < all.length; i++) {
-            if (matchesCandidate(all[i], c)) count++;
+            if (matchesLocator(all[i], locator)) count++;
         }
         return count;
     }
@@ -377,6 +414,37 @@ CAPTURE_JS = r"""
     function buildLocatorBundle(el) {
         var primary = generateLocator(el);
         var candidatePayloads = collectLocatorCandidates(el);
+        var primaryMatchCount = countLocatorMatches(primary);
+        if (primaryMatchCount !== 1) {
+            var strictCandidate = null;
+            for (var si = 0; si < candidatePayloads.length; si++) {
+                var candidate = candidatePayloads[si];
+                if (candidate.strict_match_count !== 1 || !candidate.locator) continue;
+                if (!strictCandidate) {
+                    strictCandidate = candidate;
+                    continue;
+                }
+                var candidateScore = Number(candidate.score);
+                var strictScore = Number(strictCandidate.score);
+                if (!isFinite(candidateScore)) candidateScore = S_FALLBACK;
+                if (!isFinite(strictScore)) strictScore = S_FALLBACK;
+                if (candidateScore < strictScore) {
+                    strictCandidate = candidate;
+                    continue;
+                }
+                if (candidateScore === strictScore) {
+                    var candidateIsNth = candidate.kind === 'nth'
+                        || (candidate.locator && candidate.locator.method === 'nth');
+                    var strictIsNth = strictCandidate.kind === 'nth'
+                        || (strictCandidate.locator && strictCandidate.locator.method === 'nth');
+                    if (strictIsNth && !candidateIsNth) strictCandidate = candidate;
+                }
+            }
+            if (strictCandidate) {
+                primary = strictCandidate.locator;
+                primaryMatchCount = strictCandidate.strict_match_count;
+            }
+        }
         var primaryJson = JSON.stringify(primary);
         var selectedPayload = null;
 
@@ -392,11 +460,15 @@ CAPTURE_JS = r"""
             selectedPayload = {
                 kind: primary.method || 'css',
                 score: S_FALLBACK,
-                strict_match_count: 1,
-                visible_match_count: 1,
+                strict_match_count: primaryMatchCount,
+                visible_match_count: primaryMatchCount,
                 selected: true,
                 locator: primary,
-                reason: primary.method === 'nested' ? 'scoped parent-child fallback' : 'selected generated locator'
+                reason: primaryMatchCount === 1
+                    ? 'strict unique generated locator'
+                    : (primary.method === 'nested'
+                        ? 'scoped parent-child fallback'
+                        : ('generated locator strict matches = ' + primaryMatchCount))
             };
             candidatePayloads.push(selectedPayload);
         }
@@ -488,6 +560,10 @@ CAPTURE_JS = r"""
         return {method:'css', value:'body'};
     }
 
+    function buildNthLocator(c, nthIndex) {
+        return {method:'nth', locator:formatCandidate(c), index:nthIndex};
+    }
+
     function matchesCandidate(el, c) {
         if (!el || !c) return false;
         if (c.m === 'role' || c.m === 'role_only') {
@@ -506,6 +582,62 @@ CAPTURE_JS = r"""
         if (c.m === 'text') return norm(el.textContent) === c.v && el.children.length === 0;
         if (c.m === 'css' && c.sel) {
             try { return el.matches(c.sel); } catch(e) { return false; }
+        }
+        return false;
+    }
+
+    function matchesLocator(el, locator) {
+        if (!el || !locator || typeof locator !== 'object') return false;
+        var method = locator.method || 'css';
+
+        if (method === 'nested') {
+            var child = locator.child || {};
+            var parent = locator.parent || {};
+            if (!matchesLocator(el, child)) return false;
+            var cur = el.parentElement;
+            while (cur) {
+                if (matchesLocator(cur, parent)) return true;
+                cur = cur.parentElement;
+            }
+            return false;
+        }
+
+        if (method === 'nth') {
+            var base = locator.locator || locator.base;
+            var index = parseInt(locator.index, 10);
+            if (!base || isNaN(index) || index < 0) return false;
+            var all = document.querySelectorAll('*');
+            var matchedIndex = 0;
+            for (var i = 0; i < all.length; i++) {
+                if (!matchesLocator(all[i], base)) continue;
+                if (all[i] === el) return matchedIndex === index;
+                matchedIndex++;
+            }
+            return false;
+        }
+
+        if (method === 'role') {
+            var role = locator.role || '';
+            var name = locator.name || '';
+            if (getRole(el) !== role) return false;
+            if (!name) return true;
+            return accessibleName(el) === name;
+        }
+
+        if (method === 'testid') {
+            var tid = el.getAttribute('data-testid') || el.getAttribute('data-test-id')
+                || el.getAttribute('data-test') || el.getAttribute('data-cy') || '';
+            return norm(tid) === norm(locator.value || '');
+        }
+
+        if (method === 'placeholder') return norm(el.getAttribute('placeholder')) === norm(locator.value || '');
+        if (method === 'label') return accessibleName(el) === norm(locator.value || '');
+        if (method === 'alt') return norm(el.getAttribute('alt')) === norm(locator.value || '');
+        if (method === 'title') return norm(el.getAttribute('title')) === norm(locator.value || '');
+        if (method === 'text') return norm(el.textContent) === norm(locator.value || '') && el.children.length === 0;
+        if (method === 'css') {
+            var selector = locator.value || '';
+            try { return !!selector && el.matches(selector); } catch(e) { return false; }
         }
         return false;
     }
@@ -626,10 +758,39 @@ CAPTURE_JS = r"""
 
     // ── Navigation deduplication ────────────────────────────────────
     var _lastAction = null;  // {action, time}
-    var _lastClick = null;   // {locatorJson, time} for click dedup
+    var _eventSequence = 0;
+    var _activeTarget = null;
+    var _activeLocatorBundle = null;
+
+    function rememberActiveTarget(el) {
+        if (!el) return null;
+        var target = retarget(el);
+        if (_activeTarget !== target) {
+            _activeTarget = target;
+            _activeLocatorBundle = null;
+        }
+        return _activeTarget;
+    }
+
+    function resolveActiveTarget() {
+        if (_activeTarget && _activeTarget.isConnected) return _activeTarget;
+        if (document.activeElement && document.activeElement !== document.body) {
+            return rememberActiveTarget(document.activeElement);
+        }
+        return null;
+    }
+
+    function ensureActiveLocatorBundle(el) {
+        var target = el ? rememberActiveTarget(el) : resolveActiveTarget();
+        if (!target) return null;
+        if (!_activeLocatorBundle) _activeLocatorBundle = buildLocatorBundle(target);
+        return _activeLocatorBundle;
+    }
 
     function emit(evt) {
         evt.timestamp = Date.now();
+        _eventSequence += 1;
+        evt.sequence = _eventSequence;
         evt.url = location.href;
         evt.frame_path = getFramePath();
         _lastAction = {action:evt.action, time:evt.timestamp};
@@ -641,16 +802,10 @@ CAPTURE_JS = r"""
         if (!e.isTrusted) return;
         if (window.__rpa_paused) return;
         var el = e.target;
+        rememberActiveTarget(el);
         // Skip clicks on SELECT/OPTION (handled by change event)
         if (el.tagName==='SELECT'||el.tagName==='OPTION') return;
         var locatorBundle = buildLocatorBundle(el);
-        var locJson = JSON.stringify(locatorBundle.primary);
-        var now = Date.now();
-        // Deduplicate rapid clicks on the same element (within 1s)
-        if (_lastClick && _lastClick.locatorJson===locJson && now-_lastClick.time<1000) {
-            return;
-        }
-        _lastClick = {locatorJson:locJson, time:now};
         emit({
             action:'click',
             locator:locatorBundle.primary,
@@ -661,22 +816,36 @@ CAPTURE_JS = r"""
         });
     }, true);
 
+    document.addEventListener('focusin', function(e) {
+        if (window.__rpa_paused) return;
+        var el = rememberActiveTarget(e.target);
+        if (!el) return;
+        ensureActiveLocatorBundle(el);
+    }, true);
+
+    document.addEventListener('focusout', function(e) {
+        if (_activeTarget === e.target) {
+            _activeTarget = null;
+            _activeLocatorBundle = null;
+        }
+    }, true);
+
     document.addEventListener('input', function(e) {
         if (!e.isTrusted) return;
         if (window.__rpa_paused) return;
-        var el = e.target;
-        clearTimeout(el.__rpa_timer);
-        el.__rpa_timer = setTimeout(function() {
-            var isPassword = (el.type === 'password');
-            var locatorBundle = buildLocatorBundle(el);
-            emit({action:'fill', locator:locatorBundle.primary,
-                  locator_candidates:locatorBundle.candidates,
-                  validation:locatorBundle.validation,
-                  element_snapshot:buildElementSnapshot(el),
-                  value: isPassword ? '{{credential}}' : (el.value||''),
-                  tag:el.tagName,
-                  sensitive: isPassword});
-        }, 1500);
+        var el = rememberActiveTarget(e.target);
+        if (!el) return;
+        var isPassword = (el.tagName === 'INPUT' && el.type === 'password');
+        var rawValue = (typeof el.value === 'string') ? el.value : (el.textContent || '');
+        var locatorBundle = ensureActiveLocatorBundle(el);
+        if (!locatorBundle) return;
+        emit({action:'fill', locator:locatorBundle.primary,
+              locator_candidates:locatorBundle.candidates,
+              validation:locatorBundle.validation,
+              element_snapshot:buildElementSnapshot(el),
+              value: isPassword ? '{{credential}}' : rawValue,
+              tag:el.tagName,
+              sensitive: isPassword});
     }, true);
 
     document.addEventListener('change', function(e) {
@@ -697,8 +866,10 @@ CAPTURE_JS = r"""
         if (!e.isTrusted) return;
         if (window.__rpa_paused) return;
         if (e.key === 'Enter') {
-            var el = e.target;
-            var locatorBundle = buildLocatorBundle(el);
+            var el = resolveActiveTarget();
+            if (!el) return;
+            var locatorBundle = ensureActiveLocatorBundle(el);
+            if (!locatorBundle) return;
             emit({action:'press', locator:locatorBundle.primary,
                   locator_candidates:locatorBundle.candidates,
                   validation:locatorBundle.validation,
@@ -1215,6 +1386,219 @@ class RPASessionManager:
         session.steps.pop(step_index)
         return True
 
+    @staticmethod
+    def _unescape_playwright_literal(value: str) -> str:
+        return value.replace('\\"', '"').replace("\\\\", "\\")
+
+    @classmethod
+    def _parse_playwright_locator_expression(cls, expression: str) -> Optional[Dict[str, Any]]:
+        if not expression:
+            return None
+        text = expression.strip()
+        locator_match = re.fullmatch(r'page\.locator\("((?:\\.|[^"\\])*)"\)', text)
+        if locator_match:
+            return {"method": "css", "value": cls._unescape_playwright_literal(locator_match.group(1))}
+
+        role_match = re.fullmatch(
+            r'page\.get_by_role\("((?:\\.|[^"\\])*)"(?:,\s*name="((?:\\.|[^"\\])*)"(?:,\s*exact=True)?)?\)',
+            text,
+        )
+        if role_match:
+            role = cls._unescape_playwright_literal(role_match.group(1))
+            name = cls._unescape_playwright_literal(role_match.group(2)) if role_match.group(2) is not None else ""
+            return {"method": "role", "role": role, "name": name}
+
+        one_arg_patterns = (
+            ("testid", r'page\.get_by_test_id\("((?:\\.|[^"\\])*)"\)'),
+            ("label", r'page\.get_by_label\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)'),
+            ("placeholder", r'page\.get_by_placeholder\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)'),
+            ("alt", r'page\.get_by_alt_text\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)'),
+            ("title", r'page\.get_by_title\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)'),
+            ("text", r'page\.get_by_text\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)'),
+        )
+        for method, pattern in one_arg_patterns:
+            match = re.fullmatch(pattern, text)
+            if match:
+                return {"method": method, "value": cls._unescape_playwright_literal(match.group(1))}
+
+        return None
+
+    @classmethod
+    def _resolve_candidate_locator(cls, candidate: Dict[str, Any]) -> Dict[str, Any]:
+        locator_payload = candidate.get("locator")
+        locator: Optional[Dict[str, Any]] = None
+
+        if isinstance(locator_payload, dict):
+            locator = dict(locator_payload)
+        elif isinstance(locator_payload, str) and locator_payload.strip():
+            raw_payload = locator_payload.strip()
+            try:
+                parsed = json.loads(raw_payload)
+            except (json.JSONDecodeError, TypeError):
+                parsed = None
+            if isinstance(parsed, dict):
+                locator = parsed
+            else:
+                locator = {"method": "css", "value": raw_payload}
+
+        if locator is None:
+            playwright_locator = candidate.get("playwright_locator")
+            if isinstance(playwright_locator, str):
+                locator = cls._parse_playwright_locator_expression(playwright_locator)
+
+        if locator is None:
+            selector = candidate.get("selector")
+            if isinstance(selector, str) and selector.strip():
+                locator = {"method": "css", "value": selector.strip()}
+
+        if not isinstance(locator, dict):
+            raise ValueError("Locator candidate is missing locator payload")
+
+        nth_value = candidate.get("nth")
+        if nth_value is not None and locator.get("method") != "nth":
+            try:
+                nth_index = int(nth_value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Locator candidate nth index is invalid") from exc
+            if nth_index < 0:
+                raise ValueError("Locator candidate nth index is invalid")
+            locator = {"method": "nth", "locator": locator, "index": nth_index}
+        elif locator.get("method") == "nth" and "locator" not in locator and "base" in locator:
+            normalized_locator = dict(locator)
+            normalized_locator["locator"] = normalized_locator.pop("base")
+            locator = normalized_locator
+
+        return locator
+
+    @staticmethod
+    def _candidate_score(candidate: Dict[str, Any]) -> float:
+        score = candidate.get("score")
+        if isinstance(score, (int, float)):
+            return float(score)
+        return float("inf")
+
+    @classmethod
+    def _candidate_is_nth(cls, candidate: Dict[str, Any], locator: Optional[Dict[str, Any]] = None) -> bool:
+        if candidate.get("kind") == "nth":
+            return True
+        resolved_locator = locator
+        if resolved_locator is None:
+            try:
+                resolved_locator = cls._resolve_candidate_locator(candidate)
+            except ValueError:
+                return False
+        return isinstance(resolved_locator, dict) and resolved_locator.get("method") == "nth"
+
+    @classmethod
+    def _pick_best_strict_candidate(
+        cls, locator_candidates: List[Dict[str, Any]]
+    ) -> Optional[tuple[int, Dict[str, Any], Dict[str, Any]]]:
+        best: Optional[tuple[int, Dict[str, Any], Dict[str, Any]]] = None
+        best_score = float("inf")
+        best_is_nth = False
+
+        for index, candidate in enumerate(locator_candidates):
+            if not isinstance(candidate, dict):
+                continue
+            strict_match_count = candidate.get("strict_match_count")
+            if not isinstance(strict_match_count, int) or strict_match_count != 1:
+                continue
+            try:
+                locator = cls._resolve_candidate_locator(candidate)
+            except ValueError:
+                continue
+
+            score = cls._candidate_score(candidate)
+            is_nth = cls._candidate_is_nth(candidate, locator=locator)
+            if best is None:
+                best = (index, candidate, locator)
+                best_score = score
+                best_is_nth = is_nth
+                continue
+            if score < best_score or (score == best_score and best_is_nth and not is_nth):
+                best = (index, candidate, locator)
+                best_score = score
+                best_is_nth = is_nth
+
+        return best
+
+    @classmethod
+    def _normalize_event_locator_payload(cls, evt: Dict[str, Any]) -> None:
+        locator = evt.get("locator")
+        locator_candidates = evt.get("locator_candidates")
+        if not isinstance(locator, dict) or not isinstance(locator_candidates, list) or not locator_candidates:
+            return
+
+        best_candidate_info = cls._pick_best_strict_candidate(locator_candidates)
+        if best_candidate_info is None:
+            return
+        best_index, best_candidate, best_locator = best_candidate_info
+
+        selected_index: Optional[int] = None
+        for index, candidate in enumerate(locator_candidates):
+            if isinstance(candidate, dict) and candidate.get("selected"):
+                selected_index = index
+                break
+
+        if selected_index is None:
+            locator_json = json.dumps(locator, sort_keys=True)
+            for index, candidate in enumerate(locator_candidates):
+                if not isinstance(candidate, dict):
+                    continue
+                try:
+                    candidate_locator = cls._resolve_candidate_locator(candidate)
+                except ValueError:
+                    continue
+                if json.dumps(candidate_locator, sort_keys=True) == locator_json:
+                    selected_index = index
+                    break
+
+        should_promote = False
+        if selected_index is not None:
+            selected_candidate = locator_candidates[selected_index]
+            selected_strict_count = (
+                selected_candidate.get("strict_match_count") if isinstance(selected_candidate, dict) else None
+            )
+            validation = evt.get("validation")
+            status = validation.get("status") if isinstance(validation, dict) else None
+            should_promote = selected_strict_count != 1 or status in {"fallback", "ambiguous", "warning", "broken"}
+            if not should_promote and isinstance(selected_candidate, dict):
+                selected_score = cls._candidate_score(selected_candidate)
+                best_score = cls._candidate_score(best_candidate)
+                selected_is_nth = cls._candidate_is_nth(selected_candidate)
+                best_is_nth = cls._candidate_is_nth(best_candidate, locator=best_locator)
+                should_promote = best_score < selected_score or (
+                    best_score == selected_score and selected_is_nth and not best_is_nth
+                )
+        else:
+            validation = evt.get("validation")
+            status = validation.get("status") if isinstance(validation, dict) else None
+            should_promote = status in {"fallback", "ambiguous", "warning", "broken"}
+
+        if not should_promote:
+            return
+
+        normalized_candidates: List[Dict[str, Any]] = []
+        for index, candidate in enumerate(locator_candidates):
+            if not isinstance(candidate, dict):
+                continue
+            normalized = dict(candidate)
+            normalized["selected"] = index == best_index
+            if index == best_index:
+                normalized["locator"] = best_locator
+            normalized_candidates.append(normalized)
+
+        evt["locator"] = best_locator
+        evt["locator_candidates"] = normalized_candidates
+        validation = evt.get("validation")
+        normalized_validation = dict(validation) if isinstance(validation, dict) else {}
+        normalized_validation["status"] = "ok"
+        if best_candidate.get("reason"):
+            normalized_validation["details"] = best_candidate["reason"]
+        normalized_validation["selected_candidate_index"] = best_index
+        normalized_validation["selected_candidate_kind"] = best_candidate.get("kind", "")
+        evt["validation"] = normalized_validation
+
     async def select_step_locator_candidate(self, session_id: str, step_index: int, candidate_index: int) -> RPAStep:
         session = self.sessions.get(session_id)
         if not session or step_index < 0 or step_index >= len(session.steps):
@@ -1224,18 +1608,23 @@ class RPASessionManager:
         if candidate_index < 0 or candidate_index >= len(step.locator_candidates):
             raise ValueError("Invalid locator candidate index")
 
+        selected_candidate = step.locator_candidates[candidate_index]
+        locator = self._resolve_candidate_locator(selected_candidate)
+
         for index, candidate in enumerate(step.locator_candidates):
             candidate["selected"] = index == candidate_index
 
-        selected_candidate = step.locator_candidates[candidate_index]
-        locator = selected_candidate.get("locator")
-        if not locator:
-            raise ValueError("Locator candidate is missing locator payload")
+        selected_candidate["locator"] = locator
 
         step.target = json.dumps(locator)
         if step.validation:
             step.validation["selected_candidate_index"] = candidate_index
             step.validation["selected_candidate_kind"] = selected_candidate.get("kind", "")
+            strict_match_count = selected_candidate.get("strict_match_count")
+            if isinstance(strict_match_count, int):
+                step.validation["status"] = "ok" if strict_match_count == 1 else "fallback"
+            if selected_candidate.get("reason"):
+                step.validation["details"] = selected_candidate["reason"]
         await self._broadcast_step(session_id, step)
         return step
 
@@ -1275,18 +1664,62 @@ class RPASessionManager:
 
         if evt.get("action") == "navigate":
             nav_ts = evt.get("timestamp", 0)
+            nav_sequence = evt.get("sequence")
+            nav_tab_id = evt.get("tab_id")
             steps = self.sessions[session_id].steps
-            if steps:
-                last_step = steps[-1]
+            predecessor = None
+
+            def _step_event_ts_ms(step: RPAStep) -> int:
+                if step.event_timestamp_ms is not None:
+                    return step.event_timestamp_ms
+                return int(step.timestamp.timestamp() * 1000)
+
+            if steps and nav_sequence is not None:
+                sequence_candidates = [
+                    step
+                    for step in steps
+                    if step.sequence is not None
+                    and step.sequence < nav_sequence
+                    and (
+                        step.tab_id == nav_tab_id
+                        or (step.action == "open_tab_click" and step.target_tab_id == nav_tab_id)
+                    )
+                ]
+                if sequence_candidates:
+                    predecessor = max(sequence_candidates, key=lambda step: step.sequence)
+
+            if steps and predecessor is None and nav_ts:
+                timestamp_candidates = [
+                    step
+                    for step in steps
+                    if _step_event_ts_ms(step) <= nav_ts
+                    and (
+                        step.tab_id == nav_tab_id
+                        or (step.action == "open_tab_click" and step.target_tab_id == nav_tab_id)
+                    )
+                ]
+                if timestamp_candidates:
+                    predecessor = max(timestamp_candidates, key=_step_event_ts_ms)
+
+            if steps and predecessor is None:
+                for step in reversed(steps):
+                    if step.tab_id == nav_tab_id or (
+                        step.action == "open_tab_click" and step.target_tab_id == nav_tab_id
+                    ):
+                        predecessor = step
+                        break
+
+            if predecessor:
+                last_step = predecessor
                 if (
                     last_step.action == "open_tab_click"
-                    and last_step.target_tab_id == evt.get("tab_id")
+                    and last_step.target_tab_id == nav_tab_id
                 ):
                     logger.debug(f"[RPA] Skipping nav after popup open: {evt.get('url', '')[:60]}")
                     return
                 if last_step.action in ("click", "press", "fill"):
-                    last_ts = last_step.timestamp.timestamp() * 1000
-                    same_tab = last_step.tab_id == evt.get("tab_id")
+                    last_ts = _step_event_ts_ms(last_step)
+                    same_tab = last_step.tab_id == nav_tab_id
                     if nav_ts - last_ts < 5000 and same_tab:
                         if last_step.action == "click":
                             last_step.action = "navigate_click"
@@ -1295,7 +1728,15 @@ class RPASessionManager:
                             await self._broadcast_step(session_id, last_step)
                             logger.debug(f"[RPA] Upgraded click to navigate_click: {evt.get('url', '')[:60]}")
                             return
+                        if last_step.action == "press":
+                            last_step.action = "navigate_press"
+                            last_step.url = evt.get("url", last_step.url)
+                            await self._broadcast_step(session_id, last_step)
+                            logger.debug(f"[RPA] Upgraded press to navigate_press: {evt.get('url', '')[:60]}")
+                            return
                         logger.debug(f"[RPA] Preserving nav after {last_step.action}: {evt.get('url', '')[:60]}")
+
+        self._normalize_event_locator_payload(evt)
 
         locator_info = evt.get("locator", {})
         is_sensitive = evt.get("sensitive", False)
@@ -1316,6 +1757,8 @@ class RPASessionManager:
             "tab_id": evt.get("tab_id"),
             "source_tab_id": evt.get("source_tab_id"),
             "target_tab_id": evt.get("target_tab_id"),
+            "sequence": evt.get("sequence"),
+            "event_timestamp_ms": evt.get("timestamp"),
         }
         await self.add_step(session_id, step_data)
         logger.debug(f"[RPA] Step: {step_data['description'][:60]}")
@@ -1326,22 +1769,29 @@ class RPASessionManager:
         value = evt.get("value", "")
         locator = evt.get("locator", {})
 
-        method = locator.get("method", "") if isinstance(locator, dict) else ""
-        if method == "role":
-            name = locator.get("name", "")
-            target = f'{locator.get("role", "")}("{name}")' if name else locator.get("role", "")
-        elif method in ("testid", "label", "placeholder", "alt", "title", "text"):
-            target = f'{method}("{locator.get("value", "")}")'
-        elif method == "nested":
-            parent = locator.get("parent", {})
-            child = locator.get("child", {})
-            p_name = parent.get("name", parent.get("value", ""))
-            c_name = child.get("name", child.get("value", ""))
-            target = f'{p_name} >> {c_name}'
-        elif method == "css":
-            target = locator.get("value", "")
-        else:
-            target = str(locator)
+        def _format_locator(value: Any) -> str:
+            if not isinstance(value, dict):
+                return str(value)
+
+            method = value.get("method", "")
+            if method == "role":
+                name = value.get("name", "")
+                return f'{value.get("role", "")}("{name}")' if name else value.get("role", "")
+            if method in ("testid", "label", "placeholder", "alt", "title", "text"):
+                return f'{method}("{value.get("value", "")}")'
+            if method == "nested":
+                parent = _format_locator(value.get("parent", {}))
+                child = _format_locator(value.get("child", {}))
+                return f"{parent} >> {child}"
+            if method == "nth":
+                base = value.get("locator", value.get("base"))
+                base_target = _format_locator(base) if base is not None else "locator"
+                return f"{base_target} >> nth={value.get('index', 0)}"
+            if method == "css":
+                return value.get("value", "")
+            return str(value)
+
+        target = _format_locator(locator)
 
         if action == "fill":
             display_value = '*****' if evt.get("sensitive") else f'"{value}"'
@@ -1364,10 +1814,86 @@ class RPASessionManager:
 
         session = self.sessions[session_id]
         step = RPAStep(id=str(uuid.uuid4()), **step_data)
-        session.steps.append(step)
+        insert_at = len(session.steps)
+        for index, existing_step in enumerate(session.steps):
+            if existing_step.source != step.source:
+                continue
+            if self._step_sorts_before(step, existing_step):
+                insert_at = index
+                break
+
+        if step.action == "fill" and step.source == "record":
+            previous_step = session.steps[insert_at - 1] if insert_at > 0 else None
+            if self._is_same_fill_target(previous_step, step):
+                self._merge_fill_step(previous_step, step)
+                await self._broadcast_step(session_id, previous_step)
+                return previous_step
+
+            next_step = session.steps[insert_at] if insert_at < len(session.steps) else None
+            if self._is_same_fill_target(next_step, step):
+                return next_step
+
+        session.steps.insert(insert_at, step)
 
         await self._broadcast_step(session_id, step)
         return step
+
+    @staticmethod
+    def _step_event_ts_ms(step: RPAStep) -> int:
+        if step.event_timestamp_ms is not None:
+            return step.event_timestamp_ms
+        return int(step.timestamp.timestamp() * 1000)
+
+    @classmethod
+    def _step_sorts_before(cls, incoming_step: RPAStep, existing_step: RPAStep) -> bool:
+        incoming_ts = cls._step_event_ts_ms(incoming_step)
+        existing_ts = cls._step_event_ts_ms(existing_step)
+        if incoming_ts != existing_ts:
+            return incoming_ts < existing_ts
+
+        incoming_sequence = incoming_step.sequence
+        existing_sequence = existing_step.sequence
+        if (
+            incoming_step.tab_id == existing_step.tab_id
+            and incoming_sequence is not None
+            and existing_sequence is not None
+            and incoming_sequence != existing_sequence
+        ):
+            return incoming_sequence < existing_sequence
+
+        return False
+
+    @staticmethod
+    def _is_same_fill_target(existing_step: Optional[RPAStep], incoming_step: RPAStep) -> bool:
+        if existing_step is None:
+            return False
+        existing_sequence = existing_step.sequence
+        incoming_sequence = incoming_step.sequence
+        return (
+            existing_step.action == "fill"
+            and existing_step.source == incoming_step.source
+            and existing_step.target == incoming_step.target
+            and existing_step.frame_path == incoming_step.frame_path
+            and existing_step.tab_id == incoming_step.tab_id
+            and existing_sequence is not None
+            and incoming_sequence is not None
+            and abs(existing_sequence - incoming_sequence) == 1
+        )
+
+    @staticmethod
+    def _merge_fill_step(existing_step: RPAStep, incoming_step: RPAStep) -> None:
+        existing_step.value = incoming_step.value
+        existing_step.description = incoming_step.description
+        existing_step.tag = incoming_step.tag
+        existing_step.url = incoming_step.url
+        existing_step.sensitive = incoming_step.sensitive
+        existing_step.locator_candidates = incoming_step.locator_candidates
+        existing_step.validation = incoming_step.validation
+        existing_step.signals = incoming_step.signals
+        existing_step.element_snapshot = incoming_step.element_snapshot
+        existing_step.sequence = incoming_step.sequence
+        existing_step.event_timestamp_ms = incoming_step.event_timestamp_ms
+        existing_step.timestamp = incoming_step.timestamp
 
     async def _broadcast_step(self, session_id: str, step: RPAStep):
         if session_id in self.ws_connections:

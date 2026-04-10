@@ -255,6 +255,98 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.session.steps[-1].locator_candidates[0]["selected"])
         self.assertEqual(self.session.steps[-1].validation["status"], "ok")
 
+    async def test_handle_event_prefers_best_scored_strict_candidate_over_earlier_nth(self):
+        page = _FakePage("https://example.com", "Example")
+        tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "click",
+                "tab_id": tab_id,
+                "tag": "BUTTON",
+                "timestamp": 1234567890,
+                "locator": {"method": "role", "role": "button", "name": "Save"},
+                "locator_candidates": [
+                    {
+                        "kind": "nth",
+                        "score": 10100,
+                        "strict_match_count": 1,
+                        "visible_match_count": 1,
+                        "selected": True,
+                        "locator": {"method": "role", "role": "button", "name": "Save"},
+                        "nth": 1,
+                        "reason": "strict nth match for current target",
+                    },
+                    {
+                        "kind": "css",
+                        "score": 520,
+                        "strict_match_count": 1,
+                        "visible_match_count": 1,
+                        "selected": False,
+                        "locator": {"method": "css", "value": "button.save"},
+                        "reason": "strict unique css match",
+                    },
+                ],
+                "validation": {"status": "fallback", "details": "generated locator strict matches = 2"},
+            },
+        )
+
+        step = self.session.steps[-1]
+        self.assertEqual(json.loads(step.target), {"method": "css", "value": "button.save"})
+        self.assertFalse(step.locator_candidates[0]["selected"])
+        self.assertTrue(step.locator_candidates[1]["selected"])
+        self.assertEqual(step.validation["status"], "ok")
+        self.assertEqual(step.validation["details"], "strict unique css match")
+
+    async def test_handle_event_normalizes_stale_selected_nth_even_when_validation_ok(self):
+        page = _FakePage("https://example.com", "Example")
+        tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "click",
+                "tab_id": tab_id,
+                "tag": "BUTTON",
+                "timestamp": 1234567891,
+                "locator": {
+                    "method": "nth",
+                    "locator": {"method": "role", "role": "button", "name": "Save"},
+                    "index": 1,
+                },
+                "locator_candidates": [
+                    {
+                        "kind": "nth",
+                        "score": 10100,
+                        "strict_match_count": 1,
+                        "visible_match_count": 1,
+                        "selected": True,
+                        "locator": {"method": "role", "role": "button", "name": "Save"},
+                        "nth": 1,
+                        "reason": "strict nth match for current target",
+                    },
+                    {
+                        "kind": "css",
+                        "score": 520,
+                        "strict_match_count": 1,
+                        "visible_match_count": 1,
+                        "selected": False,
+                        "locator": {"method": "css", "value": "button.save"},
+                        "reason": "strict unique css match",
+                    },
+                ],
+                "validation": {"status": "ok", "details": "stale selection from older client"},
+            },
+        )
+
+        step = self.session.steps[-1]
+        self.assertEqual(json.loads(step.target), {"method": "css", "value": "button.save"})
+        self.assertFalse(step.locator_candidates[0]["selected"])
+        self.assertTrue(step.locator_candidates[1]["selected"])
+        self.assertEqual(step.validation["status"], "ok")
+        self.assertEqual(step.validation["details"], "strict unique css match")
+
     async def test_select_step_locator_candidate_promotes_target_and_selection(self):
         await self.manager.add_step(
             self.session.id,
@@ -291,9 +383,205 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(updated.locator_candidates[0]["selected"])
         self.assertTrue(updated.locator_candidates[1]["selected"])
 
+    async def test_select_step_locator_candidate_supports_nth_locator_payload(self):
+        await self.manager.add_step(
+            self.session.id,
+            {
+                "action": "click",
+                "target": json.dumps({"method": "role", "role": "button", "name": "Save"}),
+                "frame_path": [],
+                "locator_candidates": [
+                    {
+                        "kind": "role",
+                        "score": 100,
+                        "strict_match_count": 2,
+                        "visible_match_count": 2,
+                        "selected": True,
+                        "locator": {"method": "role", "role": "button", "name": "Save"},
+                        "reason": "strict matches = 2",
+                    },
+                    {
+                        "kind": "role",
+                        "score": 10100,
+                        "strict_match_count": 1,
+                        "visible_match_count": 1,
+                        "selected": False,
+                        "locator": {"method": "role", "role": "button", "name": "Save"},
+                        "nth": 1,
+                        "reason": "strict nth match for current target",
+                    },
+                ],
+                "validation": {"status": "fallback"},
+                "value": "",
+                "label": "",
+                "tag": "BUTTON",
+                "url": "https://example.com",
+                "description": "Click Save",
+                "sensitive": False,
+                "tab_id": "tab-1",
+            },
+        )
+
+        updated = await self.manager.select_step_locator_candidate(self.session.id, 0, 1)
+
+        self.assertEqual(
+            json.loads(updated.target),
+            {
+                "method": "nth",
+                "locator": {"method": "role", "role": "button", "name": "Save"},
+                "index": 1,
+            },
+        )
+        self.assertFalse(updated.locator_candidates[0]["selected"])
+        self.assertTrue(updated.locator_candidates[1]["selected"])
+
+    async def test_select_step_locator_candidate_supports_legacy_selector_payload(self):
+        await self.manager.add_step(
+            self.session.id,
+            {
+                "action": "click",
+                "target": json.dumps({"method": "role", "role": "button", "name": "Save"}),
+                "frame_path": [],
+                "locator_candidates": [
+                    {
+                        "kind": "role",
+                        "selected": True,
+                        "locator": {"method": "role", "role": "button", "name": "Save"},
+                    },
+                    {
+                        "kind": "css",
+                        "selected": False,
+                        "selector": "button.save",
+                        "playwright_locator": 'page.locator("button.save")',
+                    },
+                ],
+                "validation": {"status": "ok"},
+                "value": "",
+                "label": "",
+                "tag": "BUTTON",
+                "url": "https://example.com",
+                "description": "Click Save",
+                "sensitive": False,
+                "tab_id": "tab-1",
+            },
+        )
+
+        updated = await self.manager.select_step_locator_candidate(self.session.id, 0, 1)
+
+        self.assertEqual(json.loads(updated.target), {"method": "css", "value": "button.save"})
+        self.assertFalse(updated.locator_candidates[0]["selected"])
+        self.assertTrue(updated.locator_candidates[1]["selected"])
+
+    async def test_select_step_locator_candidate_validation_failure_does_not_mutate_selected_flags(self):
+        await self.manager.add_step(
+            self.session.id,
+            {
+                "action": "click",
+                "target": json.dumps({"method": "role", "role": "button", "name": "Save"}),
+                "frame_path": [],
+                "locator_candidates": [
+                    {
+                        "kind": "role",
+                        "selected": True,
+                        "locator": {"method": "role", "role": "button", "name": "Save"},
+                    },
+                    {
+                        "kind": "legacy",
+                        "selected": False,
+                        "selector": "",
+                        "playwright_locator": "",
+                    },
+                ],
+                "validation": {"status": "ok"},
+                "value": "",
+                "label": "",
+                "tag": "BUTTON",
+                "url": "https://example.com",
+                "description": "Click Save",
+                "sensitive": False,
+                "tab_id": "tab-1",
+            },
+        )
+
+        step = self.session.steps[0]
+        original_target = step.target
+        before_selected = [candidate.get("selected", False) for candidate in step.locator_candidates]
+
+        with self.assertRaises(ValueError):
+            await self.manager.select_step_locator_candidate(self.session.id, 0, 1)
+
+        after_selected = [candidate.get("selected", False) for candidate in step.locator_candidates]
+        self.assertEqual(after_selected, before_selected)
+        self.assertEqual(step.target, original_target)
+
     def test_capture_js_includes_frame_path_collection(self):
         self.assertIn("frame_path", MANAGER_MODULE.CAPTURE_JS)
         self.assertIn("window.frameElement", MANAGER_MODULE.CAPTURE_JS)
+        self.assertIn("evt.sequence", MANAGER_MODULE.CAPTURE_JS)
+        self.assertIn("_eventSequence", MANAGER_MODULE.CAPTURE_JS)
+
+    def test_capture_js_records_fill_without_debounce_timer(self):
+        self.assertNotIn("setTimeout(function()", MANAGER_MODULE.CAPTURE_JS)
+        self.assertNotIn("}, 1500);", MANAGER_MODULE.CAPTURE_JS)
+
+    def test_capture_js_keydown_resolves_from_remembered_active_target(self):
+        js = MANAGER_MODULE.CAPTURE_JS
+        keydown_block = js.split("document.addEventListener('keydown'", 1)[1]
+        self.assertIn("var el = resolveActiveTarget();", keydown_block)
+        self.assertNotIn("var el = resolveActiveTarget(e.target);", keydown_block)
+        self.assertNotIn("var el = e.target;", keydown_block)
+
+    def test_capture_js_input_updates_remembered_active_target(self):
+        js = MANAGER_MODULE.CAPTURE_JS
+        input_block = js.split("document.addEventListener('input'", 1)[1].split(
+            "document.addEventListener('change'", 1
+        )[0]
+        self.assertIn("var el = rememberActiveTarget(e.target);", input_block)
+        self.assertIn("var locatorBundle = ensureActiveLocatorBundle(el);", input_block)
+        self.assertNotIn("var locatorBundle = buildLocatorBundle(el);", input_block)
+        self.assertNotIn("resolveActiveTarget(e.target)", input_block)
+
+    def test_capture_js_reuses_active_locator_bundle_for_press(self):
+        js = MANAGER_MODULE.CAPTURE_JS
+        self.assertIn("var _activeLocatorBundle = null;", js)
+        self.assertIn("function ensureActiveLocatorBundle(el)", js)
+        keydown_block = js.split("document.addEventListener('keydown'", 1)[1].split(
+            "console.log('[RPA] Event capture injected');", 1
+        )[0]
+        self.assertIn("var locatorBundle = ensureActiveLocatorBundle(el);", keydown_block)
+        self.assertNotIn("var locatorBundle = buildLocatorBundle(el);", keydown_block)
+
+    def test_capture_js_builds_nth_locator_payload_for_ambiguous_candidates(self):
+        js = MANAGER_MODULE.CAPTURE_JS
+        self.assertIn("function buildNthLocator(c, nthIndex)", js)
+        self.assertIn("method:'nth'", js)
+        self.assertIn("index:nthIndex", js)
+
+    def test_capture_js_fallback_candidate_uses_real_match_count(self):
+        js = MANAGER_MODULE.CAPTURE_JS
+        self.assertIn("var primaryMatchCount = countLocatorMatches(primary);", js)
+        fallback_block = js.split("if (!selectedPayload)", 1)[1].split("candidatePayloads.push", 1)[0]
+        self.assertIn("strict_match_count: primaryMatchCount", fallback_block)
+        self.assertNotIn("strict_match_count: 1", fallback_block)
+
+    def test_capture_js_click_listener_does_not_dedupe_same_locator_clicks(self):
+        js = MANAGER_MODULE.CAPTURE_JS
+        click_block = js.split("document.addEventListener('click'", 1)[1].split(
+            "document.addEventListener('focusin'", 1
+        )[0]
+        self.assertNotIn("_lastClick", js)
+        self.assertNotIn("now-_lastClick.time<1000", click_block)
+        self.assertNotIn("Deduplicate rapid clicks on the same element", click_block)
+
+    def test_capture_js_prefers_strict_candidate_primary_when_generated_locator_is_ambiguous(self):
+        js = MANAGER_MODULE.CAPTURE_JS
+        build_locator_block = js.split("function buildLocatorBundle(el)", 1)[1].split(
+            "function buildElementSnapshot", 1
+        )[0]
+        self.assertIn("if (primaryMatchCount !== 1)", build_locator_block)
+        self.assertIn("candidate.strict_match_count !== 1 || !candidate.locator", build_locator_block)
+        self.assertIn("if (candidateScore < strictScore)", build_locator_block)
+        self.assertIn("primary = strictCandidate.locator;", build_locator_block)
 
     async def test_register_page_bootstraps_context_recorder_once(self):
         context = _FakeContext()
@@ -394,6 +682,367 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.session.steps), 1)
         self.assertEqual(self.session.steps[-1].action, "navigate_click")
         self.assertEqual(self.session.steps[-1].url, "https://example.com/next")
+
+    def test_make_description_formats_nth_locator(self):
+        description = self.manager._make_description(
+            {
+                "action": "click",
+                "locator": {
+                    "method": "nth",
+                    "locator": {"method": "role", "role": "button", "name": "Save"},
+                    "index": 1,
+                },
+            }
+        )
+
+        self.assertIn("nth=1", description)
+        self.assertIn('button("Save")', description)
+
+    async def test_handle_event_orders_steps_by_sequence_when_events_arrive_out_of_order(self):
+        page = _FakePage("https://example.com", "Example")
+        tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "click",
+                "tab_id": tab_id,
+                "tag": "BUTTON",
+                "timestamp": 1234567891,
+                "sequence": 20,
+                "locator": {"method": "role", "role": "button", "name": "Second"},
+            },
+        )
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "click",
+                "tab_id": tab_id,
+                "tag": "BUTTON",
+                "timestamp": 1234567890,
+                "sequence": 10,
+                "locator": {"method": "role", "role": "button", "name": "First"},
+            },
+        )
+
+        self.assertEqual([step.sequence for step in self.session.steps], [10, 20])
+        self.assertIn("First", self.session.steps[0].description)
+        self.assertIn("Second", self.session.steps[1].description)
+
+    async def test_handle_event_prefers_event_timestamp_over_cross_tab_sequence_reset(self):
+        first_page = _FakePage("https://example.com", "Example")
+        first_tab_id = await self.manager.register_page(self.session.id, first_page, make_active=True)
+        second_page = _FakePage("https://example.com/results", "Results", context=first_page.context)
+        second_tab_id = await self.manager.register_context_page(
+            self.session.id,
+            second_page,
+            make_active=True,
+        )
+
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "fill",
+                "tab_id": second_tab_id,
+                "tag": "INPUT",
+                "timestamp": 2000,
+                "sequence": 1,
+                "value": "fa",
+                "locator": {"method": "placeholder", "value": "搜索教程、文档..."},
+            },
+        )
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "fill",
+                "tab_id": first_tab_id,
+                "tag": "INPUT",
+                "timestamp": 1000,
+                "sequence": 10,
+                "value": "test",
+                "locator": {"method": "placeholder", "value": "搜索教程..."},
+            },
+        )
+
+        self.assertEqual(len(self.session.steps), 2)
+        self.assertEqual([step.value for step in self.session.steps], ["test", "fa"])
+        self.assertEqual([step.tab_id for step in self.session.steps], [first_tab_id, second_tab_id])
+
+    async def test_navigation_after_press_upgrades_step_to_navigate_press(self):
+        page = _FakePage("https://example.com", "Example")
+        tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+        await self.manager.add_step(
+            self.session.id,
+            {
+                "action": "press",
+                "target": "",
+                "value": "Enter",
+                "label": "",
+                "tag": "INPUT",
+                "url": "https://example.com",
+                "description": "鎸変笅 Enter 鍦?input",
+                "sensitive": False,
+                "tab_id": tab_id,
+            },
+        )
+
+        navigate_ts = int(datetime.now().timestamp() * 1000)
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "navigate",
+                "url": "https://example.com/next",
+                "timestamp": navigate_ts,
+                "tab_id": tab_id,
+            },
+        )
+
+        self.assertEqual(len(self.session.steps), 1)
+        self.assertEqual(self.session.steps[-1].action, "navigate_press")
+        self.assertEqual(self.session.steps[-1].url, "https://example.com/next")
+
+    async def test_navigation_upgrade_uses_sequence_predecessor_not_last_arrival(self):
+        page = _FakePage("https://example.com", "Example")
+        tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "click",
+                "tab_id": tab_id,
+                "tag": "BUTTON",
+                "timestamp": 1003,
+                "sequence": 30,
+                "locator": {"method": "role", "role": "button", "name": "Later Click"},
+            },
+        )
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "press",
+                "tab_id": tab_id,
+                "tag": "INPUT",
+                "timestamp": 1000,
+                "sequence": 10,
+                "value": "Enter",
+                "locator": {"method": "role", "role": "textbox", "name": "Search"},
+            },
+        )
+
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "navigate",
+                "url": "https://example.com/next",
+                "timestamp": 1001,
+                "sequence": 11,
+                "tab_id": tab_id,
+            },
+        )
+
+        self.assertEqual(len(self.session.steps), 2)
+        self.assertEqual([step.sequence for step in self.session.steps], [10, 30])
+        self.assertEqual(self.session.steps[0].action, "navigate_press")
+        self.assertEqual(self.session.steps[1].action, "click")
+
+    async def test_navigation_upgrade_uses_timestamp_fallback_when_navigate_has_no_sequence(self):
+        page = _FakePage("https://example.com", "Example")
+        tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "click",
+                "tab_id": tab_id,
+                "tag": "BUTTON",
+                "timestamp": 1003,
+                "sequence": 30,
+                "locator": {"method": "role", "role": "button", "name": "Later Click"},
+            },
+        )
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "press",
+                "tab_id": tab_id,
+                "tag": "INPUT",
+                "timestamp": 1000,
+                "sequence": 10,
+                "value": "Enter",
+                "locator": {"method": "role", "role": "textbox", "name": "Search"},
+            },
+        )
+
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "navigate",
+                "url": "https://example.com/next",
+                "timestamp": 1001,
+                "tab_id": tab_id,
+            },
+        )
+
+        self.assertEqual(len(self.session.steps), 2)
+        self.assertEqual(self.session.steps[0].action, "navigate_press")
+        self.assertEqual(self.session.steps[0].event_timestamp_ms, 1000)
+        self.assertEqual(self.session.steps[1].action, "click")
+
+    async def test_sequence_order_keeps_fill_before_press_for_same_target(self):
+        page = _FakePage("https://example.com", "Example")
+        tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+        locator = {"method": "role", "role": "textbox", "name": "Search"}
+
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "press",
+                "tab_id": tab_id,
+                "tag": "INPUT",
+                "timestamp": 2002,
+                "sequence": 30,
+                "value": "Enter",
+                "locator": locator,
+            },
+        )
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "fill",
+                "tab_id": tab_id,
+                "tag": "INPUT",
+                "timestamp": 2001,
+                "sequence": 20,
+                "value": "cat",
+                "locator": locator,
+            },
+        )
+
+        self.assertEqual([step.action for step in self.session.steps], ["fill", "press"])
+        self.assertEqual(self.session.steps[0].target, self.session.steps[1].target)
+
+    async def test_consecutive_fill_events_collapse_to_latest_value_on_same_target_frame_tab(self):
+        page = _FakePage("https://example.com", "Example")
+        tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+        locator = {"method": "role", "role": "textbox", "name": "Search"}
+        frame_path = ["iframe[name='workspace']"]
+        values = ["t", "te", "tes", "test"]
+
+        for index, value in enumerate(values, start=1):
+            await self.manager._handle_event(
+                self.session.id,
+                {
+                    "action": "fill",
+                    "tab_id": tab_id,
+                    "tag": "INPUT",
+                    "timestamp": 3000 + index,
+                    "sequence": 40 + index,
+                    "value": value,
+                    "frame_path": frame_path,
+                    "locator": locator,
+                },
+            )
+
+        self.assertEqual(len(self.session.steps), 1)
+        self.assertEqual(self.session.steps[0].action, "fill")
+        self.assertEqual(self.session.steps[0].value, "test")
+        self.assertEqual(self.session.steps[0].frame_path, frame_path)
+        self.assertEqual(self.session.steps[0].tab_id, tab_id)
+        self.assertEqual(self.session.steps[0].sequence, 44)
+        self.assertEqual(self.session.steps[0].event_timestamp_ms, 3004)
+
+    async def test_non_consecutive_fill_events_do_not_collapse_when_same_target_arrives_out_of_order(self):
+        page = _FakePage("https://example.com", "Example")
+        tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+        locator = {"method": "role", "role": "textbox", "name": "Search"}
+
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "fill",
+                "tab_id": tab_id,
+                "tag": "INPUT",
+                "timestamp": 3004,
+                "sequence": 44,
+                "value": "fast",
+                "locator": locator,
+            },
+        )
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "fill",
+                "tab_id": tab_id,
+                "tag": "INPUT",
+                "timestamp": 3001,
+                "sequence": 41,
+                "value": "tes",
+                "locator": locator,
+            },
+        )
+
+        self.assertEqual(len(self.session.steps), 2)
+        self.assertEqual([step.action for step in self.session.steps], ["fill", "fill"])
+        self.assertEqual([step.value for step in self.session.steps], ["tes", "fast"])
+        self.assertEqual([step.sequence for step in self.session.steps], [41, 44])
+
+    async def test_consecutive_ai_fill_steps_do_not_collapse(self):
+        step_one = await self.manager.add_step(
+            self.session.id,
+            {
+                "action": "fill",
+                "source": "ai",
+                "target": json.dumps({"method": "css", "value": "input[name='q']"}),
+                "frame_path": [],
+                "value": "te",
+                "tab_id": "tab-1",
+            },
+        )
+        step_two = await self.manager.add_step(
+            self.session.id,
+            {
+                "action": "fill",
+                "source": "ai",
+                "target": json.dumps({"method": "css", "value": "input[name='q']"}),
+                "frame_path": [],
+                "value": "test",
+                "tab_id": "tab-1",
+            },
+        )
+
+        self.assertEqual(len(self.session.steps), 2)
+        self.assertEqual([step.id for step in self.session.steps], [step_one.id, step_two.id])
+        self.assertEqual([step.value for step in self.session.steps], ["te", "test"])
+
+    async def test_record_fill_does_not_collapse_into_adjacent_ai_fill(self):
+        await self.manager.add_step(
+            self.session.id,
+            {
+                "action": "fill",
+                "source": "ai",
+                "target": json.dumps({"method": "css", "value": "input[name='q']"}),
+                "frame_path": [],
+                "value": "assistant",
+                "tab_id": "tab-1",
+            },
+        )
+
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "fill",
+                "tab_id": "tab-1",
+                "tag": "INPUT",
+                "timestamp": 4001,
+                "sequence": 51,
+                "value": "user",
+                "locator": {"method": "css", "value": "input[name='q']"},
+            },
+        )
+
+        self.assertEqual(len(self.session.steps), 2)
+        self.assertEqual([step.source for step in self.session.steps], ["ai", "record"])
+        self.assertEqual([step.value for step in self.session.steps], ["assistant", "user"])
 
     async def test_register_context_page_upgrades_recent_click_to_open_tab_click(self):
         source_page = _FakePage("https://example.com", "Example")

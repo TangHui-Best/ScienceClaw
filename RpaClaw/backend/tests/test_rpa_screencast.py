@@ -81,6 +81,109 @@ class SessionScreencastControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context.calls, 2)
         self.assertEqual(ws.messages[-1]["type"], "preview_error")
 
+    async def test_dispatch_key_backspace_uses_raw_key_payload_without_text(self):
+        cdp = _FakeCDPSession()
+        controller = SCREencAST_MODULE.SessionScreencastController(
+            page_provider=lambda: None,
+            tabs_provider=lambda: [],
+        )
+        controller._cdp = cdp
+
+        await controller._dispatch_key(
+            {
+                "action": "keyDown",
+                "key": "Backspace",
+                "code": "Backspace",
+                "text": "",
+                "modifiers": 0,
+            }
+        )
+
+        self.assertEqual(len(cdp.sent), 1)
+        method, payload = cdp.sent[0]
+        self.assertEqual(method, "Input.dispatchKeyEvent")
+        self.assertEqual(payload["type"], "rawKeyDown")
+        self.assertEqual(payload["key"], "Backspace")
+        self.assertEqual(payload["code"], "Backspace")
+        self.assertEqual(payload["windowsVirtualKeyCode"], 8)
+        self.assertEqual(payload["nativeVirtualKeyCode"], 8)
+        self.assertNotIn("text", payload)
+
+
+class ScreencastServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_dispatch_key_backspace_uses_raw_key_payload_without_text(self):
+        cdp = _FakeCDPSession()
+        service = SCREencAST_MODULE.ScreencastService(cdp)
+
+        await service._dispatch_key(
+            {
+                "action": "keyDown",
+                "key": "Backspace",
+                "code": "Backspace",
+                "text": "",
+                "modifiers": 0,
+            }
+        )
+
+        self.assertEqual(len(cdp.sent), 1)
+        method, payload = cdp.sent[0]
+        self.assertEqual(method, "Input.dispatchKeyEvent")
+        self.assertEqual(payload["type"], "rawKeyDown")
+        self.assertEqual(payload["key"], "Backspace")
+        self.assertEqual(payload["windowsVirtualKeyCode"], 8)
+        self.assertEqual(payload["nativeVirtualKeyCode"], 8)
+        self.assertNotIn("text", payload)
+
+    async def test_dispatch_key_shifted_digit_uses_physical_key_code(self):
+        cdp = _FakeCDPSession()
+        service = SCREencAST_MODULE.ScreencastService(cdp)
+
+        await service._dispatch_key(
+            {
+                "action": "keyDown",
+                "key": "!",
+                "code": "Digit1",
+                "text": "!",
+                "modifiers": 8,
+            }
+        )
+
+        self.assertEqual(len(cdp.sent), 1)
+        method, payload = cdp.sent[0]
+        self.assertEqual(method, "Input.dispatchKeyEvent")
+        self.assertEqual(payload["type"], "keyDown")
+        self.assertEqual(payload["key"], "!")
+        self.assertEqual(payload["code"], "Digit1")
+        self.assertEqual(payload["windowsVirtualKeyCode"], 49)
+        self.assertEqual(payload["nativeVirtualKeyCode"], 49)
+        self.assertEqual(payload["text"], "!")
+        self.assertEqual(payload["unmodifiedText"], "1")
+
+    async def test_dispatch_key_enter_uses_keydown_with_carriage_return_text(self):
+        cdp = _FakeCDPSession()
+        service = SCREencAST_MODULE.ScreencastService(cdp)
+
+        await service._dispatch_key(
+            {
+                "action": "keyDown",
+                "key": "Enter",
+                "code": "Enter",
+                "text": "",
+                "modifiers": 0,
+            }
+        )
+
+        self.assertEqual(len(cdp.sent), 1)
+        method, payload = cdp.sent[0]
+        self.assertEqual(method, "Input.dispatchKeyEvent")
+        self.assertEqual(payload["type"], "keyDown")
+        self.assertEqual(payload["key"], "Enter")
+        self.assertEqual(payload["code"], "Enter")
+        self.assertEqual(payload["windowsVirtualKeyCode"], 13)
+        self.assertEqual(payload["nativeVirtualKeyCode"], 13)
+        self.assertEqual(payload["text"], "\r")
+        self.assertEqual(payload["unmodifiedText"], "\r")
+
 
 if __name__ == "__main__":
     unittest.main()
