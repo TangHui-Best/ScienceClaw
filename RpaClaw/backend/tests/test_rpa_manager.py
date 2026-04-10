@@ -294,6 +294,8 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
     def test_capture_js_includes_frame_path_collection(self):
         self.assertIn("frame_path", MANAGER_MODULE.CAPTURE_JS)
         self.assertIn("window.frameElement", MANAGER_MODULE.CAPTURE_JS)
+        self.assertIn("evt.sequence", MANAGER_MODULE.CAPTURE_JS)
+        self.assertIn("_eventSequence", MANAGER_MODULE.CAPTURE_JS)
 
     async def test_register_page_bootstraps_context_recorder_once(self):
         context = _FakeContext()
@@ -501,6 +503,49 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.session.steps), 2)
         self.assertEqual([step.sequence for step in self.session.steps], [10, 30])
         self.assertEqual(self.session.steps[0].action, "navigate_press")
+        self.assertEqual(self.session.steps[1].action, "click")
+
+    async def test_navigation_upgrade_uses_timestamp_fallback_when_navigate_has_no_sequence(self):
+        page = _FakePage("https://example.com", "Example")
+        tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "click",
+                "tab_id": tab_id,
+                "tag": "BUTTON",
+                "timestamp": 1003,
+                "sequence": 30,
+                "locator": {"method": "role", "role": "button", "name": "Later Click"},
+            },
+        )
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "press",
+                "tab_id": tab_id,
+                "tag": "INPUT",
+                "timestamp": 1000,
+                "sequence": 10,
+                "value": "Enter",
+                "locator": {"method": "role", "role": "textbox", "name": "Search"},
+            },
+        )
+
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "navigate",
+                "url": "https://example.com/next",
+                "timestamp": 1001,
+                "tab_id": tab_id,
+            },
+        )
+
+        self.assertEqual(len(self.session.steps), 2)
+        self.assertEqual(self.session.steps[0].action, "navigate_press")
+        self.assertEqual(self.session.steps[0].event_timestamp_ms, 1000)
         self.assertEqual(self.session.steps[1].action, "click")
 
     async def test_register_context_page_upgrades_recent_click_to_open_tab_click(self):

@@ -44,6 +44,7 @@ class RPAStep(BaseModel):
     ordinal: Optional[str] = None
     assistant_diagnostics: Dict[str, Any] = Field(default_factory=dict)
     sequence: Optional[int] = None
+    event_timestamp_ms: Optional[int] = None
 
 
 class RPATab(BaseModel):
@@ -628,9 +629,12 @@ CAPTURE_JS = r"""
     // ── Navigation deduplication ────────────────────────────────────
     var _lastAction = null;  // {action, time}
     var _lastClick = null;   // {locatorJson, time} for click dedup
+    var _eventSequence = 0;
 
     function emit(evt) {
         evt.timestamp = Date.now();
+        _eventSequence += 1;
+        evt.sequence = _eventSequence;
         evt.url = location.href;
         evt.frame_path = getFramePath();
         _lastAction = {action:evt.action, time:evt.timestamp};
@@ -1280,6 +1284,12 @@ class RPASessionManager:
             nav_tab_id = evt.get("tab_id")
             steps = self.sessions[session_id].steps
             predecessor = None
+
+            def _step_event_ts_ms(step: RPAStep) -> int:
+                if step.event_timestamp_ms is not None:
+                    return step.event_timestamp_ms
+                return int(step.timestamp.timestamp() * 1000)
+
             if steps and nav_sequence is not None:
                 sequence_candidates = [
                     step
@@ -1293,6 +1303,19 @@ class RPASessionManager:
                 ]
                 if sequence_candidates:
                     predecessor = max(sequence_candidates, key=lambda step: step.sequence)
+
+            if steps and predecessor is None and nav_ts:
+                timestamp_candidates = [
+                    step
+                    for step in steps
+                    if _step_event_ts_ms(step) <= nav_ts
+                    and (
+                        step.tab_id == nav_tab_id
+                        or (step.action == "open_tab_click" and step.target_tab_id == nav_tab_id)
+                    )
+                ]
+                if timestamp_candidates:
+                    predecessor = max(timestamp_candidates, key=_step_event_ts_ms)
 
             if steps and predecessor is None:
                 for step in reversed(steps):
@@ -1311,7 +1334,7 @@ class RPASessionManager:
                     logger.debug(f"[RPA] Skipping nav after popup open: {evt.get('url', '')[:60]}")
                     return
                 if last_step.action in ("click", "press", "fill"):
-                    last_ts = last_step.timestamp.timestamp() * 1000
+                    last_ts = _step_event_ts_ms(last_step)
                     same_tab = last_step.tab_id == nav_tab_id
                     if nav_ts - last_ts < 5000 and same_tab:
                         if last_step.action == "click":
@@ -1349,6 +1372,7 @@ class RPASessionManager:
             "source_tab_id": evt.get("source_tab_id"),
             "target_tab_id": evt.get("target_tab_id"),
             "sequence": evt.get("sequence"),
+            "event_timestamp_ms": evt.get("timestamp"),
         }
         await self.add_step(session_id, step_data)
         logger.debug(f"[RPA] Step: {step_data['description'][:60]}")
