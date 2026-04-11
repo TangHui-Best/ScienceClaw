@@ -695,7 +695,8 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         js = MANAGER_MODULE.PLAYWRIGHT_RECORDER_ACTIONS_PATH.read_text(encoding="utf-8")
         click_block = js.split("addListener('click'", 1)[1].split("addListener('input'", 1)[0]
         self.assertIn("var associated = associatedControl(target);", click_block)
-        self.assertIn("if (associated && asCheckbox(associated)) return;", click_block)
+        self.assertIn("if (associated && asCheckbox(associated)) {", click_block)
+        self.assertIn("emitLogicalAction('click', target, {});", click_block)
         logical_toggle_block = js.split("function logicalToggleTarget(node)", 1)[1].split(
             "function logicalActionTarget", 1
         )[0]
@@ -706,6 +707,17 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         change_block = js.split("addListener('change'", 1)[1].split("addListener('keydown'", 1)[0]
         self.assertIn("if (asCheckbox(target)) {", change_block)
         self.assertIn("emitLogicalAction(toggleState(target) ? 'check' : 'uncheck', target, {});", change_block)
+
+    def test_action_runtime_preserves_label_clicks_for_associated_checkbox_targets(self):
+        js = MANAGER_MODULE.PLAYWRIGHT_RECORDER_ACTIONS_PATH.read_text(encoding="utf-8")
+        click_block = js.split("addListener('click'", 1)[1].split("addListener('input'", 1)[0]
+        self.assertIn("var associated = associatedControl(target);", click_block)
+        self.assertIn("emitLogicalAction('click', target, {});", click_block)
+        suppress_block = js.split("function shouldSuppress(action, target)", 1)[1].split(
+            "function wrongTarget", 1
+        )[0]
+        self.assertIn("if (recentAction.action === 'click') {", suppress_block)
+        self.assertIn("return action === 'check' || action === 'uncheck';", suppress_block)
 
     async def test_register_page_bootstraps_context_recorder_once(self):
         context = _FakeContext()

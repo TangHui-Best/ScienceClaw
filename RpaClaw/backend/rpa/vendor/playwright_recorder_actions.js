@@ -127,6 +127,9 @@
             if (now() - recentAction.time > SUPPRESSION_WINDOW_MS) return false;
             if (!sameOrRelatedTarget(target, recentAction.target)) return false;
             if (recentAction.action === action) return true;
+            if (recentAction.action === 'click') {
+                return action === 'check' || action === 'uncheck';
+            }
             if (recentAction.action === 'check' || recentAction.action === 'uncheck') {
                 return action === 'click' || action === 'fill' || action === 'select';
             }
@@ -178,7 +181,10 @@
             }
 
             var associated = associatedControl(target);
-            if (associated && asCheckbox(associated)) return;
+            if (associated && asCheckbox(associated)) {
+                emitLogicalAction('click', target, {});
+                return;
+            }
 
             emitLogicalAction('click', target, {});
         });
