@@ -10,6 +10,10 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_SCREENCAST_WIDTH = 1280
+_DEFAULT_SCREENCAST_HEIGHT = 720
+_INPUT_METRICS_REFRESH_INTERVAL_S = 0.25
+
 _KEY_TO_VIRTUAL_KEY_CODE: Dict[str, int] = {
     "Backspace": 8,
     "Space": 32,
@@ -127,6 +131,41 @@ def _build_cdp_key_event(event: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+def _pick_dimension(*values: Any, default: int) -> int:
+    for value in values:
+        try:
+            numeric = int(value)
+        except (TypeError, ValueError):
+            continue
+        if numeric > 0:
+            return numeric
+    return default
+
+
+async def _fetch_css_viewport_size(cdp: Any, fallback_width: int, fallback_height: int) -> tuple[int, int]:
+    if not cdp:
+        return fallback_width, fallback_height
+
+    try:
+        metrics = await cdp.send("Page.getLayoutMetrics", {})
+    except Exception:
+        return fallback_width, fallback_height
+
+    css_viewport = metrics.get("cssVisualViewport", {}) if isinstance(metrics, dict) else {}
+    width = _pick_dimension(css_viewport.get("clientWidth"), default=fallback_width)
+    height = _pick_dimension(css_viewport.get("clientHeight"), default=fallback_height)
+    return width, height
+
+
+def _resolve_pointer_coordinates(event: Dict[str, Any], width: int, height: int) -> tuple[float, float]:
+    coordinate_space = event.get("coordinateSpace", "css-pixel")
+    x = float(event.get("x", 0) or 0)
+    y = float(event.get("y", 0) or 0)
+    if coordinate_space == "normalized":
+        return x * width, y * height
+    return x, y
+
+
 class SessionScreencastController:
     """Streams the currently active tab and switches targets when active tab changes."""
 
@@ -141,8 +180,11 @@ class SessionScreencastController:
         self._running = False
         self._page = None
         self._cdp = None
-        self._viewport_width = 1280
-        self._viewport_height = 720
+        self._frame_width = _DEFAULT_SCREENCAST_WIDTH
+        self._frame_height = _DEFAULT_SCREENCAST_HEIGHT
+        self._input_width = _DEFAULT_SCREENCAST_WIDTH
+        self._input_height = _DEFAULT_SCREENCAST_HEIGHT
+        self._last_input_metrics_refresh = 0.0
         self._tabs_snapshot_json = ""
         self._last_preview_error = ""
         self._frames_sent = 0
@@ -227,6 +269,7 @@ class SessionScreencastController:
                         "everyNthFrame": 1,
                     },
                 )
+                await self._refresh_input_metrics(force=True)
                 self._last_preview_error = ""
                 logger.info(
                     "[Screencast] attached to page page_id=%s url=%s",
@@ -306,6 +349,20 @@ class SessionScreencastController:
             elif msg_type == "wheel":
                 await self._dispatch_wheel(msg)
 
+    async def _refresh_input_metrics(self, force: bool = False) -> None:
+        if not self._cdp:
+            return
+        now = time.time()
+        if not force and now - self._last_input_metrics_refresh < _INPUT_METRICS_REFRESH_INTERVAL_S:
+            return
+
+        self._input_width, self._input_height = await _fetch_css_viewport_size(
+            self._cdp,
+            fallback_width=self._input_width,
+            fallback_height=self._input_height,
+        )
+        self._last_input_metrics_refresh = now
+
     async def _on_frame(self, params: Dict[str, Any]) -> None:
         if not self._cdp or not self._ws or not self._running:
             return
@@ -320,9 +377,9 @@ class SessionScreencastController:
         metadata = params.get("metadata", {})
         device_w = metadata.get("deviceWidth")
         device_h = metadata.get("deviceHeight")
-        if device_w and device_h:
-            self._viewport_width = int(device_w)
-            self._viewport_height = int(device_h)
+        self._frame_width = _pick_dimension(device_w, default=self._frame_width)
+        self._frame_height = _pick_dimension(device_h, default=self._frame_height)
+        await self._refresh_input_metrics()
 
         try:
             await self._ws.send_json(
@@ -330,8 +387,12 @@ class SessionScreencastController:
                     "type": "frame",
                     "data": params.get("data", ""),
                     "metadata": {
-                        "width": self._viewport_width,
-                        "height": self._viewport_height,
+                        "width": self._frame_width,
+                        "height": self._frame_height,
+                        "frameWidth": self._frame_width,
+                        "frameHeight": self._frame_height,
+                        "inputWidth": self._input_width,
+                        "inputHeight": self._input_height,
                         "timestamp": metadata.get("timestamp", time.time()),
                     },
                 }
@@ -339,9 +400,11 @@ class SessionScreencastController:
             self._frames_sent += 1
             if self._frames_sent == 1:
                 logger.info(
-                    "[Screencast] first frame sent viewport=%sx%s",
-                    self._viewport_width,
-                    self._viewport_height,
+                    "[Screencast] first frame sent frame=%sx%s input=%sx%s",
+                    self._frame_width,
+                    self._frame_height,
+                    self._input_width,
+                    self._input_height,
                 )
             self._last_preview_error = ""
         except Exception:
@@ -350,8 +413,7 @@ class SessionScreencastController:
     async def _dispatch_mouse(self, event: Dict[str, Any]) -> None:
         if not self._cdp:
             return
-        x = event.get("x", 0) * self._viewport_width
-        y = event.get("y", 0) * self._viewport_height
+        x, y = _resolve_pointer_coordinates(event, self._input_width, self._input_height)
         params: Dict[str, Any] = {
             "type": event.get("action", "mouseMoved"),
             "x": x,
@@ -377,8 +439,7 @@ class SessionScreencastController:
     async def _dispatch_wheel(self, event: Dict[str, Any]) -> None:
         if not self._cdp:
             return
-        x = event.get("x", 0) * self._viewport_width
-        y = event.get("y", 0) * self._viewport_height
+        x, y = _resolve_pointer_coordinates(event, self._input_width, self._input_height)
         params: Dict[str, Any] = {
             "type": "mouseWheel",
             "x": x,
@@ -400,8 +461,11 @@ class ScreencastService:
         self._cdp = cdp_session
         self._ws: Optional[WebSocket] = None
         self._running = False
-        self._viewport_width = 1280
-        self._viewport_height = 720
+        self._frame_width = _DEFAULT_SCREENCAST_WIDTH
+        self._frame_height = _DEFAULT_SCREENCAST_HEIGHT
+        self._input_width = _DEFAULT_SCREENCAST_WIDTH
+        self._input_height = _DEFAULT_SCREENCAST_HEIGHT
+        self._last_input_metrics_refresh = 0.0
 
     async def start(self, websocket: WebSocket) -> None:
         self._ws = websocket
@@ -415,6 +479,7 @@ class ScreencastService:
                 "everyNthFrame": 1,
             },
         )
+        await self._refresh_input_metrics(force=True)
         try:
             await self._recv_loop()
         except WebSocketDisconnect:
@@ -458,6 +523,20 @@ class ScreencastService:
             elif msg_type == "wheel":
                 await self._dispatch_wheel(msg)
 
+    async def _refresh_input_metrics(self, force: bool = False) -> None:
+        if not self._cdp:
+            return
+        now = time.time()
+        if not force and now - self._last_input_metrics_refresh < _INPUT_METRICS_REFRESH_INTERVAL_S:
+            return
+
+        self._input_width, self._input_height = await _fetch_css_viewport_size(
+            self._cdp,
+            fallback_width=self._input_width,
+            fallback_height=self._input_height,
+        )
+        self._last_input_metrics_refresh = now
+
     async def _on_frame(self, params: Dict[str, Any]) -> None:
         if not self._cdp or not self._ws or not self._running:
             return
@@ -472,9 +551,9 @@ class ScreencastService:
         metadata = params.get("metadata", {})
         device_w = metadata.get("deviceWidth")
         device_h = metadata.get("deviceHeight")
-        if device_w and device_h:
-            self._viewport_width = int(device_w)
-            self._viewport_height = int(device_h)
+        self._frame_width = _pick_dimension(device_w, default=self._frame_width)
+        self._frame_height = _pick_dimension(device_h, default=self._frame_height)
+        await self._refresh_input_metrics()
 
         try:
             await self._ws.send_json(
@@ -482,8 +561,12 @@ class ScreencastService:
                     "type": "frame",
                     "data": params.get("data", ""),
                     "metadata": {
-                        "width": self._viewport_width,
-                        "height": self._viewport_height,
+                        "width": self._frame_width,
+                        "height": self._frame_height,
+                        "frameWidth": self._frame_width,
+                        "frameHeight": self._frame_height,
+                        "inputWidth": self._input_width,
+                        "inputHeight": self._input_height,
                         "timestamp": metadata.get("timestamp", time.time()),
                     },
                 }
@@ -494,8 +577,7 @@ class ScreencastService:
     async def _dispatch_mouse(self, event: Dict[str, Any]) -> None:
         if not self._cdp:
             return
-        x = event.get("x", 0) * self._viewport_width
-        y = event.get("y", 0) * self._viewport_height
+        x, y = _resolve_pointer_coordinates(event, self._input_width, self._input_height)
         params: Dict[str, Any] = {
             "type": event.get("action", "mouseMoved"),
             "x": x,
@@ -521,8 +603,7 @@ class ScreencastService:
     async def _dispatch_wheel(self, event: Dict[str, Any]) -> None:
         if not self._cdp:
             return
-        x = event.get("x", 0) * self._viewport_width
-        y = event.get("y", 0) * self._viewport_height
+        x, y = _resolve_pointer_coordinates(event, self._input_width, self._input_height)
         params: Dict[str, Any] = {
             "type": "mouseWheel",
             "x": x,

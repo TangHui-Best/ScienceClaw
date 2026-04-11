@@ -4,6 +4,13 @@ import { useRouter, useRoute } from 'vue-router';
 import { Camera, Terminal, CheckCircle, Radio, Send, Wand2, Bot, Code, X, House, FolderOpen, Globe } from 'lucide-vue-next';
 import { apiClient } from '@/api/client';
 import { getBackendWsUrl } from '@/utils/sandbox';
+import {
+  getFrameSizeFromMetadata,
+  getInputSizeFromMetadata,
+  mapClientPointToViewportPoint,
+  type ScreencastFrameMetadata,
+  type ScreencastSize,
+} from '@/utils/screencastGeometry';
 
 const router = useRouter();
 const route = useRoute();
@@ -17,6 +24,8 @@ const loading = ref(true);
 const error = ref<string | null>(null);
 
 const canvasRef = ref<HTMLCanvasElement | null>(null);
+const screencastFrameSize = ref<ScreencastSize>({ width: 1280, height: 720 });
+const screencastInputSize = ref<ScreencastSize>({ width: 1280, height: 720 });
 let screencastWs: WebSocket | null = null;
 let lastMoveTime = 0;
 interface BrowserTab {
@@ -249,7 +258,7 @@ const getModifiers = (e: MouseEvent | KeyboardEvent | WheelEvent): number => {
   return mask;
 };
 
-const drawFrame = (base64Data: string, _metadata: { width: number; height: number }) => {
+const drawFrame = (base64Data: string, metadata: ScreencastFrameMetadata) => {
   const canvas = canvasRef.value;
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
@@ -257,9 +266,16 @@ const drawFrame = (base64Data: string, _metadata: { width: number; height: numbe
 
   const img = new Image();
   img.onload = () => {
-    // 同步绘图缓冲区尺寸与图片原始尺寸
-    if (canvas.width !== img.naturalWidth) canvas.width = img.naturalWidth;
-    if (canvas.height !== img.naturalHeight) canvas.height = img.naturalHeight;
+    const nextFrameSize = getFrameSizeFromMetadata(metadata, {
+      width: img.naturalWidth,
+      height: img.naturalHeight,
+    });
+    const nextInputSize = getInputSizeFromMetadata(metadata, nextFrameSize);
+    screencastFrameSize.value = nextFrameSize;
+    screencastInputSize.value = nextInputSize;
+
+    if (canvas.width !== nextFrameSize.width) canvas.width = nextFrameSize.width;
+    if (canvas.height !== nextFrameSize.height) canvas.height = nextFrameSize.height;
     ctx.drawImage(img, 0, 0);
   };
   img.src = `data:image/jpeg;base64,${base64Data}`;
@@ -366,10 +382,19 @@ const sendInputEvent = (e: Event) => {
     }
 
     const rect = canvas.getBoundingClientRect();
-    // rect.width/height 是 css 显示尺寸，canvas.width/height 是实际缓冲区（图片）尺寸
-    // 归一化坐标应基于 CSS 视口比例
-    const x = (e.clientX - rect.left) / rect.width;
-    const y = (e.clientY - rect.top) / rect.height;
+    const point = mapClientPointToViewportPoint({
+      clientX: e.clientX,
+      clientY: e.clientY,
+      containerRect: {
+        left: rect.left,
+        top: rect.top,
+        width: rect.width,
+        height: rect.height,
+      },
+      frameSize: screencastFrameSize.value,
+      inputSize: screencastInputSize.value,
+    });
+    if (!point) return;
     const actionMap: Record<string, string> = {
       mousedown: 'mousePressed',
       mouseup: 'mouseReleased',
@@ -381,20 +406,33 @@ const sendInputEvent = (e: Event) => {
     screencastWs.send(JSON.stringify({
       type: 'mouse',
       action,
-      x,
-      y,
+      coordinateSpace: 'css-pixel',
+      x: point.x,
+      y: point.y,
       button: buttonMap[e.button] || 'left',
       clickCount: e.type === 'mousedown' ? 1 : 0,
       modifiers: getModifiers(e),
     }));
   } else if (e instanceof WheelEvent) {
     const rect = canvas.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / rect.width;
-    const y = (e.clientY - rect.top) / rect.height;
+    const point = mapClientPointToViewportPoint({
+      clientX: e.clientX,
+      clientY: e.clientY,
+      containerRect: {
+        left: rect.left,
+        top: rect.top,
+        width: rect.width,
+        height: rect.height,
+      },
+      frameSize: screencastFrameSize.value,
+      inputSize: screencastInputSize.value,
+    });
+    if (!point) return;
     screencastWs.send(JSON.stringify({
       type: 'wheel',
-      x,
-      y,
+      coordinateSpace: 'css-pixel',
+      x: point.x,
+      y: point.y,
       deltaX: e.deltaX,
       deltaY: e.deltaY,
       modifiers: getModifiers(e),
@@ -705,27 +743,27 @@ const sendMessage = async () => {
       </aside>
 
       <!-- Center: Screencast Viewport -->
-      <main class="flex-1 bg-[#f5f6f7] p-8 flex flex-col min-w-0">
+      <main class="flex-1 bg-[#f5f6f7] px-5 py-4 flex flex-col min-w-0">
         <div class="flex-1 bg-[#1e1e1e] rounded-2xl shadow-2xl relative overflow-hidden flex flex-col border border-gray-800">
-          <div class="h-11 bg-[#cfd3d8] flex items-end px-3 gap-2 flex-shrink-0 overflow-x-auto">
+          <div class="h-9 bg-[#cfd3d8] flex items-end px-3 gap-2 flex-shrink-0 overflow-x-auto">
             <button
               v-for="tab in tabs"
               :key="tab.tab_id"
               type="button"
               @click="activateTab(tab.tab_id)"
-              class="max-w-[220px] min-w-[120px] h-8 px-3 rounded-t-xl text-[11px] border border-b-0 transition-colors truncate"
+              class="max-w-[220px] min-w-[120px] h-7 px-3 rounded-t-xl text-[11px] border border-b-0 transition-colors truncate"
               :class="tab.active ? 'bg-[#f5f6f7] text-gray-900 border-gray-300' : 'bg-white/60 text-gray-600 border-transparent hover:bg-white/80'"
             >
               {{ tab.title || tab.url || 'New Tab' }}
             </button>
           </div>
-          <div class="h-10 bg-[#dadddf] flex items-center px-4 gap-2 flex-shrink-0 border-t border-white/40">
+          <div class="h-9 bg-[#dadddf] flex items-center px-3 gap-2 flex-shrink-0 border-t border-white/40">
             <div class="flex gap-1.5">
               <div class="w-2.5 h-2.5 rounded-full bg-red-400"></div>
               <div class="w-2.5 h-2.5 rounded-full bg-yellow-400"></div>
               <div class="w-2.5 h-2.5 rounded-full bg-green-400"></div>
             </div>
-            <form class="flex-1 bg-white rounded-md h-6 mx-4 flex items-center px-2 shadow-inner border border-transparent focus-within:border-[#831bd7]/30" @submit.prevent="submitAddressBar">
+            <form class="flex-1 bg-white rounded-md h-5 mx-3 flex items-center px-2 shadow-inner border border-transparent focus-within:border-[#831bd7]/30" @submit.prevent="submitAddressBar">
               <Globe class="text-gray-400 flex-shrink-0" :size="12" />
               <input
                 v-model="addressInput"
@@ -765,14 +803,14 @@ const sendMessage = async () => {
             <div v-if="error && sessionId" class="absolute top-4 right-4 max-w-xs bg-red-500/90 text-white text-[11px] px-3 py-2 rounded-lg shadow-lg">
               {{ error }}
             </div>
-            <div v-if="sessionId" class="absolute bottom-6 left-1/2 -translate-x-1/2 bg-white/10 backdrop-blur-md border border-white/20 px-4 py-2 rounded-full flex items-center gap-3">
+            <div v-if="sessionId" class="absolute bottom-3 left-1/2 -translate-x-1/2 bg-white/10 backdrop-blur-md border border-white/20 px-3 py-1.5 rounded-full flex items-center gap-2">
               <Radio class="text-red-400 animate-pulse" :size="14" />
               <span class="text-white text-[10px] font-bold tracking-wider uppercase">实时 CDP 串流</span>
             </div>
           </div>
         </div>
 
-        <div class="mt-6 flex justify-center gap-4">
+        <div v-if="false" class="mt-6 flex justify-center gap-4">
           <button class="flex items-center gap-2 bg-white px-5 py-2.5 rounded-xl text-xs font-bold text-gray-700 shadow-sm hover:bg-gray-50 transition-colors border border-gray-200">
             <Camera :size="16" class="text-gray-500" />
             截图标记

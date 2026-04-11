@@ -52,6 +52,10 @@ import { ref, computed, watch, onBeforeUnmount } from 'vue';
 import { useI18n } from 'vue-i18n';
 import TakeOverIcon from '@/components/icons/TakeOverIcon.vue';
 import { getBackendVncPageUrl, getBackendWsUrl, isLocalMode } from '@/utils/sandbox';
+import {
+  getFrameSizeFromMetadata,
+  type ScreencastFrameMetadata,
+} from '@/utils/screencastGeometry';
 
 const props = defineProps<{
   sessionId: string;
@@ -67,7 +71,7 @@ const vncPageUrl = computed(() => getBackendVncPageUrl(props.sessionId || 'sandb
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 let screencastWs: WebSocket | null = null;
 
-const drawFrame = (base64Data: string) => {
+const drawFrame = (base64Data: string, metadata?: ScreencastFrameMetadata) => {
   const canvas = canvasRef.value;
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
@@ -75,8 +79,12 @@ const drawFrame = (base64Data: string) => {
 
   const img = new Image();
   img.onload = () => {
-    if (canvas.width !== img.naturalWidth) canvas.width = img.naturalWidth;
-    if (canvas.height !== img.naturalHeight) canvas.height = img.naturalHeight;
+    const frameSize = getFrameSizeFromMetadata(metadata, {
+      width: img.naturalWidth,
+      height: img.naturalHeight,
+    });
+    if (canvas.width !== frameSize.width) canvas.width = frameSize.width;
+    if (canvas.height !== frameSize.height) canvas.height = frameSize.height;
     ctx.drawImage(img, 0, 0);
   };
   img.src = `data:image/jpeg;base64,${base64Data}`;
@@ -91,7 +99,7 @@ const connectScreencast = () => {
     try {
       const msg = JSON.parse(ev.data);
       if (msg.type === 'frame') {
-        drawFrame(msg.data);
+        drawFrame(msg.data, msg.metadata);
       }
     } catch {
       // ignore malformed frames
