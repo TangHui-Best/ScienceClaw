@@ -35,7 +35,7 @@
     }
 
     function logicalToggleTarget(node) {
-        return asCheckbox(node) || asCheckbox(associatedControl(node)) || roleToggleTarget(node);
+        return asCheckbox(node) || roleToggleTarget(node);
     }
 
     function logicalActionTarget(node, retarget) {
@@ -177,6 +177,9 @@
                 return;
             }
 
+            var associated = associatedControl(target);
+            if (associated && asCheckbox(associated)) return;
+
             emitLogicalAction('click', target, {});
         });
 
@@ -224,6 +227,10 @@
             var target = event.target;
             rememberActiveTarget(target);
             if (!isElement(target)) return;
+            if (asCheckbox(target)) {
+                emitLogicalAction(toggleState(target) ? 'check' : 'uncheck', target, {});
+                return;
+            }
             if (target.nodeName === 'SELECT') {
                 if (wrongTarget(target)) return;
                 emitLogicalAction('select', target, { value: target.value || '' });

@@ -691,6 +691,22 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("var ROLE_MAP =", js)
         self.assertNotIn("function testUnique(", js)
 
+    def test_action_runtime_does_not_immediately_toggle_label_associated_checkbox_clicks(self):
+        js = MANAGER_MODULE.PLAYWRIGHT_RECORDER_ACTIONS_PATH.read_text(encoding="utf-8")
+        click_block = js.split("addListener('click'", 1)[1].split("addListener('input'", 1)[0]
+        self.assertIn("var associated = associatedControl(target);", click_block)
+        self.assertIn("if (associated && asCheckbox(associated)) return;", click_block)
+        logical_toggle_block = js.split("function logicalToggleTarget(node)", 1)[1].split(
+            "function logicalActionTarget", 1
+        )[0]
+        self.assertNotIn("associatedControl(node)", logical_toggle_block)
+
+    def test_action_runtime_uses_change_event_for_checkbox_state_commit(self):
+        js = MANAGER_MODULE.PLAYWRIGHT_RECORDER_ACTIONS_PATH.read_text(encoding="utf-8")
+        change_block = js.split("addListener('change'", 1)[1].split("addListener('keydown'", 1)[0]
+        self.assertIn("if (asCheckbox(target)) {", change_block)
+        self.assertIn("emitLogicalAction(toggleState(target) ? 'check' : 'uncheck', target, {});", change_block)
+
     async def test_register_page_bootstraps_context_recorder_once(self):
         context = _FakeContext()
         first_page = _FakePage("https://example.com", "Example", context=context)
