@@ -27,6 +27,10 @@ const canvasRef = ref<HTMLCanvasElement | null>(null);
 const screencastFrameSize = ref<ScreencastSize>({ width: 1280, height: 720 });
 const screencastInputSize = ref<ScreencastSize>({ width: 1280, height: 720 });
 let screencastWs: WebSocket | null = null;
+let screencastReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let screencastReconnectAttempts = 0;
+let shouldReconnectScreencast = true;
+let currentScreencastSessionId: string | null = null;
 let lastMoveTime = 0;
 interface BrowserTab {
   tab_id: string;
@@ -241,12 +245,10 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  shouldReconnectScreencast = false;
   if (timerInterval.value) clearInterval(timerInterval.value);
   if (pollInterval) clearInterval(pollInterval);
-  if (screencastWs) {
-    screencastWs.close();
-    screencastWs = null;
-  }
+  disconnectScreencast();
 });
 
 const getModifiers = (e: MouseEvent | KeyboardEvent | WheelEvent): number => {
@@ -281,21 +283,70 @@ const drawFrame = (base64Data: string, metadata: ScreencastFrameMetadata) => {
   img.src = `data:image/jpeg;base64,${base64Data}`;
 };
 
+const clearScreencastReconnectTimer = () => {
+  if (screencastReconnectTimer !== null) {
+    clearTimeout(screencastReconnectTimer);
+    screencastReconnectTimer = null;
+  }
+};
+
+const disconnectScreencast = () => {
+  clearScreencastReconnectTimer();
+  if (!screencastWs) return;
+
+  const ws = screencastWs;
+  screencastWs = null;
+  ws.onopen = null;
+  ws.onmessage = null;
+  ws.onerror = null;
+  ws.onclose = null;
+
+  if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+    ws.close();
+  }
+};
+
+const scheduleScreencastReconnect = () => {
+  if (!shouldReconnectScreencast || !currentScreencastSessionId || screencastReconnectTimer !== null) return;
+
+  screencastReconnectAttempts += 1;
+  const delay = Math.min(1000 * screencastReconnectAttempts, 5000);
+  error.value = `褰曞埗鐢婚潰娴佹殏鏃朵腑鏂紝姝ｅ湪灏濊瘯閲嶈繛... (${delay}ms)`;
+  screencastReconnectTimer = setTimeout(() => {
+    screencastReconnectTimer = null;
+    if (!shouldReconnectScreencast || !currentScreencastSessionId) return;
+    connectScreencast(currentScreencastSessionId);
+  }, delay);
+};
+
 const connectScreencast = (sid: string) => {
+  currentScreencastSessionId = sid;
+  clearScreencastReconnectTimer();
   if (screencastWs) {
-    screencastWs.close();
+    const existing = screencastWs;
     screencastWs = null;
+    existing.onopen = null;
+    existing.onmessage = null;
+    existing.onerror = null;
+    existing.onclose = null;
+    if (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING) {
+      existing.close();
+    }
   }
   const wsUrl = getBackendWsUrl(`/rpa/screencast/${sid}`);
   console.log('[RecorderPage] Connecting screencast:', wsUrl);
-  screencastWs = new WebSocket(wsUrl);
+  const ws = new WebSocket(wsUrl);
+  screencastWs = ws;
 
-  screencastWs.onopen = () => {
+  ws.onopen = () => {
+    if (screencastWs !== ws) return;
     console.log('[RecorderPage] Screencast connected');
+    screencastReconnectAttempts = 0;
     error.value = null;
   };
 
-  screencastWs.onmessage = (ev) => {
+  ws.onmessage = (ev) => {
+    if (screencastWs !== ws) return;
     try {
       const msg = JSON.parse(ev.data);
       console.log('[RecorderPage] Screencast message:', msg.type, msg.message || '');
@@ -312,15 +363,19 @@ const connectScreencast = (sid: string) => {
     }
   };
 
-  screencastWs.onclose = (ev) => {
+  ws.onclose = (ev) => {
+    if (screencastWs !== ws) return;
     console.warn('[RecorderPage] Screencast closed:', ev.code, ev.reason);
     if (!error.value) {
       error.value = `录制画面流已断开（code=${ev.code}${ev.reason ? `, reason=${ev.reason}` : ''}）`;
     }
     screencastWs = null;
+    if (!shouldReconnectScreencast) return;
+    scheduleScreencastReconnect();
   };
 
-  screencastWs.onerror = (ev) => {
+  ws.onerror = (ev) => {
+    if (screencastWs !== ws) return;
     console.error('[RecorderPage] Screencast error:', ev);
     error.value = '无法连接录制画面流，请检查后端 screencast WebSocket/代理配置。';
   };

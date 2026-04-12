@@ -1,5 +1,10 @@
 import importlib
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 
 SCREencAST_MODULE = importlib.import_module("backend.rpa.screencast")
@@ -293,6 +298,61 @@ class ScreencastServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(method, "Input.dispatchMouseEvent")
         self.assertEqual(payload["x"], 401)
         self.assertEqual(payload["y"], 299)
+
+
+class RpaScreencastRouteTests(unittest.TestCase):
+    def test_screencast_websocket_allows_connect_before_active_page_exists(self):
+        import backend.route.rpa as rpa_route
+
+        started = {"value": False}
+
+        async def _fake_get_ws_user(_websocket):
+            return SimpleNamespace(id="user-1", username="tester", role="admin")
+
+        async def _fake_get_session(_session_id):
+            return SimpleNamespace(user_id="user-1")
+
+        class _FakeController:
+            def __init__(self, page_provider, tabs_provider):
+                self.page_provider = page_provider
+                self.tabs_provider = tabs_provider
+
+            async def start(self, websocket):
+                started["value"] = True
+                await websocket.send_json(
+                    {
+                        "type": "controller_started",
+                        "page_present": self.page_provider() is not None,
+                        "tabs": self.tabs_provider(),
+                    }
+                )
+
+            async def stop(self):
+                return None
+
+        app = FastAPI()
+        app.include_router(rpa_route.router, prefix="/api/v1/rpa")
+
+        with (
+            patch.object(rpa_route, "_get_ws_user", _fake_get_ws_user),
+            patch.object(rpa_route.rpa_manager, "get_session", _fake_get_session),
+            patch.object(rpa_route.rpa_manager, "get_page", lambda _session_id: None),
+            patch.object(rpa_route.rpa_manager, "list_tabs", lambda _session_id: []),
+            patch.object(rpa_route, "SessionScreencastController", _FakeController),
+        ):
+            client = TestClient(app)
+            with client.websocket_connect("/api/v1/rpa/screencast/session-1") as websocket:
+                message = websocket.receive_json()
+
+        self.assertTrue(started["value"])
+        self.assertEqual(
+            message,
+            {
+                "type": "controller_started",
+                "page_present": False,
+                "tabs": [],
+            },
+        )
 
 
 if __name__ == "__main__":

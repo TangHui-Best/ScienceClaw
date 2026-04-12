@@ -685,17 +685,20 @@ async def rpa_screencast(websocket: WebSocket, session_id: str):
         return
 
     active_page = rpa_manager.get_page(session_id)
-    if not active_page:
-        logger.warning("Screencast websocket has no active page session=%s", session_id)
-        await websocket.close(code=1008, reason="No active page")
-        return
-    logger.info(
-        "Screencast websocket ready session=%s user=%s page_id=%s url=%s",
-        session_id,
-        user.username,
-        id(active_page),
-        getattr(active_page, "url", ""),
-    )
+    if active_page:
+        logger.info(
+            "Screencast websocket ready session=%s user=%s page_id=%s url=%s",
+            session_id,
+            user.username,
+            id(active_page),
+            getattr(active_page, "url", ""),
+        )
+    else:
+        logger.info(
+            "Screencast websocket waiting for active page session=%s user=%s",
+            session_id,
+            user.username,
+        )
 
     screencast = SessionScreencastController(
         page_provider=lambda: rpa_manager.get_page(session_id),
@@ -707,6 +710,10 @@ async def rpa_screencast(websocket: WebSocket, session_id: str):
         logger.info("Screencast websocket disconnected session=%s", session_id)
     except Exception as e:
         logger.exception("Screencast error session=%s: %s", session_id, e)
+        try:
+            await websocket.close(code=1011, reason="Screencast failed")
+        except Exception:
+            pass
     finally:
         await screencast.stop()
 

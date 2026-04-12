@@ -39,6 +39,9 @@ const params = computed(() => {
 
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 let screencastWs: WebSocket | null = null;
+let screencastReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let screencastReconnectAttempts = 0;
+let shouldReconnectScreencast = true;
 
 interface BrowserTab {
   tab_id: string;
@@ -177,22 +180,70 @@ const drawFrame = (base64Data: string, metadata: ScreencastFrameMetadata) => {
   img.src = `data:image/jpeg;base64,${base64Data}`;
 };
 
+const clearScreencastReconnectTimer = () => {
+  if (screencastReconnectTimer !== null) {
+    clearTimeout(screencastReconnectTimer);
+    screencastReconnectTimer = null;
+  }
+};
+
+const disconnectScreencast = () => {
+  clearScreencastReconnectTimer();
+  if (!screencastWs) return;
+
+  const ws = screencastWs;
+  screencastWs = null;
+  ws.onopen = null;
+  ws.onmessage = null;
+  ws.onerror = null;
+  ws.onclose = null;
+
+  if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+    ws.close();
+  }
+};
+
+const scheduleScreencastReconnect = (sid: string) => {
+  if (!shouldReconnectScreencast || screencastReconnectTimer !== null) return;
+
+  screencastReconnectAttempts += 1;
+  const delay = Math.min(1000 * screencastReconnectAttempts, 5000);
+  error.value = `娴嬭瘯鐢婚潰娴佹殏鏃朵腑鏂紝姝ｅ湪灏濊瘯閲嶈繛... (${delay}ms)`;
+  screencastReconnectTimer = setTimeout(() => {
+    screencastReconnectTimer = null;
+    if (!shouldReconnectScreencast) return;
+    connectScreencast(sid);
+  }, delay);
+};
+
 const connectScreencast = (sid: string) => {
+  clearScreencastReconnectTimer();
   if (screencastWs) {
-    screencastWs.close();
+    const existing = screencastWs;
     screencastWs = null;
+    existing.onopen = null;
+    existing.onmessage = null;
+    existing.onerror = null;
+    existing.onclose = null;
+    if (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING) {
+      existing.close();
+    }
   }
 
   const wsUrl = getBackendWsUrl(`/rpa/screencast/${sid}`);
   console.log('[TestPage] Connecting screencast:', wsUrl);
-  screencastWs = new WebSocket(wsUrl);
+  const ws = new WebSocket(wsUrl);
+  screencastWs = ws;
 
-  screencastWs.onopen = () => {
+  ws.onopen = () => {
+    if (screencastWs !== ws) return;
     console.log('[TestPage] Screencast connected');
+    screencastReconnectAttempts = 0;
     error.value = null;
   };
 
-  screencastWs.onmessage = (ev) => {
+  ws.onmessage = (ev) => {
+    if (screencastWs !== ws) return;
     try {
       const msg = JSON.parse(ev.data);
       if (msg.type === 'frame') {
@@ -210,17 +261,21 @@ const connectScreencast = (sid: string) => {
     }
   };
 
-  screencastWs.onerror = (event) => {
+  ws.onerror = (event) => {
+    if (screencastWs !== ws) return;
     console.error('[TestPage] Screencast error:', event);
     error.value = '无法连接测试画面流，请检查后端 screencast WebSocket 或代理配置。';
   };
 
-  screencastWs.onclose = (event) => {
+  ws.onclose = (event) => {
+    if (screencastWs !== ws) return;
     console.log('[TestPage] Screencast closed:', event.code, event.reason);
     if (!error.value) {
       error.value = `测试画面流已断开（code=${event.code}${event.reason ? `, reason=${event.reason}` : ''}）`;
     }
     screencastWs = null;
+    if (!shouldReconnectScreencast) return;
+    scheduleScreencastReconnect(sid);
   };
 };
 
@@ -253,14 +308,12 @@ const runTest = async () => {
   failedStepError.value = '';
 
   try {
+    connectScreencast(sessionId.value);
     const testPromise = apiClient.post(
       `/rpa/session/${sessionId.value}/test`,
       { params: params.value },
       { timeout: TEST_REQUEST_TIMEOUT_MS },
     );
-
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    connectScreencast(sessionId.value);
 
     const resp = await testPromise;
     const result = resp.data.result || {};
@@ -367,10 +420,8 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
-  if (screencastWs) {
-    screencastWs.close();
-    screencastWs = null;
-  }
+  shouldReconnectScreencast = false;
+  disconnectScreencast();
 });
 </script>
 
