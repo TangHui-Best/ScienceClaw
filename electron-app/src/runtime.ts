@@ -24,6 +24,37 @@ interface BuildBackendEnvOptions {
   extraEnv?: Record<string, string>;
 }
 
+function findEnvKey(
+  env: Record<string, string> | NodeJS.ProcessEnv | undefined,
+  targetKey: string
+): string | undefined {
+  if (!env) {
+    return undefined;
+  }
+
+  const loweredTarget = targetKey.toLowerCase();
+  return Object.keys(env).find((key) => key.toLowerCase() === loweredTarget);
+}
+
+function prependPathEntry(pathEntry: string, existingPath?: string): string {
+  const normalizedTarget = path.normalize(pathEntry);
+  const isWindows = process.platform === 'win32';
+  const matches = (candidate: string): boolean => {
+    const normalizedCandidate = path.normalize(candidate);
+    return isWindows
+      ? normalizedCandidate.toLowerCase() === normalizedTarget.toLowerCase()
+      : normalizedCandidate === normalizedTarget;
+  };
+
+  const segments = (existingPath ?? '')
+    .split(path.delimiter)
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .filter((segment) => !matches(segment));
+
+  return [pathEntry, ...segments].join(path.delimiter);
+}
+
 export function resolveRuntimePaths(options: ResolveRuntimePathsOptions): RuntimePaths {
   const devRootDir = path.resolve(options.currentDir, '..', '..');
   const resourceDir = options.isPackaged ? options.resourcesPath : devRootDir;
@@ -89,6 +120,8 @@ export function buildBackendEnv(options: BuildBackendEnvOptions): Record<string,
     '.local-browsers'
   );
   const frontendDist = path.join(options.resourceDir, 'frontend-dist');
+  const pathKey = findEnvKey(options.extraEnv, 'PATH') ?? findEnvKey(process.env, 'PATH') ?? 'PATH';
+  const inheritedPath = options.extraEnv?.[pathKey] ?? process.env[pathKey] ?? '';
 
   return {
     STORAGE_BACKEND: 'local',
@@ -106,5 +139,6 @@ export function buildBackendEnv(options: BuildBackendEnvOptions): Record<string,
     LOG_LEVEL: 'INFO',
     FRONTEND_DIST_DIR: frontendDist,
     ...options.extraEnv,
+    [pathKey]: prependPathEntry(pythonDir, inheritedPath),
   };
 }

@@ -56,4 +56,21 @@ runTest('extra env overrides defaults and preserves built-in resource paths', ()
   assert.equal(env.BUILTIN_SKILLS_DIR, path.join(resourceDir, 'builtin_skills'));
 });
 
+runTest('packaged backend env prepends bundled python to PATH for shell commands', () => {
+  const resourceDir = 'C:\\Apps\\RpaClaw\\resources';
+  const originalPath = 'C:\\Windows\\System32;C:\\Tools';
+  const env = runtime.buildBackendEnv({
+    homeDir: 'D:\\Users\\Alice\\RpaClaw',
+    resourceDir,
+    extraEnv: {
+      PATH: originalPath,
+    },
+  });
+
+  assert.equal(
+    env.PATH,
+    `${path.join(resourceDir, 'python')}${path.delimiter}${originalPath}`
+  );
+});
+
 console.log('All runtime tests passed');
