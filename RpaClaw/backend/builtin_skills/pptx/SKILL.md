@@ -225,7 +225,7 @@ pres.writeFile({ fileName: "output.pptx" });
 
 ```bash
 python3 /builtin-skills/pptx/scripts/office/soffice.py --headless --convert-to pdf output.pptx
-pdftoppm -jpeg -r 150 output.pdf slide
+python3 /builtin-skills/pdf/scripts/convert_pdf_to_images.py output.pdf slide_images
 ```
 
 ---

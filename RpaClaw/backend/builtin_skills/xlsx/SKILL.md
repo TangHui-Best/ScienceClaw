@@ -75,7 +75,7 @@ A user may ask you to create, edit, or analyze the contents of an .xlsx file. Yo
 
 ## Important Requirements
 
-**LibreOffice Required for Formula Recalculation**: LibreOffice is pre-installed in the sandbox for recalculating formula values using `/builtin-skills/xlsx/scripts/recalc.py`. The script automatically configures LibreOffice on first run, including in sandboxed environments where Unix sockets are restricted.
+**LibreOffice Required for Formula Recalculation**: LibreOffice is required for recalculating formula values using `/builtin-skills/xlsx/scripts/recalc.py`. In sandboxed environments it is pre-installed, and the script automatically configures LibreOffice on first run, including environments where Unix sockets are restricted.
 
 ## Reading and analyzing data
 
@@ -226,7 +226,7 @@ The script:
 - Recalculates all formulas in all sheets
 - Scans ALL cells for Excel errors (#REF!, #DIV/0!, etc.)
 - Returns JSON with detailed error locations and counts
-- Works on both Linux and macOS
+- Works wherever LibreOffice is available
 
 ## Formula Verification Checklist
 

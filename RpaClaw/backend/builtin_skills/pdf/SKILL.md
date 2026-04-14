@@ -32,7 +32,7 @@ When defaulting to PDF output, follow the "Generate PDF Reports" workflow below 
 |---|---|---|
 | Academic papers (two-column, conference/journal) | `pdftotext -layout` (poppler) | Handles column detection and character spacing reconstruction |
 | Simple single-column documents | pdfplumber or pypdf | Good enough, easier to script |
-| Scanned PDFs (image-based) | pytesseract + pdf2image | Needs OCR |
+| Scanned PDFs (image-based) | pytesseract + pypdfium2 | Needs OCR engine |
 | Tables / structured data | pdfplumber | Best table extraction |
 
 ### Academic Papers — Use pdftotext First
@@ -532,16 +532,16 @@ pdftk input.pdf rotate 1east output rotated.pdf
 
 ### Extract Text from Scanned PDFs
 ```python
-# Requires: pip install pytesseract pdf2image
+# Requires pytesseract, pypdfium2, Pillow, and a working Tesseract OCR executable.
 import pytesseract
-from pdf2image import convert_from_path
+import pypdfium2 as pdfium
 
-# Convert PDF to images
-images = convert_from_path('scanned.pdf')
+document = pdfium.PdfDocument("scanned.pdf")
 
 # OCR each page
 text = ""
-for i, image in enumerate(images):
+for i, page in enumerate(document):
+    image = page.render(scale=200 / 72).to_pil()
     text += f"Page {i+1}:\n"
     text += pytesseract.image_to_string(image)
     text += "\n\n"
@@ -604,7 +604,7 @@ with open("encrypted.pdf", "wb") as output:
 | Split PDFs | pypdf | One page per file |
 | Create PDFs | reportlab | Canvas or Platypus |
 | Command line merge | qpdf | `qpdf --empty --pages ...` |
-| OCR scanned PDFs | pytesseract | Convert to image first |
+| OCR scanned PDFs | pytesseract + pypdfium2 | Render pages first, then OCR with Tesseract |
 | Fill PDF forms | pdf-lib or pypdf (see FORMS.md) | See FORMS.md |
 
 ## Next Steps

@@ -76,8 +76,18 @@ runTest('packaged backend env prepends bundled python to PATH for shell commands
 
   assert.equal(
     env.PATH,
-    `${path.join(resourceDir, 'python')}${path.delimiter}${originalPath}`
+    `${path.join(resourceDir, 'python')}${path.delimiter}${path.join(resourceDir, 'node')}${path.delimiter}${originalPath}`
   );
+});
+
+runTest('packaged backend env exposes bundled node_modules through NODE_PATH', () => {
+  const resourceDir = 'C:\\Apps\\RpaClaw\\resources';
+  const env = runtime.buildBackendEnv({
+    homeDir: 'D:\\Users\\Alice\\RpaClaw',
+    resourceDir,
+  });
+
+  assert.equal(env.NODE_PATH, path.join(resourceDir, 'node', 'node_modules'));
 });
 
 console.log('All runtime tests passed');

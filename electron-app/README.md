@@ -59,8 +59,24 @@ Run the PowerShell build script from the project root:
 
 This will:
 1. Build frontend (Vue 3)
-2. Prepare Python environment (embeddable + dependencies + Playwright)
+2. Prepare Python + Node runtime environment (embedded runtimes + dependencies + Playwright)
 3. Build Electron app and create installer
+
+### Document Skill Prerequisites
+
+The desktop installer now bundles:
+
+- Python runtime and backend Python dependencies
+- Node.js runtime
+- bundled `docx` and `pptxgenjs` modules for the built-in document skills
+
+Users still need to install some desktop tools manually if they want the full local document skill set:
+
+- `Pandoc` for some DOCX text-extraction workflows
+- `LibreOffice` for DOCX/PPTX/XLSX conversion and formula recalculation workflows
+- `Tesseract OCR` for OCR on scanned PDFs
+
+The end-user setup steps are documented in [../docs/windows-desktop-document-skills-guide.zh-CN.md](../docs/windows-desktop-document-skills-guide.zh-CN.md).
 
 ### Partial Builds
 

@@ -116,6 +116,8 @@ export function loadEnvFile(filePath: string): Record<string, string> {
 export function buildBackendEnv(options: BuildBackendEnvOptions): Record<string, string> {
   const pythonDir = path.join(options.resourceDir, 'python');
   const sitePackages = path.join(pythonDir, 'Lib', 'site-packages');
+  const nodeDir = path.join(options.resourceDir, 'node');
+  const nodeModules = path.join(nodeDir, 'node_modules');
   const playwrightBrowsers = path.join(
     sitePackages,
     'playwright',
@@ -126,6 +128,7 @@ export function buildBackendEnv(options: BuildBackendEnvOptions): Record<string,
   const frontendDist = path.join(options.resourceDir, 'frontend-dist');
   const pathKey = findEnvKey(options.extraEnv, 'PATH') ?? findEnvKey(process.env, 'PATH') ?? 'PATH';
   const inheritedPath = options.extraEnv?.[pathKey] ?? process.env[pathKey] ?? '';
+  const runtimePath = prependPathEntry(pythonDir, prependPathEntry(nodeDir, inheritedPath));
 
   return {
     STORAGE_BACKEND: 'local',
@@ -138,11 +141,12 @@ export function buildBackendEnv(options: BuildBackendEnvOptions): Record<string,
     TASK_SERVICE_PORT: '12002',
     PYTHONHOME: pythonDir,
     PYTHONPATH: sitePackages,
+    NODE_PATH: nodeModules,
     PLAYWRIGHT_BROWSERS_PATH: playwrightBrowsers,
     ENVIRONMENT: 'production',
     LOG_LEVEL: 'INFO',
     FRONTEND_DIST_DIR: frontendDist,
     ...options.extraEnv,
-    [pathKey]: prependPathEntry(pythonDir, inheritedPath),
+    [pathKey]: runtimePath,
   };
 }
