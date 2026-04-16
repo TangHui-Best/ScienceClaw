@@ -23,6 +23,7 @@ import asyncio
 import json as _json
 import sys
 import httpx
+from urllib.parse import urljoin
 from playwright.async_api import async_playwright
 
 
@@ -73,6 +74,7 @@ if __name__ == "__main__":
 import asyncio
 import json as _json
 import sys
+from urllib.parse import urljoin
 from playwright.async_api import async_playwright
 
 
@@ -132,6 +134,27 @@ class StepExecutionError(Exception):
             "",
             "async def execute_skill(page, **kwargs):",
             '    """Auto-generated skill from RPA recording."""',
+            "    def _extract_ai_script_navigation_target(current_url, result):",
+            "        candidates = []",
+            "        if isinstance(result, str):",
+            "            candidates.append(result)",
+            "        elif isinstance(result, dict):",
+            "            for _key in ('target_url', 'url', 'repo_url', 'repo_path', 'repo', 'href', 'path'):",
+            "                _value = result.get(_key)",
+            "                if isinstance(_value, str):",
+            "                    candidates.append(_value)",
+            "            _output_value = result.get('output')",
+            "            if isinstance(_output_value, str):",
+            "                candidates.append(_output_value)",
+            "        for candidate in candidates:",
+            "            candidate = candidate.strip()",
+            "            if not candidate:",
+            "                continue",
+            "            if candidate.startswith('/'):",
+            "                return urljoin(current_url or '', candidate)",
+            "            if candidate.startswith('http://') or candidate.startswith('https://'):",
+            "                return candidate",
+            "        return ''",
             "    _results = {}",
             f'    tabs = {{"{root_tab_id}": page}}',
             "    current_page = page",
@@ -144,7 +167,7 @@ class StepExecutionError(Exception):
         if deduped and deduped[0].get("action") not in ("navigate", "goto"):
             first_url = deduped[0].get("url", "")
             if first_url:
-                lines.append(f'    await current_page.goto("{first_url}")')
+                lines.append(f'    await current_page.goto("{first_url}", wait_until="domcontentloaded")')
                 lines.append('    await current_page.wait_for_load_state("domcontentloaded")')
                 lines.append("")
                 prev_url = first_url
@@ -162,6 +185,43 @@ class StepExecutionError(Exception):
             if desc:
                 lines.append(f"    # {desc}")
 
+            if action == "ai_instruction":
+                step_payload = {
+                    "action": "ai_instruction",
+                    "source": step.get("source", "ai"),
+                    "description": step.get("description", ""),
+                    "prompt": step.get("prompt", ""),
+                    "instruction_kind": step.get("instruction_kind", "semantic_rule"),
+                    "input_scope": step.get("input_scope") or {"mode": "current_page"},
+                    "output_expectation": step.get("output_expectation") or {"mode": "act"},
+                    "execution_hint": step.get("execution_hint")
+                    or {
+                        "requires_dom_snapshot": True,
+                        "allow_navigation": True,
+                        "max_reasoning_steps": 10,
+                    },
+                    "result_key": step.get("result_key"),
+                    "sensitive": bool(step.get("sensitive", False)),
+                }
+                step_payload_json = json.dumps(step_payload, ensure_ascii=False)
+                step_lines.append(
+                    "    _ai_instruction_result = await execute_ai_instruction("
+                    "current_page, "
+                    f"step=_json.loads({step_payload_json!r}), "
+                    "results=_results"
+                    ")"
+                )
+                step_lines.append(
+                    '    if isinstance(_ai_instruction_result, dict) and not _ai_instruction_result.get("success", True):'
+                )
+                step_lines.append(
+                    '        raise RuntimeError(_ai_instruction_result.get("error") or _ai_instruction_result.get("output") or "AI instruction failed")'
+                )
+                lines.extend(self._wrap_step_lines(step_lines, step_index, test_mode))
+                lines.append("")
+                prev_action = action
+                continue
+
             # AI-generated script — embed directly with sync→async conversion
             if action == "ai_script":
                 ai_code = step.get("value", "")
@@ -171,13 +231,39 @@ class StepExecutionError(Exception):
                     converted = self._strip_locator_result_capture(converted)
                     for code_line in converted.split("\n"):
                         step_lines.append(f"    {code_line}" if code_line.strip() else "")
+                    step_lines.append("    _ai_script_runner = locals().get('run')")
+                    step_lines.append("    if not callable(_ai_script_runner):")
+                    step_lines.append("        raise RuntimeError('AI script missing run(...) function')")
+                    step_lines.append("    try:")
+                    step_lines.append("        _ai_script_result = await _ai_script_runner(current_page, _results)")
+                    step_lines.append("    except TypeError as _type_error:")
+                    step_lines.append("        _type_error_text = str(_type_error)")
+                    step_lines.append(
+                        "        if 'positional argument' not in _type_error_text and 'required positional argument' not in _type_error_text:"
+                    )
+                    step_lines.append("            raise")
+                    step_lines.append("        _ai_script_result = await _ai_script_runner(current_page)")
+                    step_lines.append(
+                        "    if isinstance(_ai_script_result, dict) and _ai_script_result.get('success') is False:"
+                    )
+                    step_lines.append(
+                        "        raise RuntimeError(_ai_script_result.get('error') or _ai_script_result.get('output') or 'AI script failed')"
+                    )
+                    step_lines.append(
+                        "    _ai_script_nav_target = _extract_ai_script_navigation_target(current_page.url, _ai_script_result)"
+                    )
+                    step_lines.append(
+                        "    if _ai_script_nav_target and current_page.url.rstrip('/') != _ai_script_nav_target.rstrip('/'):"
+                    )
+                    step_lines.append("        await current_page.goto(_ai_script_nav_target, wait_until='domcontentloaded')")
+                    step_lines.append("        await current_page.wait_for_load_state('domcontentloaded')")
                 lines.extend(self._wrap_step_lines(step_lines, step_index, test_mode))
                 lines.append("")
                 continue
 
             # Navigation
             if action == "navigate" or (action == "goto" and url):
-                step_lines.append(f'    await current_page.goto("{url}")')
+                step_lines.append(f'    await current_page.goto("{url}", wait_until="domcontentloaded")')
                 step_lines.append('    await current_page.wait_for_load_state("domcontentloaded")')
                 prev_url = url
                 prev_action = "navigate"
@@ -560,7 +646,7 @@ class StepExecutionError(Exception):
             # BUT: never deduplicate AI steps (each AI instruction is unique)
             if (step.get("action") == prev.get("action")
                     and step.get("target") == prev.get("target")
-                    and step.get("action") not in ("navigate", "ai_script")):
+                    and step.get("action") not in ("navigate", "ai_script", "ai_instruction")):
                 result[-1] = step  # Replace previous with current (keep last)
                 continue
             result.append(step)
@@ -796,6 +882,13 @@ class StepExecutionError(Exception):
         'nth', 'first', 'last', 'filter',
     })
 
+    _NON_SERIALIZABLE_QUERY_METHODS = frozenset({
+        'query_selector',
+        'query_selector_all',
+        'all',
+        'element_handles',
+    })
+
     _ASSIGN_RE = re.compile(r'^(\w+)\s*=\s*(?:await\s+)?page\.')
     _GENERIC_ASSIGN_RE = re.compile(r'^(?P<var>\w+)\s*=\s*(?:await\s+)?(?P<rhs>.+)$')
     _RESULT_CAPTURE_RE = re.compile(r'^_results\["[^"]+"\]\s*=\s*(?P<var>\w+)\s*$')
@@ -816,6 +909,8 @@ class StepExecutionError(Exception):
             last_call = re.search(r'\.(\w+)\([^)]*\)\s*$', stripped)
             if last_call and last_call.group(1) in cls._LOCATOR_BUILDER_METHODS:
                 continue
+            if last_call and last_call.group(1) in cls._NON_SERIALIZABLE_QUERY_METHODS:
+                continue
             if last_call and last_call.group(1) in cls._ACTION_METHODS:
                 continue
             indent = line[:len(line) - len(line.lstrip())]
@@ -835,7 +930,10 @@ class StepExecutionError(Exception):
                 var_name = assign_match.group("var")
                 rhs = assign_match.group("rhs")
                 last_call = re.search(r'\.(\w+)\([^)]*\)\s*$', rhs)
-                if last_call and last_call.group(1) in cls._LOCATOR_BUILDER_METHODS:
+                if last_call and (
+                    last_call.group(1) in cls._LOCATOR_BUILDER_METHODS
+                    or last_call.group(1) in cls._NON_SERIALIZABLE_QUERY_METHODS
+                ):
                     locator_vars.add(var_name)
                 else:
                     locator_vars.discard(var_name)

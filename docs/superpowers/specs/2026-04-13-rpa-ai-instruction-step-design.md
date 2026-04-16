@@ -57,7 +57,7 @@ We need a third step type, `ai_instruction`, to represent:
 
 1. Replace structured steps.
 2. Replace `ai_script`.
-3. Introduce unrestricted runtime Python generation in phase 1.
+3. Turn `ai_instruction` into an unrestricted general-purpose agent.
 4. Turn every "complex" action into AI execution.
 
 ## Step-Type Boundary
@@ -233,12 +233,21 @@ Phase-1 plan format:
 }
 ```
 
+Phase-1 also allows:
+
+```json
+{
+  "plan_type": "code",
+  "code": "async def run(page): ..."
+}
+```
+
 Future expansion:
 
-- `plan_type = code`
 - `plan_type = hybrid`
+- richer bounded plan metadata
 
-The architecture must allow these later, but phase-1 only enables `structured`.
+The architecture must support multiple runtime plan types from day one. Phase-1 enables `structured` and `code`.
 
 ### 3. Runtime Execution Layer
 
@@ -248,18 +257,20 @@ Responsibility:
 
 Phase-1:
 
-- only executes structured atomic actions
-- reuses existing assistant-runtime primitives
-- enforces bounded reasoning
+- executes structured atomic actions or bounded runtime Playwright code
+- reuses existing assistant-runtime primitives where possible
+- enforces bounded reasoning and bounded execution
 
 ## Phase-1 Runtime Policy
 
 These are initial execution policies, not permanent architectural constraints:
 
 - `input_scope.mode = current_page` only
-- `plan_type = structured` only
+- `plan_type = structured | code`
 - `max_reasoning_steps = 10`
 - bounded runtime loop
+- runtime `code` is limited to the Playwright page automation domain
+- no shell / filesystem / arbitrary external side-effect expansion in phase 1
 - failure surfaces clearly instead of silently degrading to `ai_script`
 
 ## Generator Behavior
@@ -291,10 +302,11 @@ Responsibilities:
 1. Read the instruction payload.
 2. Build the permitted runtime context from `input_scope`.
 3. Produce a bounded runtime plan through AI reasoning.
-4. Require `plan_type = structured` in phase 1.
-5. Execute the returned atomic actions using existing runtime execution utilities.
-6. Write extracted values into `_results` when `output_expectation` requires it.
-7. Return structured logs/errors.
+4. Accept `plan_type = structured` or `plan_type = code` in phase 1.
+5. Execute structured actions using existing runtime execution utilities.
+6. Execute runtime code only inside the Playwright page automation domain.
+7. Write extracted values into `_results` when `output_expectation` requires it.
+8. Return structured logs/errors.
 
 ## Why Not Reuse ai_script
 
@@ -309,6 +321,7 @@ Responsibilities:
 
 - runtime AI
 - runtime semantic reinterpretation
+- optionally runtime code planning when structured actions are insufficient
 
 That distinction is the whole reason the new step type exists.
 
@@ -317,7 +330,7 @@ That distinction is the whole reason the new step type exists.
 Phase-1 failure handling should be explicit:
 
 - if planning fails, fail the step
-- if structured execution fails, fail the step
+- if structured or code execution fails, fail the step
 - do not silently downgrade to `ai_script`
 - expose enough logs for debugging and later UI surfacing
 
@@ -335,6 +348,7 @@ This keeps boundaries honest during rollout.
    - accepts valid instruction payload
    - rejects unsupported phase-1 scopes/plan types
    - enforces `max_reasoning_steps = 10`
+   - allows `plan_type = code` but rejects code that escapes the page-automation boundary
 
 ### Integration Tests
 
@@ -353,7 +367,6 @@ Expected:
 After phase-1 stabilizes, additive evolution can include:
 
 - additional `input_scope` modes
-- `plan_type = code`
 - hybrid plans
 - multi-page/runtime artifact context
 - richer `instruction_kind`

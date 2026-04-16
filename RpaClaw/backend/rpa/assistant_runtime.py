@@ -926,6 +926,11 @@ async def execute_structured_intent(page, intent: Dict[str, Any]) -> Dict[str, A
     locator = _locator_from_payload(scope, locator_payload)
     if action == "click":
         await locator.click()
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=2000)
+        except Exception:
+            pass
+        await page.wait_for_timeout(500)
     elif action == "extract_text":
         output = await locator.inner_text()
     elif action == "fill":

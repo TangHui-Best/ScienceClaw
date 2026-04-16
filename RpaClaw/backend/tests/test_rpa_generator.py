@@ -13,6 +13,109 @@ PlaywrightGenerator = GENERATOR_MODULE.PlaywrightGenerator
 
 
 class PlaywrightGeneratorTests(unittest.TestCase):
+    def test_generate_script_emits_runtime_helper_for_ai_instruction(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "ai_instruction",
+                "source": "ai",
+                "description": "Sync table A into table B",
+                "prompt": "Fill table B from table A by matching rows on name, then submit",
+                "instruction_kind": "semantic_rule",
+                "input_scope": {"mode": "current_page"},
+                "output_expectation": {"mode": "act"},
+                "execution_hint": {"requires_dom_snapshot": True, "allow_navigation": True, "max_reasoning_steps": 10},
+            }
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertIn("execute_ai_instruction(", script)
+        self.assertIn('"action": "ai_instruction"', script)
+        self.assertIn("Fill table B from table A by matching rows on name, then submit", script)
+
+    def test_generate_script_executes_ai_script_run_function(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "ai_script",
+                "description": "Find repo with max stars and click it",
+                "value": (
+                    "async def run(page):\n"
+                    "    await page.wait_for_timeout(100)\n"
+                    "    return {'success': True, 'output': 'ok'}"
+                ),
+            }
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertIn("async def run(page):", script)
+        self.assertIn("_ai_script_runner = locals().get('run')", script)
+        self.assertIn("_ai_script_result = await _ai_script_runner(current_page, _results)", script)
+        self.assertIn("_ai_script_result = await _ai_script_runner(current_page)", script)
+
+    def test_generate_script_follows_ai_script_returned_navigation_target(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "ai_script",
+                "description": "Find repo with max stars and open it",
+                "value": (
+                    "async def run(page):\n"
+                    "    return {'target_url': '/obra/superpowers'}"
+                ),
+            }
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertIn("def _extract_ai_script_navigation_target(current_url, result):", script)
+        self.assertIn("_ai_script_nav_target = _extract_ai_script_navigation_target(current_page.url, _ai_script_result)", script)
+        self.assertIn("await current_page.goto(_ai_script_nav_target, wait_until='domcontentloaded')", script)
+        self.assertIn("await current_page.wait_for_load_state('domcontentloaded')", script)
+
+    def test_generate_script_does_not_capture_query_selector_handles_into_results(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "ai_script",
+                "description": "Inspect trending repositories",
+                "value": "\n".join([
+                    "articles = await page.query_selector_all('article')",
+                    "repo_link = await page.query_selector('h2 a')",
+                    "star_links = await page.query_selector_all('a[href*=\"/stargazers\"]')",
+                    "title_text = await page.title()",
+                ]),
+            }
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertNotIn('_results["articles"] = articles', script)
+        self.assertNotIn('_results["repo_link"] = repo_link', script)
+        self.assertNotIn('_results["star_links"] = star_links', script)
+        self.assertIn('_results["title_text"] = title_text', script)
+
+    def test_generate_script_does_not_capture_locator_all_handles_into_results(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "ai_script",
+                "description": "Inspect trending repositories via locator API",
+                "value": "\n".join([
+                    "star_elements = await page.locator('a[href*=\"/stargazers\"]').all()",
+                    "_results[\"star_elements\"] = star_elements",
+                    "title_text = await page.title()",
+                ]),
+            }
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertNotIn('_results["star_elements"] = star_elements', script)
+        self.assertIn('_results["title_text"] = title_text', script)
+
     def test_build_locator_nested_role_chains_get_by_role(self):
         generator = PlaywrightGenerator()
         target = json.dumps(
@@ -713,7 +816,7 @@ class PlaywrightGeneratorTests(unittest.TestCase):
         ]
         script = generator.generate_script(steps, is_local=True, test_mode=True)
         self.assertIn("raise StepExecutionError(step_index=0,", script)
-        self.assertIn('await current_page.goto("https://example.com")', script)
+        self.assertIn('await current_page.goto("https://example.com", wait_until="domcontentloaded")', script)
 
     def test_generate_script_test_mode_false_produces_unchanged_output(self):
         generator = PlaywrightGenerator()

@@ -640,20 +640,13 @@ const sendMessage = async () => {
               if (!chatMessages.value[msgIdx].actions) chatMessages.value[msgIdx].actions = [];
               chatMessages.value[msgIdx].actions!.push({ description: data.description || '', code: data.code || '', showCode: false });
             } else if (eventType === 'agent_step_done') {
-              if (data.step) {
-                const s = data.step;
-                steps.value.push({
-                  id: String(steps.value.length),
-                  title: s.description || s.action,
-                  description: s.prompt || s.description || 'AI 操作',
-                  status: 'completed',
-                  source: 'ai',
-                  sensitive: s.sensitive || false,
-                });
-              }
               // Show output if present
               if (data.output) {
                 chatMessages.value[msgIdx].text += `\n✓ 输出：${data.output}`;
+              }
+            } else if (eventType === 'agent_recorded_steps') {
+              if (Array.isArray(data.steps) && data.steps.length > 0) {
+                steps.value = mapServerSteps(data.steps);
               }
             } else if (eventType === 'confirm_required') {
               pendingConfirm.value = data;

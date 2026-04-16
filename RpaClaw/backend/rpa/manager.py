@@ -37,6 +37,10 @@ class RPAStep(BaseModel):
     url: Optional[str] = None
     source: str = "record"  # "record" or "ai"
     prompt: Optional[str] = None  # original user instruction for AI steps
+    instruction_kind: Optional[str] = None
+    input_scope: Dict[str, Any] = Field(default_factory=dict)
+    output_expectation: Dict[str, Any] = Field(default_factory=dict)
+    execution_hint: Dict[str, Any] = Field(default_factory=dict)
     sensitive: bool = False
     tab_id: Optional[str] = None
     source_tab_id: Optional[str] = None
@@ -1150,6 +1154,28 @@ class RPASessionManager:
 
         await self._broadcast_step(session_id, step)
         return step
+
+    async def replace_steps_from(
+        self,
+        session_id: str,
+        start_index: int,
+        steps_data: List[Dict[str, Any]],
+    ) -> List[RPAStep]:
+        if session_id not in self.sessions:
+            raise ValueError(f"Session {session_id} not found")
+
+        session = self.sessions[session_id]
+        safe_start = max(0, min(start_index, len(session.steps)))
+        preserved_steps = list(session.steps[:safe_start])
+        replacement_steps: List[RPAStep] = []
+
+        for step_data in steps_data or []:
+            payload = dict(step_data)
+            payload.setdefault("id", str(uuid.uuid4()))
+            replacement_steps.append(RPAStep(**payload))
+
+        session.steps = preserved_steps + replacement_steps
+        return list(session.steps)
 
     @staticmethod
     def _step_event_ts_ms(step: RPAStep) -> int:

@@ -1,8 +1,33 @@
 import importlib
+import importlib.util
+import threading
 import unittest
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 
 EXECUTOR_MODULE = importlib.import_module("backend.rpa.executor")
+GENERATOR_PATH = Path(__file__).resolve().parents[1] / "rpa" / "generator.py"
+GENERATOR_SPEC = importlib.util.spec_from_file_location("rpa_generator_module_for_executor", GENERATOR_PATH)
+GENERATOR_MODULE = importlib.util.module_from_spec(GENERATOR_SPEC)
+assert GENERATOR_SPEC is not None and GENERATOR_SPEC.loader is not None
+GENERATOR_SPEC.loader.exec_module(GENERATOR_MODULE)
+PlaywrightGenerator = GENERATOR_MODULE.PlaywrightGenerator
+
+SEMANTIC_RULE_STEP = {
+    "action": "ai_instruction",
+    "source": "ai",
+    "description": "Sync table A into table B by matching rows on name",
+    "prompt": "Fill table B from table A by matching rows on name, then submit",
+    "instruction_kind": "semantic_rule",
+    "input_scope": {"mode": "current_page"},
+    "output_expectation": {"mode": "act"},
+    "execution_hint": {
+        "requires_dom_snapshot": True,
+        "allow_navigation": True,
+        "max_reasoning_steps": 10,
+    },
+}
 
 
 class _FakePage:
@@ -129,6 +154,67 @@ async def execute_skill(page, **kwargs):
         self.assertEqual(session_manager.detached, [("session-1", browser.contexts[0])])
         self.assertEqual(page_registry, {})
         self.assertTrue(browser.contexts[0].closed)
+
+    async def test_execute_injects_execute_ai_instruction_symbol(self):
+        browser = _FakeBrowser()
+        script = '''
+async def execute_skill(page, **kwargs):
+    assert execute_ai_instruction is not None
+    return {"ok": True}
+'''
+
+        result = await EXECUTOR_MODULE.ScriptExecutor().execute(browser, script)
+
+        self.assertTrue(result["success"])
+
+    async def test_execute_runs_generated_ai_instruction_script(self):
+        browser = _FakeBrowser()
+        script = PlaywrightGenerator().generate_script([SEMANTIC_RULE_STEP], is_local=True)
+
+        with patch.object(
+            EXECUTOR_MODULE,
+            "execute_ai_instruction",
+            new=AsyncMock(return_value={"success": True, "output": "ok"}),
+        ) as execute_mock:
+            result = await EXECUTOR_MODULE.ScriptExecutor().execute(browser, script)
+
+        self.assertTrue(result["success"])
+        execute_mock.assert_awaited_once()
+        self.assertEqual(execute_mock.await_args.kwargs["step"]["action"], "ai_instruction")
+        self.assertEqual(
+            execute_mock.await_args.kwargs["step"]["prompt"],
+            "Fill table B from table A by matching rows on name, then submit",
+        )
+
+    async def test_execute_generated_ai_instruction_script_surfaces_helper_errors(self):
+        browser = _FakeBrowser()
+        script = PlaywrightGenerator().generate_script([SEMANTIC_RULE_STEP], is_local=True, test_mode=True)
+
+        with patch.object(
+            EXECUTOR_MODULE,
+            "execute_ai_instruction",
+            new=AsyncMock(return_value={"success": False, "error": "AI instruction planning timed out after 25s"}),
+        ):
+            result = await EXECUTOR_MODULE.ScriptExecutor().execute(browser, script)
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["failed_step_index"], 0)
+        self.assertIn("planning timed out", result["error"])
+
+    async def test_execute_sanitizes_non_jsonable_result_data(self):
+        browser = _FakeBrowser()
+        script = """
+import threading
+
+async def execute_skill(page, **kwargs):
+    return {"ok": True, "lock": threading.Lock()}
+"""
+
+        result = await EXECUTOR_MODULE.ScriptExecutor().execute(browser, script)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["data"]["ok"], True)
+        self.assertIsInstance(result["data"]["lock"], str)
 
 
 class StepExecutionErrorTests(unittest.IsolatedAsyncioTestCase):

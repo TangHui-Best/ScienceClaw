@@ -4,10 +4,26 @@ import asyncio
 from typing import Dict, Any, Callable, Optional
 
 from playwright.async_api import Browser
+from backend.rpa.runtime_ai_instruction import execute_ai_instruction
 
 logger = logging.getLogger(__name__)
 
 RPA_PAGE_TIMEOUT_MS = 60000
+
+
+def _sanitize_result_data(value: Any) -> Any:
+    """Best-effort conversion for values that must cross the HTTP boundary."""
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, dict):
+        return {str(key): _sanitize_result_data(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_sanitize_result_data(item) for item in value]
+    try:
+        json.dumps(value, ensure_ascii=False)
+        return value
+    except Exception:
+        return str(value)
 
 
 class ScriptExecutor:
@@ -32,7 +48,9 @@ class ScriptExecutor:
         Playwright coroutines are scheduled on the dedicated Playwright event loop
         to avoid "Future attached to a different loop" on Windows.
         """
-        namespace: Dict[str, Any] = {}
+        namespace: Dict[str, Any] = {
+            "execute_ai_instruction": execute_ai_instruction,
+        }
         exec(compile(script, "<rpa_script>", "exec"), namespace)
 
         if "execute_skill" not in namespace:
@@ -77,14 +95,15 @@ class ScriptExecutor:
                     timeout=timeout,
                 )
                 await page.wait_for_timeout(3000)
+                safe_result = _sanitize_result_data(_result or {})
 
                 if _result:
-                    output = "SKILL_DATA:" + json.dumps(_result, ensure_ascii=False, default=str) + "\nSKILL_SUCCESS"
+                    output = "SKILL_DATA:" + json.dumps(safe_result, ensure_ascii=False, default=str) + "\nSKILL_SUCCESS"
                 else:
                     output = "SKILL_SUCCESS"
                 if on_log:
                     on_log("Execution completed successfully")
-                return {"success": True, "output": output, "data": _result or {}}
+                return {"success": True, "output": output, "data": safe_result}
 
             except asyncio.TimeoutError:
                 output = f"SKILL_ERROR: Script did not complete within {timeout}s"

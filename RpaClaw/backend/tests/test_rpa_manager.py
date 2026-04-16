@@ -1403,5 +1403,28 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(next(tab for tab in tabs if tab["tab_id"] == tab_id)["url"], "https://example.com")
 
 
+class RPAAIInstructionStepModelTests(unittest.TestCase):
+    def test_rpa_step_supports_ai_instruction_fields(self):
+        step = MANAGER_MODULE.RPAStep(
+            id="step-1",
+            action="ai_instruction",
+            source="ai",
+            description="Sync table A into table B",
+            prompt="Fill table B from table A by matching rows on name, then submit",
+            instruction_kind="semantic_rule",
+            input_scope={"mode": "current_page"},
+            output_expectation={"mode": "act"},
+            execution_hint={"requires_dom_snapshot": True, "allow_navigation": True, "max_reasoning_steps": 10},
+            sensitive=False,
+        )
+
+        data = step.model_dump()
+        self.assertEqual(data["action"], "ai_instruction")
+        self.assertEqual(data["instruction_kind"], "semantic_rule")
+        self.assertEqual(data["input_scope"], {"mode": "current_page"})
+        self.assertEqual(data["output_expectation"], {"mode": "act"})
+        self.assertEqual(data["execution_hint"]["max_reasoning_steps"], 10)
+
+
 if __name__ == "__main__":
     unittest.main()
