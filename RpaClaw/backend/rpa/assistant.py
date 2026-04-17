@@ -79,6 +79,12 @@ AI_INSTRUCTION_PLACEHOLDER_HINTS = (
     "act|extract",
     "ascii_snake_case_key_when_output_mode_is_extract",
 )
+
+SEMANTIC_DECISION_ACT_PROMPT_SUFFIX = (
+    "Complete the requested browser action inside this AI instruction. "
+    "Do not stop after only identifying the best match or returning explanatory text. "
+    "If you need to express the selected target in a structured result, use target_url, url, href, path, or repo_path."
+)
 REACT_COMPLEX_CONNECTOR_PATTERNS = (
     "然后",
     "再",
@@ -109,50 +115,9 @@ REACT_COMPLEX_VERB_PATTERNS = (
     "filter",
     "go back",
 )
-DETERMINISTIC_SCRIPT_STEP_PATTERNS = (
-    "最高",
-    "最大",
-    "最多",
-    "最少",
-    "latest",
-    "highest",
-    "largest",
-    "most",
-    "least",
-    "star",
-    "stars",
-    "数量",
-    "排序",
-    "比较",
-    "ranking",
-    "compare",
-    "sort",
-    "filter",
-)
-
-BATCH_ARRAY_EXTRACTION_PATTERNS = (
-    "前10",
-    "前 10",
-    "top 10",
-    "first 10",
-    "strict array",
-    "strictly array",
-    "输出严格为数组",
-    "严格为数组",
-    "数组",
-    "array",
-    "title",
-    "author",
-    "creator",
-    "标题",
-    "创建人",
-)
-
-REACT_SEMANTIC_SUMMARY_PATTERNS = (
-    "总结",
-    "概括",
-    "提炼",
-    "归纳",
+REACT_RUNTIME_SEMANTIC_UNDERSTANDING_PATTERNS = (
+    "当前项目",
+    "项目核心",
     "核心内容",
     "核心信息",
     "主要功能",
@@ -160,12 +125,108 @@ REACT_SEMANTIC_SUMMARY_PATTERNS = (
     "技术栈",
     "用途",
     "目标用户",
-    "summarize",
-    "summary",
-    "overview",
-    "describe",
+    "能力",
+    "限制",
+    "业务含义",
+    "语义",
+    "判断",
+    "是否需要",
+    "current project",
+    "project core",
     "core content",
     "core information",
+    "purpose",
+    "capability",
+    "capabilities",
+    "limitation",
+    "limitations",
+    "business meaning",
+    "semantic",
+    "judgment",
+)
+
+DETERMINISTIC_SUMMARY_CODE_PATTERNS = (
+    "summary statistics",
+    "summary stats",
+    "统计",
+    "汇总统计",
+    "数量统计",
+    "计数",
+    "总数",
+    "counts",
+    "count by",
+    "total rows",
+    "aggregate",
+    "group by",
+)
+
+STRICT_ARRAY_EXTRACTION_PATTERNS = (
+    "strict array",
+    "strictly as an array",
+    "output strictly as an array",
+    "输出严格为数组",
+    "严格为数组",
+    "数组",
+    "array",
+)
+
+RECORD_FIELD_TITLE_PATTERNS = (
+    "title",
+    "标题",
+)
+
+RECORD_FIELD_AUTHOR_PATTERNS = (
+    "author",
+    "creator",
+    "创建人",
+)
+
+RECORD_FIELD_STATUS_PATTERNS = (
+    "status",
+    "state",
+)
+
+SEMANTIC_RELEVANCE_SELECTION_PATTERNS = (
+    "most relevant",
+    "most related",
+    "best match",
+    "best matching",
+    "relevance",
+    "relevant to",
+    "related to",
+    "\u6700\u76f8\u5173",
+    "\u6700\u5339\u914d",
+    "\u76f8\u5173\u5ea6",
+)
+
+SEMANTIC_SELECTION_TARGET_PATTERNS = (
+    "project",
+    "repo",
+    "repository",
+    "item",
+    "result",
+    "link",
+    "\u9879\u76ee",
+    "\u4ed3\u5e93",
+    "\u7ed3\u679c",
+    "\u94fe\u63a5",
+)
+
+GENERIC_CHROME_TEXT_PATTERNS = (
+    "navigation menu",
+    "menu",
+    "sign in",
+    "github",
+)
+
+STABLE_SUBPAGE_HINTS = (
+    ("/pulls", ("pull requests", "pull request", "/pulls", "pr list", "prs")),
+    ("/issues", ("issues", "/issues", "issue list")),
+    ("/actions", ("actions", "/actions")),
+    ("/releases", ("releases", "/releases")),
+    ("/wiki", ("wiki", "/wiki")),
+    ("/discussions", ("discussions", "/discussions")),
+    ("/commits", ("commits", "/commits")),
 )
 
 JS_CODE_GUARD_PATTERNS = (
@@ -173,6 +234,7 @@ JS_CODE_GUARD_PATTERNS = (
     "let ",
     "var ",
     "=>",
+    "page.evaluate",
     "document.queryselector",
     "document.queryselectorall",
     "window.location",
@@ -225,6 +287,36 @@ EXTRACT_ELEMENTS_JS = r"""() => {
     return JSON.stringify(results);
 }"""
 
+STEP_TYPE_CLASSIFICATION_GUIDANCE = """
+- structured step for atomic browser actions
+- ai_script for runtime page data plus deterministic, encodable rules
+- ai_instruction for runtime page data plus semantic/business judgment
+- If the user explicitly requests an AI instruction or says not to expand the rule into fixed script, return ai_instruction for that requested step
+- Do not classify by isolated words alone. For example, "star" or "summary" is only a signal, not a step type decision
+""".strip()
+
+STEP_TYPE_FEW_SHOTS = """
+Mini examples:
+- structured
+  User goal fragment: "Click the Stars tab"
+  Good next step: operation=click with target_hint for the Stars tab
+- ai_script
+  User goal fragment: "Find the project with the most stars and open it"
+  Good next step: code that computes the choice from current page data, then returns target_url/repo_path
+- ai_instruction
+  User goal fragment: "Summarize the current project, focusing on purpose, capabilities, and limitations"
+  Good next step: ai_instruction whose prompt only describes that local semantic summary step
+""".strip()
+
+STRUCTURED_STALL_REFLECTION_MESSAGE = (
+    "Previous step proposal was rejected. "
+    "The current structured-action path did not make reliable progress toward the target content. "
+    "Re-evaluate whether this subtask is better completed as one deterministic ai_script or one ai_instruction, "
+    "instead of more repeated structured actions."
+)
+
+# Legacy compatibility prompt for direct RPAAssistant.chat() callers.
+# The recording route now uses REACT_SYSTEM_PROMPT as the active classification contract.
 SYSTEM_PROMPT = """You are an RPA recording assistant.
 
 Prefer returning a structured JSON action instead of raw Playwright code.
@@ -369,61 +461,129 @@ async def _get_page_elements(page: Page) -> str:
 
 
 def should_use_react_mode(user_message: str, requested_mode: str = "chat") -> bool:
-    mode = (requested_mode or "chat").strip().lower()
-    if mode == "react":
-        return True
-
-    normalized = f" {(user_message or '').strip().lower()} "
-    if not normalized.strip():
-        return False
-
-    if any(pattern in normalized for pattern in REACT_COMPLEX_CONNECTOR_PATTERNS):
-        return True
-
-    matched_verbs = sum(1 for pattern in REACT_COMPLEX_VERB_PATTERNS if pattern in normalized)
-    if matched_verbs >= 2 and ("，" in normalized or "," in normalized):
-        return True
-
-    return False
+    # Chat is now a compatibility entry point for the unified ReAct recorder.
+    return True
 
 
-def _react_step_requires_scripted_logic(
-    thought: str,
-    description: str,
-    structured_intent: Optional[Dict[str, Any]],
-) -> bool:
-    if not structured_intent:
-        return False
-    action = str(structured_intent.get("action") or "").strip().lower()
-    normalized = f"{thought} {description}".strip().lower()
-
-    if action == "click":
-        return any(pattern in normalized for pattern in DETERMINISTIC_SCRIPT_STEP_PATTERNS)
-
-    if action == "extract_text":
-        has_batch_shape = any(pattern in normalized for pattern in BATCH_ARRAY_EXTRACTION_PATTERNS)
-        has_collection_signal = any(pattern in normalized for pattern in ("list", "items", "pull request", "pr", "rows", "列表", "前", "first"))
-        return has_batch_shape and has_collection_signal
-
-    return False
-
-
-def _react_step_requires_ai_instruction(
-    thought: str,
-    description: str,
-    structured_intent: Optional[Dict[str, Any]],
+def _react_step_violates_explicit_ai_instruction_request(
+    goal: str,
     ai_instruction_step: Optional[Dict[str, Any]],
-    code: str,
+    structured_intent: Optional[Dict[str, Any]] = None,
 ) -> bool:
     if ai_instruction_step:
         return False
-    if structured_intent:
+    if not RPAAssistant._should_force_ai_instruction(goal):
         return False
-    if not code.strip():
+    if _is_structured_runtime_ai_setup_step(structured_intent):
+        return False
+    return True
+
+
+def _is_structured_runtime_ai_setup_step(structured_intent: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(structured_intent, dict):
         return False
 
-    normalized = f"{thought} {description}".strip().lower()
-    return any(pattern in normalized for pattern in REACT_SEMANTIC_SUMMARY_PATTERNS)
+    action = str(structured_intent.get("action") or "").strip().lower()
+    if action == "navigate":
+        value = str(structured_intent.get("value") or "").strip()
+        return value.startswith("http://") or value.startswith("https://")
+
+    if action not in {"click", "fill", "press", "extract_text", "select"}:
+        return False
+
+    if structured_intent.get("collection_hint") or structured_intent.get("ordinal"):
+        return False
+
+    target_hint = structured_intent.get("target_hint")
+    if not isinstance(target_hint, dict):
+        return False
+
+    hint_name = " ".join(
+        str(target_hint.get(key) or "").strip().lower()
+        for key in ("name", "text", "placeholder", "label", "title")
+    ).strip()
+    if not hint_name:
+        return False
+
+    generic_runtime_terms = (
+        "project",
+        "repo",
+        "repository",
+        "item",
+        "result",
+        "项目",
+        "仓库",
+        "结果",
+        "列表项",
+    )
+    return not any(term in hint_name for term in generic_runtime_terms)
+
+
+def _structured_step_requires_ai_script(
+    goal: str,
+    thought: str,
+    description: str,
+    structured_intent: Optional[Dict[str, Any]],
+) -> bool:
+    if not isinstance(structured_intent, dict):
+        return False
+
+    action = str(structured_intent.get("action") or "").strip().lower()
+    if action not in {"click", "navigate"}:
+        return False
+
+    payload = " ".join(
+        part for part in (
+            goal or "",
+            thought or "",
+            description or "",
+            json.dumps(structured_intent, ensure_ascii=False),
+        )
+        if part
+    ).lower()
+
+    deterministic_selection_patterns = (
+        "highest",
+        "largest",
+        "most",
+        "latest",
+        "oldest",
+        "top ",
+        "maximum",
+        "minimum",
+        "最高",
+        "最多",
+        "最大",
+        "最新",
+        "最旧",
+        "第一",
+    )
+    selection_target_patterns = (
+        "open",
+        "click",
+        "repo",
+        "repository",
+        "project",
+        "item",
+        "result",
+        "link",
+        "打开",
+        "点击",
+        "项目",
+        "仓库",
+        "结果",
+        "链接",
+        "star",
+        "stars",
+    )
+
+    if not any(pattern in payload for pattern in deterministic_selection_patterns):
+        return False
+    if not any(pattern in payload for pattern in selection_target_patterns):
+        return False
+    if _is_structured_runtime_ai_setup_step(structured_intent):
+        return False
+    return True
 
 
 def _react_step_leaks_summary_helper_to_outer_trace(
@@ -437,7 +597,9 @@ def _react_step_leaks_summary_helper_to_outer_trace(
         return False
 
     normalized = f"{thought} {description}".strip().lower()
-    if not any(pattern in normalized for pattern in REACT_SEMANTIC_SUMMARY_PATTERNS):
+    if any(pattern in normalized for pattern in DETERMINISTIC_SUMMARY_CODE_PATTERNS):
+        return False
+    if not any(pattern in normalized for pattern in REACT_RUNTIME_SEMANTIC_UNDERSTANDING_PATTERNS):
         return False
 
     payload_parts: List[str] = [normalized]
@@ -492,7 +654,13 @@ def _is_semantic_summary_step(step: Dict[str, Any]) -> bool:
     blob = _step_text_blob(step)
     if not blob:
         return False
-    return any(pattern in blob for pattern in REACT_SEMANTIC_SUMMARY_PATTERNS)
+    if any(pattern in blob for pattern in DETERMINISTIC_SUMMARY_CODE_PATTERNS):
+        return False
+    action = str(step.get("action") or "").strip().lower()
+    instruction_kind = str(step.get("instruction_kind") or "").strip().lower()
+    if action == "ai_instruction" and instruction_kind in {"semantic_extract", "semantic_decision"}:
+        return True
+    return any(pattern in blob for pattern in REACT_RUNTIME_SEMANTIC_UNDERSTANDING_PATTERNS)
 
 
 def _is_summary_helper_step(step: Dict[str, Any]) -> bool:
@@ -510,6 +678,15 @@ def _is_summary_helper_step(step: Dict[str, Any]) -> bool:
     ):
         return True
     return False
+
+
+def _is_runtime_act_ai_instruction(step: Dict[str, Any]) -> bool:
+    if not isinstance(step, dict):
+        return False
+    if str(step.get("action") or "").strip().lower() != "ai_instruction":
+        return False
+    output_expectation = step.get("output_expectation") or {}
+    return str(output_expectation.get("mode") or "").strip().lower() == "act"
 
 
 def _step_signature(step: Dict[str, Any]) -> str:
@@ -544,6 +721,15 @@ def _distill_react_recorded_steps(goal: str, trace_steps: List[Dict[str, Any]]) 
         if last_summary_index != -1 and idx < last_summary_index and _is_summary_helper_step(step):
             continue
         if last_summary_index != -1 and idx != last_summary_index and _is_semantic_summary_step(step):
+            continue
+
+        if distilled and _is_superseded_stable_subpage_helper(distilled[-1], step):
+            distilled[-1] = step
+            continue
+        if distilled and _is_superseded_extract_result_step(distilled[-1], step):
+            distilled[-1] = step
+            continue
+        if distilled and _is_superseded_ai_instruction_followup_navigation(distilled[-1], step):
             continue
 
         signature = _step_signature(step)
@@ -585,12 +771,561 @@ def _extract_ai_script_navigation_target(current_url: str, raw_output: Any) -> s
     return ""
 
 
+def _stable_subpage_suffix_from_step(step: Dict[str, Any]) -> str:
+    if not isinstance(step, dict):
+        return ""
+
+    for candidate in (step.get("value"), step.get("url")):
+        if isinstance(candidate, str):
+            normalized = candidate.strip().lower()
+            for suffix, _signals in STABLE_SUBPAGE_HINTS:
+                if normalized.endswith(suffix):
+                    return suffix
+
+    text_parts: List[str] = []
+    for key in ("description", "prompt"):
+        value = step.get(key)
+        if isinstance(value, str):
+            text_parts.append(value.lower())
+    target_hint = step.get("target_hint")
+    if isinstance(target_hint, dict):
+        for key in ("name", "text", "role"):
+            value = target_hint.get(key)
+            if isinstance(value, str):
+                text_parts.append(value.lower())
+
+    blob = " ".join(part for part in text_parts if part)
+    for suffix, signals in STABLE_SUBPAGE_HINTS:
+        if any(signal in blob for signal in signals):
+            return suffix
+    return ""
+
+
+def _is_superseded_stable_subpage_helper(previous_step: Dict[str, Any], current_step: Dict[str, Any]) -> bool:
+    previous_action = str(previous_step.get("action") or "").strip().lower()
+    current_action = str(current_step.get("action") or "").strip().lower()
+    if current_action != "navigate":
+        return False
+    if previous_action not in {"click", "navigate"}:
+        return False
+
+    previous_suffix = _stable_subpage_suffix_from_step(previous_step)
+    current_suffix = _stable_subpage_suffix_from_step(current_step)
+    if not previous_suffix or not current_suffix:
+        return False
+    return previous_suffix == current_suffix
+
+
+def _normalize_recorded_step_after_success(step: Dict[str, Any], current_url: str) -> Dict[str, Any]:
+    if not isinstance(step, dict):
+        return step
+
+    action = str(step.get("action") or "").strip().lower()
+    normalized_url = str(current_url or "").strip()
+    if action != "click" or not normalized_url:
+        return step
+
+    stable_suffix = _stable_subpage_suffix_from_step(step)
+    if not stable_suffix or not normalized_url.lower().endswith(stable_suffix):
+        return step
+
+    normalized_step = dict(step)
+    normalized_step["action"] = "navigate"
+    normalized_step["url"] = normalized_url
+    normalized_step["value"] = normalized_url
+    normalized_step["target"] = ""
+    normalized_step["frame_path"] = []
+    normalized_step["locator_candidates"] = []
+    normalized_step["collection_hint"] = {}
+    normalized_step["item_hint"] = {}
+    normalized_step["ordinal"] = None
+    normalized_diagnostics = dict(normalized_step.get("assistant_diagnostics") or {})
+    normalized_diagnostics["selected_locator_kind"] = "navigate"
+    normalized_step["assistant_diagnostics"] = normalized_diagnostics
+    return normalized_step
+
+
+def _extract_result_key(step: Dict[str, Any]) -> str:
+    if not isinstance(step, dict):
+        return ""
+    action = str(step.get("action") or "").strip().lower()
+    if action != "extract_text":
+        return ""
+    result_key = step.get("result_key")
+    if isinstance(result_key, str) and result_key.strip():
+        return result_key.strip().lower()
+    return ""
+
+
+def _is_superseded_extract_result_step(previous_step: Dict[str, Any], current_step: Dict[str, Any]) -> bool:
+    previous_result_key = _extract_result_key(previous_step)
+    current_result_key = _extract_result_key(current_step)
+    return bool(previous_result_key and previous_result_key == current_result_key)
+
+
+def _is_superseded_ai_instruction_followup_navigation(previous_step: Dict[str, Any], current_step: Dict[str, Any]) -> bool:
+    if not _is_runtime_act_ai_instruction(previous_step):
+        return False
+    current_action = str(current_step.get("action") or "").strip().lower()
+    return current_action == "navigate"
+
+
+def _extract_record_list_candidate(raw_output: Any) -> Optional[List[Any]]:
+    if isinstance(raw_output, list):
+        return raw_output
+    if isinstance(raw_output, dict):
+        prioritized_keys = ("pr_list", "items", "rows", "results", "data", "output")
+        for key in prioritized_keys:
+            value = raw_output.get(key)
+            if isinstance(value, list):
+                return value
+        for value in raw_output.values():
+            if isinstance(value, list):
+                return value
+    return None
+
+
+def _looks_like_record_array_request(*values: Any) -> bool:
+    normalized = " ".join(str(value or "") for value in values).strip().lower()
+    if not normalized:
+        return False
+    if any(pattern in normalized for pattern in STRICT_ARRAY_EXTRACTION_PATTERNS):
+        return True
+    return (
+        any(pattern in normalized for pattern in ("top", "first", "前", "pull request", "pull requests", "pr", "issue", "list"))
+        and any(pattern in normalized for pattern in RECORD_FIELD_TITLE_PATTERNS)
+        and any(pattern in normalized for pattern in RECORD_FIELD_AUTHOR_PATTERNS)
+    )
+
+
+def _looks_like_single_value_field_request(*values: Any) -> bool:
+    normalized = " ".join(str(value or "") for value in values).strip().lower()
+    if not normalized or _looks_like_record_array_request(*values):
+        return False
+    field_patterns = (
+        "title",
+        "name",
+        "headline",
+        "subject",
+        "summary",
+        "description",
+        "caption",
+        "heading",
+        "header",
+    )
+    return any(pattern in normalized for pattern in field_patterns)
+
+
+def _requires_runtime_semantic_selection(*values: Any) -> bool:
+    normalized = " ".join(str(value or "") for value in values).strip().lower()
+    if not normalized:
+        return False
+    return (
+        any(pattern in normalized for pattern in SEMANTIC_RELEVANCE_SELECTION_PATTERNS)
+        and any(pattern in normalized for pattern in SEMANTIC_SELECTION_TARGET_PATTERNS)
+    )
+
+
+def _infer_ai_script_output_shape(*values: Any) -> str:
+    if _looks_like_record_array_request(*values):
+        return "record_array"
+    return "unspecified"
+
+
+def _infer_ai_script_record_fields(*values: Any) -> List[str]:
+    normalized = " ".join(str(value or "") for value in values).strip().lower()
+    fields: List[str] = []
+    if any(pattern in normalized for pattern in RECORD_FIELD_TITLE_PATTERNS):
+        fields.append("title")
+    if any(pattern in normalized for pattern in RECORD_FIELD_AUTHOR_PATTERNS):
+        fields.append("author")
+    if any(pattern in normalized for pattern in RECORD_FIELD_STATUS_PATTERNS):
+        fields.append("status")
+    return fields
+
+
+def _infer_ai_script_item_limit(ordinal: Any, *values: Any) -> Optional[int]:
+    if isinstance(ordinal, int):
+        return ordinal if ordinal > 0 else None
+    ordinal_text = str(ordinal or "").strip().lower()
+    if ordinal_text.isdigit():
+        numeric = int(ordinal_text)
+        return numeric if numeric > 0 else None
+
+    normalized = " ".join(str(value or "") for value in values).strip().lower()
+    for pattern in (
+        r"\btop\s+(\d+)\b",
+        r"\bfirst\s+(\d+)\b",
+        r"\b(\d+)\s+(?:pull requests|pull request|prs|issues|items|rows|records)\b",
+    ):
+        match = re.search(pattern, normalized)
+        if not match:
+            continue
+        try:
+            numeric = int(match.group(1))
+        except Exception:
+            continue
+        if numeric > 0:
+            return numeric
+
+    if any(token in normalized for token in ("first item", "latest issue", "latest pr")):
+        return 1
+    return None
+
+
+def _infer_ai_script_selection_scope(*values: Any) -> str:
+    normalized = " ".join(str(value or "") for value in values).strip().lower()
+    if not normalized:
+        return "current_view"
+    if any(
+        pattern in normalized
+        for pattern in (
+            "regardless of status",
+            "any state",
+            "all states",
+            "open and closed",
+            "whether open or closed",
+        )
+    ):
+        return "all_states"
+    return "current_view"
+
+
+def _infer_ai_script_stable_subpage_hint(*values: Any) -> str:
+    normalized = " ".join(str(value or "") for value in values).strip().lower()
+    if not normalized:
+        return ""
+    for suffix, signals in STABLE_SUBPAGE_HINTS:
+        if any(signal in normalized for signal in signals):
+            return suffix
+    return ""
+
+
+def _infer_ai_script_entity_hint(stable_subpage_hint: str, *values: Any) -> str:
+    if stable_subpage_hint == "/pulls":
+        return "pull_requests"
+    if stable_subpage_hint == "/issues":
+        return "issues"
+    normalized = " ".join(str(value or "") for value in values).strip().lower()
+    if any(token in normalized for token in ("pull requests", "pull request", "prs", " pr ")):
+        return "pull_requests"
+    if any(token in normalized for token in ("issues", "issue list", " issue ")):
+        return "issues"
+    return ""
+
+
+def _normalize_optional_positive_int(value: Any) -> Optional[int]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    text = str(value or "").strip()
+    if text.isdigit():
+        numeric = int(text)
+        return numeric if numeric > 0 else None
+    return None
+
+
+def _build_ai_script_output_contract(
+    output_shape: str,
+    record_fields: List[str],
+    item_limit: Optional[int],
+    min_items: Optional[int],
+) -> Dict[str, Any]:
+    contract_type = "array" if output_shape == "record_array" else "unspecified"
+    return {
+        "type": contract_type,
+        "required_fields": list(record_fields or []),
+        "max_items": item_limit,
+        "min_items": min_items,
+    }
+
+
+def _build_ai_script_brief(
+    description: str,
+    value: Any,
+    item_limit: Optional[int],
+    selection_scope: str,
+) -> str:
+    parts = [str(description or "").strip() or "Execute the current ai_script subtask."]
+    value_text = str(value or "").strip()
+    if value_text and value_text not in parts[0]:
+        parts.append(f"Additional instruction: {value_text}")
+    if item_limit:
+        parts.append(
+            f"Interpret the requested count as an upper bound: collect at most {item_limit} item(s), "
+            "not a required count. If fewer matching records exist in the correct scope, return the records that exist."
+        )
+    if selection_scope == "all_states":
+        parts.append(
+            "Interpret all states/all statuses as the data-source scope. This is not a fill-to-quota strategy; "
+            "do not merge unrelated views merely to reach the maximum item count."
+        )
+    return " ".join(part for part in parts if part).strip()
+
+
+def _is_valid_record_title(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = value.strip()
+    if not normalized:
+        return False
+    if re.fullmatch(r"\d+(\s+comments?)?", normalized.lower()):
+        return False
+    return True
+
+
+def _is_valid_record_author(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = value.strip().lower()
+    return bool(normalized and normalized != "unknown")
+
+
+def _ai_script_quality_issue(goal: str, description: str, raw_output: Any) -> str:
+    normalized = str(description or "").strip().lower()
+    expects_record_array = _looks_like_record_array_request(description)
+    records = _extract_record_list_candidate(raw_output)
+    if not expects_record_array and records is not None:
+        expects_record_array = True
+    if not expects_record_array:
+        return ""
+
+    if records is None:
+        return "AI script did not return the requested record array."
+    if not records:
+        return "AI script returned an empty record array even though the target list should be visible."
+
+    requires_title = any(pattern in normalized for pattern in RECORD_FIELD_TITLE_PATTERNS) or any(
+        isinstance(item, dict) and "title" in item for item in records
+    )
+    requires_author = any(pattern in normalized for pattern in RECORD_FIELD_AUTHOR_PATTERNS) or any(
+        isinstance(item, dict) and ("author" in item or "creator" in item) for item in records
+    )
+    if not (requires_title or requires_author):
+        return ""
+
+    valid_items = 0
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+        title = item.get("title")
+        author = item.get("author")
+        if author is None:
+            author = item.get("creator")
+
+        title_ok = _is_valid_record_title(title) if requires_title else True
+        author_ok = _is_valid_record_author(author) if requires_author else True
+        if title_ok and author_ok:
+            valid_items += 1
+
+    if valid_items * 5 < len(records) * 4:
+        return "AI script returned a low-quality record array with missing or misaligned title/author fields."
+    return ""
+
+
+def _structured_result_quality_issue(intent: Dict[str, Any], result: Dict[str, Any]) -> str:
+    action = str(intent.get("action") or "").strip().lower()
+    if action != "extract_text":
+        return ""
+
+    description = intent.get("description", "")
+    prompt = intent.get("prompt", "")
+    result_key = intent.get("result_key", "")
+    output = str(result.get("output", "") or "").strip()
+    expects_record_array = _looks_like_record_array_request(description, prompt, result_key)
+    expects_single_value_field = _looks_like_single_value_field_request(description, prompt, result_key)
+    if not expects_record_array and not expects_single_value_field:
+        return ""
+    if not output:
+        if expects_record_array:
+            return "Structured extract_text returned empty output for a batch array extraction task."
+        return "Structured extract_text returned empty output for a required field extraction task."
+    if output.lower() in GENERIC_CHROME_TEXT_PATTERNS:
+        if expects_record_array:
+            return "Structured extract_text captured generic page chrome instead of the requested batch array; return ai_script instead."
+        return "Structured extract_text captured generic page chrome instead of the requested field value; refine the target or return a different step."
+    if expects_record_array:
+        return "Structured extract_text cannot satisfy this batch array extraction task; return ai_script instead."
+    return ""
+
+
+def _step_completion_fact(step: Dict[str, Any], current_url: str) -> str:
+    action = str(step.get("action") or "").strip().lower() or "step"
+    description = str(step.get("description") or action).strip()
+    fact = f"- {action}: {description}"
+    if current_url:
+        fact += f" | current_page_url={current_url}"
+
+    result_key = step.get("result_key")
+    if isinstance(result_key, str) and result_key.strip():
+        fact += f" | result_key={result_key.strip()}"
+
+    return fact
+
+
+def _safe_parse_json_output(value: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        return value
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip()
+    if not normalized:
+        return value
+    if not normalized.startswith(("{", "[")):
+        return value
+    try:
+        return json.loads(normalized)
+    except Exception:
+        return value
+
+
+def _summarize_execution_output(output: Any) -> Dict[str, Any]:
+    parsed = _safe_parse_json_output(output)
+    if isinstance(parsed, list):
+        fields: List[str] = []
+        for item in parsed:
+            if isinstance(item, dict):
+                fields = sorted(str(key) for key in item.keys())
+                break
+        return {
+            "output_type": "array",
+            "array_length": len(parsed),
+            "fields": fields,
+            "output_preview": parsed[:3],
+        }
+    if isinstance(parsed, dict):
+        return {
+            "output_type": "object",
+            "fields": sorted(str(key) for key in parsed.keys()),
+            "output_preview": parsed,
+        }
+    text = str(parsed if parsed is not None else "")
+    return {
+        "output_type": "text",
+        "output_preview": text[:800],
+    }
+
+
+def _build_execution_observation(step: Dict[str, Any], output: Any, current_url: str) -> str:
+    payload: Dict[str, Any] = {
+        "step_status": "success",
+        "step_action": step.get("action"),
+        "description": step.get("description"),
+        "result_key": step.get("result_key"),
+        "current_page_url": current_url,
+    }
+    payload.update(_summarize_execution_output(output))
+    return "Latest execution observation:\n" + json.dumps(payload, ensure_ascii=False, default=str)
+
+
+def _candidate_contract_kind(candidate: Dict[str, Any]) -> str:
+    if candidate.get("ai_instruction_step"):
+        return "ai_instruction"
+    if candidate.get("structured_intent"):
+        return "structured"
+    if candidate.get("ai_script_plan") or str(candidate.get("code") or "").strip():
+        return "ai_script"
+    return "unknown"
+
+
+def _candidate_contract_result_key(candidate: Dict[str, Any]) -> Optional[str]:
+    if not isinstance(candidate, dict):
+        return None
+    for section_key in ("ai_script_plan", "ai_instruction_step", "structured_intent"):
+        section = candidate.get(section_key)
+        if not isinstance(section, dict):
+            continue
+        result_key = section.get("result_key")
+        if isinstance(result_key, str) and result_key.strip():
+            return result_key.strip()
+    parsed = candidate.get("parsed")
+    if isinstance(parsed, dict):
+        result_key = parsed.get("result_key")
+        if isinstance(result_key, str) and result_key.strip():
+            return result_key.strip()
+    return None
+
+
+def _restore_candidate_result_key(candidate: Dict[str, Any], result_key: Optional[str]) -> Dict[str, Any]:
+    if not result_key:
+        return candidate
+    restored = dict(candidate)
+    for section_key in ("ai_script_plan", "ai_instruction_step", "structured_intent"):
+        section = restored.get(section_key)
+        if isinstance(section, dict):
+            restored[section_key] = dict(section)
+            restored[section_key]["result_key"] = result_key
+    parsed = dict(restored.get("parsed") or {})
+    parsed["result_key"] = result_key
+    restored["parsed"] = parsed
+    if restored.get("ai_script_plan"):
+        restored["action_payload"] = json.dumps(restored["ai_script_plan"], ensure_ascii=False, default=str)
+    elif restored.get("ai_instruction_step"):
+        restored["action_payload"] = json.dumps(restored["ai_instruction_step"], ensure_ascii=False, default=str)
+    elif restored.get("structured_intent"):
+        restored["action_payload"] = json.dumps(restored["structured_intent"], ensure_ascii=False, default=str)
+    return restored
+
+
+def _compact_react_history_after_success(
+    history_prefix: List[Dict[str, str]],
+    goal_message: str,
+    successful_trace_steps: List[Dict[str, Any]],
+    current_url: str,
+    latest_execution_observation: str = "",
+) -> List[Dict[str, str]]:
+    if not successful_trace_steps:
+        return history_prefix + [{"role": "user", "content": goal_message}]
+
+    recent_facts = [
+        _step_completion_fact(step, current_url if index == len(successful_trace_steps) - 1 else "")
+        for index, step in enumerate(successful_trace_steps[-6:])
+    ]
+    summary = (
+        "Completed subtask facts (already finished; do not revisit or roll back to them unless a later execution "
+        "explicitly fails and proves that state is wrong):\n"
+        + "\n".join(recent_facts)
+        + "\nContinue only from the current page and the remaining unfinished subtask."
+    )
+    return history_prefix + [
+        {"role": "user", "content": goal_message},
+        {"role": "user", "content": summary},
+        *([{"role": "user", "content": latest_execution_observation}] if latest_execution_observation else []),
+    ]
+
+
+async def _capture_page_observation(page: Page) -> Dict[str, Any]:
+    title = ""
+    try:
+        title = await page.title()
+    except Exception:
+        title = ""
+    return {
+        "url": getattr(page, "url", "") or "",
+        "title": title or "",
+    }
+
+
+def _has_observable_page_change(before: Dict[str, Any], after: Dict[str, Any]) -> bool:
+    return (before.get("url") != after.get("url")) or (before.get("title") != after.get("title"))
+
+
 def _looks_like_javascript_code(code: str) -> bool:
     normalized = (code or "").strip().lower()
     if not normalized:
         return False
     if normalized.startswith("async def run(") or normalized.startswith("def run("):
-        return False
+        return any(
+            pattern in normalized
+            for pattern in (
+                "page.evaluate",
+                "document.queryselector",
+                "document.queryselectorall",
+                "window.location",
+                "=>",
+            )
+        )
     return any(pattern in normalized for pattern in JS_CODE_GUARD_PATTERNS)
 
 
@@ -752,14 +1487,46 @@ def _snapshot_frame_lines(snapshot: Dict[str, Any]) -> List[str]:
     return lines
 
 
+def _structured_intent_signature(intent: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(intent, dict):
+        return ""
+
+    signature = {
+        "action": intent.get("action"),
+        "target_hint": intent.get("target_hint"),
+        "collection_hint": intent.get("collection_hint"),
+        "ordinal": intent.get("ordinal"),
+        "value": intent.get("value"),
+        "result_key": intent.get("result_key"),
+    }
+    compact_signature = {key: value for key, value in signature.items() if value not in (None, "", {}, [])}
+    if not compact_signature:
+        return ""
+    return json.dumps(compact_signature, ensure_ascii=False, sort_keys=True)
+
+
+def _should_reflect_on_stalled_structured_path(
+    structured_intent: Optional[Dict[str, Any]],
+    last_structured_signature: str,
+    stall_score: int,
+) -> bool:
+    current_signature = _structured_intent_signature(structured_intent)
+    if not current_signature:
+        return False
+    if last_structured_signature and current_signature == last_structured_signature:
+        return True
+    return stall_score >= 2
+
+
 REACT_SYSTEM_PROMPT = """You are an RPA automation agent.
 
 You receive a goal and must iteratively observe the current page, decide the next small step, execute it, and continue until the goal is complete.
 
-The final recorded result must be a sequence of existing RPA step types:
-- structured step for atomic browser actions
-- ai_script for deterministic scripted logic
-- ai_instruction only when a single step truly requires runtime semantic understanding
+The final recorded result must follow this step type classification contract:
+""" + STEP_TYPE_CLASSIFICATION_GUIDANCE + """
+
+Use these examples as the default interpretation pattern:
+""" + STEP_TYPE_FEW_SHOTS + """
 
 Do not collapse the whole goal into one giant ai_instruction. Break complex goals into multiple small executable steps.
 
@@ -769,6 +1536,7 @@ Preferred format:
 {
   "thought": "brief reasoning about the current page and next step",
   "action": "execute|done|abort",
+  "step_type": "structured|ai_script|ai_instruction",
   "operation": "navigate|click|fill|extract_text|press",
   "description": "short action summary",
   "result_key": "short_ascii_snake_case_key_for_extracted_value",
@@ -781,7 +1549,6 @@ Preferred format:
   },
   "ordinal": "first|last|1|2|3",
   "value": "text to fill or key to press when relevant",
-  "code": "async def run(page): ... when deterministic scripted logic is needed",
   "ai_instruction": {
     "description": "short semantic step summary",
     "prompt": "the rule for this one step only",
@@ -802,9 +1569,13 @@ Preferred format:
 Rules:
 1. Each turn should plan only the next small step, not the entire goal.
 2. Prefer structured atomic actions with operation/target_hint/collection_hint over raw Playwright code.
-3. Use ai_script code only for deterministic scripted logic such as ranking, sorting, numeric comparison, fixed filtering, or looping over stable page structures.
-4. Use ai_instruction only for a single step whose correctness depends on runtime semantic understanding of the current page or business meaning.
+3. For runtime page data plus deterministic, encodable rules such as ranking, sorting, numeric comparison, fixed filtering, or looping over stable page structures, set step_type to ai_script.
+3a. For deterministic batch extraction tasks such as collecting top N items, returning a strict array, or gathering repeated title/author/status fields, prefer one ai_script over repeated structured clicks.
+3b. When step_type is ai_script, describe the subtask using description/result_key/target_hint/collection_hint/ordinal/value. Do not return Python code here; a dedicated ai_script generator will produce the code.
+3c. If a stable subpage is already implied by the goal or current repo context, such as /issues or /pulls, express that target in the ai_script planning fields instead of navigating to the parent page and repeatedly clicking tabs.
+4. Use ai_instruction for runtime page data plus semantic/business judgment whose correctness depends on understanding current-page meaning.
 5. For summary/explanation/judgment tasks, the ai_instruction prompt should describe only that local semantic step, not the entire original goal.
+5a. Classify by the rule above, not by isolated words. For example, "star" or "summary" alone is only a signal, not a step type decision.
 6. Use collection semantics for first, last, and nth requests. Do not hard-code dynamic titles or href values.
 7. For opening a website or jumping to a known URL, use operation=navigate with the URL in value. Do not refer to the browser address bar as a page textbox.
 8. The backend resolves iframe context automatically from the snapshot. Do not invent iframe selectors unless the user explicitly names a frame.
@@ -814,10 +1585,78 @@ Rules:
 12. Do not mark the task done just because the data is visible on the page.
 13. Execute the extraction step first and return the extracted value.
 14. For example, if the user asks to get or read a title, first run extract_text on the target element, set result_key to something like latest_issue_title, then summarize the extracted value in description.
-15. For deterministic "find the best item and open it" steps, prefer ai_script that returns the selected target URL/path (or a dict containing target_url/repo_path) after computing the choice. Do not hard-code that chosen item into later summary prompts.
+15. For deterministic "find the best item and open it" steps, prefer step_type=ai_script and describe that the dedicated ai_script should return the selected target URL/path (or a dict containing target_url/repo_path) after computing the choice. Do not hard-code that chosen item into later summary prompts.
 16. When a summary step follows navigation, summarize the current page/repository generically. Do not bake a specific repo name or URL into the ai_instruction prompt.
-17. The code field must contain Python async Playwright code only. Never return JavaScript, browser-page scripts, or page.evaluate-style code in the code field.
 """
+
+STEP_LOCAL_REPAIR_SYSTEM_PROMPT = """You are repairing exactly one failed RPA step.
+
+You receive:
+- the current page snapshot
+- the original user goal
+- the previously proposed step
+- the execution or quality failure reason
+
+Return exactly one JSON object, not wrapped in markdown.
+
+Rules:
+1. Repair only the current subtask. Do not restart the whole task or revisit earlier committed steps.
+2. Keep the scope narrow and return one next step only.
+3. Preserve the failed step kind unless the runtime explicitly says this step is allowed to change kind.
+4. Preserve result_key, script_brief, output_contract, and other task-contract fields exactly when present.
+5. If the previous structured step failed because the target shape was wrong, you may upgrade it only when the current failed step contract explicitly permits that upgrade.
+6. If the previous ai_script failed, return one corrected ai_script step. Do not fall back to exploratory repeated clicks.
+7. Do not repeat the same broken selector or the same broken DOM-guessing strategy.
+8. Prefer stable navigation targets such as direct URLs or stable subpages over dynamic tab labels.
+9. The code field must contain valid Python async Playwright code only.
+""".strip()
+
+AI_SCRIPT_GENERATION_SYSTEM_PROMPT = """You are a dedicated ai_script generator.
+
+The planner has already decided that the current subtask must be implemented as exactly one ai_script step.
+
+Return exactly one JSON object, not wrapped in markdown:
+{
+  "thought": "brief note",
+  "action": "execute",
+  "description": "short ai_script summary",
+  "result_key": "optional_ascii_snake_case_key",
+  "code": "async def run(page): ..."
+}
+
+Rules:
+1. Generate only one ai_script step. Do not return structured actions or ai_instruction.
+2. Use script_brief as the source of task semantics. Use output_contract only as the output shape contract.
+3. Use the provided page snapshot to pick stable page structures. Prefer stable collections, containers, and direct target URLs over brittle DOM trivia.
+4. Do not use page.evaluate or browser-side JavaScript. Use Python Playwright locators, query_selector/query_selector_all, and element handles instead.
+5. The code field must contain valid Python async Playwright code only.
+6. When the task requests a strict array or repeated records, return one deterministic list payload from code instead of multiple partial values.
+7. If a stable navigation target or stable subpage hint is implied, have code return the selected target URL/path rather than hard-coding a click on dynamic tab labels.
+8. Treat output_contract.max_items as an upper bound, not a required count. If fewer records exist in the correct scope, return the records that exist unless output_contract.min_items is explicitly set.
+9. Treat scope phrases like all states/all statuses as data-source scope constraints, not as permission to merge unrelated views just to fill max_items.
+""".strip()
+
+AI_SCRIPT_REPAIR_SYSTEM_PROMPT = """You are repairing exactly one failed ai_script step.
+
+Return exactly one JSON object, not wrapped in markdown:
+{
+  "thought": "brief note",
+  "action": "execute",
+  "description": "short ai_script summary",
+  "result_key": "optional_ascii_snake_case_key",
+  "code": "async def run(page): ..."
+}
+
+Rules:
+1. Repair only the current ai_script subtask. Do not restart the whole task.
+2. Preserve script_brief and output_contract exactly.
+3. Do not use page.evaluate or browser-side JavaScript. Use Python Playwright locators, query_selector/query_selector_all, and element handles instead.
+4. Do not repeat the same failing DOM-guessing pattern.
+5. Prefer more stable collection/container scoping, stable href patterns, or direct target URLs.
+6. Keep the result shape aligned with the requested fields and output format.
+7. The code field must contain valid Python async Playwright code only.
+8. Treat output_contract.max_items as an upper bound, not a required count, unless output_contract.min_items is explicitly set.
+""".strip()
 
 
 
@@ -843,6 +1682,677 @@ class RPAReActAgent:
         if self._confirm_event:
             self._confirm_event.set()
 
+    @staticmethod
+    def _candidate_retry_budget(
+        structured_intent: Optional[Dict[str, Any]],
+        ai_instruction_step: Optional[Dict[str, Any]],
+        code: str,
+    ) -> int:
+        if ai_instruction_step:
+            return 1
+        if structured_intent:
+            return 1
+        if str(code or "").strip():
+            return 1
+        return 0
+
+    @staticmethod
+    def _candidate_kind(
+        ai_script_plan: Optional[Dict[str, Any]],
+        structured_intent: Optional[Dict[str, Any]],
+        ai_instruction_step: Optional[Dict[str, Any]],
+        code: str,
+    ) -> str:
+        if ai_instruction_step:
+            return "ai_instruction"
+        if structured_intent:
+            return "structured"
+        if ai_script_plan:
+            return "ai_script"
+        if str(code or "").strip():
+            return "ai_script"
+        return "unknown"
+
+    @staticmethod
+    def _is_ai_script_candidate(
+        action: str,
+        ai_script_plan: Optional[Dict[str, Any]],
+        structured_intent: Optional[Dict[str, Any]],
+        ai_instruction_step: Optional[Dict[str, Any]],
+        code: str,
+    ) -> bool:
+        return (
+            str(action or "").strip().lower() == "execute"
+            and bool(ai_script_plan or str(code or "").strip())
+            and not structured_intent
+            and not ai_instruction_step
+        )
+
+    @staticmethod
+    def _candidate_requires_runtime_semantic_ai_instruction(
+        goal: str,
+        thought: str,
+        description: str,
+        ai_script_plan: Optional[Dict[str, Any]],
+        structured_intent: Optional[Dict[str, Any]],
+        ai_instruction_step: Optional[Dict[str, Any]],
+        code: str,
+    ) -> bool:
+        if ai_instruction_step:
+            return False
+        if isinstance(structured_intent, dict) and _is_structured_runtime_ai_setup_step(structured_intent):
+            return False
+        if isinstance(structured_intent, dict):
+            action = str(structured_intent.get("action") or "").strip().lower()
+            if action == "navigate":
+                value = str(structured_intent.get("value") or "").strip()
+                if value.startswith(("http://", "https://")):
+                    return False
+        payload_parts: List[str] = [goal or "", thought or "", description or ""]
+        if isinstance(ai_script_plan, dict):
+            payload_parts.append(json.dumps(ai_script_plan, ensure_ascii=False))
+        if isinstance(structured_intent, dict):
+            payload_parts.append(json.dumps(structured_intent, ensure_ascii=False))
+        if code:
+            payload_parts.append(code)
+        return _requires_runtime_semantic_selection(*payload_parts)
+
+    @staticmethod
+    def _candidate_requires_deterministic_ai_script(
+        goal: str,
+        thought: str,
+        description: str,
+        structured_intent: Optional[Dict[str, Any]],
+        ai_instruction_step: Optional[Dict[str, Any]],
+    ) -> bool:
+        if isinstance(ai_instruction_step, dict):
+            return _looks_like_record_array_request(
+                ai_instruction_step.get("description"),
+                ai_instruction_step.get("prompt"),
+                ai_instruction_step.get("result_key"),
+            )
+        if isinstance(structured_intent, dict):
+            action = str(structured_intent.get("action") or "").strip().lower()
+            if action == "extract_text":
+                return _looks_like_record_array_request(
+                    description,
+                    structured_intent.get("description"),
+                    structured_intent.get("prompt"),
+                    structured_intent.get("result_key"),
+                    structured_intent.get("ordinal"),
+                    structured_intent.get("collection_hint"),
+                )
+        return _structured_step_requires_ai_script(goal, thought, description, structured_intent)
+
+    @staticmethod
+    def _coerce_candidate_to_runtime_semantic_ai_instruction(
+        candidate: Dict[str, Any],
+        goal: str,
+    ) -> Dict[str, Any]:
+        description = str(candidate.get("description") or "").strip() or str(goal or "").strip() or "Execute semantic runtime instruction"
+        parsed = {
+            "action": "ai_instruction",
+            "description": description,
+            "prompt": description,
+            "instruction_kind": "semantic_decision",
+            "input_scope": {"mode": "current_page"},
+            "output_expectation": {"mode": "act"},
+            "execution_hint": {
+                "requires_dom_snapshot": True,
+                "allow_navigation": True,
+                "max_reasoning_steps": AI_INSTRUCTION_DEFAULT_MAX_REASONING_STEPS,
+                "planning_timeout_s": float(AI_INSTRUCTION_DEFAULT_PLANNING_TIMEOUT_S),
+            },
+        }
+        coerced = RPAReActAgent._parse_step_candidate(
+            parsed,
+            goal,
+            force_ai_instruction=False,
+        )
+        coerced["thought"] = candidate.get("thought") or coerced.get("thought", "")
+        return coerced
+
+    @staticmethod
+    def _coerce_candidate_to_ai_script_plan(
+        candidate: Dict[str, Any],
+        goal: str,
+    ) -> Dict[str, Any]:
+        ai_instruction_step = candidate.get("ai_instruction_step") or {}
+        structured_intent = candidate.get("structured_intent") or {}
+        description = (
+            str(ai_instruction_step.get("description") or "").strip()
+            or str(candidate.get("description") or "").strip()
+            or str(structured_intent.get("description") or "").strip()
+            or "Execute ai_script step"
+        )
+        result_key = (
+            ai_instruction_step.get("result_key")
+            or structured_intent.get("result_key")
+            or (candidate.get("parsed") or {}).get("result_key")
+        )
+        value = (
+            ai_instruction_step.get("prompt")
+            or structured_intent.get("prompt")
+            or description
+        )
+        parsed = {
+            "action": "execute",
+            "step_type": "ai_script",
+            "description": description,
+            "result_key": result_key,
+            "value": value,
+        }
+        coerced = RPAReActAgent._parse_step_candidate(
+            parsed,
+            goal,
+            force_ai_instruction=False,
+        )
+        coerced["thought"] = candidate.get("thought") or coerced.get("thought", "")
+        return coerced
+
+    @staticmethod
+    def _parse_step_candidate(
+        parsed: Dict[str, Any],
+        goal: str,
+        force_ai_instruction: bool,
+        allow_ai_script_code: bool = False,
+    ) -> Dict[str, Any]:
+        thought = parsed.get("thought", "")
+        action = parsed.get("action", "execute")
+        structured_intent = RPAReActAgent._extract_structured_execute_intent(parsed, goal)
+        ai_instruction_step = RPAReActAgent._extract_execute_ai_instruction(
+            parsed,
+            goal,
+            prefer_user_prompt=force_ai_instruction,
+        )
+        raw_code = parsed.get("code", "")
+        ai_script_plan = RPAReActAgent._extract_ai_script_plan(parsed)
+        code = raw_code if allow_ai_script_code and ai_script_plan else ""
+        description = parsed.get("description", "Execute step")
+        risk = parsed.get("risk", "none")
+        risk_reason = parsed.get("risk_reason", "")
+        action_payload = code or ""
+        if structured_intent:
+            action_payload = json.dumps(structured_intent, ensure_ascii=False)
+        elif ai_instruction_step:
+            action_payload = json.dumps(ai_instruction_step, ensure_ascii=False)
+        elif ai_script_plan:
+            action_payload = json.dumps(ai_script_plan, ensure_ascii=False)
+        return {
+            "thought": thought,
+            "action": action,
+            "ai_script_plan": ai_script_plan,
+            "structured_intent": structured_intent,
+            "ai_instruction_step": ai_instruction_step,
+            "code": code,
+            "description": description,
+            "risk": risk,
+            "risk_reason": risk_reason,
+            "action_payload": action_payload,
+            "parsed": parsed,
+        }
+
+    @staticmethod
+    def _extract_ai_script_plan(parsed: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        step_type = str(parsed.get("step_type", "") or "").strip().lower()
+        action = str(parsed.get("action", "") or "").strip().lower()
+        if action in {"done", "abort"}:
+            return None
+
+        explicit_plan = parsed.get("ai_script")
+        if isinstance(explicit_plan, dict):
+            plan_payload = dict(explicit_plan)
+        elif step_type == "ai_script":
+            plan_payload = {}
+        elif str(parsed.get("code", "") or "").strip():
+            # Backward-compatible fallback: old planner outputs may still emit code.
+            # We intentionally ignore the planner code and keep only planning hints.
+            plan_payload = {}
+        else:
+            return None
+
+        for key in ("description", "result_key", "target_hint", "collection_hint", "ordinal", "value"):
+            if parsed.get(key) is not None and key not in plan_payload:
+                plan_payload[key] = parsed.get(key)
+
+        description = str(plan_payload.get("description", "") or "").strip()
+        if not description:
+            description = str(parsed.get("description", "") or "").strip()
+        if not description:
+            description = "Execute ai_script step"
+        plan_payload["description"] = description
+        result_key = plan_payload.get("result_key")
+        if isinstance(result_key, str):
+            result_key = result_key.strip()
+        plan_payload["result_key"] = result_key or None
+
+        output_shape = _infer_ai_script_output_shape(
+            description,
+            plan_payload.get("value"),
+            plan_payload.get("result_key"),
+        )
+        if output_shape != "unspecified":
+            plan_payload["output_shape"] = output_shape
+
+        record_fields = _infer_ai_script_record_fields(
+            description,
+            plan_payload.get("value"),
+            plan_payload.get("result_key"),
+        )
+        if record_fields:
+            plan_payload["record_fields"] = record_fields
+
+        item_limit = _infer_ai_script_item_limit(
+            plan_payload.get("ordinal"),
+            description,
+            plan_payload.get("value"),
+            plan_payload.get("result_key"),
+        )
+        if item_limit:
+            plan_payload["item_limit"] = item_limit
+
+        selection_scope = _infer_ai_script_selection_scope(
+            description,
+            plan_payload.get("value"),
+            plan_payload.get("target_hint"),
+        )
+        if selection_scope != "current_view":
+            plan_payload["selection_scope"] = selection_scope
+
+        stable_subpage_hint = _infer_ai_script_stable_subpage_hint(
+            description,
+            plan_payload.get("value"),
+            plan_payload.get("target_hint"),
+            plan_payload.get("collection_hint"),
+        )
+        if stable_subpage_hint:
+            plan_payload["stable_subpage_hint"] = stable_subpage_hint
+
+        entity_hint = _infer_ai_script_entity_hint(
+            stable_subpage_hint,
+            description,
+            plan_payload.get("value"),
+            plan_payload.get("target_hint"),
+            plan_payload.get("collection_hint"),
+        )
+        if entity_hint:
+            plan_payload["entity_hint"] = entity_hint
+
+        min_items = _normalize_optional_positive_int(plan_payload.get("min_items"))
+        plan_payload["script_brief"] = str(plan_payload.get("script_brief") or "").strip() or _build_ai_script_brief(
+            description,
+            plan_payload.get("value"),
+            item_limit,
+            selection_scope,
+        )
+        plan_payload["output_contract"] = plan_payload.get("output_contract") or _build_ai_script_output_contract(
+            output_shape,
+            record_fields,
+            item_limit,
+            min_items,
+        )
+        plan_payload["step_type"] = "ai_script"
+        return plan_payload
+
+    @staticmethod
+    def _build_step_data_from_result(
+        result: Dict[str, Any],
+        ai_instruction_step: Optional[Dict[str, Any]],
+        structured_intent: Optional[Dict[str, Any]],
+        parsed: Dict[str, Any],
+        code: str,
+        description: str,
+        goal: str,
+        current_url: str,
+    ) -> Dict[str, Any]:
+        if ai_instruction_step:
+            step_data = result.get("step") or ai_instruction_step
+        else:
+            step_data = result.get("step") or {
+                "action": "ai_script",
+                "source": "ai",
+                "value": code,
+                "description": description,
+                "prompt": goal,
+            }
+            parsed_result_key = parsed.get("result_key")
+            if isinstance(parsed_result_key, str) and parsed_result_key.strip():
+                step_data["result_key"] = parsed_result_key.strip()
+        return _normalize_recorded_step_after_success(step_data, current_url)
+
+    @staticmethod
+    def _result_issue_for_candidate(
+        goal: str,
+        description: str,
+        structured_intent: Optional[Dict[str, Any]],
+        ai_instruction_step: Optional[Dict[str, Any]],
+        result: Dict[str, Any],
+    ) -> str:
+        if ai_instruction_step:
+            return ""
+        if structured_intent:
+            return _structured_result_quality_issue(structured_intent, result)
+        return _ai_script_quality_issue(goal, description, result.get("raw_output"))
+
+    @staticmethod
+    async def _stream_llm_with_system_prompt(
+        history: List[Dict[str, str]],
+        system_prompt: str,
+        model_config: Optional[Dict[str, Any]] = None,
+    ) -> AsyncGenerator[str, None]:
+        from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+
+        model = get_llm_model(config=model_config, streaming=True)
+        lc_messages = [SystemMessage(content=system_prompt)]
+        for m in history:
+            if m["role"] == "user":
+                lc_messages.append(HumanMessage(content=m["content"]))
+            elif m["role"] == "assistant":
+                lc_messages.append(AIMessage(content=m["content"]))
+        if hasattr(model, "astream"):
+            text_parts: List[str] = []
+            fallback_parts: List[str] = []
+            async for chunk in model.astream(lc_messages):
+                text = _extract_llm_chunk_text(chunk)
+                if text:
+                    text_parts.append(text)
+                    continue
+                fallback = _extract_llm_chunk_fallback_text(chunk)
+                if fallback:
+                    fallback_parts.append(fallback)
+            full_text = "".join(text_parts)
+            if full_text.strip():
+                yield full_text
+                return
+            fallback_text = "\n".join(part for part in fallback_parts if part).strip()
+            if fallback_text:
+                yield fallback_text
+                return
+
+        response = await model.ainvoke(lc_messages)
+        yield _extract_llm_response_text(response)
+
+    async def _request_step_local_repair(
+        self,
+        goal: str,
+        snapshot: Dict[str, Any],
+        candidate: Dict[str, Any],
+        failure_reason: str,
+        model_config: Optional[Dict[str, Any]],
+        force_ai_instruction: bool,
+    ) -> Optional[Dict[str, Any]]:
+        step_kind = self._candidate_kind(
+            candidate.get("ai_script_plan"),
+            candidate.get("structured_intent"),
+            candidate.get("ai_instruction_step"),
+            candidate.get("code", ""),
+        )
+        previous_step = {
+            "description": candidate.get("description"),
+            "ai_script_plan": candidate.get("ai_script_plan"),
+            "structured_intent": candidate.get("structured_intent"),
+            "ai_instruction": candidate.get("ai_instruction_step"),
+            "code": candidate.get("code"),
+        }
+        immutable_contract = {
+            "step_kind": step_kind,
+            "result_key": (
+                (candidate.get("ai_script_plan") or {}).get("result_key")
+                or (candidate.get("ai_instruction_step") or {}).get("result_key")
+                or (candidate.get("structured_intent") or {}).get("result_key")
+            ),
+            "script_brief": (candidate.get("ai_script_plan") or {}).get("script_brief"),
+            "output_contract": (candidate.get("ai_script_plan") or {}).get("output_contract"),
+        }
+        frame_lines = _snapshot_frame_lines(snapshot)
+        repair_history = [
+            {
+                "role": "user",
+                "content": (
+                    f"Goal: {goal}\n"
+                    f"Current page URL: {snapshot.get('url', '')}\n"
+                    f"Current page title: {snapshot.get('title', '')}\n"
+                    f"Current page snapshot:\n{chr(10).join(frame_lines) or '(no observable elements)'}\n\n"
+                    f"Failed step kind: {step_kind}\n"
+                    f"Failed step payload: {json.dumps(previous_step, ensure_ascii=False, default=str)}\n"
+                    f"Immutable step contract: {json.dumps(immutable_contract, ensure_ascii=False, default=str)}\n"
+                    f"Failure reason: {failure_reason}\n"
+                    "Return exactly one corrected next-step JSON object that preserves the immutable step contract."
+                ),
+            }
+        ]
+        repair_response = ""
+        async for chunk_text in self._stream_llm_with_system_prompt(
+            repair_history,
+            STEP_LOCAL_REPAIR_SYSTEM_PROMPT,
+            model_config,
+        ):
+            repair_response += chunk_text
+
+        parsed = self._parse_json(repair_response)
+        if not parsed:
+            return None
+        repaired_candidate = self._parse_step_candidate(
+            parsed,
+            goal,
+            force_ai_instruction,
+            allow_ai_script_code=True,
+        )
+        original_kind = _candidate_contract_kind(candidate)
+        repaired_kind = _candidate_contract_kind(repaired_candidate)
+        if original_kind != "unknown" and repaired_kind != original_kind:
+            return None
+        return _restore_candidate_result_key(
+            repaired_candidate,
+            _candidate_contract_result_key(candidate),
+        )
+
+    async def _request_ai_script_candidate(
+        self,
+        goal: str,
+        snapshot: Dict[str, Any],
+        candidate: Dict[str, Any],
+        model_config: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        return await self._request_ai_script_candidate_with_prompt(
+            goal=goal,
+            snapshot=snapshot,
+            candidate=candidate,
+            system_prompt=AI_SCRIPT_GENERATION_SYSTEM_PROMPT,
+            model_config=model_config,
+            failure_reason="",
+        )
+
+    async def _request_ai_script_repair(
+        self,
+        goal: str,
+        snapshot: Dict[str, Any],
+        candidate: Dict[str, Any],
+        failure_reason: str,
+        model_config: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        return await self._request_ai_script_candidate_with_prompt(
+            goal=goal,
+            snapshot=snapshot,
+            candidate=candidate,
+            system_prompt=AI_SCRIPT_REPAIR_SYSTEM_PROMPT,
+            model_config=model_config,
+            failure_reason=failure_reason,
+        )
+
+    async def _request_ai_script_candidate_with_prompt(
+        self,
+        goal: str,
+        snapshot: Dict[str, Any],
+        candidate: Dict[str, Any],
+        system_prompt: str,
+        model_config: Optional[Dict[str, Any]],
+        failure_reason: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        frame_lines = _snapshot_frame_lines(snapshot)
+        ai_script_plan = candidate.get("ai_script_plan") or {}
+        planner_payload = {
+            "thought": candidate.get("thought"),
+            "description": ai_script_plan.get("description") or candidate.get("description"),
+            "result_key": ai_script_plan.get("result_key"),
+            "script_brief": ai_script_plan.get("script_brief") or ai_script_plan.get("description") or candidate.get("description"),
+            "output_contract": ai_script_plan.get("output_contract"),
+            "target_hint": ai_script_plan.get("target_hint"),
+            "collection_hint": ai_script_plan.get("collection_hint"),
+            "stable_subpage_hint": ai_script_plan.get("stable_subpage_hint"),
+        }
+        request_lines = [
+            f"Goal: {goal}",
+            f"Current page URL: {snapshot.get('url', '')}",
+            f"Current page title: {snapshot.get('title', '')}",
+            f"Current page snapshot:\n{chr(10).join(frame_lines) or '(no observable elements)'}",
+            "",
+            f"Current ai_script subtask: {json.dumps(planner_payload, ensure_ascii=False, default=str)}",
+        ]
+        if failure_reason:
+            request_lines.extend(
+                [
+                    "",
+                    f"Previous ai_script failure: {failure_reason}",
+                ]
+            )
+        request_lines.extend(
+            [
+                "",
+                "Return exactly one corrected ai_script JSON object.",
+            ]
+        )
+        ai_script_history = [{"role": "user", "content": "\n".join(request_lines)}]
+
+        ai_script_response = ""
+        async for chunk_text in self._stream_llm_with_system_prompt(
+            ai_script_history,
+            system_prompt,
+            model_config,
+        ):
+            ai_script_response += chunk_text
+
+        parsed = self._parse_json(ai_script_response)
+        if not parsed:
+            return None
+        parsed.setdefault("action", "execute")
+        parsed.setdefault("description", candidate.get("description") or "Execute ai_script step")
+        prior_result_key = (candidate.get("parsed") or {}).get("result_key")
+        if isinstance(prior_result_key, str) and prior_result_key.strip() and not parsed.get("result_key"):
+            parsed["result_key"] = prior_result_key.strip()
+        generated_candidate = self._parse_step_candidate(
+            parsed,
+            goal,
+            force_ai_instruction=False,
+            allow_ai_script_code=True,
+        )
+        if self._candidate_kind(
+            generated_candidate.get("ai_script_plan"),
+            generated_candidate.get("structured_intent"),
+            generated_candidate.get("ai_instruction_step"),
+            generated_candidate.get("code", ""),
+        ) != "ai_script":
+            return None
+        if not str(generated_candidate.get("code") or "").strip():
+            return None
+        if _looks_like_javascript_code(str(generated_candidate.get("code") or "")):
+            return None
+        if ai_script_plan:
+            preserved_plan = dict(ai_script_plan)
+            generated_candidate["ai_script_plan"] = preserved_plan
+            generated_candidate["description"] = str(
+                preserved_plan.get("description")
+                or candidate.get("description")
+                or generated_candidate.get("description")
+                or "Execute ai_script step"
+            )
+            preserved_result_key = preserved_plan.get("result_key")
+            if isinstance(preserved_result_key, str) and preserved_result_key.strip():
+                generated_candidate.setdefault("parsed", {})
+                generated_candidate["parsed"]["result_key"] = preserved_result_key.strip()
+            generated_candidate["action_payload"] = json.dumps(preserved_plan, ensure_ascii=False, default=str)
+        elif not generated_candidate.get("ai_script_plan"):
+            generated_candidate["ai_script_plan"] = {}
+        generated_candidate["thought"] = candidate.get("thought") or generated_candidate.get("thought", "")
+        generated_candidate["description"] = generated_candidate.get("description") or candidate.get("description") or "Execute ai_script step"
+        return generated_candidate
+
+    @staticmethod
+    def _summarize_failure_reason(reason: str) -> str:
+        text = str(reason or "").strip()
+        if not text:
+            return "Unknown error"
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not lines:
+            return text[:300]
+        non_traceback_lines = [
+            line for line in lines
+            if not line.startswith("Traceback")
+            and not line.startswith("File ")
+            and line != "^"
+        ]
+        if non_traceback_lines:
+            return non_traceback_lines[-1][:300]
+        return lines[-1][:300]
+
+    @classmethod
+    def _build_bounded_failure_payload(
+        cls,
+        failure_kind: str,
+        attempts_used: int,
+        repair_attempted: bool,
+        step_description: str,
+        last_error: str,
+        total_steps: int,
+    ) -> Dict[str, Any]:
+        summarized_error = cls._summarize_failure_reason(last_error)
+        if failure_kind == "ai_script":
+            repair_text = "and one local repair were attempted" if repair_attempted else "was attempted"
+            reason = (
+                f"ai_script step could not reliably converge after {attempts_used} bounded attempt(s). "
+                f"A dedicated ai_script generation {repair_text}, but the current DOM abstraction or scripted "
+                "extraction strategy cannot reliably converge. Stopping here to avoid polluting recorded steps."
+            )
+            return {
+                "reason": reason,
+                "total_steps": total_steps,
+                "failure_kind": "ai_script",
+                "bounded_attempts": attempts_used,
+                "repair_attempted": repair_attempted,
+                "step_description": step_description,
+                "last_error": summarized_error,
+                "stop_reason": "ai_script_non_convergent",
+            }
+        if failure_kind == "ai_instruction":
+            repair_text = "and one local repair were attempted" if repair_attempted else "was attempted"
+            return {
+                "reason": (
+                    f"ai_instruction step failed after {attempts_used} bounded attempt(s). "
+                    f"The runtime ai_instruction execution {repair_text}, but the semantic extraction/action plan "
+                    "still could not be executed reliably. Stopping here to avoid polluting recorded steps."
+                ),
+                "total_steps": total_steps,
+                "failure_kind": "ai_instruction",
+                "bounded_attempts": attempts_used,
+                "repair_attempted": repair_attempted,
+                "step_description": step_description,
+                "last_error": summarized_error,
+                "stop_reason": "ai_instruction_non_convergent",
+            }
+        return {
+            "reason": (
+                f"Failed to complete the current {failure_kind or 'step'} after {attempts_used} bounded attempt(s): "
+                f"{summarized_error}"
+            ),
+            "total_steps": total_steps,
+            "failure_kind": failure_kind or "unknown",
+            "bounded_attempts": attempts_used,
+            "repair_attempted": repair_attempted,
+            "step_description": step_description,
+            "last_error": summarized_error,
+            "stop_reason": "bounded_step_failure",
+        }
+
     async def run(
         self,
         session_id: str,
@@ -854,14 +2364,20 @@ class RPAReActAgent:
     ) -> AsyncGenerator[Dict[str, Any], None]:
         self._aborted = False
         steps_done = 0
-        successful_trace_steps: List[Dict[str, Any]] = []
+        working_trace_steps: List[Dict[str, Any]] = []
+        committed_steps: List[Dict[str, Any]] = []
+        last_structured_signature = ""
+        stall_score = 0
+        force_ai_instruction = RPAAssistant._should_force_ai_instruction(goal)
+        history_prefix = list(self._history)
 
         # Append new user goal to persistent history
         steps_summary = ""
         if existing_steps:
             lines = [f"{i+1}. {s.get('description', s.get('action', ''))}" for i, s in enumerate(existing_steps)]
             steps_summary = "\nExisting steps:\n" + "\n".join(lines) + "\n"
-        self._history.append({"role": "user", "content": f"Goal: {goal}{steps_summary}"})
+        goal_message = f"Goal: {goal}{steps_summary}"
+        self._history.append({"role": "user", "content": goal_message})
 
         for iteration in range(self.MAX_STEPS):
             if self._aborted:
@@ -890,24 +2406,22 @@ class RPAReActAgent:
                 yield {"event": "agent_aborted", "data": {"reason": f"Unable to parse agent response: {full_response[:200]}"}}
                 return
 
-            thought = parsed.get("thought", "")
-            action = parsed.get("action", "execute")
-            structured_intent = self._extract_structured_execute_intent(parsed, goal)
-            ai_instruction_step = self._extract_execute_ai_instruction(parsed, goal)
-            code = parsed.get("code", "")
-            description = parsed.get("description", "Execute step")
-            risk = parsed.get("risk", "none")
-            risk_reason = parsed.get("risk_reason", "")
-            action_payload = code or ""
-            if structured_intent:
-                action_payload = json.dumps(structured_intent, ensure_ascii=False)
-            elif ai_instruction_step:
-                action_payload = json.dumps(ai_instruction_step, ensure_ascii=False)
+            candidate = self._parse_step_candidate(parsed, goal, force_ai_instruction)
+            thought = candidate["thought"]
+            action = candidate["action"]
+            ai_script_plan = candidate.get("ai_script_plan")
+            structured_intent = candidate["structured_intent"]
+            ai_instruction_step = candidate["ai_instruction_step"]
+            code = candidate["code"]
+            description = candidate["description"]
+            risk = candidate["risk"]
+            risk_reason = candidate["risk_reason"]
+            action_payload = candidate["action_payload"]
 
             if action == "done":
                 if thought:
                     yield {"event": "agent_thought", "data": {"text": thought}}
-                recorded_steps = _distill_react_recorded_steps(goal, successful_trace_steps)
+                recorded_steps = _distill_react_recorded_steps(goal, committed_steps)
                 yield {"event": "agent_recorded_steps", "data": {"steps": recorded_steps}}
                 yield {"event": "agent_done", "data": {"total_steps": steps_done}}
                 return
@@ -918,33 +2432,71 @@ class RPAReActAgent:
                 yield {"event": "agent_aborted", "data": {"reason": thought}}
                 return
 
-            if _react_step_requires_scripted_logic(thought, description, structured_intent):
-                self._history.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            "Previous step proposal was rejected. "
-                            "This next step involves deterministic ranking/comparison/filtering logic, "
-                            "so return code for this one step instead of a direct structured click."
-                        ),
-                    }
-                )
-                continue
-
-            if _react_step_requires_ai_instruction(
-                thought,
-                description,
-                structured_intent,
+            if _react_step_violates_explicit_ai_instruction_request(
+                goal,
                 ai_instruction_step,
-                code,
+                structured_intent=structured_intent,
             ):
                 self._history.append(
                     {
                         "role": "user",
                         "content": (
                             "Previous step proposal was rejected. "
-                            "This next step is a semantic summary/judgment task, "
-                            "so return a single-step ai_instruction instead of raw code extraction."
+                            "The user explicitly requested a runtime AI instruction or asked not to expand the rule "
+                            "into a fixed script. Return ai_instruction for this step instead of structured action or code."
+                        ),
+                    }
+                )
+                continue
+
+            if self._candidate_requires_runtime_semantic_ai_instruction(
+                goal,
+                thought,
+                description,
+                ai_script_plan,
+                structured_intent,
+                ai_instruction_step,
+                code,
+            ):
+                candidate = self._coerce_candidate_to_runtime_semantic_ai_instruction(candidate, goal)
+                thought = candidate["thought"]
+                action = candidate["action"]
+                ai_script_plan = candidate.get("ai_script_plan")
+                structured_intent = candidate["structured_intent"]
+                ai_instruction_step = candidate["ai_instruction_step"]
+                code = candidate["code"]
+                description = candidate["description"]
+                risk = candidate["risk"]
+                risk_reason = candidate["risk_reason"]
+                action_payload = candidate["action_payload"]
+
+            if not force_ai_instruction and self._candidate_requires_deterministic_ai_script(
+                goal,
+                thought,
+                description,
+                structured_intent,
+                ai_instruction_step,
+            ):
+                candidate = self._coerce_candidate_to_ai_script_plan(candidate, goal)
+                thought = candidate["thought"]
+                action = candidate["action"]
+                ai_script_plan = candidate.get("ai_script_plan")
+                structured_intent = candidate["structured_intent"]
+                ai_instruction_step = candidate["ai_instruction_step"]
+                code = candidate["code"]
+                description = candidate["description"]
+                risk = candidate["risk"]
+                risk_reason = candidate["risk_reason"]
+                action_payload = candidate["action_payload"]
+
+            if _structured_step_requires_ai_script(goal, thought, description, structured_intent):
+                self._history.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Previous step proposal was rejected. "
+                            "This subtask depends on runtime page data plus deterministic ranking, comparison, or "
+                            "selection logic. Return one ai_script step instead of a structured action."
                         ),
                     }
                 )
@@ -971,6 +2523,27 @@ class RPAReActAgent:
                 )
                 continue
 
+            if self._is_ai_script_candidate(action, ai_script_plan, structured_intent, ai_instruction_step, code):
+                generated_ai_script_candidate = await self._request_ai_script_candidate(
+                    goal=goal,
+                    snapshot=snapshot,
+                    candidate=candidate,
+                    model_config=model_config,
+                )
+                if generated_ai_script_candidate:
+                    candidate = generated_ai_script_candidate
+                    candidate["thought"] = thought or candidate.get("thought", "")
+                    thought = candidate["thought"]
+                    action = candidate["action"]
+                    ai_script_plan = candidate.get("ai_script_plan")
+                    structured_intent = candidate["structured_intent"]
+                    ai_instruction_step = candidate["ai_instruction_step"]
+                    code = candidate["code"]
+                    description = candidate["description"]
+                    risk = candidate["risk"]
+                    risk_reason = candidate["risk_reason"]
+                    action_payload = candidate["action_payload"]
+
             if code.strip() and _looks_like_javascript_code(code):
                 self._history.append(
                     {
@@ -983,6 +2556,20 @@ class RPAReActAgent:
                         ),
                     }
                 )
+                continue
+
+            if _should_reflect_on_stalled_structured_path(
+                structured_intent,
+                last_structured_signature=last_structured_signature,
+                stall_score=stall_score,
+            ):
+                self._history.append(
+                    {
+                        "role": "user",
+                        "content": STRUCTURED_STALL_REFLECTION_MESSAGE,
+                    }
+                )
+                stall_score = 0
                 continue
 
             if thought:
@@ -1006,76 +2593,218 @@ class RPAReActAgent:
                     self._history.append({"role": "user", "content": "User rejected that step. Continue with a safer next step or finish."})
                     continue
 
-            # Act
-            yield {
-                "event": "agent_action",
-                "data": {
-                    "description": description,
-                    "code": action_payload,
-                },
-            }
-            current_page = page_provider() if page_provider else page
-            if current_page is None:
-                yield {"event": "agent_aborted", "data": {"reason": "No active page available"}}
-                return
-            if ai_instruction_step:
-                from backend.rpa.runtime_ai_instruction import execute_ai_instruction
+            active_candidate = candidate
+            active_snapshot = snapshot
+            retry_budget = self._candidate_retry_budget(structured_intent, ai_instruction_step, code)
+            local_attempt = 0
+            committed_step_data: Optional[Dict[str, Any]] = None
+            committed_output = ""
+            abort_reason = ""
+            last_failure_kind = self._candidate_kind(
+                active_candidate["ai_script_plan"],
+                active_candidate["structured_intent"],
+                active_candidate["ai_instruction_step"],
+                active_candidate["code"],
+            )
+            repair_attempted = False
 
-                result = await execute_ai_instruction(current_page, ai_instruction_step, results={})
-            elif structured_intent:
-                resolved_intent = resolve_structured_intent(snapshot, structured_intent)
-                result = await execute_structured_intent(current_page, resolved_intent)
-            else:
-                executable = self._wrap_code(code)
-                result = await _execute_on_page(current_page, executable)
-            if result["success"]:
-                if not ai_instruction_step and not structured_intent:
-                    nav_target = _extract_ai_script_navigation_target(
-                        getattr(current_page, "url", ""),
-                        result.get("raw_output"),
-                    )
-                    if nav_target and getattr(current_page, "url", "").rstrip("/") != nav_target.rstrip("/"):
-                        try:
-                            await current_page.goto(nav_target)
-                            await current_page.wait_for_load_state("domcontentloaded")
-                        except Exception as nav_error:
-                            self._history.append(
-                                {
-                                    "role": "user",
-                                    "content": (
-                                        f"Execution failed: selected target {nav_target} but navigation did not complete: {nav_error}\n"
-                                        "Analyze the failure and adjust the strategy."
-                                    ),
-                                }
-                            )
-                            continue
-                steps_done += 1
-                if ai_instruction_step:
-                    step_data = result.get("step") or ai_instruction_step
-                else:
-                    step_data = result.get("step") or {
-                        "action": "ai_script",
-                        "source": "ai",
-                        "value": code,
-                        "description": description,
-                        "prompt": goal,
-                    }
-                successful_trace_steps.append(step_data)
+            while True:
                 yield {
-                    "event": "agent_recorded_steps",
-                    "data": {"steps": _distill_react_recorded_steps(goal, successful_trace_steps)},
+                    "event": "agent_action",
+                    "data": {
+                        "description": active_candidate["description"],
+                        "code": active_candidate["action_payload"],
+                    },
                 }
-                output = result.get("output", "")
-                # If there's meaningful output, append to description for visibility
-                if output and output != "ok" and output != "None":
-                    yield {"event": "agent_step_done", "data": {"step": step_data, "output": output}}
-                    self._history.append({"role": "user", "content": f"Step succeeded: {description}\nOutput: {output}"})
+                current_page = page_provider() if page_provider else page
+                if current_page is None:
+                    yield {"event": "agent_aborted", "data": {"reason": "No active page available"}}
+                    return
+                before_observation = await _capture_page_observation(current_page)
+
+                active_structured_intent = active_candidate["structured_intent"]
+                active_ai_instruction_step = active_candidate["ai_instruction_step"]
+                active_code = active_candidate["code"]
+                active_description = active_candidate["description"]
+                active_parsed = active_candidate["parsed"]
+                last_failure_kind = self._candidate_kind(
+                    active_candidate["ai_script_plan"],
+                    active_structured_intent,
+                    active_ai_instruction_step,
+                    active_code,
+                )
+
+                if active_ai_instruction_step:
+                    from backend.rpa.runtime_ai_instruction import execute_ai_instruction
+
+                    result = await execute_ai_instruction(
+                        current_page,
+                        active_ai_instruction_step,
+                        results={},
+                        model_config=model_config,
+                    )
+                    failure_reason = ""
+                elif active_structured_intent:
+                    resolved_intent = resolve_structured_intent(active_snapshot, active_structured_intent)
+                    result = await execute_structured_intent(current_page, resolved_intent)
+                    failure_reason = (
+                        self._result_issue_for_candidate(
+                            goal,
+                            active_description,
+                            active_structured_intent,
+                            active_ai_instruction_step,
+                            result,
+                        )
+                        if result.get("success")
+                        else str(result.get("error", "Unknown error"))
+                    )
                 else:
-                    yield {"event": "agent_step_done", "data": {"step": step_data}}
-                    self._history.append({"role": "user", "content": f"Step succeeded: {description}"})
+                    executable = self._wrap_code(active_code)
+                    result = await _execute_on_page(current_page, executable)
+                    failure_reason = (
+                        self._result_issue_for_candidate(
+                            goal,
+                            active_description,
+                            active_structured_intent,
+                            active_ai_instruction_step,
+                            result,
+                        )
+                        if result.get("success")
+                        else str(result.get("error", "Unknown error"))
+                    )
+                    if result.get("success") and not failure_reason:
+                        nav_target = _extract_ai_script_navigation_target(
+                            getattr(current_page, "url", ""),
+                            result.get("raw_output"),
+                        )
+                        if nav_target and getattr(current_page, "url", "").rstrip("/") != nav_target.rstrip("/"):
+                            try:
+                                await current_page.goto(nav_target)
+                                await current_page.wait_for_load_state("domcontentloaded")
+                            except Exception as nav_error:
+                                failure_reason = f"selected target {nav_target} but navigation did not complete: {nav_error}"
+
+                if result.get("success") and not failure_reason:
+                    current_url = str(getattr(current_page, "url", "") or "")
+                    committed_step_data = self._build_step_data_from_result(
+                        result=result,
+                        ai_instruction_step=active_ai_instruction_step,
+                        structured_intent=active_structured_intent,
+                        parsed=active_parsed,
+                        code=active_code,
+                        description=active_description,
+                        goal=goal,
+                        current_url=current_url,
+                    )
+                    committed_output = result.get("output", "")
+                    working_trace_steps.append(
+                        {
+                            "status": "committed",
+                            "step": committed_step_data,
+                            "attempt": local_attempt,
+                        }
+                    )
+                    break
+
+                working_trace_steps.append(
+                    {
+                        "status": "failed_attempt",
+                        "kind": self._candidate_kind(
+                            active_candidate["ai_script_plan"],
+                            active_structured_intent,
+                            active_ai_instruction_step,
+                            active_code,
+                        ),
+                        "description": active_description,
+                        "error": failure_reason or str(result.get("error", "Unknown error")),
+                        "attempt": local_attempt,
+                    }
+                )
+                if local_attempt >= retry_budget:
+                    abort_reason = failure_reason or str(result.get("error", "Unknown error"))
+                    break
+
+                repair_page = page_provider() if page_provider else page
+                if repair_page is None:
+                    abort_reason = "No active page available"
+                    break
+                repair_snapshot = active_snapshot
+                after_observation = await _capture_page_observation(repair_page)
+                if _has_observable_page_change(before_observation, after_observation):
+                    repair_snapshot = await build_page_snapshot(repair_page, build_frame_path_from_frame)
+                repair_attempted = True
+                if last_failure_kind == "ai_script":
+                    repaired_candidate = await self._request_ai_script_repair(
+                        goal=goal,
+                        snapshot=repair_snapshot,
+                        candidate=active_candidate,
+                        failure_reason=failure_reason or str(result.get("error", "Unknown error")),
+                        model_config=model_config,
+                    )
+                else:
+                    repaired_candidate = await self._request_step_local_repair(
+                        goal=goal,
+                        snapshot=repair_snapshot,
+                        candidate=active_candidate,
+                        failure_reason=failure_reason or str(result.get("error", "Unknown error")),
+                        model_config=model_config,
+                        force_ai_instruction=force_ai_instruction,
+                    )
+                if not repaired_candidate or repaired_candidate.get("action") in {"done", "abort"}:
+                    abort_reason = failure_reason or str(result.get("error", "Unknown error"))
+                    break
+                active_snapshot = repair_snapshot
+                active_candidate = repaired_candidate
+                local_attempt += 1
+
+            if committed_step_data is None:
+                yield {
+                    "event": "agent_aborted",
+                    "data": self._build_bounded_failure_payload(
+                        failure_kind=last_failure_kind,
+                        attempts_used=local_attempt + 1,
+                        repair_attempted=repair_attempted,
+                        step_description=active_candidate.get("description", ""),
+                        last_error=abort_reason,
+                        total_steps=steps_done,
+                    ),
+                }
+                return
+
+            steps_done += 1
+            current_structured_signature = _structured_intent_signature(
+                committed_step_data if committed_step_data.get("action") in {"navigate", "click", "fill", "extract_text", "press"} else None
+            )
+            if not current_structured_signature and structured_intent:
+                current_structured_signature = _structured_intent_signature(structured_intent)
+            if current_structured_signature:
+                stall_score = 1
+                last_structured_signature = current_structured_signature
             else:
-                error_msg = result.get("error", "Unknown error")
-                self._history.append({"role": "user", "content": f"Execution failed: {error_msg[:500]}\nAnalyze the failure and adjust the strategy."})
+                stall_score = 0
+                last_structured_signature = ""
+            committed_steps.append(committed_step_data)
+            current_url = str(getattr((page_provider() if page_provider else page), "url", "") or "")
+            latest_execution_observation = _build_execution_observation(
+                committed_step_data,
+                committed_output,
+                current_url,
+            )
+            self._history = _compact_react_history_after_success(
+                history_prefix=history_prefix,
+                goal_message=goal_message,
+                successful_trace_steps=committed_steps,
+                current_url=current_url,
+                latest_execution_observation=latest_execution_observation,
+            )
+            yield {
+                "event": "agent_recorded_steps",
+                "data": {"steps": _distill_react_recorded_steps(goal, committed_steps)},
+            }
+            if committed_output and committed_output != "ok" and committed_output != "None":
+                yield {"event": "agent_step_done", "data": {"step": committed_step_data, "output": committed_output}}
+            else:
+                yield {"event": "agent_step_done", "data": {"step": committed_step_data}}
 
         yield {
             "event": "agent_aborted",
@@ -1123,7 +2852,11 @@ Return the next JSON action."""
         return intent
 
     @staticmethod
-    def _extract_execute_ai_instruction(parsed: Dict[str, Any], prompt: str) -> Optional[Dict[str, Any]]:
+    def _extract_execute_ai_instruction(
+        parsed: Dict[str, Any],
+        prompt: str,
+        prefer_user_prompt: bool = False,
+    ) -> Optional[Dict[str, Any]]:
         candidate = parsed.get("ai_instruction")
         if not isinstance(candidate, dict):
             if str(parsed.get("action", "") or "").strip().lower() == "ai_instruction":
@@ -1133,7 +2866,11 @@ Return the next JSON action."""
 
         candidate_payload = dict(candidate)
         candidate_payload.setdefault("action", "ai_instruction")
-        return RPAAssistant._coerce_to_ai_instruction(prompt, candidate_payload)
+        return RPAAssistant._coerce_to_ai_instruction(
+            prompt,
+            candidate_payload,
+            prefer_user_prompt=prefer_user_prompt,
+        )
 
     @staticmethod
     def _parse_json(text: str) -> Optional[Dict[str, Any]]:
@@ -1259,40 +2996,12 @@ class RPAAssistant:
             return "semantic_decision"
         return "semantic_rule"
 
-    @staticmethod
-    def _looks_like_summary_instruction(*values: Any) -> bool:
-        normalized = " ".join(str(value or "") for value in values).strip().lower()
-        if not normalized:
-            return False
-        return any(pattern in normalized for pattern in REACT_SEMANTIC_SUMMARY_PATTERNS)
-
-    @staticmethod
-    def _prefer_chinese_prompt(text: str) -> bool:
-        return bool(re.search(r"[\u4e00-\u9fff]", text or ""))
-
-    @classmethod
-    def _generic_summary_prompt(cls, user_message: str) -> str:
-        if cls._prefer_chinese_prompt(user_message):
-            return (
-                "阅读当前页面上的项目标题、简介（Description）以及可见的 README/正文内容。"
-                "用中文总结当前项目的核心目标、主要功能特点、适用场景以及它解决的问题。"
-            )
-        return (
-            "Read the repository title, description, and visible README/content on the current page. "
-            "Summarize the current project's core purpose, key features, target use cases, and the problems it solves."
-        )
-
-    @classmethod
-    def _generic_summary_description(cls, user_message: str) -> str:
-        if cls._prefer_chinese_prompt(user_message):
-            return "总结当前项目核心内容"
-        return "Summarize current repository core content"
-
     @classmethod
     def _coerce_to_ai_instruction(
         cls,
         user_message: str,
         parsed: Optional[Dict[str, Any]] = None,
+        prefer_user_prompt: bool = False,
     ) -> Dict[str, Any]:
         output_expectation = cls._infer_ai_instruction_output_mode(user_message, parsed)
         parsed_kind = cls._infer_ai_instruction_kind(user_message, parsed)
@@ -1301,18 +3010,15 @@ class RPAAssistant:
         if cls._is_placeholder_text(description):
             description = user_message
 
-        prompt = (parsed or {}).get("prompt")
-        if cls._is_placeholder_text(prompt):
+        parsed_prompt = (parsed or {}).get("prompt")
+        if prefer_user_prompt:
             prompt = user_message
-
-        if parsed_kind == "semantic_extract" and cls._looks_like_summary_instruction(
-            user_message,
-            description,
-            prompt,
-            (parsed or {}).get("instruction_kind"),
-        ):
-            description = cls._generic_summary_description(user_message)
-            prompt = cls._generic_summary_prompt(user_message)
+            if cls._is_placeholder_text(prompt):
+                prompt = parsed_prompt
+        else:
+            prompt = parsed_prompt
+            if cls._is_placeholder_text(prompt):
+                prompt = user_message
 
         raw_result_key = (parsed or {}).get("result_key")
         result_key = None
@@ -1339,6 +3045,15 @@ class RPAAssistant:
         allow_navigation = execution_hint.get("allow_navigation")
         if not isinstance(allow_navigation, bool):
             allow_navigation = output_expectation.get("mode") != "extract"
+        if parsed_kind == "semantic_decision" and output_expectation.get("mode") == "act":
+            allow_navigation = True
+            normalized_prompt = str(prompt or user_message).strip()
+            if SEMANTIC_DECISION_ACT_PROMPT_SUFFIX.lower() not in normalized_prompt.lower():
+                prompt = (
+                    f"{normalized_prompt}\n\n{SEMANTIC_DECISION_ACT_PROMPT_SUFFIX}"
+                    if normalized_prompt
+                    else SEMANTIC_DECISION_ACT_PROMPT_SUFFIX
+                )
 
         return {
             "action": "ai_instruction",
@@ -1452,6 +3167,7 @@ class RPAAssistant:
                 full_response,
                 user_message=user_message,
                 force_ai_instruction=force_ai_instruction,
+                model_config=model_config,
             )
             if result["success"]:
                 return result, full_response, code, resolution, ""
@@ -1480,6 +3196,7 @@ class RPAAssistant:
                 retry_response,
                 user_message=user_message,
                 force_ai_instruction=force_ai_instruction,
+                model_config=model_config,
             )
             return retry_result, retry_response, retry_code, retry_resolution, "\n\nExecution failed. Retrying.\n\n"
         except Exception as exc:
@@ -1492,13 +3209,19 @@ class RPAAssistant:
         full_response: str,
         user_message: str,
         force_ai_instruction: bool = False,
+        model_config: Optional[Dict[str, Any]] = None,
     ) -> tuple[Dict[str, Any], Optional[str], Optional[Dict[str, Any]]]:
         ai_instruction = self._extract_ai_instruction(full_response)
         if ai_instruction:
             from backend.rpa.runtime_ai_instruction import execute_ai_instruction
 
             step = self._coerce_to_ai_instruction(user_message, ai_instruction)
-            result = await execute_ai_instruction(current_page, step, results={})
+            result = await execute_ai_instruction(
+                current_page,
+                step,
+                results={},
+                model_config=model_config,
+            )
             success = result.get("success", True)
             return {
                 "success": success,
@@ -1511,8 +3234,17 @@ class RPAAssistant:
         if force_ai_instruction and structured_intent:
             from backend.rpa.runtime_ai_instruction import execute_ai_instruction
 
-            step = self._coerce_to_ai_instruction(user_message, structured_intent)
-            result = await execute_ai_instruction(current_page, step, results={})
+            step = self._coerce_to_ai_instruction(
+                user_message,
+                structured_intent,
+                prefer_user_prompt=True,
+            )
+            result = await execute_ai_instruction(
+                current_page,
+                step,
+                results={},
+                model_config=model_config,
+            )
             success = result.get("success", True)
             return {
                 "success": success,
@@ -1529,8 +3261,16 @@ class RPAAssistant:
         if force_ai_instruction and code:
             from backend.rpa.runtime_ai_instruction import execute_ai_instruction
 
-            step = self._coerce_to_ai_instruction(user_message)
-            result = await execute_ai_instruction(current_page, step, results={})
+            step = self._coerce_to_ai_instruction(
+                user_message,
+                prefer_user_prompt=True,
+            )
+            result = await execute_ai_instruction(
+                current_page,
+                step,
+                results={},
+                model_config=model_config,
+            )
             success = result.get("success", True)
             return {
                 "success": success,

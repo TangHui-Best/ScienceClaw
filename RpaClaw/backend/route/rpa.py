@@ -16,7 +16,7 @@ from backend.rpa.manager import rpa_manager
 from backend.rpa.generator import PlaywrightGenerator
 from backend.rpa.executor import ScriptExecutor
 from backend.rpa.skill_exporter import SkillExporter
-from backend.rpa.assistant import RPAAssistant, RPAReActAgent, _active_agents, should_use_react_mode
+from backend.rpa.assistant import RPAReActAgent, _active_agents
 from backend.rpa.cdp_connector import get_cdp_connector
 from backend.rpa.screencast import SessionScreencastController
 from backend.user.dependencies import get_current_user, User
@@ -33,9 +33,6 @@ router = APIRouter(tags=["RPA"])
 generator = PlaywrightGenerator()
 executor = ScriptExecutor()
 exporter = SkillExporter()
-assistant = RPAAssistant()
-
-
 def _json_ready_step_payloads(steps) -> list[Dict[str, Any]]:
     payloads = []
     for step in steps or []:
@@ -563,57 +560,40 @@ async def chat_with_assistant(
         try:
             rpa_manager.pause_recording(session_id)
 
-            if should_use_react_mode(request.message, request.mode):
-                # Reuse existing agent for this session to preserve history across turns
-                agent = _active_agents.get(session_id)
-                if agent is None:
-                    agent = RPAReActAgent()
-                    _active_agents[session_id] = agent
-                base_step_count = len(session.steps)
-                try:
-                    async for event in agent.run(
-                        session_id=session_id,
-                        page=page,
-                        goal=request.message,
-                        existing_steps=steps,
-                        model_config=model_config,
-                        page_provider=lambda: rpa_manager.get_page(session_id),
-                    ):
-                        evt_type = event.get("event", "message")
-                        evt_data = event.get("data", {})
-                        if evt_type == "agent_recorded_steps":
-                            current_steps = await rpa_manager.replace_steps_from(
-                                session_id,
-                                base_step_count,
-                                evt_data.get("steps") or [],
-                            )
-                            evt_data = {"steps": _json_ready_step_payloads(current_steps)}
-                        if evt_type == "agent_aborted":
-                            _active_agents.pop(session_id, None)
-                        yield {
-                            "event": evt_type,
-                            "data": json.dumps(evt_data, ensure_ascii=False),
-                        }
-                except Exception:
-                    _active_agents.pop(session_id, None)
-                    raise
-            else:
-                async for event in assistant.chat(
+            # Chat mode remains only as a request compatibility field. Recording now
+            # always uses the unified ReAct flow, including single-step instructions.
+            agent = _active_agents.get(session_id)
+            if agent is None:
+                agent = RPAReActAgent()
+                _active_agents[session_id] = agent
+            base_step_count = len(session.steps)
+            try:
+                async for event in agent.run(
                     session_id=session_id,
                     page=page,
-                    message=request.message,
-                    steps=steps,
+                    goal=request.message,
+                    existing_steps=steps,
                     model_config=model_config,
                     page_provider=lambda: rpa_manager.get_page(session_id),
                 ):
                     evt_type = event.get("event", "message")
                     evt_data = event.get("data", {})
-                    if evt_type == "result" and evt_data.get("success") and evt_data.get("step"):
-                        await rpa_manager.add_step(session_id, evt_data["step"])
+                    if evt_type == "agent_recorded_steps":
+                        current_steps = await rpa_manager.replace_steps_from(
+                            session_id,
+                            base_step_count,
+                            evt_data.get("steps") or [],
+                        )
+                        evt_data = {"steps": _json_ready_step_payloads(current_steps)}
+                    if evt_type == "agent_aborted":
+                        _active_agents.pop(session_id, None)
                     yield {
                         "event": evt_type,
                         "data": json.dumps(evt_data, ensure_ascii=False),
                     }
+            except Exception:
+                _active_agents.pop(session_id, None)
+                raise
         except Exception as e:
             logger.error(f"Chat error: {e}")
             yield {"event": "error", "data": json.dumps({"message": str(e)}, ensure_ascii=False)}

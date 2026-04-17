@@ -33,6 +33,49 @@ class PlaywrightGeneratorTests(unittest.TestCase):
         self.assertIn("execute_ai_instruction(", script)
         self.assertIn('"action": "ai_instruction"', script)
         self.assertIn("Fill table B from table A by matching rows on name, then submit", script)
+        self.assertIn("_normalize_serialized_json_result", script)
+
+    def test_generate_script_normalizes_ai_instruction_extract_result_from_json_string(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "ai_instruction",
+                "source": "ai",
+                "description": "Extract first 10 PRs",
+                "prompt": "Return a strict JSON array of PR title and author records.",
+                "instruction_kind": "semantic_extract",
+                "input_scope": {"mode": "current_page"},
+                "output_expectation": {"mode": "extract"},
+                "execution_hint": {"requires_dom_snapshot": True, "allow_navigation": False, "max_reasoning_steps": 5},
+                "result_key": "top_10_prs",
+            }
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertIn('if "top_10_prs" in _results:', script)
+        self.assertIn('_results["top_10_prs"] = _normalize_serialized_json_result(_results["top_10_prs"])', script)
+        self.assertIn('_results["top_10_prs"] = _normalize_serialized_json_result(_ai_instruction_result.get("output"))', script)
+
+    def test_generate_script_normalizes_semantic_decision_act_navigation_contract(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "ai_instruction",
+                "source": "ai",
+                "description": "Find the project most related to SKILL from trending repos",
+                "prompt": "Scan all repository names and descriptions on the current page and return the repo_path of the top match.",
+                "instruction_kind": "semantic_decision",
+                "input_scope": {"mode": "current_page"},
+                "output_expectation": {"mode": "act"},
+                "execution_hint": {"requires_dom_snapshot": True, "allow_navigation": False, "max_reasoning_steps": 5},
+            }
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertIn('"allow_navigation": true', script.lower())
+        self.assertIn("Complete the requested browser action inside this AI instruction.", script)
 
     def test_generate_script_executes_ai_script_run_function(self):
         generator = PlaywrightGenerator()
@@ -672,6 +715,182 @@ class PlaywrightGeneratorTests(unittest.TestCase):
         self.assertIn('preview = page.frame_locator("iframe[title=\'杩愯缁撴灉棰勮\']").frame_locator("iframe")', script)
         self.assertIn('preview = await preview.locator("h1").inner_text()', script)
         self.assertEqual(script.count('_results["preview"] = preview'), 1)
+
+    def test_generate_script_injects_result_capture_after_multiline_page_evaluate(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "ai_script",
+                "source": "ai",
+                "description": "Extract repo links",
+                "value": "\n".join([
+                    "async def run(page):",
+                    "    links = await page.evaluate('''",
+                    "    () => Array.from(document.querySelectorAll('a')).map(a => ({",
+                    "        href: a.getAttribute('href'),",
+                    "        text: a.textContent.trim()",
+                    "    }))",
+                    "    ''')",
+                    "    return {'target_url': '/example/repo/issues'}",
+                ]),
+            }
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertIn("    links = await page.evaluate('''", script)
+        self.assertIn("        ''')\n        _results[\"links\"] = links", script)
+        self.assertNotIn("page.evaluate('''\n    _results[\"links\"] = links", script)
+
+    def test_generate_script_stores_ai_script_result_under_stable_result_key(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "ai_script",
+                "source": "ai",
+                "description": "Collect PR list",
+                "result_key": "first_10_prs",
+                "value": "\n".join([
+                    "async def run(page):",
+                    "    return {",
+                    "        'target_url': 'https://github.com/example/repo/pulls',",
+                    "        'pr_list': [{'title': 'Fix bug', 'author': 'alice'}],",
+                    "    }",
+                ]),
+            }
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertIn('    _store_ai_script_result(_results, "first_10_prs", _ai_script_result)', script)
+        self.assertNotIn("    _merge_ai_script_result(_results, _ai_script_result)", script)
+        self.assertNotIn("results[_key] = _value", script)
+
+    def test_generate_script_ai_script_result_falls_back_to_step_scoped_key_without_result_key(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "ai_script",
+                "source": "ai",
+                "description": "Collect PR list",
+                "value": "\n".join([
+                    "async def run(page):",
+                    "    return [{'title': 'Fix bug', 'author': 'alice'}]",
+                ]),
+            }
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertIn('    _store_ai_script_result(_results, "ai_script_1", _ai_script_result)', script)
+
+    def test_generate_script_uses_relative_stable_subpage_navigation_after_ai_script(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "ai_script",
+                "source": "ai",
+                "description": "Open top repository",
+                "value": "\n".join([
+                    "async def run(page):",
+                    "    return {'target_url': 'https://github.com/dynamic/repo'}",
+                ]),
+            },
+            {
+                "action": "navigate",
+                "description": "Open pull requests page",
+                "value": "https://github.com/public-apis/public-apis/pulls",
+                "url": "https://github.com/public-apis/public-apis/pulls",
+                "source": "ai",
+            },
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertIn('_relative_nav_target = _relative_stable_subpage_url(current_page.url, "https://github.com/public-apis/public-apis/pulls")', script)
+        self.assertIn('await current_page.goto(_relative_nav_target or "https://github.com/public-apis/public-apis/pulls", wait_until="domcontentloaded")', script)
+
+    def test_generate_script_uses_relative_stable_subpage_navigation_with_query_after_ai_script(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "ai_script",
+                "source": "ai",
+                "description": "Open the selected repository",
+                "value": "\n".join([
+                    "async def run(page):",
+                    "    return {'target_url': 'https://github.com/dynamic/repo'}",
+                ]),
+            },
+            {
+                "action": "navigate",
+                "description": "Open all pull requests view",
+                "value": "https://github.com/public-apis/public-apis/pulls?q=is%3Apr",
+                "url": "https://github.com/public-apis/public-apis/pulls?q=is%3Apr",
+                "source": "ai",
+            },
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertIn('_relative_nav_target = _relative_stable_subpage_url(current_page.url, "https://github.com/public-apis/public-apis/pulls?q=is%3Apr")', script)
+        self.assertIn('await current_page.goto(_relative_nav_target or "https://github.com/public-apis/public-apis/pulls?q=is%3Apr", wait_until="domcontentloaded")', script)
+
+    def test_generate_script_normalizes_stable_subpage_click_to_navigation(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "ai_script",
+                "source": "ai",
+                "description": "Open top repository",
+                "value": "\n".join([
+                    "async def run(page):",
+                    "    return {'target_url': 'https://github.com/example/repo'}",
+                ]),
+            },
+            {
+                "action": "click",
+                "target": json.dumps({"method": "role", "role": "link", "name": "Pull requests 1.3k"}),
+                "description": "Click Pull requests tab",
+                "url": "https://github.com/example/repo/pulls",
+                "source": "ai",
+            }
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertIn('_relative_nav_target = _relative_stable_subpage_url(current_page.url, "https://github.com/example/repo/pulls")', script)
+        self.assertIn('await current_page.goto(_relative_nav_target or "https://github.com/example/repo/pulls", wait_until="domcontentloaded")', script)
+        self.assertNotIn('get_by_role("link", name="Pull requests 1.3k", exact=True).click()', script)
+
+    def test_build_locator_relaxes_dynamic_role_name_suffix(self):
+        generator = PlaywrightGenerator()
+
+        locator = generator._build_locator(
+            json.dumps({"method": "role", "role": "link", "name": "Pull requests 1.3k"})
+        )
+
+        self.assertEqual(locator, 'page.get_by_role("link", name="Pull requests", exact=False)')
+
+    def test_generate_script_validates_ai_script_array_results(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "ai_script",
+                "source": "ai",
+                "description": "Extract the first 10 PR titles and creators into an array",
+                "value": "\n".join([
+                    "async def run(page):",
+                    "    return {'first_10_prs': []}",
+                ]),
+            },
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertIn("def _validate_ai_script_result(step_description, result):", script)
+        self.assertIn("AI script returned an empty record array", script)
+        self.assertIn("_validate_ai_script_result(\"Extract the first 10 PR titles and creators into an array\", _ai_script_result)", script)
 
 
     def test_generate_script_does_not_prefix_for_loop_over_page_frames_with_await(self):

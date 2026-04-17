@@ -6,6 +6,7 @@ import re
 import io
 import tokenize
 from typing import Any, Dict, Optional
+from urllib.parse import urljoin
 
 from backend.deepagent.engine import get_llm_model
 from backend.rpa.assistant import _extract_llm_response_text
@@ -45,6 +46,7 @@ Rules:
 - Keep code limited to Playwright page automation and page.evaluate(...). Do not use filesystem, network, shell, or system libraries.
 - Never import or use requests, httpx, urllib, fetch, or any external HTTP client. Work only with the current page, its DOM, and Playwright APIs.
 - For code plans in act mode, return a dict from run(page, results) that includes either a non-empty output or action_performed=true.
+- For semantic selection tasks in act mode, do not stop at returning only a chosen identifier/path. Prefer a real click/navigate plan. If you must return the selected target, use target_url/url/href/path/repo_path so runtime can execute it.
 - If planning_feedback is present, treat it as a validation failure from the previous attempt and return a corrected replacement plan instead of repeating the same mistake.
 - Keep the plan concise and executable within the provided reasoning budget.
 """
@@ -336,13 +338,18 @@ def _is_retryable_code_plan_error(exc: Exception) -> bool:
 
 def _is_retryable_execution_error(error: str) -> bool:
     normalized = str(error or "")
+    lowered = normalized.lower()
     return (
         "SyntaxError" in normalized
+        or "syntaxerror" in lowered
+        or "invalid syntax" in lowered
         or "Invalid or unexpected token" in normalized
         or "strict mode violation" in normalized
         or "EOF in multi-line string" in normalized
-        or "unterminated string" in normalized.lower()
-        or "tokenerror" in normalized.lower()
+        or "unterminated string" in lowered
+        or "tokenerror" in lowered
+        or "expression cannot contain assignment" in lowered
+        or 'perhaps you meant "=="' in lowered
     )
 
 
@@ -350,6 +357,44 @@ def _normalize_output_value(value: Any) -> Any:
     if isinstance(value, (dict, list)):
         return json.dumps(value, ensure_ascii=False)
     return value
+
+
+def _extract_navigation_target_from_value(current_url: str, value: Any) -> str:
+    candidates = []
+    if isinstance(value, str):
+        normalized = value.strip()
+        if not normalized:
+            return ""
+        if (normalized.startswith("{") and normalized.endswith("}")) or (
+            normalized.startswith("[") and normalized.endswith("]")
+        ):
+            try:
+                parsed = json.loads(normalized)
+            except Exception:
+                parsed = None
+            if parsed is not None:
+                return _extract_navigation_target_from_value(current_url, parsed)
+        candidates.append(normalized)
+    elif isinstance(value, dict):
+        for key in ("target_url", "url", "repo_url", "repo_path", "repo", "href", "path"):
+            candidate = value.get(key)
+            if isinstance(candidate, str):
+                candidates.append(candidate)
+        for key in ("output", "data", "selected", "selection", "result"):
+            nested = value.get(key)
+            target = _extract_navigation_target_from_value(current_url, nested)
+            if target:
+                return target
+
+    for candidate in candidates:
+        stripped = candidate.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("/"):
+            return urljoin(current_url or "", stripped)
+        if stripped.startswith(("http://", "https://")):
+            return stripped
+    return ""
 
 
 def _is_semantic_summary_extract_step(step: Dict[str, Any]) -> bool:
@@ -528,6 +573,8 @@ async def _execute_code_plan(page, code: str, results: Dict[str, Any]) -> Dict[s
         outcome = await asyncio.wait_for(run(page, results), timeout=60)
     except asyncio.TimeoutError:
         return {"success": False, "error": "AI instruction code plan timed out after 60s", "output": ""}
+    except SyntaxError as exc:
+        return {"success": False, "error": f"SyntaxError: {exc}", "output": ""}
     except Exception as exc:
         return {"success": False, "error": str(exc), "output": ""}
     if isinstance(outcome, dict):
@@ -653,12 +700,18 @@ async def execute_ai_instruction(
                     }
                 snapshot = await build_page_snapshot(page, build_frame_path_from_frame)
                 last_result: Dict[str, Any] = {"success": True, "output": ""}
-                for action in actions:
+                action_observation_before = await _capture_page_observation(page)
+                for index, action in enumerate(actions):
                     resolved = resolve_structured_intent(snapshot, action)
                     last_result = await execute_structured_intent(page, resolved)
                     if not last_result.get("success"):
                         return last_result
-                    snapshot = await build_page_snapshot(page, build_frame_path_from_frame)
+                    if index == len(actions) - 1:
+                        continue
+                    action_observation_after = await _capture_page_observation(page)
+                    if _has_observable_page_change(action_observation_before, action_observation_after):
+                        snapshot = await build_page_snapshot(page, build_frame_path_from_frame)
+                    action_observation_before = action_observation_after
                 final_result = last_result
                 break
             if plan_type == "code":
@@ -668,8 +721,8 @@ async def execute_ai_instruction(
                         **step,
                         "planning_feedback": (
                             f"Previous code plan failed during execution: {final_result.get('error')}. "
-                            "Return a corrected replacement plan that avoids invalid page.evaluate JavaScript "
-                            "and uses Playwright APIs safely."
+                            "Return a corrected replacement plan that avoids invalid Python syntax, "
+                            "invalid page.evaluate JavaScript, and uses Playwright APIs safely."
                         ),
                     }
                     continue
@@ -717,6 +770,35 @@ async def execute_ai_instruction(
         action_performed = bool(final_result.get("action_performed"))
         if not action_performed and before_observation is not None:
             action_performed = _has_observable_page_change(before_observation, after_observation)
+        if not action_performed:
+            navigation_target = _extract_navigation_target_from_value(
+                getattr(page, "url", "") or "",
+                final_result,
+            )
+            if not navigation_target and result_key:
+                navigation_target = _extract_navigation_target_from_value(
+                    getattr(page, "url", "") or "",
+                    results.get(result_key),
+                )
+            if navigation_target:
+                try:
+                    await page.goto(navigation_target, wait_until="domcontentloaded")
+                    await page.wait_for_load_state("domcontentloaded")
+                except Exception as exc:
+                    return {
+                        "success": False,
+                        "error": f"AI instruction selected navigation target {navigation_target} but navigation failed: {exc}",
+                        "output": final_result.get("output", ""),
+                    }
+                after_observation = await _capture_page_observation(page)
+                action_performed = bool(
+                    navigation_target.rstrip("/") == str(getattr(page, "url", "") or "").rstrip("/")
+                )
+                if not action_performed and before_observation is not None:
+                    action_performed = _has_observable_page_change(before_observation, after_observation)
+                if action_performed:
+                    final_result["action_performed"] = True
+                    final_result["navigation_target"] = navigation_target
         if not action_performed:
             return {
                 "success": False,

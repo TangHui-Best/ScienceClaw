@@ -8,8 +8,20 @@ from backend.rpa.runtime_ai_instruction import _parse_plan_response_text, execut
 class _FakePage:
     url = "https://example.com"
 
+    def __init__(self):
+        self.url = "https://example.com"
+        self.goto_calls = []
+        self.load_state_calls = []
+
     async def title(self):
         return "Example"
+
+    async def goto(self, url, wait_until=None):
+        self.goto_calls.append((url, wait_until))
+        self.url = url
+
+    async def wait_for_load_state(self, state):
+        self.load_state_calls.append(state)
 
 
 class RuntimeAIInstructionTests(unittest.IsolatedAsyncioTestCase):
@@ -231,6 +243,41 @@ class RuntimeAIInstructionTests(unittest.IsolatedAsyncioTestCase):
             result = await execute_ai_instruction(page, step, results={})
 
         self.assertTrue(result["success"])
+
+    async def test_execute_ai_instruction_materializes_navigation_target_for_act_mode(self):
+        step = {
+            "action": "ai_instruction",
+            "prompt": "Open the project most related to SKILL on the current page",
+            "instruction_kind": "semantic_decision",
+            "input_scope": {"mode": "current_page"},
+            "output_expectation": {"mode": "act"},
+            "execution_hint": {"max_reasoning_steps": 10},
+            "result_key": "most_skill_related_project",
+        }
+        page = _FakePage()
+        results = {}
+
+        with patch(
+            "backend.rpa.runtime_ai_instruction.build_page_snapshot",
+            new=AsyncMock(return_value={"url": page.url, "title": "Example", "frames": []}),
+        ), patch(
+            "backend.rpa.runtime_ai_instruction.plan_ai_instruction",
+            new=AsyncMock(
+                return_value={
+                    "plan_type": "code",
+                    "code": (
+                        "async def run(page, results):\n"
+                        "    return {'success': True, 'output': {'repo_path': '/forrestchang/andrej-karpathy-skills'}}"
+                    ),
+                }
+            ),
+        ):
+            result = await execute_ai_instruction(page, step, results=results)
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result["action_performed"])
+        self.assertEqual(result["navigation_target"], "https://example.com/forrestchang/andrej-karpathy-skills")
+        self.assertEqual(page.goto_calls[0][0], "https://example.com/forrestchang/andrej-karpathy-skills")
 
     async def test_execute_ai_instruction_replans_when_code_plan_uses_disallowed_token(self):
         step = {

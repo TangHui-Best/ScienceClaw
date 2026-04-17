@@ -7,6 +7,15 @@ logger = logging.getLogger(__name__)
 
 RPA_PLAYWRIGHT_TIMEOUT_MS = 60000
 RPA_NAVIGATION_TIMEOUT_MS = 60000
+STABLE_SUBPAGE_HINTS = (
+    ("/pulls", ("pull requests", "pull request", "/pulls", "pr list", "prs")),
+    ("/issues", ("issues", "/issues", "issue list")),
+    ("/actions", ("actions", "/actions", "workflow runs", "workflow")),
+    ("/releases", ("releases", "/releases")),
+    ("/wiki", ("wiki", "/wiki")),
+    ("/discussions", ("discussions", "/discussions")),
+    ("/commits", ("commits", "/commits", "commit history")),
+)
 
 
 class PlaywrightGenerator:
@@ -21,6 +30,7 @@ class PlaywrightGenerator:
     RUNNER_TEMPLATE_DOCKER = '''\
 import asyncio
 import json as _json
+import re
 import sys
 import httpx
 from urllib.parse import urljoin
@@ -73,6 +83,7 @@ if __name__ == "__main__":
     RUNNER_TEMPLATE_LOCAL = '''\
 import asyncio
 import json as _json
+import re
 import sys
 from urllib.parse import urljoin
 from playwright.async_api import async_playwright
@@ -126,6 +137,7 @@ class StepExecutionError(Exception):
         deduped = self._deduplicate_steps(steps)
         deduped = self._infer_missing_tab_transitions(deduped)
         deduped = self._normalize_step_signals(deduped)
+        deduped = self._normalize_export_steps(deduped)
         root_tab_id = deduped[0].get("tab_id") if deduped else None
         root_tab_id = root_tab_id or "tab-1"
         used_result_keys: Dict[str, int] = {}
@@ -155,6 +167,118 @@ class StepExecutionError(Exception):
             "            if candidate.startswith('http://') or candidate.startswith('https://'):",
             "                return candidate",
             "        return ''",
+            "    def _sanitize_ai_script_result(result):",
+            "        if isinstance(result, dict):",
+            "            _cleaned = {}",
+            "            for _key, _value in result.items():",
+            "                if _key in {'target_url', 'url', 'repo_url', 'repo_path', 'repo', 'href', 'path', 'success', 'error'}:",
+            "                    continue",
+            "                if _key == 'output' and isinstance(_value, str):",
+            "                    _normalized_output = _value.strip()",
+            "                    if _normalized_output.startswith('/') or _normalized_output.startswith('http://') or _normalized_output.startswith('https://'):",
+            "                        continue",
+            "                _cleaned[_key] = _value",
+            "            if not _cleaned:",
+            "                return None",
+            "            if len(_cleaned) == 1:",
+            "                return next(iter(_cleaned.values()))",
+            "            return _cleaned",
+            "        if result is None:",
+            "            return None",
+            "        if isinstance(result, str):",
+            "            _normalized_output = result.strip()",
+            "            if _normalized_output.startswith('/') or _normalized_output.startswith('http://') or _normalized_output.startswith('https://'):",
+            "                return None",
+            "        return result",
+            "    def _store_ai_script_result(results, result_key, result):",
+            "        if not isinstance(result_key, str) or not result_key.strip():",
+            "            return",
+            "        _payload = _sanitize_ai_script_result(result)",
+            "        if _payload is None:",
+            "            return",
+            "        results[result_key] = _payload",
+            "    def _relative_stable_subpage_url(current_url, recorded_url):",
+            "        if not isinstance(current_url, str) or not isinstance(recorded_url, str):",
+            "            return ''",
+            "        _normalized_recorded = recorded_url.strip()",
+            "        if not _normalized_recorded.startswith(('http://', 'https://')):",
+            "            return ''",
+            "        _recorded_base, _query_sep, _recorded_query = _normalized_recorded.partition('?')",
+            "        _current_base = (current_url or '').split('?', 1)[0].rstrip('/')",
+            "        _known_suffixes = ('/pulls', '/issues', '/actions', '/releases', '/wiki', '/discussions', '/commits')",
+            "        for _existing_suffix in _known_suffixes:",
+            "            if _current_base.endswith(_existing_suffix):",
+            "                _current_base = _current_base[:-len(_existing_suffix)].rstrip('/')",
+            "                break",
+            "        for _suffix in _known_suffixes:",
+            "            if _recorded_base.endswith(_suffix):",
+            "                _query = f'?{_recorded_query}' if _query_sep else ''",
+            "                return f\"{_current_base}{_suffix}{_query}\"",
+            "        return ''",
+            "    def _normalize_serialized_json_result(value):",
+            "        if not isinstance(value, str):",
+            "            return value",
+            "        _normalized = value.strip()",
+            "        if not _normalized:",
+            "            return value",
+            "        if not ((_normalized.startswith('[') and _normalized.endswith(']')) or (_normalized.startswith('{') and _normalized.endswith('}'))):",
+            "            return value",
+            "        try:",
+            "            return _json.loads(_normalized)",
+            "        except Exception:",
+            "            return value",
+            "    def _extract_record_list_candidate(result):",
+            "        if isinstance(result, list):",
+            "            return result",
+            "        if isinstance(result, dict):",
+            "            for _key in ('first_10_prs', 'pr_list', 'items', 'rows', 'results', 'data', 'output'):",
+            "                _value = result.get(_key)",
+            "                if isinstance(_value, list):",
+            "                    return _value",
+            "            for _value in result.values():",
+            "                if isinstance(_value, list):",
+            "                    return _value",
+            "        return None",
+            "    def _looks_like_record_array_request(step_description):",
+            "        _normalized = str(step_description or '').strip().lower()",
+            "        if not _normalized:",
+            "            return False",
+            "        if any(_pattern in _normalized for _pattern in ('strict array', 'strictly as an array', 'output strictly as an array', '输出严格为数组', '严格为数组', '数组')):",
+            "            return True",
+            "        return (",
+            "            any(_pattern in _normalized for _pattern in ('top', 'first', '前', 'pull request', 'pull requests', 'pr', 'issue', 'list'))",
+            "            and any(_pattern in _normalized for _pattern in ('title', '标题'))",
+            "            and any(_pattern in _normalized for _pattern in ('author', 'creator', '创建人'))",
+            "        )",
+            "    def _is_valid_record_title(value):",
+            "        if not isinstance(value, str):",
+            "            return False",
+            "        _normalized = value.strip()",
+            "        if not _normalized:",
+            "            return False",
+            "        return re.fullmatch(r'\\d+(\\s+comments?)?', _normalized.lower()) is None",
+            "    def _is_valid_record_author(value):",
+            "        return isinstance(value, str) and bool(value.strip()) and value.strip().lower() != 'unknown'",
+            "    def _validate_ai_script_result(step_description, result):",
+            "        if not _looks_like_record_array_request(step_description):",
+            "            return",
+            "        _records = _extract_record_list_candidate(result)",
+            "        if _records is None:",
+            "            raise RuntimeError('AI script did not return the requested record array')",
+            "        if not _records:",
+            "            raise RuntimeError('AI script returned an empty record array even though the target list should be visible')",
+            "        _valid_items = 0",
+            "        for _item in _records:",
+            "            if not isinstance(_item, dict):",
+            "                continue",
+            "            _title = _item.get('title')",
+            "            _author = _item.get('author')",
+            "            if _author is None:",
+            "                _author = _item.get('creator')",
+            "            if _is_valid_record_title(_title) and _is_valid_record_author(_author):",
+            "                _valid_items += 1",
+            "        if _valid_items * 5 < len(_records) * 4:",
+            "            raise RuntimeError('AI script returned a low-quality record array with missing or misaligned title/author fields')",
             "    _results = {}",
             f'    tabs = {{"{root_tab_id}": page}}',
             "    current_page = page",
@@ -186,20 +310,36 @@ class StepExecutionError(Exception):
                 lines.append(f"    # {desc}")
 
             if action == "ai_instruction":
-                step_payload = {
-                    "action": "ai_instruction",
-                    "source": step.get("source", "ai"),
-                    "description": step.get("description", ""),
-                    "prompt": step.get("prompt", ""),
-                    "instruction_kind": step.get("instruction_kind", "semantic_rule"),
-                    "input_scope": step.get("input_scope") or {"mode": "current_page"},
-                    "output_expectation": step.get("output_expectation") or {"mode": "act"},
-                    "execution_hint": step.get("execution_hint")
+                instruction_kind = step.get("instruction_kind", "semantic_rule")
+                output_expectation = step.get("output_expectation") or {"mode": "act"}
+                execution_hint = dict(
+                    step.get("execution_hint")
                     or {
                         "requires_dom_snapshot": True,
                         "allow_navigation": True,
                         "max_reasoning_steps": 10,
-                    },
+                    }
+                )
+                prompt = step.get("prompt", "")
+                if instruction_kind == "semantic_decision" and str(output_expectation.get("mode") or "").strip().lower() == "act":
+                    execution_hint["allow_navigation"] = True
+                    prompt_text = str(prompt or "").strip()
+                    contract_suffix = (
+                        "Complete the requested browser action inside this AI instruction. "
+                        "Do not stop after only identifying the best match or returning explanatory text. "
+                        "If you need to express the selected target in a structured result, use target_url, url, href, path, or repo_path."
+                    )
+                    if contract_suffix.lower() not in prompt_text.lower():
+                        prompt = f"{prompt_text}\n\n{contract_suffix}" if prompt_text else contract_suffix
+                step_payload = {
+                    "action": "ai_instruction",
+                    "source": step.get("source", "ai"),
+                    "description": step.get("description", ""),
+                    "prompt": prompt,
+                    "instruction_kind": instruction_kind,
+                    "input_scope": step.get("input_scope") or {"mode": "current_page"},
+                    "output_expectation": output_expectation,
+                    "execution_hint": execution_hint,
                     "result_key": step.get("result_key"),
                     "sensitive": bool(step.get("sensitive", False)),
                 }
@@ -217,6 +357,12 @@ class StepExecutionError(Exception):
                 step_lines.append(
                     '        raise RuntimeError(_ai_instruction_result.get("error") or _ai_instruction_result.get("output") or "AI instruction failed")'
                 )
+                result_key = self._normalize_result_key(step.get("result_key"))
+                if result_key:
+                    step_lines.append(f'    if "{result_key}" in _results:')
+                    step_lines.append(f'        _results["{result_key}"] = _normalize_serialized_json_result(_results["{result_key}"])')
+                    step_lines.append("    elif isinstance(_ai_instruction_result, dict) and 'output' in _ai_instruction_result:")
+                    step_lines.append(f'        _results["{result_key}"] = _normalize_serialized_json_result(_ai_instruction_result.get("output"))')
                 lines.extend(self._wrap_step_lines(step_lines, step_index, test_mode))
                 lines.append("")
                 prev_action = action
@@ -226,6 +372,7 @@ class StepExecutionError(Exception):
             if action == "ai_script":
                 ai_code = step.get("value", "")
                 if ai_code:
+                    result_key = self._build_ai_script_result_key(step, used_result_keys)
                     converted = self._sync_to_async(ai_code)
                     converted = self._inject_result_capture(converted)
                     converted = self._strip_locator_result_capture(converted)
@@ -249,6 +396,8 @@ class StepExecutionError(Exception):
                     step_lines.append(
                         "        raise RuntimeError(_ai_script_result.get('error') or _ai_script_result.get('output') or 'AI script failed')"
                     )
+                    step_lines.append(f'    _validate_ai_script_result("{self._escape(desc)}", _ai_script_result)')
+                    step_lines.append(f'    _store_ai_script_result(_results, "{result_key}", _ai_script_result)')
                     step_lines.append(
                         "    _ai_script_nav_target = _extract_ai_script_navigation_target(current_page.url, _ai_script_result)"
                     )
@@ -259,11 +408,16 @@ class StepExecutionError(Exception):
                     step_lines.append("        await current_page.wait_for_load_state('domcontentloaded')")
                 lines.extend(self._wrap_step_lines(step_lines, step_index, test_mode))
                 lines.append("")
+                prev_action = action
                 continue
 
             # Navigation
             if action == "navigate" or (action == "goto" and url):
-                step_lines.append(f'    await current_page.goto("{url}", wait_until="domcontentloaded")')
+                if prev_action == "ai_script" and url:
+                    step_lines.append(f'    _relative_nav_target = _relative_stable_subpage_url(current_page.url, "{url}")')
+                    step_lines.append(f'    await current_page.goto(_relative_nav_target or "{url}", wait_until="domcontentloaded")')
+                else:
+                    step_lines.append(f'    await current_page.goto("{url}", wait_until="domcontentloaded")')
                 step_lines.append('    await current_page.wait_for_load_state("domcontentloaded")')
                 prev_url = url
                 prev_action = "navigate"
@@ -308,6 +462,7 @@ class StepExecutionError(Exception):
                 step_lines.append(f'    # If this step appears, manually wrap the triggering click with expect_download()')
                 lines.extend(self._wrap_step_lines(step_lines, step_index, test_mode))
                 lines.append("")
+                prev_action = action
                 continue
 
             scope_var = "current_page"
@@ -452,6 +607,19 @@ class StepExecutionError(Exception):
             return key
         return f"{key}_{count}"
 
+    def _build_ai_script_result_key(self, step: Dict[str, Any], used_result_keys: Dict[str, int]) -> str:
+        key = self._normalize_result_key(step.get("result_key"))
+        if not key:
+            fallback_count = used_result_keys.get("ai_script", 0) + 1
+            used_result_keys["ai_script"] = fallback_count
+            return f"ai_script_{fallback_count}"
+
+        count = used_result_keys.get(key, 0) + 1
+        used_result_keys[key] = count
+        if count == 1:
+            return key
+        return f"{key}_{count}"
+
     def _normalize_result_key(self, raw_key: Any) -> str:
         text = str(raw_key or "").strip().lower()
         if not text:
@@ -580,6 +748,125 @@ class StepExecutionError(Exception):
         return normalized
 
     @classmethod
+    def _normalize_export_steps(cls, steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        normalized: List[Dict[str, Any]] = []
+        for original_step in steps:
+            step = dict(original_step)
+            step["target"] = cls._normalize_target_locator(step.get("target"))
+            step = cls._normalize_stable_subpage_click(step)
+            normalized.append(step)
+        return normalized
+
+    @classmethod
+    def _normalize_stable_subpage_click(cls, step: Dict[str, Any]) -> Dict[str, Any]:
+        action = str(step.get("action") or "").strip().lower()
+        if action not in {"click", "navigate_click"}:
+            return step
+        if cls._popup_signal(step) or cls._download_signal(step):
+            return step
+        url = str(step.get("url") or step.get("value") or "").strip()
+        stable_suffix = cls._infer_stable_subpage_suffix(step, url)
+        if not stable_suffix:
+            return step
+
+        normalized = dict(step)
+        normalized["action"] = "navigate"
+        normalized["value"] = url
+        normalized["url"] = url
+        return normalized
+
+    @classmethod
+    def _infer_stable_subpage_suffix(cls, step: Dict[str, Any], url: str) -> str:
+        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+            return ""
+        lowered_url = url.strip().lower().split("?", 1)[0]
+        text_parts: List[str] = [
+            str(step.get("description") or ""),
+            cls._locator_text_blob(step.get("target")),
+        ]
+        blob = " ".join(part for part in text_parts if part).strip().lower()
+        for suffix, signals in STABLE_SUBPAGE_HINTS:
+            if not lowered_url.endswith(suffix):
+                continue
+            if any(signal in blob for signal in signals):
+                return suffix
+        return ""
+
+    @classmethod
+    def _locator_text_blob(cls, target: Any) -> str:
+        try:
+            loc = json.loads(target) if isinstance(target, str) else target
+        except Exception:
+            return str(target or "")
+        if not isinstance(loc, dict):
+            return str(target or "")
+        parts: List[str] = []
+        for key in ("name", "value", "role", "title", "label", "placeholder", "text"):
+            value = loc.get(key)
+            if isinstance(value, str) and value.strip():
+                parts.append(value.strip())
+        for child_key in ("parent", "child", "locator", "collection", "item"):
+            child = loc.get(child_key)
+            if child:
+                parts.append(cls._locator_text_blob(child))
+        return " ".join(part for part in parts if part)
+
+    @classmethod
+    def _normalize_target_locator(cls, target: Any) -> Any:
+        try:
+            loc = json.loads(target) if isinstance(target, str) else target
+        except Exception:
+            return target
+        normalized = cls._normalize_locator_payload(loc)
+        if isinstance(target, str):
+            return json.dumps(normalized, ensure_ascii=False)
+        return normalized
+
+    @classmethod
+    def _normalize_locator_payload(cls, loc: Any) -> Any:
+        if isinstance(loc, list):
+            return [cls._normalize_locator_payload(item) for item in loc]
+        if not isinstance(loc, dict):
+            return loc
+
+        normalized = dict(loc)
+        method = str(normalized.get("method") or "").strip().lower()
+        for child_key in ("parent", "child", "locator", "collection", "item"):
+            if child_key in normalized:
+                normalized[child_key] = cls._normalize_locator_payload(normalized.get(child_key))
+
+        if method in {"role", "label", "placeholder", "alt", "title", "text"}:
+            value_key = "name" if method == "role" else "value"
+            raw_value = normalized.get(value_key)
+            cleaned_value = cls._strip_dynamic_text_suffix(raw_value)
+            if cleaned_value and cleaned_value != raw_value:
+                normalized[value_key] = cleaned_value
+                normalized["exact"] = False
+
+        return normalized
+
+    @staticmethod
+    def _strip_dynamic_text_suffix(value: Any) -> str:
+        if not isinstance(value, str):
+            return ""
+        normalized = re.sub(r"\s+", " ", value).strip()
+        if not normalized:
+            return ""
+
+        patterns = (
+            r"^(?P<base>.+?)\s+\d{1,3}(?:,\d{3})*(?:\.\d+)?[kmb]?$",
+            r"^(?P<base>.+?)\s+\(\d{1,3}(?:,\d{3})*(?:\.\d+)?[kmb]?\)$",
+        )
+        for pattern in patterns:
+            match = re.match(pattern, normalized, flags=re.IGNORECASE)
+            if not match:
+                continue
+            base = re.sub(r"\s+", " ", match.group("base")).strip(" -:()")
+            if base:
+                return base
+        return normalized
+
+    @classmethod
     def _merge_standalone_download_step(cls, normalized_steps: List[Dict[str, Any]], download_step: Dict[str, Any]) -> bool:
         download_tab_id = str(download_step.get("tab_id") or "")
         download_name = str(download_step.get("value") or "file")
@@ -675,6 +962,7 @@ class StepExecutionError(Exception):
         if not isinstance(loc, dict):
             return f'page.locator("{self._escape(str(target))}")'
 
+        loc = self._normalize_locator_payload(loc)
         method = loc.get("method", "css")
 
         if method == "collection_item":
@@ -692,7 +980,8 @@ class StepExecutionError(Exception):
             role = loc.get("role", "button")
             name = self._escape(loc.get("name", ""))
             if name:
-                return f'page.get_by_role("{role}", name="{name}", exact=True)'
+                exact = "False" if loc.get("exact") is False else "True"
+                return f'page.get_by_role("{role}", name="{name}", exact={exact})'
             return f'page.get_by_role("{role}")'
 
         if method == "testid":
@@ -701,23 +990,28 @@ class StepExecutionError(Exception):
 
         if method == "label":
             val = self._escape(loc.get("value", ""))
-            return f'page.get_by_label("{val}", exact=True)'
+            exact = "False" if loc.get("exact") is False else "True"
+            return f'page.get_by_label("{val}", exact={exact})'
 
         if method == "placeholder":
             val = self._escape(loc.get("value", ""))
-            return f'page.get_by_placeholder("{val}", exact=True)'
+            exact = "False" if loc.get("exact") is False else "True"
+            return f'page.get_by_placeholder("{val}", exact={exact})'
 
         if method == "alt":
             val = self._escape(loc.get("value", ""))
-            return f'page.get_by_alt_text("{val}", exact=True)'
+            exact = "False" if loc.get("exact") is False else "True"
+            return f'page.get_by_alt_text("{val}", exact={exact})'
 
         if method == "title":
             val = self._escape(loc.get("value", ""))
-            return f'page.get_by_title("{val}", exact=True)'
+            exact = "False" if loc.get("exact") is False else "True"
+            return f'page.get_by_title("{val}", exact={exact})'
 
         if method == "text":
             val = self._escape(loc.get("value", ""))
-            return f'page.get_by_text("{val}", exact=True)'
+            exact = "False" if loc.get("exact") is False else "True"
+            return f'page.get_by_text("{val}", exact={exact})'
 
         if method == "nested":
             # parent >> child locator chaining
@@ -898,8 +1192,16 @@ class StepExecutionError(Exception):
         """After data-extraction assignments, inject _results[var] = var."""
         lines = code.split('\n')
         result = []
+        pending_capture: Optional[str] = None
+        pending_delimiter: Optional[str] = None
         for line in lines:
             result.append(line)
+            if pending_delimiter:
+                if line.count(pending_delimiter) % 2 == 1:
+                    result.append(pending_capture or "")
+                    pending_capture = None
+                    pending_delimiter = None
+                continue
             stripped = line.strip()
             m = cls._ASSIGN_RE.match(stripped)
             if not m:
@@ -914,7 +1216,19 @@ class StepExecutionError(Exception):
             if last_call and last_call.group(1) in cls._ACTION_METHODS:
                 continue
             indent = line[:len(line) - len(line.lstrip())]
-            result.append(f'{indent}_results["{var_name}"] = {var_name}')
+            capture_line = f'{indent}_results["{var_name}"] = {var_name}'
+            triple_delimiter = None
+            for delimiter in ("'''", '"""'):
+                if line.count(delimiter) % 2 == 1:
+                    triple_delimiter = delimiter
+                    break
+            if triple_delimiter:
+                pending_capture = capture_line
+                pending_delimiter = triple_delimiter
+                continue
+            result.append(capture_line)
+        if pending_capture:
+            result.append(pending_capture)
         return '\n'.join(result)
 
     @classmethod

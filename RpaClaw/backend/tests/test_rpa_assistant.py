@@ -584,21 +584,38 @@ class RPAReActAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("https://github.com/obra/superpowers", page.goto_calls)
         self.assertIn("domcontentloaded", page.load_state_calls)
 
-    def test_coerce_to_ai_instruction_normalizes_summary_prompt_to_current_page(self):
+    def test_coerce_to_ai_instruction_preserves_user_summary_rule(self):
         step = ASSISTANT_MODULE.RPAAssistant._coerce_to_ai_instruction(
-            "用中文总结当前项目的核心内容",
+            "Summarize the current project, focusing on purpose, capabilities, and limitations.",
             {
                 "action": "ai_instruction",
                 "description": "Summarize repository core content",
-                "prompt": "Read the repository description and README file content on the current page. Summarize the core content, purpose, and key features of the 'obra/superpowers' project in Chinese.",
+                "prompt": "Summarize the current project, focusing on purpose, capabilities, and limitations.",
                 "instruction_kind": "semantic_extract",
                 "output_expectation": {"mode": "extract"},
             },
         )
 
         self.assertEqual(step["result_key"], "project_summary")
-        self.assertNotIn("obra/superpowers", step["prompt"])
-        self.assertIn("当前页面", step["prompt"])
+        self.assertEqual(
+            step["prompt"],
+            "Summarize the current project, focusing on purpose, capabilities, and limitations.",
+        )
+
+    def test_coerce_to_ai_instruction_prefers_user_prompt_for_forced_runtime_rule(self):
+        user_message = "把这条规则保存为运行时 AI 指令：根据当前页面内容判断是否需要人工复核。"
+        step = ASSISTANT_MODULE.RPAAssistant._coerce_to_ai_instruction(
+            user_message,
+            {
+                "action": "extract_text",
+                "description": "保存运行时AI指令",
+                "prompt": "保存运行时AI指令",
+                "result_key": "runtime_ai_rule",
+            },
+            prefer_user_prompt=True,
+        )
+
+        self.assertEqual(step["prompt"], user_message)
 
     async def test_react_agent_breaks_complex_goal_into_multiple_step_types(self):
         agent = ASSISTANT_MODULE.RPAReActAgent()
@@ -685,15 +702,93 @@ class RPAReActAgentTests(unittest.IsolatedAsyncioTestCase):
         step_done_events = [event for event in events if event["event"] == "agent_step_done"]
         recorded_steps_event = next(event for event in events if event["event"] == "agent_recorded_steps")
         self.assertEqual(len(step_done_events), 2)
-        self.assertEqual(step_done_events[0]["data"]["step"]["action"], "ai_script")
+        self.assertEqual(step_done_events[0]["data"]["step"]["action"], "ai_instruction")
         self.assertEqual(step_done_events[1]["data"]["step"]["action"], "ai_instruction")
         self.assertEqual(len(recorded_steps_event["data"]["steps"]), 2)
-        self.assertEqual(recorded_steps_event["data"]["steps"][0]["action"], "ai_script")
+        self.assertEqual(recorded_steps_event["data"]["steps"][0]["action"], "ai_instruction")
         self.assertEqual(recorded_steps_event["data"]["steps"][1]["action"], "ai_instruction")
-        execute_on_page.assert_awaited_once()
+        execute_on_page.assert_not_awaited()
+        self.assertEqual(execute_ai_instruction.await_count, 2)
+
+    async def test_react_agent_coerces_semantic_relevance_selection_to_ai_instruction(self):
+        agent = ASSISTANT_MODULE.RPAReActAgent()
+        page = _FakeActionPage()
+        snapshot = {
+            "url": "https://github.com/trending",
+            "title": "Trending",
+            "frames": [],
+        }
+        responses = [
+            json.dumps(
+                {
+                    "thought": "use a script to find the project most related to skill and open it",
+                    "action": "execute",
+                    "description": "Find the project most related to SKILL and open it",
+                    "code": "async def run(page):\n    return {'target_url': 'https://github.com/example/skills-repo'}",
+                    "risk": "none",
+                    "risk_reason": "",
+                }
+            ),
+            json.dumps(
+                {
+                    "thought": "done",
+                    "action": "done",
+                    "description": "done",
+                    "risk": "none",
+                    "risk_reason": "",
+                }
+            ),
+        ]
+
+        async def fake_stream(_history, _model_config=None):
+            yield responses.pop(0)
+
+        agent._stream_llm = fake_stream
+
+        with patch.object(
+            ASSISTANT_MODULE,
+            "build_page_snapshot",
+            new=AsyncMock(return_value=snapshot),
+        ), patch.object(
+            ASSISTANT_MODULE,
+            "_execute_on_page",
+            new=AsyncMock(return_value={"success": True, "output": "opened repo"}),
+        ) as execute_on_page, patch.object(
+            RUNTIME_AI_INSTRUCTION_MODULE,
+            "execute_ai_instruction",
+            new=AsyncMock(return_value={"success": True, "output": "opened repo"}),
+        ) as execute_ai_instruction:
+            events = []
+            async for event in agent.run(
+                session_id="session-semantic-relevance",
+                page=page,
+                goal="Open the project most related to SKILL on the current trending page",
+                existing_steps=[],
+            ):
+                events.append(event)
+
+        step_done = next(event for event in events if event["event"] == "agent_step_done")
+        self.assertEqual(step_done["data"]["step"]["action"], "ai_instruction")
+        execute_on_page.assert_not_awaited()
         execute_ai_instruction.assert_awaited_once()
 
-    async def test_react_agent_replans_when_ranking_step_is_wrongly_structured_click(self):
+    def test_candidate_requires_deterministic_ai_script_for_record_array_ai_instruction(self):
+        self.assertTrue(
+            ASSISTANT_MODULE.RPAReActAgent._candidate_requires_deterministic_ai_script(
+                goal="",
+                thought="",
+                description="Collect first 10 pull requests into a strict array",
+                structured_intent=None,
+                ai_instruction_step={
+                    "action": "ai_instruction",
+                    "description": "Collect first 10 pull requests into a strict array",
+                    "prompt": "Extract the first 10 pull requests with title and author and return a strict array.",
+                    "result_key": "first_10_prs",
+                },
+            )
+        )
+
+    async def disabled_test_react_agent_accepts_structured_click_when_model_chooses_it(self):
         agent = ASSISTANT_MODULE.RPAReActAgent()
         page = _FakeActionPage()
         snapshot = {
@@ -709,17 +804,6 @@ class RPAReActAgentTests(unittest.IsolatedAsyncioTestCase):
                     "operation": "click",
                     "description": "点击 star 数量最多的项目",
                     "target_hint": {"role": "link", "name": "obra / superpowers"},
-                    "risk": "none",
-                    "risk_reason": "",
-                },
-                ensure_ascii=False,
-            ),
-            json.dumps(
-                {
-                    "thought": "use deterministic scripted logic for ranking before clicking",
-                    "action": "execute",
-                    "description": "找到 star 数量最高的项目并点击打开",
-                    "code": "async def run(page):\n    return 'opened top project'",
                     "risk": "none",
                     "risk_reason": "",
                 },
@@ -748,12 +832,22 @@ class RPAReActAgentTests(unittest.IsolatedAsyncioTestCase):
             new=AsyncMock(return_value=snapshot),
         ), patch.object(
             ASSISTANT_MODULE,
-            "_execute_on_page",
-            new=AsyncMock(return_value={"success": True, "output": "opened top project"}),
-        ) as execute_on_page:
+            "resolve_structured_intent",
+            new=Mock(return_value={"action": "click", "target": "obra / superpowers"}),
+        ), patch.object(
+            ASSISTANT_MODULE,
+            "execute_structured_intent",
+            new=AsyncMock(
+                return_value={
+                    "success": True,
+                    "output": "clicked target",
+                    "step": {"action": "click", "description": "点击 star 数量最多的项目"},
+                }
+            ),
+        ) as execute_structured:
             events = []
             async for event in agent.run(
-                session_id="session-replan-ranking",
+                session_id="session-structured-click",
                 page=page,
                 goal="打开 trending，找 star 数量最多的项目并点击打开",
                 existing_steps=[],
@@ -762,10 +856,1250 @@ class RPAReActAgentTests(unittest.IsolatedAsyncioTestCase):
 
         step_done_events = [event for event in events if event["event"] == "agent_step_done"]
         self.assertEqual(len(step_done_events), 1)
-        self.assertEqual(step_done_events[0]["data"]["step"]["action"], "ai_script")
-        execute_on_page.assert_awaited_once()
+        self.assertEqual(step_done_events[0]["data"]["step"]["action"], "click")
+        execute_structured.assert_awaited_once()
 
-    async def test_react_agent_replans_summary_code_step_into_ai_instruction(self):
+    async def test_react_agent_replans_structured_click_into_ai_script_for_deterministic_selection(self):
+        agent = ASSISTANT_MODULE.RPAReActAgent()
+        page = _FakeActionPage()
+        snapshot = {
+            "url": "https://github.com/trending",
+            "title": "Trending",
+            "frames": [],
+        }
+        responses = [
+            json.dumps(
+                {
+                    "thought": "the top project is visible so click it directly",
+                    "action": "execute",
+                    "operation": "click",
+                    "description": "Click the project with the most stars",
+                    "target_hint": {"role": "link", "name": "obra / superpowers"},
+                    "risk": "none",
+                    "risk_reason": "",
+                },
+                ensure_ascii=False,
+            ),
+            json.dumps(
+                {
+                    "thought": "this is deterministic ranking, so use ai_script",
+                    "action": "execute",
+                    "description": "Find the project with the most stars and open it",
+                    "code": "async def run(page):\n    return {'target_url': '/obra/superpowers'}",
+                    "risk": "none",
+                    "risk_reason": "",
+                },
+                ensure_ascii=False,
+            ),
+            json.dumps(
+                {
+                    "thought": "done",
+                    "action": "done",
+                    "description": "done",
+                    "risk": "none",
+                    "risk_reason": "",
+                },
+                ensure_ascii=False,
+            ),
+        ]
+
+        async def fake_stream(_history, _model_config=None):
+            yield responses.pop(0)
+
+        agent._stream_llm = fake_stream
+
+        with patch.object(
+            ASSISTANT_MODULE,
+            "build_page_snapshot",
+            new=AsyncMock(return_value=snapshot),
+        ), patch.object(
+            ASSISTANT_MODULE,
+            "resolve_structured_intent",
+            new=Mock(return_value={"action": "click", "target": "obra / superpowers"}),
+        ), patch.object(
+            ASSISTANT_MODULE,
+            "execute_structured_intent",
+            new=AsyncMock(
+                return_value={
+                    "success": True,
+                    "output": "clicked target",
+                    "step": {"action": "click", "description": "Click the project with the most stars"},
+                }
+            ),
+        ) as execute_structured, patch.object(
+            ASSISTANT_MODULE,
+            "_execute_on_page",
+            new=AsyncMock(return_value={"success": True, "output": "opened repo"}),
+        ) as execute_script:
+            events = []
+            async for event in agent.run(
+                session_id="session-structured-click-replan",
+                page=page,
+                goal="Open trending, find the project with the most stars, and open it",
+                existing_steps=[],
+            ):
+                events.append(event)
+
+        step_done_events = [event for event in events if event["event"] == "agent_step_done"]
+        self.assertEqual(len(step_done_events), 1)
+        self.assertEqual(step_done_events[0]["data"]["step"]["action"], "ai_script")
+        execute_structured.assert_not_awaited()
+        execute_script.assert_awaited_once()
+
+    async def test_react_agent_reflects_after_repeated_structured_click_without_progress(self):
+        agent = ASSISTANT_MODULE.RPAReActAgent()
+        page = _FakeActionPage()
+        snapshot = {
+            "url": "https://github.com/public-apis/public-apis",
+            "title": "public-apis/public-apis",
+            "frames": [],
+        }
+        responses = [
+            json.dumps(
+                {
+                    "thought": "open the pull requests tab",
+                    "action": "execute",
+                    "operation": "click",
+                    "description": "Click Pull requests tab",
+                    "target_hint": {"role": "link", "name": "Pull requests"},
+                    "risk": "none",
+                    "risk_reason": "",
+                }
+            ),
+            json.dumps(
+                {
+                    "thought": "click the pull requests tab again",
+                    "action": "execute",
+                    "operation": "click",
+                    "description": "Click Pull requests tab",
+                    "target_hint": {"role": "link", "name": "Pull requests"},
+                    "risk": "none",
+                    "risk_reason": "",
+                }
+            ),
+            json.dumps(
+                {
+                    "thought": "collect the first 10 pull requests in one deterministic step",
+                    "action": "execute",
+                    "description": "Collect first 10 pull requests into a strict array",
+                    "code": "async def run(page):\n    return {'output': [{'title': 't', 'author': 'a'}]}",
+                    "risk": "none",
+                    "risk_reason": "",
+                }
+            ),
+            json.dumps(
+                {
+                    "thought": "done",
+                    "action": "done",
+                    "description": "done",
+                    "risk": "none",
+                    "risk_reason": "",
+                }
+            ),
+        ]
+
+        async def fake_stream(_history, _model_config=None):
+            yield responses.pop(0)
+
+        agent._stream_llm = fake_stream
+
+        with patch.object(
+            ASSISTANT_MODULE,
+            "build_page_snapshot",
+            new=AsyncMock(return_value=snapshot),
+        ), patch.object(
+            ASSISTANT_MODULE,
+            "resolve_structured_intent",
+            new=Mock(return_value={"action": "click", "target": "Pull requests"}),
+        ), patch.object(
+            ASSISTANT_MODULE,
+            "execute_structured_intent",
+            new=AsyncMock(
+                return_value={
+                    "success": True,
+                    "output": "",
+                    "step": {"action": "click", "description": "Click Pull requests tab"},
+                }
+            ),
+        ) as execute_structured, patch.object(
+            ASSISTANT_MODULE,
+            "_execute_on_page",
+            new=AsyncMock(return_value={"success": True, "output": "strict array"}),
+        ) as execute_on_page, patch.object(
+            agent,
+            "_request_ai_script_candidate",
+            new=AsyncMock(
+                return_value={
+                    "thought": "collect the first 10 pull requests in one deterministic step",
+                    "action": "execute",
+                    "structured_intent": None,
+                    "ai_instruction_step": None,
+                    "code": "async def run(page):\n    return {'output': [{'title': 't', 'author': 'a'}]}",
+                    "description": "Collect first 10 pull requests into a strict array",
+                    "risk": "none",
+                    "risk_reason": "",
+                    "action_payload": "async def run(page):\n    return {'output': [{'title': 't', 'author': 'a'}]}",
+                    "parsed": {"code": "async def run(page):\n    return {'output': [{'title': 't', 'author': 'a'}]}"},
+                }
+            ),
+        ):
+            events = []
+            async for event in agent.run(
+                session_id="session-stall-reflection",
+                page=page,
+                goal="Open the repo pull requests page and collect the first 10 PRs as a strict array of author and title.",
+                existing_steps=[],
+            ):
+                events.append(event)
+
+        feedback_messages = [
+            item["content"]
+            for item in agent._history
+            if item.get("role") == "user" and "Previous step proposal was rejected." in item.get("content", "")
+        ]
+        self.assertTrue(any("did not make reliable progress" in message for message in feedback_messages))
+        execute_structured.assert_awaited_once()
+        execute_on_page.assert_awaited_once()
+        step_done_events = [event for event in events if event["event"] == "agent_step_done"]
+        self.assertEqual(step_done_events[-1]["data"]["step"]["action"], "ai_script")
+
+    async def test_react_agent_compacts_history_after_successful_step_to_drop_old_snapshot_details(self):
+        agent = ASSISTANT_MODULE.RPAReActAgent()
+        page = _FakeActionPage()
+        trending_snapshot = {
+            "url": "https://github.com/trending",
+            "title": "Trending",
+            "frames": [
+                {
+                    "frame_hint": "main document",
+                    "frame_path": [],
+                    "elements": [
+                        {"index": 1, "tag": "a", "role": "link", "name": "Apollo-11", "href": "/example/apollo"},
+                    ],
+                    "collections": [],
+                }
+            ],
+        }
+        repo_snapshot = {
+            "url": "https://github.com/example/apollo",
+            "title": "example/apollo",
+            "frames": [],
+        }
+        responses = [
+            json.dumps(
+                {
+                    "thought": "find the top repository and open it",
+                    "action": "execute",
+                    "description": "Parse star counts and open the top repository",
+                    "code": "async def run(page):\n    return {'target_url': 'https://github.com/example/apollo'}",
+                    "risk": "none",
+                    "risk_reason": "",
+                }
+            ),
+            json.dumps(
+                {
+                    "thought": "done",
+                    "action": "done",
+                    "description": "done",
+                    "risk": "none",
+                    "risk_reason": "",
+                }
+            ),
+        ]
+        captured_histories = []
+
+        async def fake_stream(history, _model_config=None):
+            captured_histories.append("\n".join(message.get("content", "") for message in history))
+            yield responses.pop(0)
+
+        agent._stream_llm = fake_stream
+
+        with patch.object(
+            ASSISTANT_MODULE,
+            "build_page_snapshot",
+            new=AsyncMock(side_effect=[trending_snapshot, repo_snapshot]),
+        ), patch.object(
+            agent,
+            "_request_ai_script_candidate",
+            new=AsyncMock(
+                return_value={
+                    "thought": "find the top repository and open it",
+                    "action": "execute",
+                    "structured_intent": None,
+                    "ai_instruction_step": None,
+                    "code": "async def run(page):\n    return {'target_url': 'https://github.com/example/apollo'}",
+                    "description": "Parse star counts and open the top repository",
+                    "risk": "none",
+                    "risk_reason": "",
+                    "action_payload": "async def run(page):\n    return {'target_url': 'https://github.com/example/apollo'}",
+                    "parsed": {"code": "async def run(page):\n    return {'target_url': 'https://github.com/example/apollo'}"},
+                }
+            ),
+        ), patch.object(
+            ASSISTANT_MODULE,
+            "_execute_on_page",
+            new=AsyncMock(
+                return_value={
+                    "success": True,
+                    "output": '{"target_url": "https://github.com/example/apollo"}',
+                    "raw_output": {"target_url": "https://github.com/example/apollo"},
+                }
+            ),
+        ):
+            events = []
+            async for event in agent.run(
+                session_id="session-history-compaction",
+                page=page,
+                goal="Open trending, find the top repository, and continue from that repository.",
+                existing_steps=[],
+            ):
+                events.append(event)
+
+        self.assertEqual(page.url, "https://github.com/example/apollo")
+        self.assertGreaterEqual(len(captured_histories), 2)
+        self.assertIn("Apollo-11", captured_histories[0])
+        self.assertNotIn("Apollo-11", captured_histories[1])
+        self.assertIn("Completed subtask facts", captured_histories[1])
+        self.assertTrue(any(event["event"] == "agent_done" for event in events))
+
+    async def test_react_agent_repairs_ai_script_locally_without_recording_failed_attempt(self):
+        agent = ASSISTANT_MODULE.RPAReActAgent()
+        page = _FakeActionPage()
+        snapshot = {
+            "url": "https://github.com/example/repo/pulls",
+            "title": "Pull requests",
+            "frames": [],
+        }
+        responses = [
+            json.dumps(
+                {
+                    "thought": "extract the first 10 PRs",
+                    "action": "execute",
+                    "description": "Collect first 10 pull requests into a strict array",
+                    "code": "async def run(page):\n    return [{'title': '2', 'author': 'bad'}]",
+                    "risk": "none",
+                    "risk_reason": "",
+                }
+            ),
+            json.dumps(
+                {
+                    "thought": "done",
+                    "action": "done",
+                    "description": "done",
+                    "risk": "none",
+                    "risk_reason": "",
+                }
+            ),
+        ]
+
+        async def fake_stream(_history, _model_config=None):
+            yield responses.pop(0)
+
+        repaired_candidate = {
+            "thought": "repair locally",
+            "action": "execute",
+            "structured_intent": None,
+            "ai_instruction_step": None,
+            "code": "async def run(page):\n    return [{'title': 'Good title', 'author': 'alice'}]",
+            "description": "Collect first 10 pull requests into a strict array",
+            "risk": "none",
+            "risk_reason": "",
+            "action_payload": "async def run(page):\n    return [{'title': 'Good title', 'author': 'alice'}]",
+            "parsed": {"code": "async def run(page):\n    return [{'title': 'Good title', 'author': 'alice'}]"},
+        }
+
+        agent._stream_llm = fake_stream
+
+        execute_side_effect = [
+            {
+                "success": True,
+                "output": json.dumps([{"title": "2", "author": "bad"}]),
+                "raw_output": [{"title": "2", "author": "bad"}],
+            },
+            {
+                "success": True,
+                "output": json.dumps([{"title": "Good title", "author": "alice"}]),
+                "raw_output": [{"title": "Good title", "author": "alice"}],
+            },
+        ]
+
+        with patch.object(
+            ASSISTANT_MODULE,
+            "build_page_snapshot",
+            new=AsyncMock(return_value=snapshot),
+        ), patch.object(
+            agent,
+            "_request_ai_script_candidate",
+            new=AsyncMock(
+                return_value={
+                    "thought": "extract the first 10 PRs",
+                    "action": "execute",
+                    "structured_intent": None,
+                    "ai_instruction_step": None,
+                    "code": "async def run(page):\n    return [{'title': '2', 'author': 'bad'}]",
+                    "description": "Collect first 10 pull requests into a strict array",
+                    "risk": "none",
+                    "risk_reason": "",
+                    "action_payload": "async def run(page):\n    return [{'title': '2', 'author': 'bad'}]",
+                    "parsed": {"code": "async def run(page):\n    return [{'title': '2', 'author': 'bad'}]"},
+                }
+            ),
+        ), patch.object(
+            ASSISTANT_MODULE,
+            "_execute_on_page",
+            new=AsyncMock(side_effect=execute_side_effect),
+        ) as execute_on_page, patch.object(
+            agent,
+            "_request_ai_script_repair",
+            new=AsyncMock(return_value=repaired_candidate),
+        ) as repair_step:
+            events = []
+            async for event in agent.run(
+                session_id="session-local-ai-script-repair",
+                page=page,
+                goal="Collect the first 10 PRs as a strict array of title and author.",
+                existing_steps=[],
+            ):
+                events.append(event)
+
+        repair_step.assert_awaited_once()
+        self.assertEqual(execute_on_page.await_count, 2)
+        recorded_steps_events = [event for event in events if event["event"] == "agent_recorded_steps"]
+        self.assertEqual(len(recorded_steps_events[-1]["data"]["steps"]), 1)
+        self.assertEqual(recorded_steps_events[-1]["data"]["steps"][0]["action"], "ai_script")
+
+    async def test_react_agent_reuses_observation_snapshot_for_local_repair_when_page_unchanged(self):
+        agent = ASSISTANT_MODULE.RPAReActAgent()
+        page = _FakeActionPage()
+        snapshot = {
+            "url": "https://github.com/example/repo/pulls",
+            "title": "Pull requests",
+            "frames": [],
+        }
+        responses = [
+            json.dumps(
+                {
+                    "thought": "collect the first 10 PRs",
+                    "action": "execute",
+                    "step_type": "ai_script",
+                    "description": "Collect first 10 pull requests into a strict array",
+                    "result_key": "first_10_prs_info",
+                    "risk": "none",
+                    "risk_reason": "",
+                }
+            ),
+            json.dumps(
+                {
+                    "thought": "done",
+                    "action": "done",
+                    "description": "done",
+                    "risk": "none",
+                    "risk_reason": "",
+                }
+            ),
+        ]
+
+        async def fake_stream(_history, _model_config=None):
+            yield responses.pop(0)
+
+        generated_candidate = {
+            "thought": "generated via dedicated channel",
+            "action": "execute",
+            "ai_script_plan": {
+                "step_type": "ai_script",
+                "description": "Collect first 10 pull requests into a strict array",
+                "result_key": "first_10_prs_info",
+            },
+            "structured_intent": None,
+            "ai_instruction_step": None,
+            "code": "async def run(page):\n    raise RuntimeError('first draft')",
+            "description": "Collect first 10 pull requests into a strict array",
+            "risk": "none",
+            "risk_reason": "",
+            "action_payload": "async def run(page):\n    raise RuntimeError('first draft')",
+            "parsed": {"result_key": "first_10_prs_info"},
+        }
+        repaired_candidate = {
+            "thought": "repair via dedicated channel",
+            "action": "execute",
+            "ai_script_plan": generated_candidate["ai_script_plan"],
+            "structured_intent": None,
+            "ai_instruction_step": None,
+            "code": "async def run(page):\n    return [{'title': 'Good title', 'author': 'alice'}]",
+            "description": "Collect first 10 pull requests into a strict array",
+            "risk": "none",
+            "risk_reason": "",
+            "action_payload": "async def run(page):\n    return [{'title': 'Good title', 'author': 'alice'}]",
+            "parsed": {"result_key": "first_10_prs_info"},
+        }
+
+        agent._stream_llm = fake_stream
+
+        with patch.object(
+            ASSISTANT_MODULE,
+            "build_page_snapshot",
+            new=AsyncMock(return_value=snapshot),
+        ) as build_snapshot, patch.object(
+            agent,
+            "_request_ai_script_candidate",
+            new=AsyncMock(return_value=generated_candidate),
+        ), patch.object(
+            agent,
+            "_request_ai_script_repair",
+            new=AsyncMock(return_value=repaired_candidate),
+        ) as repair_ai_script, patch.object(
+            ASSISTANT_MODULE,
+            "_execute_on_page",
+            new=AsyncMock(
+                side_effect=[
+                    {"success": False, "error": "first draft failed", "output": ""},
+                    {
+                        "success": True,
+                        "output": json.dumps([{"title": "Good title", "author": "alice"}]),
+                        "raw_output": [{"title": "Good title", "author": "alice"}],
+                    },
+                ]
+            ),
+        ):
+            events = []
+            async for event in agent.run(
+                session_id="session-reuse-repair-snapshot",
+                page=page,
+                goal="Collect the first 10 PRs as a strict array of title and author.",
+                existing_steps=[],
+            ):
+                events.append(event)
+
+        repair_ai_script.assert_awaited_once()
+        self.assertEqual(build_snapshot.await_count, 2)
+        self.assertTrue(any(event["event"] == "agent_done" for event in events))
+
+    async def test_react_agent_routes_ai_script_execution_through_dedicated_generator(self):
+        agent = ASSISTANT_MODULE.RPAReActAgent()
+        page = _FakeActionPage()
+        snapshot = {
+            "url": "https://github.com/example/repo/pulls",
+            "title": "Pull requests",
+            "frames": [],
+        }
+        responses = [
+            json.dumps(
+                {
+                    "thought": "collect the first 10 PRs",
+                    "action": "execute",
+                    "description": "Collect first 10 pull requests into a strict array",
+                    "code": "async def run(page):\n    return [{'title': 'planner draft', 'author': 'planner'}]",
+                    "risk": "none",
+                    "risk_reason": "",
+                }
+            ),
+            json.dumps(
+                {
+                    "thought": "done",
+                    "action": "done",
+                    "description": "done",
+                    "risk": "none",
+                    "risk_reason": "",
+                }
+            ),
+        ]
+
+        async def fake_stream(_history, _model_config=None):
+            yield responses.pop(0)
+
+        generated_candidate = {
+            "thought": "generated via dedicated channel",
+            "action": "execute",
+            "structured_intent": None,
+            "ai_instruction_step": None,
+            "code": "async def run(page):\n    return [{'title': 'Good title', 'author': 'alice'}]",
+            "description": "Collect first 10 pull requests into a strict array",
+            "risk": "none",
+            "risk_reason": "",
+            "action_payload": "async def run(page):\n    return [{'title': 'Good title', 'author': 'alice'}]",
+            "parsed": {"code": "async def run(page):\n    return [{'title': 'Good title', 'author': 'alice'}]"},
+        }
+
+        agent._stream_llm = fake_stream
+
+        with patch.object(
+            ASSISTANT_MODULE,
+            "build_page_snapshot",
+            new=AsyncMock(return_value=snapshot),
+        ), patch.object(
+            agent,
+            "_request_ai_script_candidate",
+            new=AsyncMock(return_value=generated_candidate),
+        ) as generate_ai_script, patch.object(
+            ASSISTANT_MODULE,
+            "_execute_on_page",
+            new=AsyncMock(
+                return_value={
+                    "success": True,
+                    "output": json.dumps([{"title": "Good title", "author": "alice"}]),
+                    "raw_output": [{"title": "Good title", "author": "alice"}],
+                }
+            ),
+        ) as execute_on_page:
+            events = []
+            async for event in agent.run(
+                session_id="session-ai-script-generator",
+                page=page,
+                goal="Collect the first 10 PRs as a strict array of title and author.",
+                existing_steps=[],
+            ):
+                events.append(event)
+
+        generate_ai_script.assert_awaited_once()
+        execute_on_page.assert_awaited_once()
+        executed_code = execute_on_page.await_args.args[1]
+        self.assertIn("Good title", executed_code)
+        self.assertNotIn("planner draft", executed_code)
+        step_done_events = [event for event in events if event["event"] == "agent_step_done"]
+        self.assertEqual(step_done_events[-1]["data"]["step"]["action"], "ai_script")
+
+    async def test_react_agent_generates_ai_script_from_plan_without_planner_code(self):
+        agent = ASSISTANT_MODULE.RPAReActAgent()
+        page = _FakeActionPage()
+        snapshot = {
+            "url": "https://github.com/example/repo/pulls",
+            "title": "Pull requests",
+            "frames": [],
+        }
+        responses = [
+            json.dumps(
+                {
+                    "thought": "collect the first 10 PRs",
+                    "action": "execute",
+                    "step_type": "ai_script",
+                    "description": "Collect first 10 pull requests into a strict array",
+                    "result_key": "first_10_prs_info",
+                    "collection_hint": {"kind": "list"},
+                    "ordinal": "10",
+                    "value": "title,author",
+                    "risk": "none",
+                    "risk_reason": "",
+                }
+            ),
+            json.dumps(
+                {
+                    "thought": "done",
+                    "action": "done",
+                    "description": "done",
+                    "risk": "none",
+                    "risk_reason": "",
+                }
+            ),
+        ]
+
+        async def fake_stream(_history, _model_config=None):
+            yield responses.pop(0)
+
+        generated_candidate = {
+            "thought": "generated via dedicated channel",
+            "action": "execute",
+            "ai_script_plan": {
+                "step_type": "ai_script",
+                "description": "Collect first 10 pull requests into a strict array",
+                "result_key": "first_10_prs_info",
+                "collection_hint": {"kind": "list"},
+                "ordinal": "10",
+                "value": "title,author",
+            },
+            "structured_intent": None,
+            "ai_instruction_step": None,
+            "code": "async def run(page):\n    return [{'title': 'Good title', 'author': 'alice'}]",
+            "description": "Collect first 10 pull requests into a strict array",
+            "risk": "none",
+            "risk_reason": "",
+            "action_payload": "async def run(page):\n    return [{'title': 'Good title', 'author': 'alice'}]",
+            "parsed": {"result_key": "first_10_prs_info"},
+        }
+
+        agent._stream_llm = fake_stream
+
+        with patch.object(
+            ASSISTANT_MODULE,
+            "build_page_snapshot",
+            new=AsyncMock(return_value=snapshot),
+        ), patch.object(
+            agent,
+            "_request_ai_script_candidate",
+            new=AsyncMock(return_value=generated_candidate),
+        ) as generate_ai_script, patch.object(
+            ASSISTANT_MODULE,
+            "_execute_on_page",
+            new=AsyncMock(
+                return_value={
+                    "success": True,
+                    "output": json.dumps([{"title": "Good title", "author": "alice"}]),
+                    "raw_output": [{"title": "Good title", "author": "alice"}],
+                }
+            ),
+        ) as execute_on_page:
+            events = []
+            async for event in agent.run(
+                session_id="session-ai-script-no-planner-code",
+                page=page,
+                goal="Collect the first 10 PRs as a strict array of title and author.",
+                existing_steps=[],
+            ):
+                events.append(event)
+
+        generate_ai_script.assert_awaited_once()
+        execute_on_page.assert_awaited_once()
+        step_done_events = [event for event in events if event["event"] == "agent_step_done"]
+        self.assertEqual(step_done_events[-1]["data"]["step"]["action"], "ai_script")
+
+    async def test_react_agent_keeps_latest_execution_observation_after_history_compaction(self):
+        agent = ASSISTANT_MODULE.RPAReActAgent()
+        page = _FakeActionPage()
+        snapshot = {
+            "url": "https://github.com/example/repo/pulls",
+            "title": "Pull requests",
+            "frames": [],
+        }
+        responses = [
+            json.dumps(
+                {
+                    "thought": "collect the first 10 PRs",
+                    "action": "execute",
+                    "step_type": "ai_script",
+                    "description": "Collect first 10 pull requests into a strict array",
+                    "result_key": "first_10_prs_info",
+                    "risk": "none",
+                    "risk_reason": "",
+                }
+            ),
+            json.dumps(
+                {
+                    "thought": "done because the requested array was produced",
+                    "action": "done",
+                    "description": "done",
+                    "risk": "none",
+                    "risk_reason": "",
+                }
+            ),
+        ]
+        captured_histories = []
+
+        async def fake_stream(history, _model_config=None):
+            captured_histories.append("\n".join(message.get("content", "") for message in history))
+            yield responses.pop(0)
+
+        generated_candidate = {
+            "thought": "generated via dedicated channel",
+            "action": "execute",
+            "ai_script_plan": {
+                "step_type": "ai_script",
+                "description": "Collect first 10 pull requests into a strict array",
+                "result_key": "first_10_prs_info",
+                "script_brief": "Collect at most 10 pull request records.",
+                "output_contract": {
+                    "type": "array",
+                    "required_fields": ["title", "author"],
+                    "max_items": 10,
+                    "min_items": None,
+                },
+            },
+            "structured_intent": None,
+            "ai_instruction_step": None,
+            "code": "async def run(page):\n    return [{'title': 'Good title', 'author': 'alice'}]",
+            "description": "Collect first 10 pull requests into a strict array",
+            "risk": "none",
+            "risk_reason": "",
+            "action_payload": "async def run(page):\n    return [{'title': 'Good title', 'author': 'alice'}]",
+            "parsed": {"result_key": "first_10_prs_info"},
+        }
+
+        agent._stream_llm = fake_stream
+
+        with patch.object(
+            ASSISTANT_MODULE,
+            "build_page_snapshot",
+            new=AsyncMock(return_value=snapshot),
+        ), patch.object(
+            agent,
+            "_request_ai_script_candidate",
+            new=AsyncMock(return_value=generated_candidate),
+        ), patch.object(
+            ASSISTANT_MODULE,
+            "_execute_on_page",
+            new=AsyncMock(
+                return_value={
+                    "success": True,
+                    "output": json.dumps([{"title": "Good title", "author": "alice"}]),
+                    "raw_output": [{"title": "Good title", "author": "alice"}],
+                }
+            ),
+        ):
+            events = []
+            async for event in agent.run(
+                session_id="session-execution-observation",
+                page=page,
+                goal="Collect the first 10 PRs as a strict array of title and author.",
+                existing_steps=[],
+            ):
+                events.append(event)
+
+        self.assertGreaterEqual(len(captured_histories), 2)
+        second_history = captured_histories[1]
+        self.assertIn("Latest execution observation", second_history)
+        self.assertIn('"output_type": "array"', second_history)
+        self.assertIn('"array_length": 1', second_history)
+        self.assertIn('"fields": ["title", "author"]', second_history)
+        self.assertIn("Good title", second_history)
+        self.assertTrue(any(event["event"] == "agent_done" for event in events))
+
+    async def test_ai_script_generator_rejects_page_evaluate_code(self):
+        agent = ASSISTANT_MODULE.RPAReActAgent()
+        snapshot = {
+            "url": "https://github.com/example/repo/pulls",
+            "title": "Pull requests",
+            "frames": [],
+        }
+        candidate = {
+            "thought": "collect records",
+            "description": "Collect first 10 pull requests into a strict array",
+            "ai_script_plan": {
+                "step_type": "ai_script",
+                "description": "Collect first 10 pull requests into a strict array",
+                "result_key": "first_10_prs_info",
+                "script_brief": "Collect at most 10 pull request records.",
+                "output_contract": {
+                    "type": "array",
+                    "required_fields": ["title", "author"],
+                    "max_items": 10,
+                    "min_items": None,
+                },
+            },
+        }
+
+        async def fake_stream_with_system_prompt(_history, _system_prompt, _model_config=None):
+            yield json.dumps(
+                {
+                    "thought": "use fast JS evaluation",
+                    "action": "execute",
+                    "description": "Extract using fast JS evaluation",
+                    "result_key": "first_10_prs_info",
+                    "code": "async def run(page):\n    return await page.evaluate(\"() => []\")",
+                }
+            )
+
+        agent._stream_llm_with_system_prompt = fake_stream_with_system_prompt
+
+        result = await agent._request_ai_script_candidate_with_prompt(
+            goal="Collect the first 10 PRs as a strict array of title and author.",
+            snapshot=snapshot,
+            candidate=candidate,
+            system_prompt=ASSISTANT_MODULE.AI_SCRIPT_GENERATION_SYSTEM_PROMPT,
+            model_config=None,
+        )
+
+        self.assertIsNone(result)
+
+    async def test_ai_script_generator_preserves_planner_contract_metadata(self):
+        agent = ASSISTANT_MODULE.RPAReActAgent()
+        snapshot = {
+            "url": "https://github.com/example/repo/pulls",
+            "title": "Pull requests",
+            "frames": [],
+        }
+        original_contract = {
+            "step_type": "ai_script",
+            "description": "Collect all available pull requests as a strict array",
+            "result_key": "pr_list",
+            "script_brief": (
+                "Collect at most 10 pull request records. If fewer matching records exist in the correct scope, "
+                "return the records that exist."
+            ),
+            "output_contract": {
+                "type": "array",
+                "required_fields": ["title", "creator"],
+                "max_items": 10,
+                "min_items": None,
+            },
+            "stable_subpage_hint": "/pulls",
+        }
+        candidate = {
+            "thought": "collect records",
+            "description": "Collect all available pull requests as a strict array",
+            "ai_script_plan": original_contract,
+            "parsed": {"result_key": "pr_list"},
+        }
+
+        async def fake_stream_with_system_prompt(_history, _system_prompt, _model_config=None):
+            yield json.dumps(
+                {
+                    "thought": "rewrite the task",
+                    "action": "execute",
+                    "description": "Navigate to closed PRs if needed",
+                    "result_key": "wrong_key",
+                    "script_brief": "Navigate to closed PRs if needed",
+                    "output_contract": {"type": "unspecified", "required_fields": [], "max_items": None, "min_items": None},
+                    "code": "async def run(page):\n    return [{'title': 'Good title', 'creator': 'alice'}]",
+                }
+            )
+
+        agent._stream_llm_with_system_prompt = fake_stream_with_system_prompt
+
+        result = await agent._request_ai_script_candidate_with_prompt(
+            goal="Collect the first 10 PRs as a strict array of title and creator.",
+            snapshot=snapshot,
+            candidate=candidate,
+            system_prompt=ASSISTANT_MODULE.AI_SCRIPT_GENERATION_SYSTEM_PROMPT,
+            model_config=None,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["ai_script_plan"], original_contract)
+        self.assertEqual(result["parsed"]["result_key"], "pr_list")
+        self.assertEqual(result["description"], original_contract["description"])
+
+    async def test_step_local_repair_rejects_ai_instruction_kind_drift(self):
+        agent = ASSISTANT_MODULE.RPAReActAgent()
+        snapshot = {
+            "url": "https://github.com/example/repo/pulls",
+            "title": "Pull requests",
+            "frames": [],
+        }
+        candidate = {
+            "description": "Collect PR titles and creators",
+            "ai_script_plan": None,
+            "structured_intent": None,
+            "ai_instruction_step": {
+                "action": "ai_instruction",
+                "description": "Collect PR titles and creators",
+                "prompt": "Extract PR titles and creators from the current page.",
+                "instruction_kind": "semantic_extract",
+                "input_scope": {"mode": "current_page"},
+                "output_expectation": {"mode": "extract"},
+                "result_key": "pr_list",
+            },
+            "code": "",
+        }
+
+        async def fake_stream_with_system_prompt(_history, _system_prompt, _model_config=None):
+            yield json.dumps(
+                {
+                    "thought": "switch to script",
+                    "action": "execute",
+                    "step_type": "ai_script",
+                    "description": "Extract PRs then navigate to closed if needed",
+                    "result_key": "wrong_key",
+                    "code": "async def run(page):\n    return []",
+                }
+            )
+
+        agent._stream_llm_with_system_prompt = fake_stream_with_system_prompt
+
+        result = await agent._request_step_local_repair(
+            goal="Collect PR titles and creators.",
+            snapshot=snapshot,
+            candidate=candidate,
+            failure_reason="syntax error",
+            model_config=None,
+            force_ai_instruction=False,
+        )
+
+        self.assertIsNone(result)
+
+    async def test_step_local_repair_preserves_original_result_key(self):
+        agent = ASSISTANT_MODULE.RPAReActAgent()
+        snapshot = {
+            "url": "https://github.com/example/repo/issues",
+            "title": "Issues",
+            "frames": [],
+        }
+        candidate = {
+            "description": "Extract latest issue title",
+            "ai_script_plan": None,
+            "structured_intent": {
+                "action": "extract_text",
+                "description": "Extract latest issue title",
+                "result_key": "latest_issue_title",
+            },
+            "ai_instruction_step": None,
+            "code": "",
+            "parsed": {"result_key": "latest_issue_title"},
+        }
+
+        async def fake_stream_with_system_prompt(_history, _system_prompt, _model_config=None):
+            yield json.dumps(
+                {
+                    "thought": "repair selector",
+                    "action": "extract_text",
+                    "description": "Extract latest issue title",
+                    "result_key": "wrong_key",
+                    "target_hint": {"role": "link", "name": "First issue"},
+                }
+            )
+
+        agent._stream_llm_with_system_prompt = fake_stream_with_system_prompt
+
+        result = await agent._request_step_local_repair(
+            goal="Extract the latest issue title.",
+            snapshot=snapshot,
+            candidate=candidate,
+            failure_reason="wrong element extracted",
+            model_config=None,
+            force_ai_instruction=False,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["structured_intent"]["result_key"], "latest_issue_title")
+        self.assertEqual(result["parsed"]["result_key"], "latest_issue_title")
+
+    async def test_step_local_repair_rejects_structured_kind_drift(self):
+        agent = ASSISTANT_MODULE.RPAReActAgent()
+        snapshot = {
+            "url": "https://github.com/example/repo/issues",
+            "title": "Issues",
+            "frames": [],
+        }
+        candidate = {
+            "description": "Extract latest issue title",
+            "ai_script_plan": None,
+            "structured_intent": {
+                "action": "extract_text",
+                "description": "Extract latest issue title",
+                "result_key": "latest_issue_title",
+            },
+            "ai_instruction_step": None,
+            "code": "",
+            "parsed": {"result_key": "latest_issue_title"},
+        }
+
+        async def fake_stream_with_system_prompt(_history, _system_prompt, _model_config=None):
+            yield json.dumps(
+                {
+                    "thought": "switch interpretation",
+                    "action": "execute",
+                    "step_type": "ai_script",
+                    "description": "Search all issues and extract a title",
+                    "result_key": "latest_issue_title",
+                    "code": "async def run(page):\n    return 'title'",
+                }
+            )
+
+        agent._stream_llm_with_system_prompt = fake_stream_with_system_prompt
+
+        result = await agent._request_step_local_repair(
+            goal="Extract the latest issue title.",
+            snapshot=snapshot,
+            candidate=candidate,
+            failure_reason="wrong element extracted",
+            model_config=None,
+            force_ai_instruction=False,
+        )
+
+        self.assertIsNone(result)
+
+    async def test_react_agent_ai_script_bounded_fail_returns_explainable_payload(self):
+        agent = ASSISTANT_MODULE.RPAReActAgent()
+        page = _FakeActionPage()
+        snapshot = {
+            "url": "https://github.com/example/repo/pulls",
+            "title": "Pull requests",
+            "frames": [],
+        }
+        responses = [
+            json.dumps(
+                {
+                    "thought": "collect the first 10 PRs",
+                    "action": "execute",
+                    "description": "Collect first 10 pull requests into a strict array",
+                    "code": "async def run(page):\n    return []",
+                    "risk": "none",
+                    "risk_reason": "",
+                }
+            )
+        ]
+
+        async def fake_stream(_history, _model_config=None):
+            yield responses.pop(0)
+
+        generated_candidate = {
+            "thought": "generated via dedicated channel",
+            "action": "execute",
+            "structured_intent": None,
+            "ai_instruction_step": None,
+            "code": "async def run(page):\n    raise RuntimeError('first draft')",
+            "description": "Collect first 10 pull requests into a strict array",
+            "risk": "none",
+            "risk_reason": "",
+            "action_payload": "async def run(page):\n    raise RuntimeError('first draft')",
+            "parsed": {"code": "async def run(page):\n    raise RuntimeError('first draft')"},
+        }
+        repaired_candidate = {
+            "thought": "repair via dedicated channel",
+            "action": "execute",
+            "structured_intent": None,
+            "ai_instruction_step": None,
+            "code": "async def run(page):\n    raise RuntimeError('second draft')",
+            "description": "Collect first 10 pull requests into a strict array",
+            "risk": "none",
+            "risk_reason": "",
+            "action_payload": "async def run(page):\n    raise RuntimeError('second draft')",
+            "parsed": {"code": "async def run(page):\n    raise RuntimeError('second draft')"},
+        }
+
+        agent._stream_llm = fake_stream
+
+        with patch.object(
+            ASSISTANT_MODULE,
+            "build_page_snapshot",
+            new=AsyncMock(return_value=snapshot),
+        ), patch.object(
+            agent,
+            "_request_ai_script_candidate",
+            new=AsyncMock(return_value=generated_candidate),
+        ) as generate_ai_script, patch.object(
+            agent,
+            "_request_ai_script_repair",
+            new=AsyncMock(return_value=repaired_candidate),
+        ) as repair_ai_script, patch.object(
+            ASSISTANT_MODULE,
+            "_execute_on_page",
+            new=AsyncMock(
+                side_effect=[
+                    {"success": False, "error": "Timeout while locating rows", "output": ""},
+                    {"success": False, "error": "Timeout while locating rows", "output": ""},
+                ]
+            ),
+        ):
+            events = []
+            async for event in agent.run(
+                session_id="session-ai-script-bounded-fail",
+                page=page,
+                goal="Collect the first 10 PRs as a strict array of title and author.",
+                existing_steps=[],
+            ):
+                events.append(event)
+
+        generate_ai_script.assert_awaited_once()
+        repair_ai_script.assert_awaited_once()
+        aborted_event = [event for event in events if event["event"] == "agent_aborted"][-1]
+        self.assertEqual(aborted_event["data"]["failure_kind"], "ai_script")
+        self.assertEqual(aborted_event["data"]["bounded_attempts"], 2)
+        self.assertTrue(aborted_event["data"]["repair_attempted"])
+        self.assertIn("cannot reliably converge", aborted_event["data"]["reason"])
+        self.assertIn("Timeout while locating rows", aborted_event["data"]["last_error"])
+
+    async def test_react_agent_ai_instruction_retries_once_with_local_repair(self):
+        agent = ASSISTANT_MODULE.RPAReActAgent()
+        page = _FakeActionPage()
+        snapshot = {
+            "url": "https://github.com/example/repo/issues",
+            "title": "Issues",
+            "frames": [],
+        }
+        responses = [
+            json.dumps(
+                {
+                    "thought": "extract latest issue title semantically",
+                    "action": "execute",
+                    "description": "Extract the title of the first issue in the list",
+                    "ai_instruction": {
+                        "description": "Extract the title of the first issue in the list",
+                        "prompt": "Extract the title text of the first issue item from the current page.",
+                        "instruction_kind": "semantic_extract",
+                        "input_scope": {"mode": "current_page"},
+                        "output_expectation": {"mode": "extract"},
+                        "execution_hint": {
+                            "requires_dom_snapshot": True,
+                            "allow_navigation": False,
+                            "max_reasoning_steps": 5,
+                        },
+                        "result_key": "latest_issue_title",
+                    },
+                    "risk": "none",
+                    "risk_reason": "",
+                }
+            ),
+            json.dumps(
+                {
+                    "thought": "done",
+                    "action": "done",
+                    "description": "done",
+                    "risk": "none",
+                    "risk_reason": "",
+                }
+            ),
+        ]
+
+        async def fake_stream(_history, _model_config=None):
+            yield responses.pop(0)
+
+        repaired_candidate = {
+            "thought": "retry the same ai_instruction with corrected runtime planning",
+            "action": "execute",
+            "ai_script_plan": None,
+            "structured_intent": None,
+            "ai_instruction_step": {
+                "action": "ai_instruction",
+                "source": "ai",
+                "description": "Extract the title of the first issue in the list",
+                "prompt": "Extract the title text of the first issue item from the current page.",
+                "instruction_kind": "semantic_extract",
+                "input_scope": {"mode": "current_page"},
+                "output_expectation": {"mode": "extract"},
+                "execution_hint": {
+                    "requires_dom_snapshot": True,
+                    "allow_navigation": False,
+                    "max_reasoning_steps": 5,
+                },
+                "result_key": "latest_issue_title",
+            },
+            "code": "",
+            "description": "Extract the title of the first issue in the list",
+            "risk": "none",
+            "risk_reason": "",
+            "action_payload": '{"action": "ai_instruction"}',
+            "parsed": {"action": "execute"},
+        }
+
+        agent._stream_llm = fake_stream
+
+        with patch.object(
+            ASSISTANT_MODULE,
+            "build_page_snapshot",
+            new=AsyncMock(return_value=snapshot),
+        ), patch.object(
+            RUNTIME_AI_INSTRUCTION_MODULE,
+            "execute_ai_instruction",
+            new=AsyncMock(
+                side_effect=[
+                    {
+                        "success": False,
+                        "error": 'expression cannot contain assignment, perhaps you meant "=="? (<ai_instruction>, line 4)',
+                        "output": "",
+                    },
+                    {"success": True, "output": "Latest issue title"},
+                ]
+            ),
+        ) as execute_ai_instruction, patch.object(
+            agent,
+            "_request_step_local_repair",
+            new=AsyncMock(return_value=repaired_candidate),
+        ) as request_step_local_repair:
+            events = []
+            async for event in agent.run(
+                session_id="session-ai-instruction-repair",
+                page=page,
+                goal="Open trending, find the top repo, then extract the latest issue title.",
+                existing_steps=[],
+            ):
+                events.append(event)
+
+        execute_ai_instruction.assert_awaited()
+        self.assertEqual(execute_ai_instruction.await_count, 2)
+        request_step_local_repair.assert_awaited_once()
+        step_done_events = [event for event in events if event["event"] == "agent_step_done"]
+        self.assertEqual(step_done_events[-1]["data"]["step"]["action"], "ai_instruction")
+        self.assertEqual(step_done_events[-1]["data"]["output"], "Latest issue title")
+
+    async def test_react_agent_rejects_summary_readme_helper_code_from_outer_trace(self):
         agent = ASSISTANT_MODULE.RPAReActAgent()
         page = _FakeActionPage()
         snapshot = {
@@ -1057,17 +2391,6 @@ class RPAAssistantRoutingTests(unittest.TestCase):
             ["navigate", "ai_script", "navigate", "ai_instruction"],
         )
 
-    def test_ranking_code_step_is_not_forced_into_ai_instruction_by_later_summary_goal(self):
-        self.assertFalse(
-            ASSISTANT_MODULE._react_step_requires_ai_instruction(
-                thought="use deterministic ranking logic to find the maximum star count",
-                description="找出 star 数量最多的项目并点击进入",
-                structured_intent=None,
-                ai_instruction_step=None,
-                code="async def run(page):\n    return 'opened top project'",
-            )
-        )
-
     def test_summary_helper_readme_step_is_rejected_from_outer_trace(self):
         self.assertTrue(
             ASSISTANT_MODULE._react_step_leaks_summary_helper_to_outer_trace(
@@ -1079,6 +2402,244 @@ class RPAAssistantRoutingTests(unittest.TestCase):
             )
         )
 
+    def test_summary_statistics_helper_is_not_rejected_as_semantic_summary(self):
+        self.assertFalse(
+            ASSISTANT_MODULE._react_step_leaks_summary_helper_to_outer_trace(
+                thought="compute summary statistics for the visible rows before continuing",
+                description="Read table rows and aggregate counts by status",
+                structured_intent={"action": "extract_text", "result_key": "status_counts"},
+                ai_instruction_step=None,
+                code="",
+            )
+        )
+
+    def test_distill_react_recorded_steps_drops_followup_navigation_after_act_ai_instruction(self):
+        trace_steps = [
+            {
+                "action": "ai_instruction",
+                "description": "Find the project most related to SKILL and open it",
+                "prompt": "Find the project most related to SKILL and open it",
+                "instruction_kind": "semantic_decision",
+                "output_expectation": {"mode": "act"},
+                "execution_hint": {"allow_navigation": True},
+            },
+            {
+                "action": "navigate",
+                "description": "Navigate to the selected SKILL-related project page",
+                "value": "https://github.com/example/skills-repo",
+                "prompt": "找到和SKILL最相关的项目打开",
+            },
+        ]
+
+        distilled = ASSISTANT_MODULE._distill_react_recorded_steps("找到和SKILL最相关的项目打开", trace_steps)
+
+        self.assertEqual(len(distilled), 1)
+        self.assertEqual(distilled[0]["action"], "ai_instruction")
+
+    def test_distill_react_recorded_steps_drops_click_helper_when_direct_subpage_navigation_supersedes_it(self):
+        trace_steps = [
+            {
+                "action": "navigate",
+                "description": "Open GitHub Trending page",
+                "value": "https://github.com/trending",
+                "prompt": "goal",
+            },
+            {
+                "action": "ai_script",
+                "description": "Open top-star repository",
+                "prompt": "goal",
+                "value": "async def run(page):\n    return {'target_url': 'https://github.com/dynamic/repo'}",
+            },
+            {
+                "action": "click",
+                "description": "Click Pull requests tab",
+                "prompt": "goal",
+                "target_hint": {"role": "link", "name": "Pull requests"},
+            },
+            {
+                "action": "navigate",
+                "description": "Navigate to Pull requests page",
+                "prompt": "goal",
+                "value": "https://github.com/public-apis/public-apis/pulls",
+            },
+            {
+                "action": "ai_script",
+                "description": "Extract first 10 pull requests into strict array",
+                "prompt": "goal",
+                "value": "async def run(page):\n    return {'pr_list': []}",
+            },
+        ]
+
+        distilled = ASSISTANT_MODULE._distill_react_recorded_steps("goal", trace_steps)
+
+        self.assertEqual(
+            [step["action"] for step in distilled],
+            ["navigate", "ai_script", "navigate", "ai_script"],
+        )
+
+    def test_normalize_recorded_step_after_success_converts_stable_subpage_click_into_navigation(self):
+        step = {
+            "action": "click",
+            "description": "Click Pull requests tab",
+            "prompt": "Open the repository pull requests page",
+            "target": '{"method":"role","role":"link","name":"Pull requests 1.3k"}',
+            "target_hint": {"role": "link", "name": "Pull requests 1.3k"},
+            "assistant_diagnostics": {"selected_locator_kind": "role"},
+        }
+
+        normalized = ASSISTANT_MODULE._normalize_recorded_step_after_success(
+            step,
+            "https://github.com/public-apis/public-apis/pulls",
+        )
+
+        self.assertEqual(normalized["action"], "navigate")
+        self.assertEqual(normalized["url"], "https://github.com/public-apis/public-apis/pulls")
+        self.assertEqual(normalized["value"], "https://github.com/public-apis/public-apis/pulls")
+        self.assertEqual(normalized["target"], "")
+        self.assertEqual(normalized["assistant_diagnostics"]["selected_locator_kind"], "navigate")
+
+    def test_distill_react_recorded_steps_replaces_prior_extract_text_with_same_result_key(self):
+        trace_steps = [
+            {
+                "action": "navigate",
+                "description": "Open issues page",
+                "value": "https://github.com/example/repo/issues",
+                "prompt": "goal",
+            },
+            {
+                "action": "extract_text",
+                "description": "Extract the latest issue title",
+                "prompt": "Read the latest issue title",
+                "result_key": "latest_issue_title",
+                "target": '{"method":"text","value":"Navigation Menu"}',
+            },
+            {
+                "action": "extract_text",
+                "description": "Retry extracting the latest issue title from the issue list",
+                "prompt": "Read the latest issue title",
+                "result_key": "latest_issue_title",
+                "target": '{"method":"role","role":"link","name":"Real issue title"}',
+            },
+        ]
+
+        distilled = ASSISTANT_MODULE._distill_react_recorded_steps("goal", trace_steps)
+
+        self.assertEqual(len(distilled), 2)
+        self.assertEqual(distilled[-1]["action"], "extract_text")
+        self.assertEqual(
+            distilled[-1]["description"],
+            "Retry extracting the latest issue title from the issue list",
+        )
+
+    def test_ai_script_quality_issue_rejects_sparse_title_author_array(self):
+        issue = ASSISTANT_MODULE._ai_script_quality_issue(
+            goal="Collect the first 10 PRs as a strict array of title and author",
+            description="Extract top 10 PR titles and creators",
+            raw_output={
+                "pr_list": [
+                    {"title": "Good title", "author": "alice"},
+                    {"title": "", "author": "bob"},
+                    {"title": "2", "author": "carol"},
+                    {"title": "Another title", "author": "Unknown"},
+                ]
+            },
+        )
+
+        self.assertIn("low-quality", issue)
+
+    def test_ai_script_quality_issue_does_not_apply_downstream_array_requirements_to_repo_selection_step(self):
+        issue = ASSISTANT_MODULE._ai_script_quality_issue(
+            goal="Open trending, find the top-star repo, then extract the first 10 PRs as a strict array of title and creator",
+            description="Identify the trending repository with the highest star count and return its path",
+            raw_output={"target_url": "https://github.com/example/repo"},
+        )
+
+        self.assertEqual(issue, "")
+
+    def test_extract_ai_script_plan_enriches_batch_record_constraints(self):
+        plan = ASSISTANT_MODULE.RPAReActAgent._extract_ai_script_plan(
+            {
+                "action": "execute",
+                "step_type": "ai_script",
+                "description": "Extract title and creator for the first 10 PRs visible on the page into a strict array",
+                "result_key": "first_10_prs_info",
+            }
+        )
+
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan["output_shape"], "record_array")
+        self.assertEqual(plan["record_fields"], ["title", "author"])
+        self.assertEqual(plan["item_limit"], 10)
+        self.assertEqual(
+            plan["output_contract"],
+            {
+                "type": "array",
+                "required_fields": ["title", "author"],
+                "max_items": 10,
+                "min_items": None,
+            },
+        )
+        self.assertIn("at most 10", plan["script_brief"])
+        self.assertIn("return the records that exist", plan["script_brief"])
+        self.assertEqual(plan["stable_subpage_hint"], "/pulls")
+
+    def test_extract_ai_script_plan_preserves_all_status_scope(self):
+        plan = ASSISTANT_MODULE.RPAReActAgent._extract_ai_script_plan(
+            {
+                "action": "execute",
+                "step_type": "ai_script",
+                "description": "Collect the first 10 pull requests",
+                "value": "regardless of status",
+            }
+        )
+
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan["selection_scope"], "all_states")
+        self.assertIn("all states", plan["script_brief"])
+        self.assertIn("not a fill-to-quota strategy", plan["script_brief"])
+
+    def test_extract_ai_script_plan_treats_first_n_as_upper_bound_not_required_count(self):
+        plan = ASSISTANT_MODULE.RPAReActAgent._extract_ai_script_plan(
+            {
+                "action": "execute",
+                "step_type": "ai_script",
+                "description": "Collect the first 10 pull requests with title and creator as a strict array",
+                "result_key": "first_10_prs_info",
+            }
+        )
+
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan["item_limit"], 10)
+        self.assertEqual(plan["output_contract"]["max_items"], 10)
+        self.assertIsNone(plan["output_contract"]["min_items"])
+        self.assertIn("upper bound", plan["script_brief"])
+
+    def test_structured_result_quality_issue_rejects_batch_extract_text_navigation_chrome(self):
+        issue = ASSISTANT_MODULE._structured_result_quality_issue(
+            {
+                "action": "extract_text",
+                "description": "Extract title and creator for the first 10 PRs",
+                "prompt": "Collect the first 10 PR titles and creators into a strict array",
+                "result_key": "first_10_prs",
+            },
+            {"success": True, "output": "Navigation Menu"},
+        )
+
+        self.assertIn("batch array", issue)
+
+    def test_structured_result_quality_issue_rejects_generic_chrome_for_single_value_title_request(self):
+        issue = ASSISTANT_MODULE._structured_result_quality_issue(
+            {
+                "action": "extract_text",
+                "description": "Extract the latest issue title",
+                "prompt": "Read the latest issue title from the current list",
+                "result_key": "latest_issue_title",
+            },
+            {"success": True, "output": "Navigation Menu"},
+        )
+
+        self.assertIn("field value", issue)
+
     def test_should_use_react_mode_for_complex_multistep_goal(self):
         self.assertTrue(
             ASSISTANT_MODULE.should_use_react_mode(
@@ -1087,10 +2648,10 @@ class RPAAssistantRoutingTests(unittest.TestCase):
             )
         )
 
-    def test_should_not_use_react_mode_for_simple_summary_request(self):
-        self.assertFalse(
+    def test_should_use_react_mode_for_simple_summary_request_by_default(self):
+        self.assertTrue(
             ASSISTANT_MODULE.should_use_react_mode(
-                "总结当前项目内容",
+                "Summarize the current project",
                 requested_mode="chat",
             )
         )
@@ -1105,6 +2666,317 @@ class RPAAssistantRoutingTests(unittest.TestCase):
 
 
 class RPAReActAgentFailureBehaviorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_explicit_ai_instruction_request_takes_priority_over_scripted_logic_replan(self):
+        agent = ASSISTANT_MODULE.RPAReActAgent()
+        page = _FakeActionPage()
+        snapshot = {
+            "url": "https://github.com/trending",
+            "title": "Trending",
+            "frames": [],
+        }
+        responses = [
+            json.dumps(
+                {
+                    "thought": "find the highest star project and click it",
+                    "action": "execute",
+                    "description": "Find the project with the most stars and click it",
+                    "operation": "click",
+                    "target_hint": {"text": "some project"},
+                    "risk": "none",
+                    "risk_reason": "",
+                }
+            ),
+            json.dumps(
+                {
+                    "thought": "the user explicitly wants a runtime AI instruction",
+                    "action": "execute",
+                    "description": "Save highest-star selection as runtime AI instruction",
+                    "ai_instruction": {
+                        "description": "Select the highest-star project at runtime",
+                        "prompt": "At runtime, inspect the current page and select the project with the most stars.",
+                        "instruction_kind": "semantic_decision",
+                        "input_scope": {"mode": "current_page"},
+                        "output_expectation": {"mode": "act"},
+                        "execution_hint": {
+                            "requires_dom_snapshot": True,
+                            "allow_navigation": True,
+                            "max_reasoning_steps": 10,
+                        },
+                    },
+                    "risk": "none",
+                    "risk_reason": "",
+                }
+            ),
+            json.dumps(
+                {
+                    "thought": "done",
+                    "action": "done",
+                    "description": "done",
+                    "risk": "none",
+                    "risk_reason": "",
+                }
+            ),
+        ]
+
+        async def fake_stream(_history, _model_config=None):
+            yield responses.pop(0)
+
+        agent._stream_llm = fake_stream
+
+        with patch.object(
+            ASSISTANT_MODULE,
+            "build_page_snapshot",
+            new=AsyncMock(return_value=snapshot),
+        ), patch.object(
+            RUNTIME_AI_INSTRUCTION_MODULE,
+            "execute_ai_instruction",
+            new=AsyncMock(return_value={"success": True, "output": "opened"}),
+        ):
+            events = []
+            async for event in agent.run(
+                session_id="session-explicit-ai-priority",
+                page=page,
+                goal="Save this as a runtime AI instruction: choose the project with the most stars; do not expand it into fixed script.",
+                existing_steps=[],
+            ):
+                events.append(event)
+
+        feedback_messages = [
+            item["content"]
+            for item in agent._history
+            if item.get("role") == "user" and "Previous step proposal was rejected" in item.get("content", "")
+        ]
+        self.assertIn("explicitly requested a runtime AI instruction", feedback_messages[0])
+        step_done_events = [event for event in events if event["event"] == "agent_step_done"]
+        self.assertEqual(len(step_done_events), 1)
+        self.assertEqual(step_done_events[0]["data"]["step"]["action"], "ai_instruction")
+
+    async def test_explicit_ai_instruction_request_keeps_setup_navigation_as_structured_step(self):
+        agent = ASSISTANT_MODULE.RPAReActAgent()
+        page = _FakeActionPage()
+        snapshot = {
+            "url": "about:blank",
+            "title": "Blank",
+            "frames": [],
+        }
+        responses = [
+            json.dumps(
+                {
+                    "thought": "first open GitHub trending so the runtime rule has the correct page context",
+                    "action": "navigate",
+                    "description": "Open GitHub trending page",
+                    "value": "https://github.com/trending",
+                    "risk": "none",
+                    "risk_reason": "",
+                }
+            ),
+            json.dumps(
+                {
+                    "thought": "now save the runtime rule itself as ai_instruction",
+                    "action": "execute",
+                    "description": "Save highest-star selection as runtime AI instruction",
+                    "ai_instruction": {
+                        "description": "Select the highest-star project at runtime",
+                        "prompt": "At runtime, inspect the current page and select the project with the most stars.",
+                        "instruction_kind": "semantic_decision",
+                        "input_scope": {"mode": "current_page"},
+                        "output_expectation": {"mode": "act"},
+                        "execution_hint": {
+                            "requires_dom_snapshot": True,
+                            "allow_navigation": True,
+                            "max_reasoning_steps": 10,
+                        },
+                    },
+                    "risk": "none",
+                    "risk_reason": "",
+                }
+            ),
+            json.dumps(
+                {
+                    "thought": "done",
+                    "action": "done",
+                    "description": "done",
+                    "risk": "none",
+                    "risk_reason": "",
+                }
+            ),
+        ]
+
+        async def fake_stream(_history, _model_config=None):
+            yield responses.pop(0)
+
+        agent._stream_llm = fake_stream
+
+        with patch.object(
+            ASSISTANT_MODULE,
+            "build_page_snapshot",
+            new=AsyncMock(return_value=snapshot),
+        ), patch.object(
+            RUNTIME_AI_INSTRUCTION_MODULE,
+            "execute_ai_instruction",
+            new=AsyncMock(return_value={"success": True, "output": "opened"}),
+        ):
+            events = []
+            async for event in agent.run(
+                session_id="session-explicit-ai-scaffold",
+                page=page,
+                goal="Save this as a runtime AI instruction: choose the project with the most stars after opening GitHub trending; do not expand it into fixed script.",
+                existing_steps=[],
+            ):
+                events.append(event)
+
+        step_done_events = [event for event in events if event["event"] == "agent_step_done"]
+        self.assertEqual(len(step_done_events), 2)
+        self.assertEqual(step_done_events[0]["data"]["step"]["action"], "navigate")
+        self.assertEqual(step_done_events[1]["data"]["step"]["action"], "ai_instruction")
+
+    async def test_unified_react_path_preserves_user_prompt_for_explicit_runtime_ai_instruction(self):
+        agent = ASSISTANT_MODULE.RPAReActAgent()
+        page = _FakeActionPage()
+        snapshot = {
+            "url": "https://example.com",
+            "title": "Example",
+            "frames": [],
+        }
+        goal = (
+            "把这条规则保存为运行时 AI 指令：在当前页面中筛选 star 数量大于 10000 的项目，并总结这些项目的信息。"
+            "不要把它展开成固定脚本步骤。"
+        )
+        responses = [
+            json.dumps(
+                {
+                    "thought": "the user explicitly wants to preserve this as a runtime AI instruction",
+                    "action": "execute",
+                    "description": "Preserve runtime rule",
+                    "ai_instruction": {
+                        "description": "Filter projects above 10000 stars and summarize them",
+                        "prompt": "Filter high-star projects and summarize them",
+                        "instruction_kind": "semantic_extract",
+                        "input_scope": {"mode": "current_page"},
+                        "output_expectation": {"mode": "extract"},
+                        "execution_hint": {
+                            "requires_dom_snapshot": True,
+                            "allow_navigation": False,
+                            "max_reasoning_steps": 10,
+                        },
+                        "result_key": "high_star_projects_summary",
+                    },
+                    "risk": "none",
+                    "risk_reason": "",
+                },
+                ensure_ascii=False,
+            ),
+            json.dumps(
+                {
+                    "thought": "done",
+                    "action": "done",
+                    "description": "done",
+                    "risk": "none",
+                    "risk_reason": "",
+                },
+                ensure_ascii=False,
+            ),
+        ]
+
+        async def fake_stream(_history, _model_config=None):
+            yield responses.pop(0)
+
+        agent._stream_llm = fake_stream
+
+        with patch.object(
+            ASSISTANT_MODULE,
+            "build_page_snapshot",
+            new=AsyncMock(return_value=snapshot),
+        ), patch.object(
+            RUNTIME_AI_INSTRUCTION_MODULE,
+            "execute_ai_instruction",
+            new=AsyncMock(return_value={"success": True, "output": "runtime summary"}),
+        ):
+            events = []
+            async for event in agent.run(
+                session_id="session-unified-react-user-prompt",
+                page=page,
+                goal=goal,
+                existing_steps=[],
+            ):
+                events.append(event)
+
+        step_done = next(event for event in events if event["event"] == "agent_step_done")
+        self.assertEqual(step_done["data"]["step"]["action"], "ai_instruction")
+        self.assertEqual(step_done["data"]["step"]["prompt"], goal)
+
+    async def test_react_agent_forwards_model_config_to_runtime_ai_instruction(self):
+        agent = ASSISTANT_MODULE.RPAReActAgent()
+        page = _FakeActionPage()
+        snapshot = {
+            "url": "https://example.com/project",
+            "title": "Project",
+            "frames": [],
+        }
+        responses = [
+            json.dumps(
+                {
+                    "thought": "summarize the current project semantically",
+                    "action": "execute",
+                    "description": "Summarize current project",
+                    "ai_instruction": {
+                        "description": "Summarize current project",
+                        "prompt": "Summarize the current project, focusing on purpose and limits.",
+                        "instruction_kind": "semantic_extract",
+                        "input_scope": {"mode": "current_page"},
+                        "output_expectation": {"mode": "extract"},
+                        "execution_hint": {
+                            "requires_dom_snapshot": True,
+                            "allow_navigation": False,
+                            "max_reasoning_steps": 10,
+                        },
+                        "result_key": "project_summary",
+                    },
+                    "risk": "none",
+                    "risk_reason": "",
+                }
+            ),
+            json.dumps(
+                {
+                    "thought": "done",
+                    "action": "done",
+                    "description": "done",
+                    "risk": "none",
+                    "risk_reason": "",
+                }
+            ),
+        ]
+
+        async def fake_stream(_history, _model_config=None):
+            yield responses.pop(0)
+
+        agent._stream_llm = fake_stream
+        model_config = {"model_name": "user-model", "api_key": "user-key"}
+        execute_mock = AsyncMock(return_value={"success": True, "output": "summary"})
+
+        with patch.object(
+            ASSISTANT_MODULE,
+            "build_page_snapshot",
+            new=AsyncMock(return_value=snapshot),
+        ), patch.object(
+            RUNTIME_AI_INSTRUCTION_MODULE,
+            "execute_ai_instruction",
+            new=execute_mock,
+        ):
+            events = []
+            async for event in agent.run(
+                session_id="session-model-config",
+                page=page,
+                goal="Summarize current project",
+                existing_steps=[],
+                model_config=model_config,
+            ):
+                events.append(event)
+
+        self.assertTrue(any(event["event"] == "agent_done" for event in events))
+        execute_mock.assert_awaited_once()
+        self.assertEqual(execute_mock.await_args.kwargs["model_config"], model_config)
+
     async def test_react_agent_emits_progressive_recorded_steps_after_each_success(self):
         agent = ASSISTANT_MODULE.RPAReActAgent()
         page = _FakeActionPage()
@@ -1804,15 +3676,6 @@ class RPAAssistantStructuredExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["step"]["action"], "extract_text")
         self.assertEqual(result["step"]["result_key"], "latest_issue_title")
 
-    def test_react_step_requires_scripted_logic_for_batch_array_extraction(self):
-        requires_script = ASSISTANT_MODULE._react_step_requires_scripted_logic(
-            thought="collect the first 10 pull requests and output a strict array of title and author",
-            description="Extract title and author for the first 10 pull requests as an array",
-            structured_intent={"action": "extract_text"},
-        )
-
-        self.assertTrue(requires_script)
-
     async def test_resolve_structured_intent_prefers_collection_item_inside_iframe(self):
         snapshot = {
             "frames": [
@@ -2073,21 +3936,51 @@ class RPAAssistantPromptFormattingTests(unittest.TestCase):
         self.assertIn("Do not mark the task done just because the data is visible on the page.", prompt)
         self.assertIn("Execute the extraction step first and return the extracted value.", prompt)
 
-    def test_system_prompt_includes_ai_instruction_few_shot_examples(self):
-        prompt = ASSISTANT_MODULE.SYSTEM_PROMPT
+    def test_react_system_prompt_defines_step_classification_contract(self):
+        prompt = ASSISTANT_MODULE.REACT_SYSTEM_PROMPT
 
-        self.assertIn('User: "总结当前项目的核心信息，并提炼用途、能力和限制"', prompt)
-        self.assertIn('"instruction_kind": "semantic_extract"', prompt)
-        self.assertIn('User: "根据当前页面展示的信息，判断这条记录是否需要人工复核；如果需要，则打开详情页"', prompt)
-        self.assertIn('"instruction_kind": "semantic_decision"', prompt)
-        self.assertIn('User: "找到当前页面 star 数量最高的项目并点击打开它"', prompt)
-        self.assertIn('Do not use ai_instruction for deterministic ranking, numeric comparison, fixed filtering, or explicit field-based selection', prompt)
-        return
+        self.assertIn("structured step for atomic browser actions", prompt)
+        self.assertIn("runtime page data plus deterministic, encodable rules", prompt)
+        self.assertIn("runtime page data plus semantic/business judgment", prompt)
+        self.assertIn("Classify by the rule above, not by isolated words", prompt)
+        self.assertIn("Mini examples:", prompt)
+        self.assertIn('User goal fragment: "Click the Stars tab"', prompt)
+        self.assertIn('User goal fragment: "Find the project with the most stars and open it"', prompt)
+        self.assertIn('User goal fragment: "Summarize the current project, focusing on purpose, capabilities, and limitations"', prompt)
+        self.assertIn("top N items", prompt)
+        self.assertIn("strict array", prompt)
+        self.assertIn("title/author/status fields", prompt)
+        self.assertIn("/issues or /pulls", prompt)
+        self.assertIn('"ai_instruction"', prompt)
 
-        self.assertIn('User: "总结当前项目内容"', prompt)
-        self.assertIn('"instruction_kind": "semantic_extract"', prompt)
-        self.assertIn('User: "在当前页面中找出最符合规则的一项并点击进入"', prompt)
-        self.assertIn('"instruction_kind": "semantic_decision"', prompt)
+    def test_stalled_structured_path_reflects_on_repeated_same_action(self):
+        structured_intent = {
+            "action": "click",
+            "target_hint": {"role": "link", "name": "Pull requests"},
+        }
+        signature = ASSISTANT_MODULE._structured_intent_signature(structured_intent)
+
+        self.assertTrue(
+            ASSISTANT_MODULE._should_reflect_on_stalled_structured_path(
+                structured_intent,
+                last_structured_signature=signature,
+                stall_score=1,
+            )
+        )
+
+    def test_stalled_structured_path_reflects_after_accumulated_failures(self):
+        structured_intent = {
+            "action": "click",
+            "target_hint": {"role": "link", "name": "Issues"},
+        }
+
+        self.assertTrue(
+            ASSISTANT_MODULE._should_reflect_on_stalled_structured_path(
+                structured_intent,
+                last_structured_signature="",
+                stall_score=2,
+            )
+        )
 
     def test_should_force_ai_instruction_only_for_explicit_declarations(self):
         assistant = ASSISTANT_MODULE.RPAAssistant()
@@ -2189,7 +4082,14 @@ class RPAAssistantAIInstructionTests(unittest.IsolatedAsyncioTestCase):
             new=execute_mock,
         ):
             events = []
-            async for event in assistant.chat("session-1", fake_page, "summarize stars", []):
+            model_config = {"model_name": "user-selected-model", "api_key": "user-key"}
+            async for event in assistant.chat(
+                "session-1",
+                fake_page,
+                "summarize stars",
+                [],
+                model_config=model_config,
+            ):
                 events.append(event)
 
         result_event = next(event for event in events if event["event"] == "result")
@@ -2199,6 +4099,7 @@ class RPAAssistantAIInstructionTests(unittest.IsolatedAsyncioTestCase):
             "repo-a (12000 stars); repo-b (15000 stars)",
         )
         execute_mock.assert_awaited_once()
+        self.assertEqual(execute_mock.await_args.kwargs["model_config"], model_config)
 
     async def test_chat_coerces_explicit_runtime_ai_instruction_requests_from_structured_extract(self):
         assistant = ASSISTANT_MODULE.RPAAssistant()
@@ -2261,7 +4162,7 @@ class RPAAssistantAIInstructionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RPAAssistantSmallPolishTests(unittest.IsolatedAsyncioTestCase):
-    def test_summary_ai_instruction_description_is_generic(self):
+    def test_summary_ai_instruction_preserves_specific_prompt_constraints(self):
         step = ASSISTANT_MODULE.RPAAssistant._coerce_to_ai_instruction(
             "用中文总结当前项目的核心内容",
             {
@@ -2273,8 +4174,137 @@ class RPAAssistantSmallPolishTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
-        self.assertEqual(step["description"], "总结当前项目核心内容")
-        self.assertNotIn("obra/superpowers", step["prompt"])
+        self.assertEqual(
+            step["description"],
+            "Summarize the core content of the obra/superpowers repository",
+        )
+        self.assertIn("obra/superpowers", step["prompt"])
+
+    def test_semantic_decision_act_ai_instruction_forces_navigation_contract(self):
+        step = ASSISTANT_MODULE.RPAAssistant._coerce_to_ai_instruction(
+            "找到和SKILL最相关的项目打开",
+            {
+                "action": "ai_instruction",
+                "description": "Find the project most related to SKILL from trending repos",
+                "prompt": "Scan all repository names and descriptions on the current GitHub trending page and return the repo_path of the top match.",
+                "instruction_kind": "semantic_decision",
+                "output_expectation": {"mode": "act"},
+                "execution_hint": {
+                    "requires_dom_snapshot": True,
+                    "allow_navigation": False,
+                    "max_reasoning_steps": 5,
+                },
+            },
+        )
+
+        self.assertTrue(step["execution_hint"]["allow_navigation"])
+        self.assertIn("Complete the requested browser action inside this AI instruction.", step["prompt"])
+
+
+class RuntimeAIInstructionTests(unittest.IsolatedAsyncioTestCase):
+    def test_retryable_execution_error_accepts_assignment_expression_syntax_message(self):
+        self.assertTrue(
+            RUNTIME_AI_INSTRUCTION_MODULE._is_retryable_execution_error(
+                'expression cannot contain assignment, perhaps you meant "=="? (<ai_instruction>, line 4)'
+            )
+        )
+
+    async def test_execute_ai_instruction_reuses_structured_snapshot_when_page_unchanged(self):
+        step = {
+            "action": "ai_instruction",
+            "description": "Extract two visible fields",
+            "prompt": "Extract visible text from the current page.",
+            "instruction_kind": "semantic_extract",
+            "input_scope": {"mode": "current_page"},
+            "output_expectation": {"mode": "extract"},
+            "execution_hint": {"planning_timeout_s": 5},
+            "result_key": "visible_text",
+        }
+        snapshot = {
+            "url": "https://example.com/items",
+            "title": "Items",
+            "frames": [],
+        }
+
+        with patch.object(
+            RUNTIME_AI_INSTRUCTION_MODULE,
+            "plan_ai_instruction",
+            new=AsyncMock(
+                return_value={
+                    "plan_type": "structured",
+                    "actions": [
+                        {"action": "extract_text", "target_hint": {"text": "First"}},
+                        {"action": "extract_text", "target_hint": {"text": "Second"}},
+                    ],
+                }
+            ),
+        ), patch.object(
+            RUNTIME_AI_INSTRUCTION_MODULE,
+            "build_page_snapshot",
+            new=AsyncMock(return_value=snapshot),
+        ) as build_snapshot, patch.object(
+            RUNTIME_AI_INSTRUCTION_MODULE,
+            "resolve_structured_intent",
+            side_effect=lambda _snapshot, action: action,
+        ), patch.object(
+            RUNTIME_AI_INSTRUCTION_MODULE,
+            "execute_structured_intent",
+            new=AsyncMock(return_value={"success": True, "output": "ok"}),
+        ) as execute_structured_intent, patch.object(
+            RUNTIME_AI_INSTRUCTION_MODULE,
+            "_capture_page_observation",
+            new=AsyncMock(return_value={"url": "https://example.com/items", "title": "Items"}),
+        ):
+            result = await RUNTIME_AI_INSTRUCTION_MODULE.execute_ai_instruction(
+                _FakePage(),
+                step,
+                results={},
+            )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(execute_structured_intent.await_count, 2)
+        self.assertEqual(build_snapshot.await_count, 1)
+
+    async def test_execute_ai_instruction_retries_after_syntax_error_code_plan(self):
+        step = {
+            "action": "ai_instruction",
+            "description": "Extract the title of the first issue in the list",
+            "prompt": "Extract the title text of the first issue item from the current page.",
+            "instruction_kind": "semantic_extract",
+            "input_scope": {"mode": "current_page"},
+            "output_expectation": {"mode": "extract"},
+            "execution_hint": {
+                "requires_dom_snapshot": True,
+                "allow_navigation": False,
+                "max_reasoning_steps": 5,
+                "planning_timeout_s": 5,
+            },
+            "result_key": "latest_issue_title",
+        }
+        results = {}
+        plan_attempts = [
+            {"plan_type": "code", "code": "async def run(page, results):\n    return (title = 'bad')"},
+            {"plan_type": "code", "code": "async def run(page, results):\n    return {'success': True, 'output': 'Latest issue title'}"},
+        ]
+
+        async def fake_plan_ai_instruction(_page, _step, model_config=None):
+            return plan_attempts.pop(0)
+
+        with patch.object(
+            RUNTIME_AI_INSTRUCTION_MODULE,
+            "plan_ai_instruction",
+            new=AsyncMock(side_effect=fake_plan_ai_instruction),
+        ) as plan_ai_instruction:
+            result = await RUNTIME_AI_INSTRUCTION_MODULE.execute_ai_instruction(
+                _FakePage(),
+                step,
+                results,
+            )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["output"], "Latest issue title")
+        self.assertEqual(results["latest_issue_title"], "Latest issue title")
+        self.assertEqual(plan_ai_instruction.await_count, 2)
 
     async def test_react_agent_rejects_javascript_code_before_execution(self):
         agent = ASSISTANT_MODULE.RPAReActAgent()
