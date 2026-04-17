@@ -166,7 +166,7 @@ def test_transport_selection(monkeypatch, transport: str, helper_name: str, help
     if transport == "sse":
         assert captured["kwargs"]["headers"] == {"Authorization": "Bearer token"}
         assert captured["kwargs"]["timeout"] == 20.0
-        assert captured["kwargs"]["sse_read_timeout"] == 20.0
+        assert captured["kwargs"]["sse_read_timeout"] == 300.0
     else:
         assert captured["kwargs"]["http_client"].kwargs["headers"] == {"Authorization": "Bearer token"}
         assert captured["kwargs"]["http_client"].kwargs["timeout"] == 20.0

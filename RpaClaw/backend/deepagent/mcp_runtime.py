@@ -48,6 +48,10 @@ def _timeout_seconds(server: McpServerDefinition) -> float:
     return max(server.timeout_ms / 1000.0, 0.001)
 
 
+def _sse_read_timeout_seconds() -> float:
+    return 60.0 * 5.0
+
+
 def _normalize_server_headers(headers: Mapping[str, str] | None) -> dict[str, str] | None:
     if not headers:
         return None
@@ -145,7 +149,7 @@ class McpSdkRuntime:
                 self._server.url,
                 headers=_normalize_server_headers(self._server.headers),
                 timeout=timeout,
-                sse_read_timeout=timeout,
+                sse_read_timeout=_sse_read_timeout_seconds(),
             ) as streams:
                 yield streams
             return
