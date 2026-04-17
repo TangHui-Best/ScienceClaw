@@ -73,7 +73,8 @@ def _resolve_sandbox_tools_dir() -> str:
 
 
 def _resolve_system_mcp_config_path() -> str:
-    return _env_or_default("SYSTEM_MCP_CONFIG_PATH", "mcp_servers.yaml")
+    repo_root = Path(__file__).resolve().parents[2]
+    return _env_or_default("SYSTEM_MCP_CONFIG_PATH", str(repo_root / "mcp_servers.yaml"))
 
 
 def _derive_sandbox_vnc_ws_url(base_url: str) -> str:
