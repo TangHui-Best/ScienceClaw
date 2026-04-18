@@ -1,8 +1,8 @@
-"""
-FastAPI 应用入口 — 精简版。
+﻿"""
+FastAPI 搴旂敤鍏ュ彛 鈥?绮剧畝鐗堛€?
 
-挂载路由：auth / models / sessions / file / rpa / chat / statistics
-启动时：连接 MongoDB → 初始化系统模型 → 创建默认 admin
+鎸傝浇璺敱锛歛uth / models / sessions / file / rpa / chat / statistics
+鍚姩鏃讹細杩炴帴 MongoDB 鈫?鍒濆鍖栫郴缁熸ā鍨?鈫?鍒涘缓榛樿 admin
 """
 import asyncio
 import os
@@ -24,7 +24,7 @@ from backend.route.chat import router as chat_router
 from backend.route.statistics import router as statistics_router
 from backend.route.rpa import router as rpa_router
 from backend.route.credential import router as credential_router
-from backend.route.mcp import router as mcp_router
+from backend.route.mcp import router as mcp_router`r`nfrom backend.route.rpa_mcp import router as rpa_mcp_router
 from backend.route.runtime_proxy import router as runtime_proxy_router
 from backend.runtime.session_runtime_manager import get_session_runtime_manager
 from backend.models import init_system_models
@@ -156,7 +156,7 @@ def create_app() -> FastAPI:
     app.include_router(rpa_router, prefix="/api/v1/rpa")
     app.include_router(runtime_proxy_router, prefix="/api/v1")
     app.include_router(credential_router, prefix="/api/v1")
-    app.include_router(mcp_router, prefix="/api/v1")
+    app.include_router(mcp_router, prefix="/api/v1")`r`n    app.include_router(rpa_mcp_router, prefix="/api/v1")
 
     logger.info("FastAPI initialized with /api/v1 endpoints")
     return app
@@ -188,3 +188,4 @@ if frontend_dist:
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+

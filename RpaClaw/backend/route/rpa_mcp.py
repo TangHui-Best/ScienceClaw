@@ -1,0 +1,185 @@
+﻿from __future__ import annotations
+
+import inspect
+import uuid
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
+
+from backend.rpa.manager import rpa_manager
+from backend.rpa.mcp_converter import RpaMcpConverter
+from backend.rpa.mcp_executor import InvalidCookieError, RpaMcpExecutor
+from backend.rpa.mcp_models import RpaMcpToolDefinition
+from backend.rpa.mcp_registry import RpaMcpToolRegistry
+from backend.user.dependencies import User, require_user
+
+router = APIRouter(tags=["rpa-mcp"])
+
+
+class ApiResponse(BaseModel):
+    code: int = 0
+    msg: str = "ok"
+    data: Any = None
+
+
+class PreviewRequest(BaseModel):
+    name: str
+    description: str = ""
+
+
+class SaveToolRequest(BaseModel):
+    name: str
+    description: str = ""
+    allowed_domains: list[str] = Field(default_factory=list)
+    post_auth_start_url: str = ""
+
+
+class UpdateToolRequest(BaseModel):
+    name: str = ""
+    description: str = ""
+    enabled: bool = True
+    allowed_domains: list[str] = Field(default_factory=list)
+    post_auth_start_url: str = ""
+
+
+class TestToolRequest(BaseModel):
+    cookies: list[dict[str, Any]] = Field(default_factory=list)
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+async def _maybe_await(value: Any) -> Any:
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+async def get_rpa_session_steps(session_id: str, user_id: str) -> dict[str, Any]:
+    session = await rpa_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if str(session.user_id) != str(user_id):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    return {
+        "steps": [step.model_dump() for step in session.steps],
+        "params": getattr(session, 'params', {}) or {},
+        "skill_name": getattr(session, 'skill_name', '') or getattr(session, 'title', '') or '',
+    }
+
+
+async def _preview_payload(session_id: str, user_id: str, body: PreviewRequest | SaveToolRequest):
+    payload = await _maybe_await(get_rpa_session_steps(session_id, user_id))
+    preview = RpaMcpConverter().preview(
+        user_id=user_id,
+        session_id=session_id,
+        skill_name=payload.get('skill_name', ''),
+        name=body.name,
+        description=body.description,
+        steps=payload.get('steps', []),
+        params=payload.get('params', {}),
+    )
+    return preview
+
+
+async def _build_gateway_tools(user_id: str) -> list[dict[str, Any]]:
+    tools = await RpaMcpToolRegistry().list_enabled_for_user(user_id)
+    return [
+        {
+            "name": tool.tool_name,
+            "description": tool.description,
+            "input_schema": tool.input_schema,
+        }
+        for tool in tools
+    ]
+
+
+@router.post('/rpa-mcp/session/{session_id}/preview', response_model=ApiResponse)
+async def preview_rpa_mcp_tool(session_id: str, body: PreviewRequest, current_user: User = Depends(require_user)) -> ApiResponse:
+    preview = await _preview_payload(session_id, str(current_user.id), body)
+    return ApiResponse(data=preview.model_dump(mode='python'))
+
+
+@router.post('/rpa-mcp/session/{session_id}/tools', response_model=ApiResponse)
+async def create_rpa_mcp_tool(session_id: str, body: SaveToolRequest, current_user: User = Depends(require_user)) -> ApiResponse:
+    preview = await _preview_payload(session_id, str(current_user.id), body)
+    if body.allowed_domains:
+        preview.allowed_domains = body.allowed_domains
+    if body.post_auth_start_url:
+        preview.post_auth_start_url = body.post_auth_start_url
+    preview.id = f"rpa_mcp_{uuid.uuid4().hex[:12]}"
+    saved = await RpaMcpToolRegistry().save(preview)
+    return ApiResponse(data=saved.model_dump(mode='python'))
+
+
+@router.get('/rpa-mcp/tools', response_model=ApiResponse)
+async def list_rpa_mcp_tools(current_user: User = Depends(require_user)) -> ApiResponse:
+    tools = await RpaMcpToolRegistry().list_for_user(str(current_user.id))
+    return ApiResponse(data=[tool.model_dump(mode='python') for tool in tools])
+
+
+@router.get('/rpa-mcp/tools/{tool_id}', response_model=ApiResponse)
+async def get_rpa_mcp_tool(tool_id: str, current_user: User = Depends(require_user)) -> ApiResponse:
+    tool = await RpaMcpToolRegistry().get_owned(tool_id, str(current_user.id))
+    if not tool:
+        raise HTTPException(status_code=404, detail='RPA MCP tool not found')
+    return ApiResponse(data=tool.model_dump(mode='python'))
+
+
+@router.put('/rpa-mcp/tools/{tool_id}', response_model=ApiResponse)
+async def update_rpa_mcp_tool(tool_id: str, body: UpdateToolRequest, current_user: User = Depends(require_user)) -> ApiResponse:
+    registry = RpaMcpToolRegistry()
+    tool = await registry.get_owned(tool_id, str(current_user.id))
+    if not tool:
+        raise HTTPException(status_code=404, detail='RPA MCP tool not found')
+    if body.name:
+        tool.name = body.name
+        tool.tool_name = RpaMcpConverter()._tool_name(body.name)
+    if body.description:
+        tool.description = body.description
+    tool.enabled = body.enabled
+    if body.allowed_domains:
+        tool.allowed_domains = body.allowed_domains
+    if body.post_auth_start_url:
+        tool.post_auth_start_url = body.post_auth_start_url
+    saved = await registry.save(tool)
+    return ApiResponse(data=saved.model_dump(mode='python'))
+
+
+@router.delete('/rpa-mcp/tools/{tool_id}', response_model=ApiResponse)
+async def delete_rpa_mcp_tool(tool_id: str, current_user: User = Depends(require_user)) -> ApiResponse:
+    deleted = await RpaMcpToolRegistry().delete(tool_id, str(current_user.id))
+    if not deleted:
+        raise HTTPException(status_code=404, detail='RPA MCP tool not found')
+    return ApiResponse(data={"id": tool_id, "deleted": True})
+
+
+@router.post('/rpa-mcp/tools/{tool_id}/test', response_model=ApiResponse)
+async def test_rpa_mcp_tool(tool_id: str, body: TestToolRequest, current_user: User = Depends(require_user)) -> ApiResponse:
+    tool = await RpaMcpToolRegistry().get_owned(tool_id, str(current_user.id))
+    if not tool:
+        raise HTTPException(status_code=404, detail='RPA MCP tool not found')
+    try:
+        result = await RpaMcpExecutor().execute(tool, {"cookies": body.cookies, **body.arguments})
+    except InvalidCookieError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ApiResponse(data=result)
+
+
+@router.post('/rpa-mcp/mcp')
+async def rpa_mcp_gateway(body: dict[str, Any], current_user: User = Depends(require_user)) -> dict[str, Any]:
+    method = body.get('method')
+    params = body.get('params') or {}
+    if method == 'tools/list':
+        return {"result": {"tools": await _maybe_await(_build_gateway_tools(str(current_user.id)))}}
+    if method == 'tools/call':
+        tool_name = str(params.get('name') or '')
+        arguments = dict(params.get('arguments') or {})
+        tool = await RpaMcpToolRegistry().get_by_tool_name(tool_name, str(current_user.id))
+        if not tool:
+            raise HTTPException(status_code=404, detail='RPA MCP tool not found')
+        try:
+            result = await RpaMcpExecutor().execute(tool, arguments)
+        except InvalidCookieError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"result": {"content": [], "structuredContent": result}}
+    raise HTTPException(status_code=400, detail='Unsupported MCP method')
