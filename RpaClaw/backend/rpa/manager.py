@@ -46,6 +46,9 @@ class RPAStep(BaseModel):
     source_tab_id: Optional[str] = None
     target_tab_id: Optional[str] = None
     result_key: Optional[str] = None
+    value_from: Optional[str] = None
+    url_from: Optional[str] = None
+    target_from: Optional[str] = None
     collection_hint: Dict[str, Any] = Field(default_factory=dict)
     item_hint: Dict[str, Any] = Field(default_factory=dict)
     ordinal: Optional[str] = None

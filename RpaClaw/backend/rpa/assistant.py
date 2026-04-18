@@ -1082,9 +1082,57 @@ def _is_valid_record_author(value: Any) -> bool:
     return bool(normalized and normalized != "unknown")
 
 
-def _ai_script_quality_issue(goal: str, description: str, raw_output: Any) -> str:
+def _normalize_record_field_name(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"creator", "created_by", "owner", "user"}:
+        return "author"
+    return normalized
+
+
+def _ai_script_contract_record_fields(ai_script_plan: Optional[Dict[str, Any]]) -> List[str]:
+    if not isinstance(ai_script_plan, dict):
+        return []
+
+    fields: List[str] = []
+    raw_record_fields = ai_script_plan.get("record_fields")
+    if isinstance(raw_record_fields, list):
+        fields.extend(_normalize_record_field_name(field) for field in raw_record_fields)
+
+    output_contract = ai_script_plan.get("output_contract")
+    if isinstance(output_contract, dict):
+        required_fields = output_contract.get("required_fields")
+        if isinstance(required_fields, list):
+            fields.extend(_normalize_record_field_name(field) for field in required_fields)
+
+    deduped: List[str] = []
+    for field in fields:
+        if field and field not in deduped:
+            deduped.append(field)
+    return deduped
+
+
+def _ai_script_contract_expects_record_array(ai_script_plan: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(ai_script_plan, dict):
+        return False
+    if str(ai_script_plan.get("output_shape") or "").strip().lower() == "record_array":
+        return True
+    output_contract = ai_script_plan.get("output_contract")
+    if isinstance(output_contract, dict):
+        return str(output_contract.get("type") or "").strip().lower() == "array"
+    return False
+
+
+def _ai_script_quality_issue(
+    goal: str,
+    description: str,
+    raw_output: Any,
+    ai_script_plan: Optional[Dict[str, Any]] = None,
+) -> str:
     normalized = str(description or "").strip().lower()
-    expects_record_array = _looks_like_record_array_request(description)
+    contract_fields = _ai_script_contract_record_fields(ai_script_plan)
+    expects_record_array = _ai_script_contract_expects_record_array(ai_script_plan)
+    if not expects_record_array:
+        expects_record_array = _looks_like_record_array_request(description)
     records = _extract_record_list_candidate(raw_output)
     if not expects_record_array and records is not None:
         expects_record_array = True
@@ -1096,12 +1144,16 @@ def _ai_script_quality_issue(goal: str, description: str, raw_output: Any) -> st
     if not records:
         return "AI script returned an empty record array even though the target list should be visible."
 
-    requires_title = any(pattern in normalized for pattern in RECORD_FIELD_TITLE_PATTERNS) or any(
-        isinstance(item, dict) and "title" in item for item in records
-    )
-    requires_author = any(pattern in normalized for pattern in RECORD_FIELD_AUTHOR_PATTERNS) or any(
-        isinstance(item, dict) and ("author" in item or "creator" in item) for item in records
-    )
+    if contract_fields:
+        requires_title = "title" in contract_fields
+        requires_author = "author" in contract_fields
+    else:
+        requires_title = any(pattern in normalized for pattern in RECORD_FIELD_TITLE_PATTERNS) or any(
+            isinstance(item, dict) and "title" in item for item in records
+        )
+        requires_author = any(pattern in normalized for pattern in RECORD_FIELD_AUTHOR_PATTERNS) or any(
+            isinstance(item, dict) and ("author" in item or "creator" in item) for item in records
+        )
     if not (requires_title or requires_author):
         return ""
 
@@ -1217,6 +1269,25 @@ def _build_execution_observation(step: Dict[str, Any], output: Any, current_url:
     }
     payload.update(_summarize_execution_output(output))
     return "Latest execution observation:\n" + json.dumps(payload, ensure_ascii=False, default=str)
+
+
+def _store_ai_script_execution_result(
+    execution_results: Dict[str, Any],
+    candidate: Dict[str, Any],
+    result: Dict[str, Any],
+) -> None:
+    if not isinstance(execution_results, dict):
+        return
+    result_key = (
+        ((candidate.get("ai_script_plan") or {}).get("result_key"))
+        or ((candidate.get("parsed") or {}).get("result_key"))
+    )
+    if not isinstance(result_key, str) or not result_key.strip():
+        return
+    payload = result.get("raw_output")
+    if payload is None:
+        payload = result.get("output")
+    execution_results[result_key.strip()] = payload
 
 
 def _candidate_contract_kind(candidate: Dict[str, Any]) -> str:
@@ -1549,6 +1620,12 @@ Preferred format:
   },
   "ordinal": "first|last|1|2|3",
   "value": "text to fill or key to press when relevant",
+  "output_shape": "record_array|single_value|unspecified",
+  "record_fields": ["title", "author"],
+  "item_limit": 10,
+  "selection_scope": "current_view|all_states",
+  "entity_hint": "pull_requests|issues|table_rows|cards|...",
+  "stable_subpage_hint": "/pulls|/issues|/actions|...",
   "ai_instruction": {
     "description": "short semantic step summary",
     "prompt": "the rule for this one step only",
@@ -1571,8 +1648,9 @@ Rules:
 2. Prefer structured atomic actions with operation/target_hint/collection_hint over raw Playwright code.
 3. For runtime page data plus deterministic, encodable rules such as ranking, sorting, numeric comparison, fixed filtering, or looping over stable page structures, set step_type to ai_script.
 3a. For deterministic batch extraction tasks such as collecting top N items, returning a strict array, or gathering repeated title/author/status fields, prefer one ai_script over repeated structured clicks.
-3b. When step_type is ai_script, describe the subtask using description/result_key/target_hint/collection_hint/ordinal/value. Do not return Python code here; a dedicated ai_script generator will produce the code.
+3b. When step_type is ai_script, describe the subtask using a complete ai_script subtask contract: description, result_key, output_shape, record_fields, item_limit, selection_scope, entity_hint, stable_subpage_hint, target_hint, collection_hint, ordinal, value, and any value_from/url_from/target_from reference fields that apply. Do not return Python code here; a dedicated ai_script generator will produce the code.
 3c. If a stable subpage is already implied by the goal or current repo context, such as /issues or /pulls, express that target in the ai_script planning fields instead of navigating to the parent page and repeatedly clicking tabs.
+3d. The ai_script contract is the semantic source of truth for the generator. Do not leave important constraints only inside description or value when they can be represented by contract fields such as record_fields, item_limit, selection_scope, entity_hint, or stable_subpage_hint.
 4. Use ai_instruction for runtime page data plus semantic/business judgment whose correctness depends on understanding current-page meaning.
 5. For summary/explanation/judgment tasks, the ai_instruction prompt should describe only that local semantic step, not the entire original goal.
 5a. Classify by the rule above, not by isolated words. For example, "star" or "summary" alone is only a signal, not a step type decision.
@@ -1626,7 +1704,8 @@ Return exactly one JSON object, not wrapped in markdown:
 
 Rules:
 1. Generate only one ai_script step. Do not return structured actions or ai_instruction.
-2. Use script_brief as the source of task semantics. Use output_contract only as the output shape contract.
+2. The complete ai_script subtask contract is the primary source of task semantics. Read and obey all contract fields, including output_shape, record_fields, item_limit, selection_scope, entity_hint, stable_subpage_hint, output_contract, target_hint, collection_hint, and reference fields.
+2a. script_brief is only supplemental natural-language context. Do not let script_brief override, narrow, expand, or redefine structured contract fields.
 3. Use the provided page snapshot to pick stable page structures. Prefer stable collections, containers, and direct target URLs over brittle DOM trivia.
 4. Do not use page.evaluate or browser-side JavaScript. Use Python Playwright locators, query_selector/query_selector_all, and element handles instead.
 5. The code field must contain valid Python async Playwright code only.
@@ -1649,7 +1728,8 @@ Return exactly one JSON object, not wrapped in markdown:
 
 Rules:
 1. Repair only the current ai_script subtask. Do not restart the whole task.
-2. Preserve script_brief and output_contract exactly.
+2. Preserve the complete ai_script subtask contract exactly, including output_shape, record_fields, item_limit, selection_scope, entity_hint, stable_subpage_hint, output_contract, script_brief, and result_key.
+2a. Do not redefine contract fields from script_brief, description, previous broken code, or the repair failure message.
 3. Do not use page.evaluate or browser-side JavaScript. Use Python Playwright locators, query_selector/query_selector_all, and element handles instead.
 4. Do not repeat the same failing DOM-guessing pattern.
 5. Prefer more stable collection/container scoping, stable href patterns, or direct target URLs.
@@ -1671,6 +1751,7 @@ class RPAReActAgent:
         self._confirm_approved: bool = False
         self._aborted: bool = False
         self._history: List[Dict[str, str]] = []  # persists across turns
+        self._last_ai_script_generation_failure: str = ""
 
     def resolve_confirm(self, approved: bool) -> None:
         self._confirm_approved = approved
@@ -1911,7 +1992,26 @@ class RPAReActAgent:
         else:
             return None
 
-        for key in ("description", "result_key", "target_hint", "collection_hint", "ordinal", "value"):
+        for key in (
+            "description",
+            "result_key",
+            "target_hint",
+            "collection_hint",
+            "ordinal",
+            "value",
+            "output_shape",
+            "record_fields",
+            "item_limit",
+            "min_items",
+            "selection_scope",
+            "entity_hint",
+            "stable_subpage_hint",
+            "script_brief",
+            "output_contract",
+            "value_from",
+            "url_from",
+            "target_from",
+        ):
             if parsed.get(key) is not None and key not in plan_payload:
                 plan_payload[key] = parsed.get(key)
 
@@ -1926,55 +2026,74 @@ class RPAReActAgent:
             result_key = result_key.strip()
         plan_payload["result_key"] = result_key or None
 
-        output_shape = _infer_ai_script_output_shape(
-            description,
-            plan_payload.get("value"),
-            plan_payload.get("result_key"),
-        )
+        output_shape = str(plan_payload.get("output_shape") or "").strip().lower()
+        if output_shape not in {"record_array", "single_value", "unspecified"}:
+            output_shape = ""
+        if not output_shape:
+            output_shape = _infer_ai_script_output_shape(
+                description,
+                plan_payload.get("value"),
+                plan_payload.get("result_key"),
+            )
         if output_shape != "unspecified":
             plan_payload["output_shape"] = output_shape
 
-        record_fields = _infer_ai_script_record_fields(
-            description,
-            plan_payload.get("value"),
-            plan_payload.get("result_key"),
-        )
+        raw_record_fields = plan_payload.get("record_fields")
+        record_fields = [
+            str(field).strip()
+            for field in raw_record_fields
+            if str(field).strip()
+        ] if isinstance(raw_record_fields, list) else []
+        if not record_fields:
+            record_fields = _infer_ai_script_record_fields(
+                description,
+                plan_payload.get("value"),
+                plan_payload.get("result_key"),
+            )
         if record_fields:
             plan_payload["record_fields"] = record_fields
 
-        item_limit = _infer_ai_script_item_limit(
-            plan_payload.get("ordinal"),
-            description,
-            plan_payload.get("value"),
-            plan_payload.get("result_key"),
-        )
+        item_limit = _normalize_optional_positive_int(plan_payload.get("item_limit"))
+        if not item_limit:
+            item_limit = _infer_ai_script_item_limit(
+                plan_payload.get("ordinal"),
+                description,
+                plan_payload.get("value"),
+                plan_payload.get("result_key"),
+            )
         if item_limit:
             plan_payload["item_limit"] = item_limit
 
-        selection_scope = _infer_ai_script_selection_scope(
-            description,
-            plan_payload.get("value"),
-            plan_payload.get("target_hint"),
-        )
+        selection_scope = str(plan_payload.get("selection_scope") or "").strip().lower()
+        if selection_scope not in {"current_view", "all_states"}:
+            selection_scope = _infer_ai_script_selection_scope(
+                description,
+                plan_payload.get("value"),
+                plan_payload.get("target_hint"),
+            )
         if selection_scope != "current_view":
             plan_payload["selection_scope"] = selection_scope
 
-        stable_subpage_hint = _infer_ai_script_stable_subpage_hint(
-            description,
-            plan_payload.get("value"),
-            plan_payload.get("target_hint"),
-            plan_payload.get("collection_hint"),
-        )
+        stable_subpage_hint = str(plan_payload.get("stable_subpage_hint") or "").strip()
+        if not stable_subpage_hint:
+            stable_subpage_hint = _infer_ai_script_stable_subpage_hint(
+                description,
+                plan_payload.get("value"),
+                plan_payload.get("target_hint"),
+                plan_payload.get("collection_hint"),
+            )
         if stable_subpage_hint:
             plan_payload["stable_subpage_hint"] = stable_subpage_hint
 
-        entity_hint = _infer_ai_script_entity_hint(
-            stable_subpage_hint,
-            description,
-            plan_payload.get("value"),
-            plan_payload.get("target_hint"),
-            plan_payload.get("collection_hint"),
-        )
+        entity_hint = str(plan_payload.get("entity_hint") or "").strip()
+        if not entity_hint:
+            entity_hint = _infer_ai_script_entity_hint(
+                stable_subpage_hint,
+                description,
+                plan_payload.get("value"),
+                plan_payload.get("target_hint"),
+                plan_payload.get("collection_hint"),
+            )
         if entity_hint:
             plan_payload["entity_hint"] = entity_hint
 
@@ -2027,12 +2146,13 @@ class RPAReActAgent:
         structured_intent: Optional[Dict[str, Any]],
         ai_instruction_step: Optional[Dict[str, Any]],
         result: Dict[str, Any],
+        ai_script_plan: Optional[Dict[str, Any]] = None,
     ) -> str:
         if ai_instruction_step:
             return ""
         if structured_intent:
             return _structured_result_quality_issue(structured_intent, result)
-        return _ai_script_quality_issue(goal, description, result.get("raw_output"))
+        return _ai_script_quality_issue(goal, description, result.get("raw_output"), ai_script_plan=ai_script_plan)
 
     @staticmethod
     async def _stream_llm_with_system_prompt(
@@ -2154,7 +2274,7 @@ class RPAReActAgent:
         candidate: Dict[str, Any],
         model_config: Optional[Dict[str, Any]],
     ) -> Optional[Dict[str, Any]]:
-        return await self._request_ai_script_candidate_with_prompt(
+        generated_candidate = await self._request_ai_script_candidate_with_prompt(
             goal=goal,
             snapshot=snapshot,
             candidate=candidate,
@@ -2162,6 +2282,33 @@ class RPAReActAgent:
             model_config=model_config,
             failure_reason="",
         )
+        if generated_candidate:
+            return generated_candidate
+
+        initial_failure = (
+            self._last_ai_script_generation_failure
+            or "ai_script_generator_returned_no_candidate"
+        )
+        repaired_candidate = await self._request_ai_script_repair(
+            goal=goal,
+            snapshot=snapshot,
+            candidate=candidate,
+            failure_reason=initial_failure,
+            model_config=model_config,
+        )
+        if repaired_candidate:
+            repaired_candidate["_generation_repair_attempted"] = True
+            repaired_candidate["_generation_failure_reason"] = initial_failure
+            return repaired_candidate
+
+        repair_failure = self._last_ai_script_generation_failure
+        if repair_failure and repair_failure != initial_failure:
+            self._last_ai_script_generation_failure = (
+                f"{initial_failure}; repair_failed: {repair_failure}"
+            )
+        else:
+            self._last_ai_script_generation_failure = initial_failure
+        return None
 
     async def _request_ai_script_repair(
         self,
@@ -2189,25 +2336,31 @@ class RPAReActAgent:
         model_config: Optional[Dict[str, Any]],
         failure_reason: str = "",
     ) -> Optional[Dict[str, Any]]:
+        self._last_ai_script_generation_failure = ""
         frame_lines = _snapshot_frame_lines(snapshot)
         ai_script_plan = candidate.get("ai_script_plan") or {}
-        planner_payload = {
-            "thought": candidate.get("thought"),
-            "description": ai_script_plan.get("description") or candidate.get("description"),
-            "result_key": ai_script_plan.get("result_key"),
-            "script_brief": ai_script_plan.get("script_brief") or ai_script_plan.get("description") or candidate.get("description"),
-            "output_contract": ai_script_plan.get("output_contract"),
-            "target_hint": ai_script_plan.get("target_hint"),
-            "collection_hint": ai_script_plan.get("collection_hint"),
-            "stable_subpage_hint": ai_script_plan.get("stable_subpage_hint"),
-        }
+        planner_payload = dict(ai_script_plan)
+        planner_payload["thought"] = candidate.get("thought")
+        planner_payload["description"] = (
+            planner_payload.get("description")
+            or candidate.get("description")
+        )
+        planner_payload["result_key"] = (
+            planner_payload.get("result_key")
+            or (candidate.get("parsed") or {}).get("result_key")
+        )
+        planner_payload["script_brief"] = (
+            planner_payload.get("script_brief")
+            or planner_payload.get("description")
+            or candidate.get("description")
+        )
         request_lines = [
-            f"Goal: {goal}",
+            f"Global goal: {goal}",
             f"Current page URL: {snapshot.get('url', '')}",
             f"Current page title: {snapshot.get('title', '')}",
             f"Current page snapshot:\n{chr(10).join(frame_lines) or '(no observable elements)'}",
             "",
-            f"Current ai_script subtask: {json.dumps(planner_payload, ensure_ascii=False, default=str)}",
+            f"Current ai_script subtask contract: {json.dumps(planner_payload, ensure_ascii=False, default=str)}",
         ]
         if failure_reason:
             request_lines.extend(
@@ -2234,6 +2387,9 @@ class RPAReActAgent:
 
         parsed = self._parse_json(ai_script_response)
         if not parsed:
+            self._last_ai_script_generation_failure = (
+                "ai_script_generator_parse_failed"
+            )
             return None
         parsed.setdefault("action", "execute")
         parsed.setdefault("description", candidate.get("description") or "Execute ai_script step")
@@ -2252,10 +2408,19 @@ class RPAReActAgent:
             generated_candidate.get("ai_instruction_step"),
             generated_candidate.get("code", ""),
         ) != "ai_script":
+            self._last_ai_script_generation_failure = (
+                "ai_script_generator_kind_mismatch"
+            )
             return None
         if not str(generated_candidate.get("code") or "").strip():
+            self._last_ai_script_generation_failure = (
+                "ai_script_generator_missing_code"
+            )
             return None
         if _looks_like_javascript_code(str(generated_candidate.get("code") or "")):
+            self._last_ai_script_generation_failure = (
+                "ai_script_generator_rejected_javascript_code"
+            )
             return None
         if ai_script_plan:
             preserved_plan = dict(ai_script_plan)
@@ -2275,6 +2440,7 @@ class RPAReActAgent:
             generated_candidate["ai_script_plan"] = {}
         generated_candidate["thought"] = candidate.get("thought") or generated_candidate.get("thought", "")
         generated_candidate["description"] = generated_candidate.get("description") or candidate.get("description") or "Execute ai_script step"
+        self._last_ai_script_generation_failure = ""
         return generated_candidate
 
     @staticmethod
@@ -2308,10 +2474,16 @@ class RPAReActAgent:
         summarized_error = cls._summarize_failure_reason(last_error)
         if failure_kind == "ai_script":
             repair_text = "and one local repair were attempted" if repair_attempted else "was attempted"
+            diagnostic_text = (
+                f" Last error: {summarized_error}."
+                if summarized_error and summarized_error != "Unknown error"
+                else ""
+            )
             reason = (
                 f"ai_script step could not reliably converge after {attempts_used} bounded attempt(s). "
                 f"A dedicated ai_script generation {repair_text}, but the current DOM abstraction or scripted "
-                "extraction strategy cannot reliably converge. Stopping here to avoid polluting recorded steps."
+                "extraction strategy cannot reliably converge."
+                f"{diagnostic_text} Stopping here to avoid polluting recorded steps."
             )
             return {
                 "reason": reason,
@@ -2368,6 +2540,7 @@ class RPAReActAgent:
         committed_steps: List[Dict[str, Any]] = []
         last_structured_signature = ""
         stall_score = 0
+        execution_results: Dict[str, Any] = {}
         force_ai_instruction = RPAAssistant._should_force_ai_instruction(goal)
         history_prefix = list(self._history)
 
@@ -2596,6 +2769,14 @@ class RPAReActAgent:
             active_candidate = candidate
             active_snapshot = snapshot
             retry_budget = self._candidate_retry_budget(structured_intent, ai_instruction_step, code)
+            generation_repair_attempted = bool(active_candidate.get("_generation_repair_attempted"))
+            if generation_repair_attempted and self._candidate_kind(
+                active_candidate.get("ai_script_plan"),
+                active_candidate.get("structured_intent"),
+                active_candidate.get("ai_instruction_step"),
+                active_candidate.get("code", ""),
+            ) == "ai_script":
+                retry_budget = 0
             local_attempt = 0
             committed_step_data: Optional[Dict[str, Any]] = None
             committed_output = ""
@@ -2606,7 +2787,7 @@ class RPAReActAgent:
                 active_candidate["ai_instruction_step"],
                 active_candidate["code"],
             )
-            repair_attempted = False
+            repair_attempted = generation_repair_attempted
 
             while True:
                 yield {
@@ -2623,6 +2804,7 @@ class RPAReActAgent:
                 before_observation = await _capture_page_observation(current_page)
 
                 active_structured_intent = active_candidate["structured_intent"]
+                active_ai_script_plan = active_candidate["ai_script_plan"]
                 active_ai_instruction_step = active_candidate["ai_instruction_step"]
                 active_code = active_candidate["code"]
                 active_description = active_candidate["description"]
@@ -2640,13 +2822,17 @@ class RPAReActAgent:
                     result = await execute_ai_instruction(
                         current_page,
                         active_ai_instruction_step,
-                        results={},
+                        results=execution_results,
                         model_config=model_config,
                     )
                     failure_reason = ""
                 elif active_structured_intent:
                     resolved_intent = resolve_structured_intent(active_snapshot, active_structured_intent)
-                    result = await execute_structured_intent(current_page, resolved_intent)
+                    result = await execute_structured_intent(
+                        current_page,
+                        resolved_intent,
+                        results=execution_results,
+                    )
                     failure_reason = (
                         self._result_issue_for_candidate(
                             goal,
@@ -2654,6 +2840,7 @@ class RPAReActAgent:
                             active_structured_intent,
                             active_ai_instruction_step,
                             result,
+                            ai_script_plan=active_ai_script_plan,
                         )
                         if result.get("success")
                         else str(result.get("error", "Unknown error"))
@@ -2661,6 +2848,8 @@ class RPAReActAgent:
                 else:
                     executable = self._wrap_code(active_code)
                     result = await _execute_on_page(current_page, executable)
+                    if result.get("success"):
+                        _store_ai_script_execution_result(execution_results, active_candidate, result)
                     failure_reason = (
                         self._result_issue_for_candidate(
                             goal,
@@ -2668,6 +2857,7 @@ class RPAReActAgent:
                             active_structured_intent,
                             active_ai_instruction_step,
                             result,
+                            ai_script_plan=active_ai_script_plan,
                         )
                         if result.get("success")
                         else str(result.get("error", "Unknown error"))
@@ -2845,7 +3035,16 @@ Return the next JSON action."""
             "description": parsed.get("description", operation),
             "prompt": prompt,
         }
-        for key in ("target_hint", "collection_hint", "ordinal", "value", "result_key"):
+        for key in (
+            "target_hint",
+            "collection_hint",
+            "ordinal",
+            "value",
+            "result_key",
+            "value_from",
+            "url_from",
+            "target_from",
+        ):
             value = parsed.get(key)
             if value is not None:
                 intent[key] = value
@@ -3060,6 +3259,7 @@ class RPAAssistant:
             "source": "ai",
             "description": description or user_message,
             "prompt": prompt or user_message,
+            "global_goal": user_message,
             "instruction_kind": parsed_kind,
             "input_scope": (parsed or {}).get("input_scope") or {"mode": "current_page"},
             "output_expectation": output_expectation,
@@ -3100,6 +3300,7 @@ class RPAAssistant:
             yield {"event": "message_chunk", "data": {"text": chunk_text}}
 
         yield {"event": "executing", "data": {}}
+        execution_results: Dict[str, Any] = {}
         result, final_response, code, resolution, retry_notice = await self._execute_with_retry(
             page=page,
             page_provider=page_provider,
@@ -3109,6 +3310,7 @@ class RPAAssistant:
             force_ai_instruction=force_ai_instruction,
             messages=messages,
             model_config=model_config,
+            execution_results=execution_results,
         )
 
         if retry_notice:
@@ -3155,6 +3357,7 @@ class RPAAssistant:
         force_ai_instruction: bool,
         messages: List[Dict[str, str]],
         model_config: Optional[Dict[str, Any]],
+        execution_results: Dict[str, Any],
     ) -> tuple[Dict[str, Any], str, Optional[str], Optional[Dict[str, Any]], str]:
         current_page = page_provider() if page_provider else page
         if current_page is None:
@@ -3168,6 +3371,7 @@ class RPAAssistant:
                 user_message=user_message,
                 force_ai_instruction=force_ai_instruction,
                 model_config=model_config,
+                execution_results=execution_results,
             )
             if result["success"]:
                 return result, full_response, code, resolution, ""
@@ -3197,6 +3401,7 @@ class RPAAssistant:
                 user_message=user_message,
                 force_ai_instruction=force_ai_instruction,
                 model_config=model_config,
+                execution_results=execution_results,
             )
             return retry_result, retry_response, retry_code, retry_resolution, "\n\nExecution failed. Retrying.\n\n"
         except Exception as exc:
@@ -3210,7 +3415,10 @@ class RPAAssistant:
         user_message: str,
         force_ai_instruction: bool = False,
         model_config: Optional[Dict[str, Any]] = None,
+        execution_results: Optional[Dict[str, Any]] = None,
     ) -> tuple[Dict[str, Any], Optional[str], Optional[Dict[str, Any]]]:
+        execution_results = execution_results if isinstance(execution_results, dict) else {}
+        parsed_response = self._parse_json(full_response) or {}
         ai_instruction = self._extract_ai_instruction(full_response)
         if ai_instruction:
             from backend.rpa.runtime_ai_instruction import execute_ai_instruction
@@ -3219,7 +3427,7 @@ class RPAAssistant:
             result = await execute_ai_instruction(
                 current_page,
                 step,
-                results={},
+                results=execution_results,
                 model_config=model_config,
             )
             success = result.get("success", True)
@@ -3242,7 +3450,7 @@ class RPAAssistant:
             result = await execute_ai_instruction(
                 current_page,
                 step,
-                results={},
+                results=execution_results,
                 model_config=model_config,
             )
             success = result.get("success", True)
@@ -3254,7 +3462,11 @@ class RPAAssistant:
             }, None, None
         if structured_intent:
             resolved_intent = resolve_structured_intent(snapshot, structured_intent)
-            result = await execute_structured_intent(current_page, resolved_intent)
+            result = await execute_structured_intent(
+                current_page,
+                resolved_intent,
+                results=execution_results,
+            )
             return result, None, resolved_intent
 
         code = self._extract_code(full_response)
@@ -3268,7 +3480,7 @@ class RPAAssistant:
             result = await execute_ai_instruction(
                 current_page,
                 step,
-                results={},
+                results=execution_results,
                 model_config=model_config,
             )
             success = result.get("success", True)
@@ -3281,6 +3493,8 @@ class RPAAssistant:
         if not code:
             raise ValueError("Unable to extract structured intent or executable code from assistant response")
         result = await self._execute_on_page(current_page, code)
+        if result.get("success"):
+            _store_ai_script_execution_result(execution_results, {"parsed": parsed_response}, result)
         return result, code, None
 
     def _build_messages(

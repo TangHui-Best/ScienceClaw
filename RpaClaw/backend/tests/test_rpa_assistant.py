@@ -1698,6 +1698,79 @@ class RPAReActAgentTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(result)
 
+    async def test_ai_script_candidate_repairs_initial_generation_rejected_by_gate(self):
+        agent = ASSISTANT_MODULE.RPAReActAgent()
+        snapshot = {
+            "url": "https://github.com/example/repo/pulls",
+            "title": "Pull requests",
+            "frames": [],
+        }
+        candidate = {
+            "thought": "collect records",
+            "description": "Collect first 10 pull requests into a strict array",
+            "ai_script_plan": {
+                "step_type": "ai_script",
+                "description": "Collect first 10 pull requests into a strict array",
+                "result_key": "first_10_prs_info",
+                "script_brief": "Collect at most 10 pull request records.",
+                "output_contract": {
+                    "type": "array",
+                    "required_fields": ["title", "author"],
+                    "max_items": 10,
+                    "min_items": None,
+                },
+            },
+            "parsed": {"result_key": "first_10_prs_info"},
+        }
+        captured_requests = []
+
+        async def fake_stream_with_system_prompt(history, system_prompt, _model_config=None):
+            captured_requests.append(
+                {
+                    "system_prompt": system_prompt,
+                    "user": history[0]["content"],
+                }
+            )
+            if system_prompt == ASSISTANT_MODULE.AI_SCRIPT_GENERATION_SYSTEM_PROMPT:
+                yield json.dumps(
+                    {
+                        "thought": "use fast JS evaluation",
+                        "action": "execute",
+                        "description": "Extract using fast JS evaluation",
+                        "result_key": "first_10_prs_info",
+                        "code": "async def run(page):\n    return await page.evaluate(\"() => []\")",
+                    }
+                )
+                return
+            yield json.dumps(
+                {
+                    "thought": "use Python Playwright locators",
+                    "action": "execute",
+                    "description": "Extract with Python Playwright locators",
+                    "result_key": "first_10_prs_info",
+                    "code": "async def run(page):\n    return [{'title': 'Good title', 'author': 'alice'}]",
+                }
+            )
+
+        agent._stream_llm_with_system_prompt = fake_stream_with_system_prompt
+
+        result = await agent._request_ai_script_candidate(
+            goal="Collect the first 10 PRs as a strict array of title and author.",
+            snapshot=snapshot,
+            candidate=candidate,
+            model_config=None,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertIn("Good title", result["code"])
+        self.assertTrue(result.get("_generation_repair_attempted"))
+        self.assertEqual(len(captured_requests), 2)
+        self.assertEqual(
+            captured_requests[1]["system_prompt"],
+            ASSISTANT_MODULE.AI_SCRIPT_REPAIR_SYSTEM_PROMPT,
+        )
+        self.assertIn("ai_script_generator_rejected_javascript_code", captured_requests[1]["user"])
+
     async def test_ai_script_generator_preserves_planner_contract_metadata(self):
         agent = ASSISTANT_MODULE.RPAReActAgent()
         snapshot = {
@@ -1755,6 +1828,96 @@ class RPAReActAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["ai_script_plan"], original_contract)
         self.assertEqual(result["parsed"]["result_key"], "pr_list")
         self.assertEqual(result["description"], original_contract["description"])
+
+    async def test_ai_script_generator_receives_global_goal_and_full_plan_contract(self):
+        agent = ASSISTANT_MODULE.RPAReActAgent()
+        snapshot = {
+            "url": "https://github.com/example/repo/pulls",
+            "title": "Pull requests",
+            "frames": [],
+        }
+        captured_history = {}
+        candidate = {
+            "thought": "collect records",
+            "description": "Collect all available pull requests as a strict array",
+            "ai_script_plan": {
+                "step_type": "ai_script",
+                "description": "Collect all available pull requests as a strict array",
+                "result_key": "pr_list",
+                "script_brief": "Collect pull requests from the correct scope.",
+                "output_contract": {
+                    "type": "array",
+                    "required_fields": ["title", "author"],
+                    "max_items": 10,
+                    "min_items": None,
+                },
+                "output_shape": "record_array",
+                "record_fields": ["title", "author"],
+                "item_limit": 10,
+                "selection_scope": "all_states",
+                "entity_hint": "pull_requests",
+                "stable_subpage_hint": "/pulls",
+            },
+            "parsed": {"result_key": "pr_list"},
+        }
+
+        async def fake_stream_with_system_prompt(history, _system_prompt, _model_config=None):
+            captured_history["text"] = history[0]["content"]
+            yield json.dumps(
+                {
+                    "thought": "collect records deterministically",
+                    "action": "execute",
+                    "description": "Collect all available pull requests as a strict array",
+                    "result_key": "pr_list",
+                    "code": "async def run(page):\n    return []",
+                }
+            )
+
+        agent._stream_llm_with_system_prompt = fake_stream_with_system_prompt
+
+        result = await agent._request_ai_script_candidate_with_prompt(
+            goal="收集当前仓库的前10个pr（无论是什么状态）的信息，要求记录每个pr的创建人和标题，输出严格为数组",
+            snapshot=snapshot,
+            candidate=candidate,
+            system_prompt=ASSISTANT_MODULE.AI_SCRIPT_GENERATION_SYSTEM_PROMPT,
+            model_config=None,
+        )
+
+        self.assertIsNotNone(result)
+        request_text = captured_history["text"]
+        self.assertIn("Global goal:", request_text)
+        self.assertIn("无论是什么状态", request_text)
+        self.assertIn('"record_fields": ["title", "author"]', request_text)
+        self.assertIn('"item_limit": 10', request_text)
+        self.assertIn('"selection_scope": "all_states"', request_text)
+        self.assertIn('"entity_hint": "pull_requests"', request_text)
+        self.assertIn('"stable_subpage_hint": "/pulls"', request_text)
+
+    def test_react_prompt_requires_explicit_ai_script_contract_fields(self):
+        prompt = ASSISTANT_MODULE.REACT_SYSTEM_PROMPT
+
+        self.assertIn("output_shape", prompt)
+        self.assertIn("record_fields", prompt)
+        self.assertIn("item_limit", prompt)
+        self.assertIn("selection_scope", prompt)
+        self.assertIn("entity_hint", prompt)
+        self.assertIn("stable_subpage_hint", prompt)
+        self.assertIn("When step_type is ai_script", prompt)
+
+    def test_ai_script_generation_prompt_is_contract_first(self):
+        prompt = ASSISTANT_MODULE.AI_SCRIPT_GENERATION_SYSTEM_PROMPT
+
+        self.assertIn("complete ai_script subtask contract", prompt)
+        self.assertIn("contract is the primary source of task semantics", prompt)
+        self.assertIn("script_brief is only supplemental", prompt)
+        self.assertNotIn("Use script_brief as the source of task semantics", prompt)
+
+    def test_ai_script_repair_prompt_preserves_complete_contract(self):
+        prompt = ASSISTANT_MODULE.AI_SCRIPT_REPAIR_SYSTEM_PROMPT
+
+        self.assertIn("Preserve the complete ai_script subtask contract", prompt)
+        self.assertIn("Do not redefine contract fields from script_brief", prompt)
+        self.assertNotIn("Preserve script_brief and output_contract exactly", prompt)
 
     async def test_step_local_repair_rejects_ai_instruction_kind_drift(self):
         agent = ASSISTANT_MODULE.RPAReActAgent()
@@ -2556,6 +2719,44 @@ class RPAAssistantRoutingTests(unittest.TestCase):
 
         self.assertEqual(issue, "")
 
+    def test_ai_script_quality_issue_uses_contract_fields_before_description_keywords(self):
+        issue = ASSISTANT_MODULE._ai_script_quality_issue(
+            goal="Collect records",
+            description="Collect records",
+            raw_output={"items": [{"heading": "Good title", "user": "alice"}]},
+            ai_script_plan={
+                "output_shape": "record_array",
+                "record_fields": ["title", "author"],
+                "output_contract": {
+                    "type": "array",
+                    "required_fields": ["title", "author"],
+                    "max_items": 10,
+                    "min_items": None,
+                },
+            },
+        )
+
+        self.assertIn("missing or misaligned title/author", issue)
+
+    def test_ai_script_quality_issue_accepts_creator_alias_from_contract(self):
+        issue = ASSISTANT_MODULE._ai_script_quality_issue(
+            goal="Collect records",
+            description="Collect records",
+            raw_output={"items": [{"title": "Good title", "creator": "alice"}]},
+            ai_script_plan={
+                "output_shape": "record_array",
+                "record_fields": ["title", "creator"],
+                "output_contract": {
+                    "type": "array",
+                    "required_fields": ["title", "creator"],
+                    "max_items": 10,
+                    "min_items": None,
+                },
+            },
+        )
+
+        self.assertEqual(issue, "")
+
     def test_extract_ai_script_plan_enriches_batch_record_constraints(self):
         plan = ASSISTANT_MODULE.RPAReActAgent._extract_ai_script_plan(
             {
@@ -2597,6 +2798,41 @@ class RPAAssistantRoutingTests(unittest.TestCase):
         self.assertEqual(plan["selection_scope"], "all_states")
         self.assertIn("all states", plan["script_brief"])
         self.assertIn("not a fill-to-quota strategy", plan["script_brief"])
+
+    def test_extract_ai_script_plan_preserves_explicit_contract_fields_from_planner(self):
+        plan = ASSISTANT_MODULE.RPAReActAgent._extract_ai_script_plan(
+            {
+                "action": "execute",
+                "step_type": "ai_script",
+                "description": "Collect records",
+                "result_key": "top_10_prs_info",
+                "output_shape": "record_array",
+                "record_fields": ["title", "author"],
+                "item_limit": 10,
+                "selection_scope": "all_states",
+                "entity_hint": "pull_requests",
+                "stable_subpage_hint": "/pulls",
+                "script_brief": "Collect PR records using the explicit planner contract.",
+            }
+        )
+
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan["output_shape"], "record_array")
+        self.assertEqual(plan["record_fields"], ["title", "author"])
+        self.assertEqual(plan["item_limit"], 10)
+        self.assertEqual(plan["selection_scope"], "all_states")
+        self.assertEqual(plan["entity_hint"], "pull_requests")
+        self.assertEqual(plan["stable_subpage_hint"], "/pulls")
+        self.assertEqual(plan["script_brief"], "Collect PR records using the explicit planner contract.")
+        self.assertEqual(
+            plan["output_contract"],
+            {
+                "type": "array",
+                "required_fields": ["title", "author"],
+                "max_items": 10,
+                "min_items": None,
+            },
+        )
 
     def test_extract_ai_script_plan_treats_first_n_as_upper_bound_not_required_count(self):
         plan = ASSISTANT_MODULE.RPAReActAgent._extract_ai_script_plan(
@@ -4162,6 +4398,41 @@ class RPAAssistantAIInstructionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RPAAssistantSmallPolishTests(unittest.IsolatedAsyncioTestCase):
+    def test_extract_structured_execute_intent_preserves_reference_fields(self):
+        intent = ASSISTANT_MODULE.RPAReActAgent._extract_structured_execute_intent(
+            {
+                "action": "execute",
+                "operation": "fill",
+                "description": "Fill the email field from extracted contact info",
+                "target_hint": {"role": "textbox", "name": "Email"},
+                "value_from": "contact_info.email",
+                "target_from": "form_targets.email",
+                "result_key": "filled_email",
+            },
+            "Fill the email field from extracted contact info",
+        )
+
+        self.assertIsNotNone(intent)
+        self.assertEqual(intent["action"], "fill")
+        self.assertEqual(intent["value_from"], "contact_info.email")
+        self.assertEqual(intent["target_from"], "form_targets.email")
+        self.assertEqual(intent["result_key"], "filled_email")
+
+    def test_extract_structured_execute_intent_preserves_url_from_for_navigate(self):
+        intent = ASSISTANT_MODULE.RPAReActAgent._extract_structured_execute_intent(
+            {
+                "action": "execute",
+                "operation": "navigate",
+                "description": "Open the selected repository page",
+                "url_from": "selected_repo.repo_path",
+            },
+            "Open the selected repository page",
+        )
+
+        self.assertIsNotNone(intent)
+        self.assertEqual(intent["action"], "navigate")
+        self.assertEqual(intent["url_from"], "selected_repo.repo_path")
+
     def test_summary_ai_instruction_preserves_specific_prompt_constraints(self):
         step = ASSISTANT_MODULE.RPAAssistant._coerce_to_ai_instruction(
             "用中文总结当前项目的核心内容",

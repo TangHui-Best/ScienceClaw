@@ -146,6 +146,11 @@ class StepExecutionError(Exception):
             "",
             "async def execute_skill(page, **kwargs):",
             '    """Auto-generated skill from RPA recording."""',
+            *(
+                ["    from backend.rpa.runtime_ai_instruction import execute_ai_instruction"]
+                if any(str(step.get("action") or "").strip().lower() == "ai_instruction" for step in deduped)
+                else []
+            ),
             "    def _extract_ai_script_navigation_target(current_url, result):",
             "        candidates = []",
             "        if isinstance(result, str):",
@@ -227,6 +232,85 @@ class StepExecutionError(Exception):
             "            return _json.loads(_normalized)",
             "        except Exception:",
             "            return value",
+            "    def _resolve_result_ref(results, ref):",
+            "        if not isinstance(results, dict):",
+            "            return None",
+            "        if not isinstance(ref, str):",
+            "            return None",
+            "        _path = ref.strip()",
+            "        if not _path:",
+            "            return None",
+            "        _current = results",
+            "        for _segment in _path.split('.'):",
+            "            if isinstance(_current, str):",
+            "                _current = _normalize_serialized_json_result(_current)",
+            "            if isinstance(_current, dict):",
+            "                if _segment not in _current:",
+            "                    return None",
+            "                _current = _current.get(_segment)",
+            "                continue",
+            "            if isinstance(_current, list) and _segment.isdigit():",
+            "                _index = int(_segment)",
+            "                if 0 <= _index < len(_current):",
+            "                    _current = _current[_index]",
+            "                    continue",
+            "            return None",
+            "        return _normalize_serialized_json_result(_current)",
+            "    def _locator_from_payload(scope, payload):",
+            "        if isinstance(payload, str):",
+            "            payload = _normalize_serialized_json_result(payload)",
+            "            if isinstance(payload, str):",
+            "                return scope.locator(payload)",
+            "        if not isinstance(payload, dict):",
+            "            return scope.locator(str(payload or 'body'))",
+            "        _method = payload.get('method')",
+            "        if _method == 'collection_item':",
+            "            _collection = payload.get('collection', {'method': 'css', 'value': 'body'})",
+            "            _item = payload.get('item', {'method': 'css', 'value': 'body'})",
+            "            _ordinal = str(payload.get('ordinal') or 'first').strip().lower()",
+            "            _collection_locator = _locator_from_payload(scope, _collection)",
+            "            if _ordinal == 'first':",
+            "                _scoped_collection = _collection_locator.first",
+            "            elif _ordinal == 'last':",
+            "                _scoped_collection = _collection_locator.last",
+            "            elif _ordinal.isdigit():",
+            "                _scoped_collection = _collection_locator.nth(max(int(_ordinal) - 1, 0))",
+            "            else:",
+            "                _scoped_collection = _collection_locator.nth(0)",
+            "            return _locator_from_payload(_scoped_collection, _item)",
+            "        if _method == 'role':",
+            "            _kwargs = {'name': payload.get('name')} if payload.get('name') else {}",
+            "            if payload.get('exact') is False:",
+            "                _kwargs['exact'] = False",
+            "            return scope.get_by_role(payload.get('role', 'button'), **_kwargs)",
+            "        if _method == 'testid':",
+            "            return scope.get_by_test_id(payload.get('value', ''))",
+            "        if _method == 'label':",
+            "            _kwargs = {'exact': False} if payload.get('exact') is False else {}",
+            "            return scope.get_by_label(payload.get('value', ''), **_kwargs)",
+            "        if _method == 'placeholder':",
+            "            _kwargs = {'exact': False} if payload.get('exact') is False else {}",
+            "            return scope.get_by_placeholder(payload.get('value', ''), **_kwargs)",
+            "        if _method == 'alt':",
+            "            _kwargs = {'exact': False} if payload.get('exact') is False else {}",
+            "            return scope.get_by_alt_text(payload.get('value', ''), **_kwargs)",
+            "        if _method == 'title':",
+            "            _kwargs = {'exact': False} if payload.get('exact') is False else {}",
+            "            return scope.get_by_title(payload.get('value', ''), **_kwargs)",
+            "        if _method == 'text':",
+            "            _kwargs = {'exact': False} if payload.get('exact') is False else {}",
+            "            return scope.get_by_text(payload.get('value', ''), **_kwargs)",
+            "        if _method == 'nested':",
+            "            _parent = _locator_from_payload(scope, payload.get('parent', {}))",
+            "            return _locator_from_payload(_parent, payload.get('child', {}))",
+            "        if _method == 'nth':",
+            "            _base = _locator_from_payload(scope, payload.get('locator') or payload.get('base') or {'method': 'css', 'value': 'body'})",
+            "            try:",
+            "                _index = max(int(payload.get('index', 0)), 0)",
+            "            except Exception:",
+            "                _index = 0",
+            "            return _base.nth(_index)",
+            "        return scope.locator(payload.get('value', 'body'))",
             "    def _extract_record_list_candidate(result):",
             "        if isinstance(result, list):",
             "            return result",
@@ -412,8 +496,28 @@ class StepExecutionError(Exception):
                 continue
 
             # Navigation
-            if action == "navigate" or (action == "goto" and url):
-                if prev_action == "ai_script" and url:
+            if action == "navigate" or (action == "goto" and (url or step.get("url_from"))):
+                url_from = str(step.get("url_from") or "").strip()
+                if url_from:
+                    step_lines.append(f'    _resolved_url = _resolve_result_ref(_results, "{self._escape(url_from)}")')
+                    step_lines.append("    _resolved_nav_target = _extract_ai_script_navigation_target(current_page.url, _resolved_url)")
+                    step_lines.append("    if not _resolved_nav_target and isinstance(_resolved_url, str):")
+                    step_lines.append("        _resolved_nav_target = _resolved_url.strip()")
+                    if url:
+                        step_lines.append("    if _resolved_nav_target:")
+                        step_lines.append('        await current_page.goto(_resolved_nav_target, wait_until="domcontentloaded")')
+                        if self._should_use_relative_stable_subpage_after_previous_step(prev_action, step, url):
+                            step_lines.append(f'    else:')
+                            step_lines.append(f'        _relative_nav_target = _relative_stable_subpage_url(current_page.url, "{url}")')
+                            step_lines.append(f'        await current_page.goto(_relative_nav_target or "{url}", wait_until="domcontentloaded")')
+                        else:
+                            step_lines.append(f'    else:')
+                            step_lines.append(f'        await current_page.goto("{url}", wait_until="domcontentloaded")')
+                    else:
+                        step_lines.append("    if not _resolved_nav_target:")
+                        step_lines.append("        raise RuntimeError('Navigate step could not resolve url_from')")                        
+                        step_lines.append('    await current_page.goto(_resolved_nav_target, wait_until="domcontentloaded")')
+                elif self._should_use_relative_stable_subpage_after_previous_step(prev_action, step, url):
                     step_lines.append(f'    _relative_nav_target = _relative_stable_subpage_url(current_page.url, "{url}")')
                     step_lines.append(f'    await current_page.goto(_relative_nav_target or "{url}", wait_until="domcontentloaded")')
                 else:
@@ -480,6 +584,13 @@ class StepExecutionError(Exception):
             if not locator:
                 # Parse the locator object from target (stored as JSON string)
                 locator = self._build_locator_for_page(target, scope_var)
+            target_from = str(step.get("target_from") or "").strip()
+            if target_from:
+                step_lines.append(f'    _resolved_target = _resolve_result_ref(_results, "{self._escape(target_from)}")')
+                step_lines.append("    if _resolved_target is None:")
+                step_lines.append("        raise RuntimeError('Step could not resolve target_from')")
+                step_lines.append(f"    _resolved_target_locator = _locator_from_payload({scope_var}, _resolved_target)")
+                locator = "_resolved_target_locator"
 
             popup_signal = self._popup_signal(step)
             download_signal = self._download_signal(step)
@@ -541,8 +652,15 @@ class StepExecutionError(Exception):
                 step_lines.append(f"    await _dl.save_as(_dl_dest)")
                 step_lines.append(f'    _results["download_{safe_name}"] = {{"filename": _dl.suggested_filename, "path": _dl_dest}}')
             elif action == "fill":
-                fill_value = self._maybe_parameterize(value, params)
-                step_lines.append(f"    await {locator}.fill({fill_value})")
+                value_from = str(step.get("value_from") or "").strip()
+                if value_from:
+                    step_lines.append(f'    _resolved_fill_value = _resolve_result_ref(_results, "{self._escape(value_from)}")')
+                    step_lines.append(
+                        f'    await {locator}.fill("" if _resolved_fill_value is None else str(_resolved_fill_value))'
+                    )
+                else:
+                    fill_value = self._maybe_parameterize(value, params)
+                    step_lines.append(f"    await {locator}.fill({fill_value})")
             elif action == "check":
                 step_lines.append(f"    await {locator}.check()")
             elif action == "uncheck":
@@ -753,9 +871,121 @@ class StepExecutionError(Exception):
         for original_step in steps:
             step = dict(original_step)
             step["target"] = cls._normalize_target_locator(step.get("target"))
+            step = cls._normalize_semantic_selection_click(step)
             step = cls._normalize_stable_subpage_click(step)
+            if cls._is_redundant_dynamic_stable_subpage_navigation(normalized, step):
+                continue
             normalized.append(step)
         return normalized
+
+    @classmethod
+    def _is_redundant_dynamic_stable_subpage_navigation(
+        cls,
+        normalized_steps: List[Dict[str, Any]],
+        step: Dict[str, Any],
+    ) -> bool:
+        if len(normalized_steps) < 2:
+            return False
+        if str(step.get("action") or "").strip().lower() != "navigate":
+            return False
+
+        previous_step = normalized_steps[-1]
+        dynamic_anchor_step = normalized_steps[-2]
+        if str(previous_step.get("action") or "").strip().lower() != "navigate":
+            return False
+        if str(dynamic_anchor_step.get("action") or "").strip().lower() not in {"ai_instruction", "ai_script"}:
+            return False
+
+        current_signature = cls._stable_subpage_signature(step)
+        previous_signature = cls._stable_subpage_signature(previous_step)
+        return bool(current_signature and current_signature == previous_signature)
+
+    @classmethod
+    def _stable_subpage_signature(cls, step: Dict[str, Any]) -> str:
+        url = str(step.get("url") or step.get("value") or "").strip()
+        stable_suffix = cls._infer_stable_subpage_suffix(step, url)
+        if not stable_suffix:
+            return ""
+        _base, query_sep, query = url.partition("?")
+        return f"{stable_suffix}?{query}" if query_sep else stable_suffix
+
+    @classmethod
+    def _normalize_semantic_selection_click(cls, step: Dict[str, Any]) -> Dict[str, Any]:
+        action = str(step.get("action") or "").strip().lower()
+        if action not in {"click", "navigate_click"}:
+            return step
+        if not cls._looks_like_semantic_selection_action(step):
+            return step
+
+        prompt = str(step.get("prompt") or "").strip()
+        description = str(step.get("description") or prompt or "Execute semantic selection").strip()
+        if ":" in description:
+            description = description.split(":", 1)[0].strip() or description
+        instruction_prompt = prompt or description
+        return {
+            "action": "ai_instruction",
+            "source": step.get("source", "ai"),
+            "description": description,
+            "prompt": instruction_prompt,
+            "instruction_kind": "semantic_decision",
+            "input_scope": {"mode": "current_page"},
+            "output_expectation": {"mode": "act"},
+            "execution_hint": {
+                "requires_dom_snapshot": True,
+                "allow_navigation": True,
+                "max_reasoning_steps": 10,
+            },
+            "result_key": step.get("result_key"),
+            "sensitive": bool(step.get("sensitive", False)),
+        }
+
+    @classmethod
+    def _looks_like_semantic_selection_action(cls, step: Dict[str, Any]) -> bool:
+        parts: List[str] = []
+        for key in ("description", "prompt"):
+            value = step.get(key)
+            if isinstance(value, str) and value.strip():
+                parts.append(value.strip().lower())
+        blob = " ".join(parts)
+        if not blob:
+            return False
+        semantic_signals = (
+            "most related",
+            "most relevant",
+            "best match",
+            "best matching",
+            "最相关",
+            "最匹配",
+            "相关度",
+        )
+        target_signals = (
+            "open",
+            "click",
+            "project",
+            "repo",
+            "repository",
+            "item",
+            "link",
+            "打开",
+            "点击",
+            "项目",
+            "仓库",
+            "链接",
+        )
+        return any(signal in blob for signal in semantic_signals) and any(
+            signal in blob for signal in target_signals
+        )
+
+    @classmethod
+    def _should_use_relative_stable_subpage_after_previous_step(
+        cls,
+        prev_action: Optional[str],
+        step: Dict[str, Any],
+        url: str,
+    ) -> bool:
+        if str(prev_action or "").strip().lower() not in {"ai_script", "ai_instruction"}:
+            return False
+        return bool(url and cls._infer_stable_subpage_suffix(step, url))
 
     @classmethod
     def _normalize_stable_subpage_click(cls, step: Dict[str, Any]) -> Dict[str, Any]:

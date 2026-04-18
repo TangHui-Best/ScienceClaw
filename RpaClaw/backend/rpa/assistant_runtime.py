@@ -5,6 +5,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+from urllib.parse import urljoin
 
 from .assistant_snapshot_runtime import SNAPSHOT_V2_JS
 from .frame_selectors import build_frame_path
@@ -383,7 +384,7 @@ def _build_locator_candidates_for_element(element: Dict[str, Any]) -> List[Dict[
             {
                 "kind": "css",
                 "selected": True,
-                "locator": {"method": "css", "value": f"a[href*='{href}']"},
+                "locator": _build_exact_href_locator_payload(href),
             }
         )
     else:
@@ -395,6 +396,37 @@ def _build_locator_candidates_for_element(element: Dict[str, Any]) -> List[Dict[
             }
         )
     return candidates
+
+
+def _css_attr_value(value: Any) -> str:
+    return str(value or "").replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _build_exact_href_locator_payload(href: Any) -> Dict[str, Any]:
+    return {"method": "css", "value": f'a[href="{_css_attr_value(href)}"]'}
+
+
+def _extract_href_contains_value(locator_payload: Any) -> str:
+    if not isinstance(locator_payload, dict):
+        return ""
+    if locator_payload.get("method") != "css":
+        return ""
+    selector = str(locator_payload.get("value") or "").strip()
+    match = re.fullmatch(r"""a\s*\[\s*href\s*\*=\s*(['"])(.*?)\1\s*\]""", selector)
+    if not match:
+        return ""
+    return match.group(2).strip()
+
+
+def _exact_href_candidates_from_contains_value(href_value: str) -> List[str]:
+    normalized = str(href_value or "").strip()
+    if not normalized:
+        return []
+
+    candidates = [normalized]
+    if not normalized.startswith(("/", "http://", "https://", "#", "?")):
+        candidates.append(f"/{normalized}")
+    return list(dict.fromkeys(candidates))
 
 
 def _candidate_locator_payload(candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -860,15 +892,84 @@ def resolve_structured_intent(snapshot: Dict[str, Any], intent: Dict[str, Any]) 
 
 
 def _locator_from_payload(scope, payload):
+    if isinstance(payload, str):
+        payload = _normalize_serialized_json_value(payload)
+        if isinstance(payload, str):
+            return scope.locator(payload)
+    if not isinstance(payload, dict):
+        return scope.locator(str(payload or "body"))
     method = payload.get("method")
+    if method == "collection_item":
+        collection = payload.get("collection", {"method": "css", "value": "body"})
+        item = payload.get("item", {"method": "css", "value": "body"})
+        ordinal = str(payload.get("ordinal") or "first").strip().lower()
+        collection_locator = _locator_from_payload(scope, collection)
+        if ordinal == "first":
+            scoped_collection = collection_locator.first
+        elif ordinal == "last":
+            scoped_collection = collection_locator.last
+        elif ordinal.isdigit():
+            scoped_collection = collection_locator.nth(max(int(ordinal) - 1, 0))
+        else:
+            scoped_collection = collection_locator.nth(0)
+        return _locator_from_payload(scoped_collection, item)
     if method == "role":
         kwargs = {"name": payload.get("name")} if payload.get("name") else {}
+        if payload.get("exact") is False:
+            kwargs["exact"] = False
         return scope.get_by_role(payload["role"], **kwargs)
+    if method == "testid":
+        return scope.get_by_test_id(payload.get("value", ""))
+    if method == "label":
+        kwargs = {"exact": False} if payload.get("exact") is False else {}
+        return scope.get_by_label(payload.get("value", ""), **kwargs)
     if method == "text":
-        return scope.get_by_text(payload["value"])
+        kwargs = {"exact": False} if payload.get("exact") is False else {}
+        return scope.get_by_text(payload["value"], **kwargs)
     if method == "placeholder":
-        return scope.get_by_placeholder(payload["value"])
+        kwargs = {"exact": False} if payload.get("exact") is False else {}
+        return scope.get_by_placeholder(payload["value"], **kwargs)
+    if method == "alt":
+        kwargs = {"exact": False} if payload.get("exact") is False else {}
+        return scope.get_by_alt_text(payload.get("value", ""), **kwargs)
+    if method == "title":
+        kwargs = {"exact": False} if payload.get("exact") is False else {}
+        return scope.get_by_title(payload.get("value", ""), **kwargs)
+    if method == "nested":
+        parent = _locator_from_payload(scope, payload.get("parent", {}))
+        return _locator_from_payload(parent, payload.get("child", {}))
+    if method == "nth":
+        base = _locator_from_payload(scope, payload.get("locator") or payload.get("base") or {"method": "css", "value": "body"})
+        try:
+            index = max(int(payload.get("index", 0)), 0)
+        except Exception:
+            index = 0
+        return base.nth(index)
     return scope.locator(payload.get("value", ""))
+
+
+async def _normalize_click_locator(scope, locator_payload: Any):
+    locator = _locator_from_payload(scope, locator_payload)
+    href_contains_value = _extract_href_contains_value(locator_payload)
+    if not href_contains_value:
+        return locator, locator_payload
+
+    try:
+        if await locator.count() <= 1:
+            return locator, locator_payload
+    except Exception:
+        return locator, locator_payload
+
+    for href in _exact_href_candidates_from_contains_value(href_contains_value):
+        exact_payload = _build_exact_href_locator_payload(href)
+        exact_locator = _locator_from_payload(scope, exact_payload)
+        try:
+            if await exact_locator.count() == 1:
+                return exact_locator, exact_payload
+        except Exception:
+            continue
+
+    return locator, locator_payload
 
 
 def _build_collection_item_payload(collection_hint: Dict[str, Any], item_hint: Dict[str, Any], ordinal: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -887,14 +988,101 @@ def _build_collection_item_payload(collection_hint: Dict[str, Any], item_hint: D
     }
 
 
-async def execute_structured_intent(page, intent: Dict[str, Any]) -> Dict[str, Any]:
+async def execute_structured_intent(
+    page,
+    intent: Dict[str, Any],
+    results: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    return await _execute_structured_intent(page, intent, results=results)
+
+
+def _normalize_serialized_json_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip()
+    if not normalized:
+        return value
+    if not ((normalized.startswith("[") and normalized.endswith("]")) or (normalized.startswith("{") and normalized.endswith("}"))):
+        return value
+    try:
+        return json.loads(normalized)
+    except Exception:
+        return value
+
+
+def _resolve_result_ref(results: Optional[Dict[str, Any]], ref: Any) -> Any:
+    if not isinstance(results, dict):
+        return None
+    if not isinstance(ref, str):
+        return None
+    path = ref.strip()
+    if not path:
+        return None
+
+    current: Any = results
+    for segment in path.split("."):
+        if isinstance(current, str):
+            current = _normalize_serialized_json_value(current)
+        if isinstance(current, dict):
+            if segment not in current:
+                return None
+            current = current.get(segment)
+            continue
+        if isinstance(current, list) and segment.isdigit():
+            index = int(segment)
+            if 0 <= index < len(current):
+                current = current[index]
+                continue
+        return None
+    return _normalize_serialized_json_value(current)
+
+
+def _extract_navigation_target(current_url: str, value: Any) -> str:
+    candidates: List[str] = []
+    if isinstance(value, str):
+        candidates.append(value)
+    elif isinstance(value, dict):
+        for key in ("target_url", "url", "repo_url", "repo_path", "repo", "href", "path"):
+            nested = value.get(key)
+            if isinstance(nested, str):
+                candidates.append(nested)
+        output_value = value.get("output")
+        if isinstance(output_value, str):
+            candidates.append(output_value)
+
+    for candidate in candidates:
+        normalized = candidate.strip()
+        if not normalized:
+            continue
+        if normalized.startswith("/"):
+            return urljoin(current_url or "", normalized)
+        if normalized.startswith("http://") or normalized.startswith("https://"):
+            return normalized
+    return ""
+
+
+async def _execute_structured_intent(page, intent: Dict[str, Any], results: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     resolved = intent["resolved"]
     action = intent["action"]
     output = "ok"
     if action == "navigate":
-        url = resolved.get("url") or intent.get("value", "")
+        url_from = intent.get("url_from")
+        resolved_url_value = _resolve_result_ref(results, url_from) if url_from else None
+        url = (
+            _extract_navigation_target(getattr(page, "url", "") or "", resolved_url_value)
+            or (resolved_url_value.strip() if isinstance(resolved_url_value, str) else "")
+            or resolved.get("url")
+            or intent.get("value", "")
+        )
+        if not url:
+            return {
+                "success": False,
+                "error": "Structured navigate step could not resolve a target URL",
+                "output": "",
+            }
         await page.goto(url)
         await page.wait_for_load_state("domcontentloaded")
+        output = url
         step = {
             "action": "navigate",
             "source": "ai",
@@ -914,7 +1102,11 @@ async def execute_structured_intent(page, intent: Dict[str, Any]) -> Dict[str, A
             "description": intent.get("description", action),
             "prompt": intent.get("prompt"),
             "value": intent.get("value"),
+            "url_from": url_from,
         }
+        result_key = intent.get("result_key")
+        if isinstance(results, dict) and isinstance(result_key, str) and result_key.strip():
+            results[result_key.strip()] = output
         return {"success": True, "step": step, "output": output}
 
     frame_path = resolved.get("frame_path", [])
@@ -923,8 +1115,18 @@ async def execute_structured_intent(page, intent: Dict[str, Any]) -> Dict[str, A
         scope = scope.frame_locator(frame_selector)
 
     locator_payload = resolved["locator"]
-    locator = _locator_from_payload(scope, locator_payload)
+    target_from = intent.get("target_from")
+    if target_from:
+        resolved_target = _resolve_result_ref(results, target_from)
+        if resolved_target is None:
+            return {
+                "success": False,
+                "error": "Structured step could not resolve target_from",
+                "output": "",
+            }
+        locator_payload = resolved_target
     if action == "click":
+        locator, locator_payload = await _normalize_click_locator(scope, locator_payload)
         await locator.click()
         try:
             await page.wait_for_load_state("domcontentloaded", timeout=2000)
@@ -932,10 +1134,16 @@ async def execute_structured_intent(page, intent: Dict[str, Any]) -> Dict[str, A
             pass
         await page.wait_for_timeout(500)
     elif action == "extract_text":
+        locator = _locator_from_payload(scope, locator_payload)
         output = await locator.inner_text()
     elif action == "fill":
-        await locator.fill(intent.get("value", ""))
+        locator = _locator_from_payload(scope, locator_payload)
+        value_from = intent.get("value_from")
+        resolved_value = _resolve_result_ref(results, value_from) if value_from else None
+        fill_value = intent.get("value", "") if resolved_value is None else resolved_value
+        await locator.fill("" if fill_value is None else str(fill_value))
     elif action == "press":
+        locator = _locator_from_payload(scope, locator_payload)
         await locator.press(intent.get("value", "Enter"))
     else:
         raise ValueError(f"Unsupported action: {action}")
@@ -966,6 +1174,12 @@ async def execute_structured_intent(page, intent: Dict[str, Any]) -> Dict[str, A
         "description": intent.get("description", action),
         "prompt": intent.get("prompt"),
         "value": intent.get("value"),
+        "value_from": intent.get("value_from"),
+        "url_from": intent.get("url_from"),
+        "target_from": intent.get("target_from"),
     }
+    result_key = intent.get("result_key")
+    if isinstance(results, dict) and isinstance(result_key, str) and result_key.strip():
+        results[result_key.strip()] = output
     return {"success": True, "step": step, "output": output}
 

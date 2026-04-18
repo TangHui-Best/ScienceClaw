@@ -114,6 +114,23 @@ Routes defined in `src/main.ts`:
 
 The RPA module records user browser actions and generates Playwright scripts. Supports two modes: **Docker sandbox mode** and **local mode**.
 
+### RPA/Agent 架构专项军规
+
+- **军规 1：禁止用本地抽取规则替代主 Agent/Planner 的语义理解职责。**
+  本地规则只允许承担兜底校验、轻量规范化、明显同义词补齐，不允许成为步骤语义、范围约束、业务判断的主要来源。
+
+- **军规 2：步骤契约（step contract）的主来源必须是 Planner/LLM 的结构化输出。**
+  像 `selection_scope`、`record_fields`、`item_limit`、`entity_hint`、`stable_subpage_hint` 这类字段，应优先由 Planner 显式产出；如果系统长期依赖本地 heuristics 去反推这些字段，说明架构边界已经漂移。
+
+- **军规 3：Generator、Repair、Validator 必须优先消费结构化 contract，而不是重新从自然语言摘要里猜任务。**
+  `script_brief`、`description`、`prompt` 只能作为补充说明，不能覆盖或替代完整的结构化 contract。
+
+- **军规 4：当步骤失败时，优先回查 contract 设计与职责分层，禁止第一反应继续补规则。**
+  如果一个能力需要越来越多本地规则才能“理解”用户意图，优先判断是 Planner 没有产出完整 contract，还是 Generator/Runtime 没有严格消费 contract，而不是继续在 fallback 上叠补丁。
+
+- **军规 5：Fallback 只能救急，不能反客为主。**
+  任何 `_infer_*`、关键词匹配、模式表，都必须视为 fallback；一旦它们开始主导主路径行为，就应立即回收职责，把语义理解还给 Planner，把执行约束还给 contract。
+
 ### Modes
 - **Docker mode** (`STORAGE_BACKEND=docker`): Playwright runs in sandbox container, uses VNC for display
 - **Local mode** (`STORAGE_BACKEND=local`): Playwright runs on host machine, uses CDP screencast for display

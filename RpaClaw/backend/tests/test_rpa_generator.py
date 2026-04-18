@@ -77,6 +77,91 @@ class PlaywrightGeneratorTests(unittest.TestCase):
         self.assertIn('"allow_navigation": true', script.lower())
         self.assertIn("Complete the requested browser action inside this AI instruction.", script)
 
+    def test_generate_script_converts_leaked_semantic_selection_click_to_ai_instruction(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "navigate",
+                "description": "Navigate to GitHub trending page",
+                "value": "https://github.com/trending",
+                "url": "https://github.com/trending",
+            },
+            {
+                "action": "click",
+                "description": "Open the project most related to SKILL: SimoneAvogadro/android-reverse-engineering-skill",
+                "prompt": "找和SKILL最相关的项目打开",
+                "target": '{"method":"role","role":"link","name":"SimoneAvogadro / android-"}',
+                "url": "https://github.com/SimoneAvogadro/android-reverse-engineering-skill",
+                "signals": {"popup": {"target_tab_id": "tab-2"}},
+            },
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertIn('"action": "ai_instruction"', script)
+        self.assertIn('"instruction_kind": "semantic_decision"', script)
+        self.assertIn("Complete the requested browser action inside this AI instruction.", script)
+        self.assertNotIn("expect_popup", script)
+        self.assertNotIn("SimoneAvogadro / android-", script)
+
+    def test_generate_script_uses_relative_stable_subpage_after_ai_instruction(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "ai_instruction",
+                "source": "ai",
+                "description": "Find the project most related to SKILL and open it",
+                "prompt": "找和SKILL最相关的项目打开",
+                "instruction_kind": "semantic_decision",
+                "input_scope": {"mode": "current_page"},
+                "output_expectation": {"mode": "act"},
+                "execution_hint": {"requires_dom_snapshot": True, "allow_navigation": True, "max_reasoning_steps": 10},
+            },
+            {
+                "action": "navigate",
+                "description": "Open Pull requests page",
+                "value": "https://github.com/recorded/repo/pulls",
+                "url": "https://github.com/recorded/repo/pulls",
+            },
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertIn('_relative_nav_target = _relative_stable_subpage_url(current_page.url, "https://github.com/recorded/repo/pulls")', script)
+        self.assertIn('await current_page.goto(_relative_nav_target or "https://github.com/recorded/repo/pulls", wait_until="domcontentloaded")', script)
+
+    def test_generate_script_drops_duplicate_stable_subpage_navigation_after_ai_instruction(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "ai_instruction",
+                "source": "ai",
+                "description": "Find the project most related to SKILL and open it",
+                "prompt": "找和SKILL最相关的项目打开",
+                "instruction_kind": "semantic_decision",
+                "input_scope": {"mode": "current_page"},
+                "output_expectation": {"mode": "act"},
+                "execution_hint": {"requires_dom_snapshot": True, "allow_navigation": True, "max_reasoning_steps": 10},
+            },
+            {
+                "action": "navigate",
+                "description": "Open Pull requests page",
+                "value": "https://github.com/recorded/repo/pulls",
+                "url": "https://github.com/recorded/repo/pulls",
+            },
+            {
+                "action": "navigate",
+                "description": "Click Pull requests tab",
+                "value": "https://github.com/recorded/repo/pulls",
+                "url": "https://github.com/recorded/repo/pulls",
+            },
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertEqual(script.count("https://github.com/recorded/repo/pulls"), 2)
+        self.assertIn('_relative_nav_target = _relative_stable_subpage_url(current_page.url, "https://github.com/recorded/repo/pulls")', script)
+
     def test_generate_script_executes_ai_script_run_function(self):
         generator = PlaywrightGenerator()
         steps = [
@@ -836,6 +921,26 @@ class PlaywrightGeneratorTests(unittest.TestCase):
         self.assertIn('_relative_nav_target = _relative_stable_subpage_url(current_page.url, "https://github.com/public-apis/public-apis/pulls?q=is%3Apr")', script)
         self.assertIn('await current_page.goto(_relative_nav_target or "https://github.com/public-apis/public-apis/pulls?q=is%3Apr", wait_until="domcontentloaded")', script)
 
+    def test_generate_script_navigate_step_can_resolve_url_from_previous_results(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "navigate",
+                "description": "Open the selected repository page",
+                "url_from": "selected_repo.repo_path",
+                "source": "ai",
+            },
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertIn("def _resolve_result_ref(results, ref):", script)
+        self.assertIn('    _resolved_url = _resolve_result_ref(_results, "selected_repo.repo_path")', script)
+        self.assertIn("    _resolved_nav_target = _extract_ai_script_navigation_target(current_page.url, _resolved_url)", script)
+        self.assertIn("    if not _resolved_nav_target:", script)
+        self.assertIn("Navigate step could not resolve url_from", script)
+        self.assertIn('    await current_page.goto(_resolved_nav_target, wait_until="domcontentloaded")', script)
+
     def test_generate_script_normalizes_stable_subpage_click_to_navigation(self):
         generator = PlaywrightGenerator()
         steps = [
@@ -1005,6 +1110,108 @@ class PlaywrightGeneratorTests(unittest.TestCase):
         script = generator.generate_script(steps, is_local=True)
 
         self.assertIn('_results["extract_text_1"] = extract_text_value_1', script)
+
+    def test_generate_script_fill_step_can_resolve_value_from_previous_results(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "fill",
+                "target": json.dumps({"method": "role", "role": "textbox", "name": "Email"}),
+                "description": "Fill email from extracted contact info",
+                "value_from": "contact_info.email",
+                "value": "recorded@example.com",
+                "url": "https://example.com/form",
+                "source": "ai",
+            }
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertIn('    _resolved_fill_value = _resolve_result_ref(_results, "contact_info.email")', script)
+        self.assertIn('    await current_page.get_by_role("textbox", name="Email", exact=True).fill("" if _resolved_fill_value is None else str(_resolved_fill_value))', script)
+        self.assertNotIn('fill("recorded@example.com")', script)
+
+    def test_generate_script_click_step_can_resolve_target_from_previous_results(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "click",
+                "target": json.dumps({"method": "role", "role": "button", "name": "Recorded Fallback"}),
+                "description": "Click the runtime-selected target",
+                "target_from": "selected_target.locator",
+                "url": "https://example.com/list",
+                "source": "ai",
+            }
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertIn("def _locator_from_payload(scope, payload):", script)
+        self.assertIn('    _resolved_target = _resolve_result_ref(_results, "selected_target.locator")', script)
+        self.assertIn("Step could not resolve target_from", script)
+        self.assertIn("    _resolved_target_locator = _locator_from_payload(current_page, _resolved_target)", script)
+        self.assertIn("    await _resolved_target_locator.click()", script)
+        self.assertNotIn('get_by_role("button", name="Recorded Fallback", exact=True).click()', script)
+
+    def test_generate_script_supports_cross_step_dataflow_for_extract_navigate_and_fill(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "extract_text",
+                "target": json.dumps({"method": "role", "role": "textbox", "name": "Email"}),
+                "description": "Extract contact email",
+                "result_key": "contact_email",
+                "url": "https://example.com/source",
+                "source": "ai",
+            },
+            {
+                "action": "navigate",
+                "description": "Open the selected form page",
+                "url_from": "selected_form.url",
+                "source": "ai",
+            },
+            {
+                "action": "fill",
+                "target": json.dumps({"method": "role", "role": "textbox", "name": "Email"}),
+                "description": "Fill email into target form",
+                "value_from": "contact_email",
+                "url": "https://example.com/form",
+                "source": "ai",
+            },
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertIn('_results["contact_email"] = extract_text_value_1', script)
+        self.assertIn('    _resolved_url = _resolve_result_ref(_results, "selected_form.url")', script)
+        self.assertIn('    _resolved_fill_value = _resolve_result_ref(_results, "contact_email")', script)
+
+    def test_generate_script_supports_ai_script_result_consumed_by_following_navigation(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "action": "ai_script",
+                "source": "ai",
+                "description": "Select the most relevant repository",
+                "result_key": "selected_repo",
+                "value": "\n".join([
+                    "async def run(page):",
+                    "    return {'repo_path': '/owner/repo'}",
+                ]),
+            },
+            {
+                "action": "navigate",
+                "description": "Open the selected repository",
+                "url_from": "selected_repo.repo_path",
+                "source": "ai",
+            },
+        ]
+
+        script = generator.generate_script(steps, is_local=True)
+
+        self.assertIn('    _store_ai_script_result(_results, "selected_repo", _ai_script_result)', script)
+        self.assertIn('    _resolved_url = _resolve_result_ref(_results, "selected_repo.repo_path")', script)
+        self.assertIn('    await current_page.goto(_resolved_nav_target, wait_until="domcontentloaded")', script)
 
 
     def test_generate_script_test_mode_wraps_click_in_try_except(self):

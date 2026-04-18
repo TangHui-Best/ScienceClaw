@@ -5,7 +5,7 @@ import json
 import re
 import io
 import tokenize
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urljoin
 
 from backend.deepagent.engine import get_llm_model
@@ -47,6 +47,8 @@ Rules:
 - Never import or use requests, httpx, urllib, fetch, or any external HTTP client. Work only with the current page, its DOM, and Playwright APIs.
 - For code plans in act mode, return a dict from run(page, results) that includes either a non-empty output or action_performed=true.
 - For semantic selection tasks in act mode, do not stop at returning only a chosen identifier/path. Prefer a real click/navigate plan. If you must return the selected target, use target_url/url/href/path/repo_path so runtime can execute it.
+- When opening a selected page or repository, prefer returning target_url or a navigate action over clicking a broad selector.
+- If you must click a link by href, use an exact href selector such as a[href="/owner/repo"]. Do not use broad contains selectors such as a[href*="owner/repo"], because they can also match stargazers, forks, comments, or subpage links.
 - If planning_feedback is present, treat it as a validation failure from the previous attempt and return a corrected replacement plan instead of repeating the same mistake.
 - Keep the plan concise and executable within the provided reasoning budget.
 """
@@ -304,6 +306,7 @@ async def plan_ai_instruction(
     snapshot_summary = _build_snapshot_summary(snapshot)
     instruction = {
         "prompt": step.get("prompt", ""),
+        "global_goal": step.get("global_goal", ""),
         "instruction_kind": step.get("instruction_kind", "semantic_rule"),
         "input_scope": step.get("input_scope") or {"mode": "current_page"},
         "output_expectation": step.get("output_expectation") or {"mode": "act"},
@@ -587,6 +590,66 @@ async def _execute_code_plan(page, code: str, results: Dict[str, Any]) -> Dict[s
     return {"success": True, "output": _normalize_output_value(str(outcome) if outcome is not None else "")}
 
 
+async def _materialize_act_mode_result(
+    page,
+    final_result: Dict[str, Any],
+    result_key: Optional[str],
+    results: Dict[str, Any],
+    before_observation: Optional[Dict[str, Any]],
+) -> Tuple[bool, Dict[str, Any], str]:
+    after_observation = await _capture_page_observation(page)
+    action_performed = bool(final_result.get("action_performed"))
+    if not action_performed and before_observation is not None:
+        action_performed = _has_observable_page_change(before_observation, after_observation)
+
+    if not action_performed:
+        navigation_target = _extract_navigation_target_from_value(
+            getattr(page, "url", "") or "",
+            final_result,
+        )
+        if not navigation_target and result_key:
+            navigation_target = _extract_navigation_target_from_value(
+                getattr(page, "url", "") or "",
+                results.get(result_key),
+            )
+        if navigation_target:
+            try:
+                await page.goto(navigation_target, wait_until="domcontentloaded")
+                await page.wait_for_load_state("domcontentloaded")
+            except Exception as exc:
+                return (
+                    False,
+                    final_result,
+                    f"selected navigation target {navigation_target} but navigation failed: {exc}",
+                )
+            after_observation = await _capture_page_observation(page)
+            action_performed = bool(
+                navigation_target.rstrip("/") == str(getattr(page, "url", "") or "").rstrip("/")
+            )
+            if not action_performed and before_observation is not None:
+                action_performed = _has_observable_page_change(before_observation, after_observation)
+            if action_performed:
+                final_result["action_performed"] = True
+                final_result["navigation_target"] = navigation_target
+
+    if action_performed:
+        return True, final_result, ""
+
+    output = final_result.get("output", "")
+    if output:
+        return False, final_result, f"plan returned output without browser action: {output}"
+    return False, final_result, "plan completed without observable browser action"
+
+
+def _build_act_mode_replan_feedback(reason: str) -> str:
+    return (
+        f"Previous act-mode plan completed without an observable browser action: {reason}. "
+        "This ai_instruction is in act mode, so the corrected replacement plan must perform a real "
+        "browser click/navigation, return action_performed=true after doing the action, or return a "
+        "direct navigation target using target_url, url, href, path, or repo_path."
+    )
+
+
 async def execute_ai_instruction(
     page,
     step: Dict[str, Any],
@@ -693,17 +756,20 @@ async def execute_ai_instruction(
             if plan_type == "structured":
                 actions = list(plan.get("actions") or [])
                 if act_mode and not actions:
-                    return {
-                        "success": False,
-                        "error": "AI instruction produced no executable actions for act mode",
-                        "output": "",
-                    }
+                    failure_reason = "AI instruction produced no executable actions for act mode"
+                    if attempt == 0:
+                        current_step = {
+                            **step,
+                            "planning_feedback": _build_act_mode_replan_feedback(failure_reason),
+                        }
+                        continue
+                    return {"success": False, "error": failure_reason, "output": ""}
                 snapshot = await build_page_snapshot(page, build_frame_path_from_frame)
                 last_result: Dict[str, Any] = {"success": True, "output": ""}
                 action_observation_before = await _capture_page_observation(page)
                 for index, action in enumerate(actions):
                     resolved = resolve_structured_intent(snapshot, action)
-                    last_result = await execute_structured_intent(page, resolved)
+                    last_result = await execute_structured_intent(page, resolved, results=results)
                     if not last_result.get("success"):
                         return last_result
                     if index == len(actions) - 1:
@@ -713,6 +779,26 @@ async def execute_ai_instruction(
                         snapshot = await build_page_snapshot(page, build_frame_path_from_frame)
                     action_observation_before = action_observation_after
                 final_result = last_result
+                if final_result.get("success") and act_mode:
+                    action_ok, final_result, act_failure_reason = await _materialize_act_mode_result(
+                        page,
+                        final_result,
+                        result_key,
+                        results,
+                        before_observation,
+                    )
+                    if not action_ok:
+                        if attempt == 0:
+                            current_step = {
+                                **step,
+                                "planning_feedback": _build_act_mode_replan_feedback(act_failure_reason),
+                            }
+                            continue
+                        return {
+                            "success": False,
+                            "error": "AI instruction completed without observable action in act mode",
+                            "output": final_result.get("output", ""),
+                        }
                 break
             if plan_type == "code":
                 final_result = await _execute_code_plan(page, plan.get("code", ""), results)
@@ -722,10 +808,33 @@ async def execute_ai_instruction(
                         "planning_feedback": (
                             f"Previous code plan failed during execution: {final_result.get('error')}. "
                             "Return a corrected replacement plan that avoids invalid Python syntax, "
-                            "invalid page.evaluate JavaScript, and uses Playwright APIs safely."
+                            "invalid page.evaluate JavaScript, and uses Playwright APIs safely. "
+                            "If the failure was a strict mode violation while opening a selected link, "
+                            "return target_url/url for runtime navigation or use an exact href selector, "
+                            "not a broad a[href*=...] selector."
                         ),
                     }
                     continue
+                if final_result.get("success") and act_mode:
+                    action_ok, final_result, act_failure_reason = await _materialize_act_mode_result(
+                        page,
+                        final_result,
+                        result_key,
+                        results,
+                        before_observation,
+                    )
+                    if not action_ok:
+                        if attempt == 0:
+                            current_step = {
+                                **step,
+                                "planning_feedback": _build_act_mode_replan_feedback(act_failure_reason),
+                            }
+                            continue
+                        return {
+                            "success": False,
+                            "error": "AI instruction completed without observable action in act mode",
+                            "output": final_result.get("output", ""),
+                        }
                 break
             return {
                 "success": False,
@@ -764,46 +873,5 @@ async def execute_ai_instruction(
             final_result["output"] = normalized_output
             if result_key:
                 results[result_key] = normalized_output
-
-    if final_result.get("success") and act_mode:
-        after_observation = await _capture_page_observation(page)
-        action_performed = bool(final_result.get("action_performed"))
-        if not action_performed and before_observation is not None:
-            action_performed = _has_observable_page_change(before_observation, after_observation)
-        if not action_performed:
-            navigation_target = _extract_navigation_target_from_value(
-                getattr(page, "url", "") or "",
-                final_result,
-            )
-            if not navigation_target and result_key:
-                navigation_target = _extract_navigation_target_from_value(
-                    getattr(page, "url", "") or "",
-                    results.get(result_key),
-                )
-            if navigation_target:
-                try:
-                    await page.goto(navigation_target, wait_until="domcontentloaded")
-                    await page.wait_for_load_state("domcontentloaded")
-                except Exception as exc:
-                    return {
-                        "success": False,
-                        "error": f"AI instruction selected navigation target {navigation_target} but navigation failed: {exc}",
-                        "output": final_result.get("output", ""),
-                    }
-                after_observation = await _capture_page_observation(page)
-                action_performed = bool(
-                    navigation_target.rstrip("/") == str(getattr(page, "url", "") or "").rstrip("/")
-                )
-                if not action_performed and before_observation is not None:
-                    action_performed = _has_observable_page_change(before_observation, after_observation)
-                if action_performed:
-                    final_result["action_performed"] = True
-                    final_result["navigation_target"] = navigation_target
-        if not action_performed:
-            return {
-                "success": False,
-                "error": "AI instruction completed without observable action in act mode",
-                "output": final_result.get("output", ""),
-            }
 
     return final_result
