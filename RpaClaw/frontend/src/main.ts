@@ -24,6 +24,7 @@ import CredentialsPage from './pages/CredentialsPage.vue'
 import RecorderPage from './pages/rpa/RecorderPage.vue'
 import ConfigurePage from './pages/rpa/ConfigurePage.vue'
 import TestPage from './pages/rpa/TestPage.vue'
+import McpConvertPage from './pages/rpa/McpConvertPage.vue'
 import { configure } from "vue-gtag";
 
 configure({
@@ -95,9 +96,10 @@ export const router = createRouter({
           path: 'configure',
           component: ConfigurePage,
         },
+        ,
         {
-          path: 'test',
-          component: TestPage,
+          path: 'convert-mcp',
+          component: McpConvertPage,
         }
       ]
     },

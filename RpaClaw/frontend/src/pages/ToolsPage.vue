@@ -206,6 +206,48 @@
             </article>
           </div>
         </section>
+        <section class="space-y-4">
+          <div class="flex flex-col gap-3 border-b border-slate-200 pb-4 dark:border-white/10 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h2 class="text-xl font-black tracking-tight text-[var(--text-primary)]">{{ t('RPA MCP Gateway') }}</h2>
+              <p class="mt-1 text-sm text-[var(--text-tertiary)]">{{ t('Converted RPA tools exposed through the centralized gateway.') }}</p>
+            </div>
+            <span class="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-[var(--text-secondary)] dark:bg-white/10">{{ t('server count summary', { count: rpaMcpTools.length }) }}</span>
+          </div>
+          <div v-if="rpaMcpTools.length === 0" class="rounded-3xl border border-dashed border-slate-300 bg-white/80 p-10 text-center text-sm text-[var(--text-tertiary)] dark:border-white/10 dark:bg-white/[0.04]">
+            {{ t('No converted RPA MCP tools yet.') }}
+          </div>
+          <div v-else class="space-y-4">
+            <article v-for="tool in rpaMcpTools" :key="tool.id" class="mcp-card">
+              <div class="mcp-card-layout">
+                <div class="mcp-card-main">
+                  <div class="mcp-icon bg-cyan-100 text-cyan-700 dark:bg-cyan-400/15 dark:text-cyan-200"><Wrench :size="22" /></div>
+                  <div class="min-w-0">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <h3 class="truncate text-base font-bold text-[var(--text-primary)]">{{ tool.name }}</h3>
+                      <span class="badge-blue">Gateway</span>
+                      <span class="badge-muted">{{ tool.tool_name }}</span>
+                    </div>
+                    <p class="mt-2 line-clamp-2 text-sm leading-6 text-[var(--text-secondary)]">{{ tool.description || t('No description') }}</p>
+                    <p class="mt-3 text-xs text-[var(--text-tertiary)]">{{ t('Allowed domains') }}: {{ tool.allowed_domains.join(', ') || '-' }}</p>
+                    <details class="mt-3 rounded-2xl border border-slate-200 bg-slate-50/80 p-3 text-xs dark:border-white/10 dark:bg-white/[0.04]">
+                      <summary class="cursor-pointer font-semibold text-[var(--text-primary)]">{{ t('Preview') }}</summary>
+                      <pre class="mt-3 overflow-x-auto rounded-xl border border-slate-200 bg-white p-3 text-xs text-[var(--text-secondary)] dark:border-white/10 dark:bg-[#101115]"><code>{{ JSON.stringify(tool.input_schema || {}, null, 2) }}</code></pre>
+                      <div class="mt-3 text-[var(--text-secondary)]">{{ t('Removed login steps') }}: {{ tool.sanitize_report?.removed_steps?.join(', ') || '-' }}</div>
+                      <div class="mt-1 text-[var(--text-secondary)]">{{ t('Sanitize warnings') }}: {{ tool.sanitize_report?.warnings?.join(' | ') || '-' }}</div>
+                    </details>
+                  </div>
+                </div>
+                <div class="mcp-actions">
+                  <span class="status-pill" :class="tool.enabled ? 'status-on' : 'status-warn'">{{ tool.enabled ? t('Enabled') : t('Disabled') }}</span>
+                  <button class="action-muted" @click="toggleRpaMcpTool(tool)">{{ tool.enabled ? t('Disable') : t('Enable') }}</button>
+                  <button class="action-blue" @click="runGatewayToolTest(tool)">{{ t('Test') }}</button>
+                  <button class="action-danger" @click="deleteGatewayTool(tool)">{{ t('Delete') }}</button>
+                </div>
+              </div>
+            </article>
+          </div>
+        </section>
       </div>
     </main>
 
@@ -455,6 +497,7 @@ import { useRouter } from 'vue-router';
 import { getTools, blockTool, deleteTool as apiDeleteTool } from '../api/agent';
 import type { ExternalToolItem } from '../types/response';
 import { listCredentials, type Credential } from '../api/credential';
+import { deleteRpaMcpTool, listRpaMcpTools, testRpaMcpTool, updateRpaMcpTool, type RpaMcpToolItem } from '../api/rpaMcp';
 import {
   createMcpServer,
   deleteMcpServer,
@@ -492,6 +535,7 @@ const showAdvancedQuery = ref(false);
 const toolsDialogOpen = ref(false);
 const selectedServer = ref<McpServerItem | null>(null);
 const discoveredTools = ref<McpToolDiscoveryItem[]>([]);
+const rpaMcpTools = ref<RpaMcpToolItem[]>([]);
 
 const form = reactive({
   name: '',
@@ -591,14 +635,16 @@ const applyServerToForm = (server: McpServerItem) => {
 const loadData = async () => {
   extLoading.value = true;
   try {
-    const [tools, servers, creds] = await Promise.all([
+    const [tools, servers, creds, gatewayTools] = await Promise.all([
       getTools(),
       listMcpServers(),
       listCredentials().catch(() => []),
+      listRpaMcpTools().catch(() => []),
     ]);
     externalTools.value = tools;
     mcpServers.value = servers;
     credentials.value = creds;
+    rpaMcpTools.value = gatewayTools;
   } catch (error) {
     console.error(error);
     showErrorToast(t('Failed to load tools'));
@@ -768,6 +814,52 @@ const closeToolsDialog = () => {
   discoveredTools.value = [];
 };
 
+
+const toggleRpaMcpTool = async (tool: RpaMcpToolItem) => {
+  try {
+    const updated = await updateRpaMcpTool(tool.id, {
+      name: tool.name,
+      description: tool.description,
+      enabled: !tool.enabled,
+      allowed_domains: tool.allowed_domains,
+      post_auth_start_url: tool.post_auth_start_url,
+    });
+    rpaMcpTools.value = rpaMcpTools.value.map((item) => item.id === tool.id ? updated : item);
+    showSuccessToast(updated.enabled ? t('Enabled') : t('Disabled'));
+  } catch (error: any) {
+    console.error(error);
+    showErrorToast(error?.message || 'Failed to update RPA MCP tool');
+  }
+};
+
+const deleteGatewayTool = async (tool: RpaMcpToolItem) => {
+  if (!window.confirm(t('Delete MCP server confirm', { name: tool.name }))) return;
+  try {
+    await deleteRpaMcpTool(tool.id);
+    rpaMcpTools.value = rpaMcpTools.value.filter((item) => item.id !== tool.id);
+    showSuccessToast(t('Deleted successfully'));
+  } catch (error: any) {
+    console.error(error);
+    showErrorToast(error?.message || 'Failed to delete RPA MCP tool');
+  }
+};
+
+const runGatewayToolTest = async (tool: RpaMcpToolItem) => {
+  const raw = window.prompt(t('Gateway test cookies'), '[]');
+  if (raw === null) return;
+  try {
+    const cookies = JSON.parse(raw);
+    if (!Array.isArray(cookies) || cookies.length === 0) {
+      showErrorToast(t('Cookies JSON is required'));
+      return;
+    }
+    await testRpaMcpTool(tool.id, { cookies, arguments: {} });
+    showSuccessToast(t('Test message sent'));
+  } catch (error: any) {
+    console.error(error);
+    showErrorToast(error?.message || t('Test failed'));
+  }
+};
 const deletePrivateServer = async (server: McpServerItem) => {
   if (!window.confirm(t('Delete MCP server confirm', { name: server.name }))) return;
   try {
@@ -1033,3 +1125,4 @@ const deletePrivateServer = async (server: McpServerItem) => {
   background: rgba(255, 255, 255, 0.06);
 }
 </style>
+

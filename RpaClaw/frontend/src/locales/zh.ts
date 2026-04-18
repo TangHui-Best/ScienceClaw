@@ -661,4 +661,15 @@ export default {
   'Delete MCP server confirm': '删除“{name}”？',
   'MCP server deleted': 'MCP 服务已删除',
   'Failed to delete MCP server': '删除 MCP 服务失败'
-} 
+,
+  'Convert to MCP Tool': '转换为 MCP 工具',
+  'RPA MCP Gateway': 'RPA MCP Gateway',
+  'Converted RPA tools exposed through the centralized gateway.': '已转换的 RPA 工具会通过集中式 Gateway 对外暴露。',
+  'No converted RPA MCP tools yet.': '暂无已转换的 RPA MCP 工具',
+  'Removed login steps': '已移除登录步骤',
+  'Allowed domains': '允许域名',
+  'Post-login start URL': '登录后起始 URL',
+  'Gateway test cookies': 'Gateway 测试 Cookies',
+  'Cookies JSON is required': '请输入有效的 Cookies JSON',
+  'Sanitize warnings': '清洗告警',
+  'Converted tool saved': '转换后的工具已保存'} 

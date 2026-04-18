@@ -617,5 +617,17 @@ export default {
   'Failed to discover MCP tools': 'Failed to discover tools for {name}',
   'Delete MCP server confirm': 'Delete "{name}"?',
   'MCP server deleted': 'MCP server deleted',
-  'Failed to delete MCP server': 'Failed to delete MCP server'
+  'Failed to delete MCP server': 'Failed to delete MCP server',
+  'Convert to MCP Tool': 'Convert to MCP Tool',
+  'RPA MCP Gateway': 'RPA MCP Gateway',
+  'Converted RPA tools exposed through the centralized gateway.': 'Converted RPA tools exposed through the centralized gateway.',
+  'No converted RPA MCP tools yet.': 'No converted RPA MCP tools yet.',
+  'Removed login steps': 'Removed login steps',
+  'Allowed domains': 'Allowed domains',
+  'Post-login start URL': 'Post-login start URL',
+  'Gateway test cookies': 'Gateway test cookies',
+  'Cookies JSON is required': 'Cookies JSON is required',
+  'Sanitize warnings': 'Sanitize warnings',
+  'Converted tool saved': 'Converted tool saved'
 } 
+

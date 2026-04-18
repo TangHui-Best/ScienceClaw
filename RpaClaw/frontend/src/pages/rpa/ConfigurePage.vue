@@ -459,6 +459,14 @@ onMounted(() => {
         <div class="ml-auto flex items-center gap-2">
           <button
             type="button"
+            @click="router.push({ path: '/rpa/convert-mcp', query: { sessionId, skillName, skillDescription } })"
+            class="inline-flex items-center gap-2 rounded-full border border-violet-200 bg-violet-50 px-4 py-2 text-sm font-semibold text-violet-700 transition-colors hover:bg-violet-100 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-200 dark:hover:bg-violet-500/20"
+          >
+            <ChevronRight :size="16" />
+            转换为 MCP 工具
+          </button>
+          <button
+            type="button"
             @click="generateScript"
             class="inline-flex items-center gap-2 rounded-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#272728] px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 transition-colors hover:bg-gray-50 dark:hover:bg-[#444345]"
           >
