@@ -31,6 +31,10 @@ Your job is to classify the next SOP step into exactly one execution_strategy:
    Natural language is allowed only inside JSON fields such as reason, summary, or explanation.
 
 Hard constraints:
+- Each StepContract must use the exact schema keys: id, intent, target, operator, outputs, validation, runtime_policy.
+- Use id, not step_id. Use operator.type and operator.execution_strategy, not target.action or target.execution_strategy.
+- target.type is required. For navigation, use target.type="url" and target.url_template.
+- runtime_policy.runtime_ai_reason and runtime_policy.side_effect_reason must be strings, never null.
 - The StepContract is the only semantic source for Compiler, Executor, Validator, and Skill Builder.
 - Put all step-level constraints into structured fields, not only description.
 - For cross-step dataflow, put dotted blackboard refs in inputs.refs and URL/value templates in target.url_template.
@@ -109,11 +113,11 @@ def parse_step_contract_response(response: Any) -> StepContract:
     if isinstance(response, StepContract):
         return response
     if isinstance(response, dict):
-        return StepContract(**response)
+        return StepContract(**_normalize_step_contract_payload(response))
     if not isinstance(response, str):
         raise ValueError("planner response must be JSON text or dict")
     payload = _extract_json_object(response)
-    return StepContract(**payload)
+    return StepContract(**_normalize_step_contract_payload(payload))
 
 
 def parse_step_contracts_response(response: Any) -> list[StepContract]:
@@ -164,3 +168,57 @@ def _strip_fenced_json(text: str) -> str:
     if match:
         return match.group(1).strip()
     return text
+
+
+def _normalize_step_contract_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(payload)
+
+    if "id" not in normalized and normalized.get("step_id"):
+        normalized["id"] = normalized.get("step_id")
+
+    description = str(normalized.get("description") or normalized.get("goal") or "").strip()
+    if "intent" not in normalized or not isinstance(normalized.get("intent"), dict):
+        normalized["intent"] = {"goal": description or str(normalized.get("id") or "rpa_step")}
+
+    target = dict(normalized.get("target") or {})
+    if "type" not in target:
+        if target.get("url_template") or target.get("url"):
+            target["type"] = "url"
+        elif target.get("locator"):
+            target["type"] = "locator"
+        elif target.get("collection"):
+            target["type"] = "visible_collection"
+        else:
+            target["type"] = "page"
+    if "url_template" not in target and target.get("url"):
+        target["url_template"] = target.get("url")
+    normalized["target"] = target
+
+    if "operator" not in normalized or not isinstance(normalized.get("operator"), dict):
+        operator_type = (
+            normalized.get("action")
+            or target.get("action")
+            or normalized.get("operator_type")
+            or "navigate"
+        )
+        execution_strategy = (
+            normalized.get("execution_strategy")
+            or target.get("execution_strategy")
+            or "primitive_action"
+        )
+        normalized["operator"] = {
+            "type": operator_type,
+            "execution_strategy": execution_strategy,
+        }
+
+    runtime_policy = dict(normalized.get("runtime_policy") or {})
+    if runtime_policy.get("runtime_ai_reason") is None:
+        runtime_policy["runtime_ai_reason"] = ""
+    if runtime_policy.get("side_effect_reason") is None:
+        runtime_policy["side_effect_reason"] = ""
+    normalized["runtime_policy"] = runtime_policy
+
+    normalized.setdefault("outputs", {"blackboard_key": None, "schema": None})
+    normalized.setdefault("validation", {"must": []})
+
+    return normalized

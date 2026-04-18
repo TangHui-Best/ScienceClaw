@@ -93,6 +93,32 @@ class ContractPlannerTests(unittest.TestCase):
 
         self.assertEqual([contract.id for contract in contracts], ["open", "extract"])
 
+    def test_normalizes_live_planner_navigation_shape(self):
+        response = {
+            "step_id": "step_navigate_trending",
+            "description": "Open GitHub Trending page",
+            "target": {
+                "url_template": "https://github.com/trending",
+                "execution_strategy": "primitive_action",
+                "action": "navigate",
+            },
+            "outputs": {"blackboard_key": None, "schema": None},
+            "validation": {"must": [{"type": "url_contains", "value": "github.com/trending"}]},
+            "runtime_policy": {
+                "requires_runtime_ai": False,
+                "runtime_ai_reason": None,
+            },
+        }
+
+        contract = parse_step_contract_response(response)
+
+        self.assertEqual(contract.id, "step_navigate_trending")
+        self.assertEqual(contract.intent.goal, "Open GitHub Trending page")
+        self.assertEqual(contract.target.type, "url")
+        self.assertEqual(contract.operator.type, "navigate")
+        self.assertEqual(contract.operator.execution_strategy.value, "primitive_action")
+        self.assertEqual(contract.runtime_policy.runtime_ai_reason, "")
+
 
 if __name__ == "__main__":
     unittest.main()
