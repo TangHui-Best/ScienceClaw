@@ -18,6 +18,7 @@ from backend.rpa.executor import ScriptExecutor
 from backend.rpa.skill_exporter import SkillExporter
 from backend.rpa.assistant import RPAReActAgent, _active_agents
 from backend.rpa.cdp_connector import get_cdp_connector
+from backend.rpa.contract_session import build_contract_skill_files_from_session, has_contract_steps
 from backend.rpa.screencast import SessionScreencastController
 from backend.user.dependencies import get_current_user, User
 from backend.config import settings
@@ -403,8 +404,12 @@ async def generate_script(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    steps = [step.model_dump() for step in session.steps]
-    script = generator.generate_script(steps, request.params, is_local=(settings.storage_backend == "local"))
+    if has_contract_steps(session):
+        files = build_contract_skill_files_from_session(session, f"rpa_session_{session_id}", "Generated RPA skill")
+        script = files["skill.py"]
+    else:
+        steps = [step.model_dump() for step in session.steps]
+        script = generator.generate_script(steps, request.params, is_local=(settings.storage_backend == "local"))
     return {"status": "success", "script": script}
 
 
@@ -418,8 +423,13 @@ async def test_script(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    steps = [step.model_dump() for step in session.steps]
-    script = generator.generate_script(steps, request.params, is_local=(settings.storage_backend == "local"), test_mode=True)
+    if has_contract_steps(session):
+        files = build_contract_skill_files_from_session(session, f"rpa_session_{session_id}", "Generated RPA skill")
+        script = files["skill.py"]
+        steps = [step.model_dump() for step in session.steps]
+    else:
+        steps = [step.model_dump() for step in session.steps]
+        script = generator.generate_script(steps, request.params, is_local=(settings.storage_backend == "local"), test_mode=True)
 
     logs = []
     browser = await get_cdp_connector().get_browser(
@@ -519,8 +529,14 @@ async def save_skill(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    steps = [step.model_dump() for step in session.steps]
-    script = generator.generate_script(steps, request.params, is_local=(settings.storage_backend == "local"))
+    extra_files: Dict[str, str] = {}
+    if has_contract_steps(session):
+        files = build_contract_skill_files_from_session(session, request.skill_name, request.description)
+        script = files["skill.py"]
+        extra_files["skill.contract.json"] = files["skill.contract.json"]
+    else:
+        steps = [step.model_dump() for step in session.steps]
+        script = generator.generate_script(steps, request.params, is_local=(settings.storage_backend == "local"))
 
     skill_name = await exporter.export_skill(
         user_id=str(current_user.id),
@@ -528,6 +544,7 @@ async def save_skill(
         description=request.description,
         script=script,
         params=request.params,
+        extra_files=extra_files,
     )
 
     session.status = "saved"

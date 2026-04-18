@@ -73,6 +73,9 @@ class RPASession(BaseModel):
     start_time: datetime = Field(default_factory=datetime.now)
     status: str = "recording"  # recording, stopped, testing, saved
     steps: List[RPAStep] = []
+    contract_steps: List[Dict[str, Any]] = Field(default_factory=list)
+    contract_blackboard: Dict[str, Any] = Field(default_factory=dict)
+    contract_attempts: List[Dict[str, Any]] = Field(default_factory=list)
     sandbox_session_id: str
     paused: bool = False  # pause event recording during AI execution
     active_tab_id: Optional[str] = None
