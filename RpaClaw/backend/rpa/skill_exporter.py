@@ -3,7 +3,7 @@ import logging
 import os
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from backend.storage import get_repository
 from backend.config import settings
@@ -21,6 +21,7 @@ class SkillExporter:
         description: str,
         script: str,
         params: Dict[str, Any],
+        extra_files: Optional[Dict[str, str]] = None,
     ) -> str:
         """Export skill to MongoDB or local filesystem based on storage_backend.
 
@@ -106,6 +107,8 @@ The skill is implemented in `skill.py` using Playwright for browser automation.
 
             (skill_dir / "SKILL.md").write_text(skill_md, encoding="utf-8")
             (skill_dir / "skill.py").write_text(script, encoding="utf-8")
+            for filename, content in (extra_files or {}).items():
+                (skill_dir / filename).write_text(str(content), encoding="utf-8")
             # Save params config (includes credential_id for sensitive params)
             (skill_dir / "params.json").write_text(
                 json.dumps(params, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -116,14 +119,16 @@ The skill is implemented in `skill.py` using Playwright for browser automation.
             # Save to MongoDB
             now = datetime.now(timezone.utc)
             col = get_repository("skills")
+            files = {
+                "SKILL.md": skill_md,
+                "skill.py": script,
+            }
+            files.update(extra_files or {})
             await col.update_one(
                 {"user_id": user_id, "name": skill_name},
                 {
                     "$set": {
-                        "files": {
-                            "SKILL.md": skill_md,
-                            "skill.py": script,
-                        },
+                        "files": files,
                         "description": description,
                         "params": params,
                         "updated_at": now,
