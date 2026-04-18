@@ -76,7 +76,7 @@ async def plan_step_contract(
             ),
         ]
     )
-    return parse_step_contract_response(_extract_response_text(response))
+    return parse_step_contract_response(_extract_response_text(response), fallback_goal=goal)
 
 
 async def plan_sop_contracts(
@@ -106,33 +106,33 @@ async def plan_sop_contracts(
             ),
         ]
     )
-    return parse_step_contracts_response(_extract_response_text(response))
+    return parse_step_contracts_response(_extract_response_text(response), fallback_goal=goal)
 
 
-def parse_step_contract_response(response: Any) -> StepContract:
+def parse_step_contract_response(response: Any, fallback_goal: str = "") -> StepContract:
     if isinstance(response, StepContract):
         return response
     if isinstance(response, dict):
-        return StepContract(**_normalize_step_contract_payload(response))
+        return StepContract(**_normalize_step_contract_payload(response, fallback_goal=fallback_goal))
     if not isinstance(response, str):
         raise ValueError("planner response must be JSON text or dict")
     payload = _extract_json_object(response)
-    return StepContract(**_normalize_step_contract_payload(payload))
+    return StepContract(**_normalize_step_contract_payload(payload, fallback_goal=fallback_goal))
 
 
-def parse_step_contracts_response(response: Any) -> list[StepContract]:
+def parse_step_contracts_response(response: Any, fallback_goal: str = "") -> list[StepContract]:
     if isinstance(response, StepContract):
         return [response]
     if isinstance(response, list):
-        return [parse_step_contract_response(item) for item in response]
+        return [parse_step_contract_response(item, fallback_goal=fallback_goal) for item in response]
 
     payload = response
     if isinstance(response, str):
         payload = _extract_json_object(response)
     if isinstance(payload, dict) and isinstance(payload.get("steps"), list):
-        return [parse_step_contract_response(item) for item in payload["steps"]]
+        return [parse_step_contract_response(item, fallback_goal=fallback_goal) for item in payload["steps"]]
     if isinstance(payload, dict):
-        return [parse_step_contract_response(payload)]
+        return [parse_step_contract_response(payload, fallback_goal=fallback_goal)]
     raise ValueError("planner response must be a StepContract or steps array")
 
 
@@ -170,15 +170,24 @@ def _strip_fenced_json(text: str) -> str:
     return text
 
 
-def _normalize_step_contract_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_step_contract_payload(payload: Dict[str, Any], fallback_goal: str = "") -> Dict[str, Any]:
     normalized = dict(payload)
 
     if "id" not in normalized and normalized.get("step_id"):
         normalized["id"] = normalized.get("step_id")
 
-    description = str(normalized.get("description") or normalized.get("goal") or "").strip()
+    description = str(
+        normalized.get("description")
+        or normalized.get("goal")
+        or fallback_goal
+        or ""
+    ).strip()
+    if not str(normalized.get("description") or "").strip() and description:
+        normalized["description"] = description
     if "intent" not in normalized or not isinstance(normalized.get("intent"), dict):
         normalized["intent"] = {"goal": description or str(normalized.get("id") or "rpa_step")}
+    elif not str(normalized["intent"].get("goal") or "").strip() and description:
+        normalized["intent"]["goal"] = description
 
     target = dict(normalized.get("target") or {})
     if "type" not in target:

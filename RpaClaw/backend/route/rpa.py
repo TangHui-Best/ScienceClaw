@@ -577,7 +577,15 @@ async def chat_with_assistant(
     # Get the page object for this session
     page = rpa_manager.get_page(session_id)
     if not page:
-        raise HTTPException(status_code=400, detail="No active page for this session")
+        debug_state = rpa_manager.page_debug_state(session_id)
+        logger.error(f"No active page for RPA session {session_id}: {debug_state}")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "No active page for this session",
+                "debug_state": debug_state,
+            },
+        )
 
     steps = [step.model_dump() for step in session.steps]
 

@@ -96,7 +96,6 @@ class ContractPlannerTests(unittest.TestCase):
     def test_normalizes_live_planner_navigation_shape(self):
         response = {
             "step_id": "step_navigate_trending",
-            "description": "Open GitHub Trending page",
             "target": {
                 "url_template": "https://github.com/trending",
                 "execution_strategy": "primitive_action",
@@ -110,10 +109,11 @@ class ContractPlannerTests(unittest.TestCase):
             },
         }
 
-        contract = parse_step_contract_response(response)
+        contract = parse_step_contract_response(response, fallback_goal="打开 https://github.com/trending")
 
         self.assertEqual(contract.id, "step_navigate_trending")
-        self.assertEqual(contract.intent.goal, "Open GitHub Trending page")
+        self.assertEqual(contract.intent.goal, "打开 https://github.com/trending")
+        self.assertEqual(contract.description, "打开 https://github.com/trending")
         self.assertEqual(contract.target.type, "url")
         self.assertEqual(contract.operator.type, "navigate")
         self.assertEqual(contract.operator.execution_strategy.value, "primitive_action")

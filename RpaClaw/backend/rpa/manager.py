@@ -964,6 +964,18 @@ class RPASessionManager:
             return active_page
         return self._pages.get(session_id)
 
+    def page_debug_state(self, session_id: str) -> Dict[str, Any]:
+        session = self.sessions.get(session_id)
+        tabs = self._tabs.get(session_id, {})
+        return {
+            "session_exists": session is not None,
+            "active_tab_id": session.active_tab_id if session else None,
+            "page_cached": session_id in self._pages,
+            "tab_count": len(tabs),
+            "tab_ids": list(tabs.keys()),
+            "tab_meta_ids": list(self._tab_meta.get(session_id, {}).keys()),
+        }
+
     def owns_sandbox_session(self, user_id: str, sandbox_session_id: str) -> bool:
         return any(
             session.user_id == user_id and session.sandbox_session_id == sandbox_session_id
