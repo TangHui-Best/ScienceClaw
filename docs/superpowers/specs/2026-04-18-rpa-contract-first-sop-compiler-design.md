@@ -151,6 +151,41 @@ The following areas are reserved in schema but not fully implemented in this cor
 
 Reserved fields must not become half-working product behavior. They exist to prevent future schema-breaking rewrites.
 
+## 3.1 Primary Failure Modes to Eliminate
+
+The design is not complete unless it directly eliminates the two historical failure modes observed in prior versions.
+
+### Failure mode A: recording-time browser operation fails repeatedly
+
+Symptoms:
+
+- The Agent understands the instruction but generated code cannot operate the page reliably.
+- Generated Playwright code has unstable selectors, bad waits, invalid `page.evaluate` JavaScript, or brittle DOM assumptions.
+- Repair repeats the same guessing pattern with slightly different code.
+
+Architectural response:
+
+- Compiler must be contract-driven, not free-form description-driven.
+- Deterministic scripts should prefer controlled templates and Playwright best practices over unrestricted code generation.
+- Artifact Quality Gate must reject obviously brittle or invalid artifacts before execution.
+- Failure evidence must point repair to the failing layer, such as locator, wait condition, output schema, or script syntax.
+
+### Failure mode B: recording succeeds but exported replay fails
+
+Symptoms:
+
+- The recording-time action completes, but generated `skill.py` cannot replay the same behavior.
+- Export regenerates behavior from descriptions instead of preserving the validated artifact.
+- Dynamic values selected during recording are accidentally hard-coded into replay scripts.
+- Replay loses blackboard refs, validation policy, locator candidates, or runtime AI output schema.
+
+Architectural response:
+
+- The committed unit is `StepContract + Artifact + ValidationEvidence`, not only a step description.
+- Skill Builder wraps committed artifacts; it must not re-plan or regenerate behavior from natural language.
+- Export must preserve blackboard refs, runtime parameters, validation policy, and runtime AI output schemas.
+- Recording-to-replay equivalence must be checked before a Skill is considered testable.
+
 ## 4. System Architecture
 
 The pipeline is:
@@ -227,12 +262,27 @@ Responsibilities:
 - Compile one Artifact for the chosen strategy.
 - Use controlled Playwright patterns.
 - Never reinterpret business semantics from `description` when contract fields exist.
+- Prefer templates and constrained code generation for common browser automation patterns.
+- Produce artifact metadata needed for export equivalence checks.
 
 Artifacts:
 
 - PrimitiveActionArtifact
 - DeterministicScriptArtifact
 - RuntimeAIArtifact
+
+Controlled compiler patterns:
+
+- navigate by resolved URL or URL template
+- click by LocatorCompiler-selected locator
+- fill by field mapping and blackboard refs
+- extract one field from locator
+- extract repeated records from scoped rows/cards
+- rank/filter repeated records by deterministic rule
+- build URL from blackboard ref
+- runtime semantic select/extract with structured output
+
+Free-form Playwright code generation is reserved for cases that do not fit a controlled pattern and must carry an explicit compiler rationale.
 
 ### 4.4 Execution Sandbox
 
@@ -246,11 +296,16 @@ Responsibilities:
 
 Responsibilities:
 
-- Validate contract evidence.
+- Validate recording-time contract evidence.
 - Validate output schema.
 - Validate blackboard writes.
 - Classify failure type.
 - Decide if a step is committable.
+
+There are two validation moments:
+
+- RecordingValidator: validates a candidate artifact against the current recording page before commit.
+- ReplayValidator: validates that exported `skill.py` preserves committed artifacts, dataflow, and validation policy, and can run in the test/replay environment.
 
 ### 4.6 Committer
 
@@ -693,7 +748,78 @@ Failure example:
 }
 ```
 
-## 12. AttemptRecord and Failure Evidence
+## 12. Artifact Quality Gate
+
+Before an artifact is executed during recording, it must pass a lightweight quality gate. The gate is not a semantic classifier. It rejects artifacts that are known to cause recording-time failures or replay divergence.
+
+### 12.1 PrimitiveActionArtifact checks
+
+- target locator or URL must be present;
+- click/fill/extract locators must come from LocatorCompiler;
+- broad href contains selectors are rejected for clicks;
+- navigation must have a resolved URL, URL template, or blackboard ref;
+- extraction must declare where output will be written if later steps consume it.
+
+### 12.2 DeterministicScriptArtifact checks
+
+- Python code must compile;
+- script entrypoint must match the expected signature;
+- extraction scripts must return JSON-compatible values matching `outputs.schema`;
+- scripts must not call LLMs;
+- scripts must not use filesystem, shell, or network unless an explicit future file/network policy allows it;
+- scripts should not use `page.evaluate` unless the artifact includes a rationale;
+- scripts must preserve blackboard refs instead of hard-coding runtime-selected values;
+- scripts must include enough waits or locator-based synchronization for navigation or dynamic content.
+
+### 12.3 RuntimeAIArtifact checks
+
+- `runtime_ai_reason` must be present;
+- `outputs.blackboard_key` and `outputs.schema` must be present;
+- side effects are disallowed unless `runtime_policy.allow_side_effect` is true and justified;
+- runtime AI prompt must require JSON output conforming to `outputs.schema`;
+- runtime AI result must be validated before being written to blackboard.
+
+Artifacts that fail the quality gate return `failure_class = artifact_failed` with a specific `failure_type`, such as `script_compile_error`, `locator_ambiguous`, or `runtime_ai_output_invalid`.
+
+## 13. Recording-to-Replay Equivalence
+
+Recording success is insufficient unless the exported Skill preserves the same validated behavior.
+
+The committed unit is:
+
+```text
+StepContract + Artifact + ValidationEvidence
+```
+
+It is not:
+
+```text
+description + generator prompt + best-effort replay code
+```
+
+Export rules:
+
+- Skill Builder must wrap committed artifacts, not regenerate behavior from natural-language descriptions.
+- Export may add runtime scaffolding such as `main()`, browser setup, blackboard initialization, and step error handling.
+- Export must not replace blackboard refs with recording-time concrete values unless the contract declares a fixed value.
+- Export must preserve RuntimeAIArtifact output schema.
+- Export must preserve validation policy and enough debug metadata to explain failures.
+- Export must preserve artifact IDs so replay logs can map failures back to committed steps.
+
+Structural equivalence checks before replay:
+
+- every exported step maps to one committed step ID;
+- every committed step has an exported artifact;
+- blackboard input refs are preserved;
+- outputs schemas are preserved;
+- runtime parameters are not replaced by recorded values;
+- runtime AI nodes are not expanded into deterministic code unless explicitly recompiled through the compiler pipeline;
+- deterministic artifacts are not regenerated from `description`;
+- validation policies are present in debug/test mode.
+
+ReplayValidator runs after export and before declaring the Skill testable. It should catch missing refs, lost schemas, hard-coded selected entities, and regenerated behavior before browser replay begins when possible.
+
+## 14. AttemptRecord and Failure Evidence
 
 Every compile/execute/validate attempt produces an AttemptRecord.
 
@@ -751,7 +877,7 @@ Repair routing:
 
 The second compiler attempt receives structured failure evidence, not only a natural-language error string.
 
-## 13. Exported Skill Runtime
+## 15. Exported Skill Runtime
 
 The exported Skill contains:
 
@@ -782,7 +908,7 @@ The generated `skill.py` should be driven by exported contract metadata where pr
 
 The exported `skill.py` must not rely on reinterpreting natural-language descriptions. If a value is required at runtime, it must come from runtime parameters, blackboard, compiled constants, or the current page.
 
-## 14. GitHub Validation Scenarios
+## 16. GitHub Validation Scenarios
 
 ### Scenario A: Deterministic ranking
 
@@ -830,7 +956,7 @@ Expected design:
 - fill step consumes blackboard refs
 - validation checks field values or success state
 
-## 15. Architectural Invariants for Future Iterations
+## 17. Architectural Invariants for Future Iterations
 
 The following invariants are intended to prevent a third architectural rewrite:
 
@@ -858,7 +984,7 @@ The following invariants are intended to prevent a third architectural rewrite:
 
    If a Skill fails, the UI should be able to show the failing step, failure class, failure type, relevant evidence, and suggested repair direction.
 
-## 16. Migration Plan
+## 18. Migration Plan
 
 Phase 1: Add contract-first data models alongside existing RPA models.
 
@@ -876,7 +1002,7 @@ Phase 7: Export `skill.contract.json` and update `skill.py` generation to consum
 
 Phase 8: Gate old ReAct path behind compatibility mode and make contract-first the default RPA Agent path.
 
-## 17. Open Decisions
+## 19. Open Decisions
 
 Resolved:
 
