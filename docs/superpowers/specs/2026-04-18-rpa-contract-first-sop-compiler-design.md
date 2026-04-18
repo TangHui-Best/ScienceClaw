@@ -54,6 +54,67 @@ This design resets the architecture around a contract-first compiler pipeline.
 
    The system captures one filtered BaseSnapshot and derives in-memory views for planning, compilation, runtime AI, and validation. It must avoid repeatedly fetching the DOM unless the page state changes or the snapshot is stale.
 
+8. The exported Skill is already compiled.
+
+   `skill.py` is the runtime execution authority. `skill.contract.json` is the semantic/debug/regeneration authority. Normal Skill execution must not re-run the SOP Planner or Step Compiler.
+
+9. Runtime AI should decide, not click, by default.
+
+   Runtime AI should normally produce structured decisions or extracted values. Browser side effects after semantic decisions should be materialized by deterministic follow-up steps whenever practical.
+
+10. Architecture must resist heuristic creep.
+
+    Local rules may reject impossible contracts, validate evidence, normalize obvious syntax, or protect against unsafe actions. Local rules must not become a hidden semantic planner.
+
+## 2.1 Requirements Traceability
+
+The architecture is justified only if it satisfies these product requirements:
+
+| Requirement | Architectural response |
+| --- | --- |
+| Convert SOP into reusable Skill | StepContract + Artifact + Skill Builder |
+| Minimize runtime token cost | deterministic `skill.py` as default; runtime AI only for explicit nodes |
+| Support dynamic page data | deterministic scripts can read current DOM at runtime without LLM |
+| Support runtime semantic judgment | RuntimeAIArtifact with structured blackboard output |
+| Support cross-step dependencies | typed blackboard + `input_refs` |
+| Survive random DOM ids/classes | BaseSnapshot evidence + LocatorCompiler |
+| Avoid "recorded OK, replay broken" | Validator-gated commit + exported contract metadata |
+| Avoid repeated architectural rewrites | hard invariants, failure taxonomy, versioned schemas |
+
+If a future change improves one requirement by violating another, it must be treated as an architectural review item, not a local bug fix.
+
+## 2.2 Heavyweight Architecture Deviations
+
+These are red lines. If implementation starts drifting toward any of them, the team should stop and review the design before adding another patch.
+
+1. Runtime Skill execution becomes an agent loop.
+
+   A Skill may call runtime AI inside explicit RuntimeAIArtifact nodes, but normal execution must not ask a planner to rediscover the SOP.
+
+2. `description` becomes the primary input to compiler or validator.
+
+   Descriptions are for humans. Machine behavior must be driven by StepContract fields.
+
+3. Local keyword rules start choosing business semantics.
+
+   Local rules may enforce guardrails but must not decide that "most related" means keyword matching, or that a field should be extracted because a Chinese word appeared in a sentence.
+
+4. Failed attempts are committed as steps.
+
+   Only validated contracts and artifacts are committed. Failed attempts remain diagnostics.
+
+5. Runtime AI directly performs browser side effects when a decision-plus-deterministic-action split is possible.
+
+   This reintroduces selector instability and token-heavy runtime behavior.
+
+6. Snapshot views discard evidence needed by compiler or validator.
+
+   LLM-facing views may be compressed. Local evidence used for locator compilation and validation must remain structured and traceable.
+
+7. Skill export hard-codes runtime-selected entities without a fixed-entity contract.
+
+   Recorded URLs, selected repos, row values, and similar entities must flow through blackboard unless the contract explicitly declares them fixed.
+
 ## 3. Core Product Scope
 
 This is not an MVP. The core version must fully support these five product scenarios:
@@ -111,12 +172,42 @@ User SOP
 Responsibilities:
 
 - Understand the global SOP goal.
-- Propose one step contract at a time.
-- Choose `execution_strategy`.
-- Define input references, output contracts, validation policy, and runtime policy.
+- Propose one step contract at a time through a structured planner envelope.
+- Choose `execution_strategy` as part of the step operator.
+- Define input references, output contracts, validation policy, and runtime policy in separate fields.
 - Revise the same contract when given structured failure evidence.
 
 The Planner does not generate final Playwright scripts directly.
+
+Planner output envelope:
+
+```json
+{
+  "sop_context": {
+    "global_goal": "Open GitHub Trending, select the SKILL-related repo, collect PR records",
+    "final_outputs": ["pr_list"],
+    "known_constraints": ["output PR records as a strict array"]
+  },
+  "current_step": {
+    "intent": {},
+    "inputs": {},
+    "target": {},
+    "operator": {},
+    "outputs": {},
+    "validation": {}
+  },
+  "strategy_rationale": {
+    "execution_strategy": "deterministic_script",
+    "reason": "The task is deterministic extraction from repeated PR rows."
+  },
+  "dataflow_updates": {
+    "new_blackboard_keys": ["pr_list"],
+    "consumed_blackboard_keys": ["selected_project.url"]
+  }
+}
+```
+
+The envelope may be produced by one LLM call, but the fields must remain separate so failures can be routed precisely. For example, an invalid output schema is not the same problem as a wrong business intent.
 
 ### 4.2 Snapshot Service
 
@@ -184,20 +275,28 @@ Responsibilities:
 {
   "id": "step_2",
   "description": "Open the selected repository pull requests page",
-  "step_goal": "open_selected_repo_prs",
-  "operation": "navigate",
-  "execution_strategy": "primitive_action",
-  "page_scope": {
-    "type": "current_page"
+  "intent": {
+    "goal": "open_selected_repo_prs",
+    "business_object": "github_repository",
+    "user_visible_summary": "Open the PR page for the repository selected by the previous step"
   },
-  "input_refs": ["selected_project.url"],
-  "params": {
+  "inputs": {
+    "refs": ["selected_project.url"],
+    "params": {}
+  },
+  "target": {
+    "type": "url",
     "url_template": "{selected_project.url}/pulls"
   },
-  "selection_rule": null,
-  "locator_contract": null,
-  "output_contract": null,
-  "validation_policy": {
+  "operator": {
+    "type": "navigate",
+    "execution_strategy": "primitive_action"
+  },
+  "outputs": {
+    "blackboard_key": null,
+    "schema": null
+  },
+  "validation": {
     "must": [
       {"type": "url_contains", "value": "/pulls"}
     ]
@@ -221,6 +320,17 @@ Responsibilities:
 }
 ```
 
+Field ownership:
+
+- `intent`: business meaning and user-visible purpose.
+- `inputs`: blackboard references and runtime parameters required by this step.
+- `target`: the object, URL, collection, form field, row, card, or semantic scope this step operates on.
+- `operator`: the action family and execution strategy.
+- `outputs`: blackboard write contract.
+- `validation`: evidence required before commit.
+
+`operation` and `params` should not become catch-all fields. If a new behavior does not fit the six blocks above, it should trigger schema review instead of being stuffed into generic metadata.
+
 ### 5.1 Execution Strategy
 
 Allowed values:
@@ -233,7 +343,7 @@ Local hard guardrails:
 
 - `primitive_action` cannot carry ranking, batch extraction, aggregation, cross-element pairing, or multi-record collection.
 - `deterministic_script` cannot carry a contract that explicitly requires runtime semantic judgment.
-- `runtime_ai` must provide `runtime_ai_reason` and structured `output_contract`.
+- `runtime_ai` must provide `runtime_ai_reason` and structured `outputs`.
 
 The system does not implement a local strategy fallback engine. If the chosen strategy fails validation, structured failure evidence is returned to the Planner, which revises the same contract.
 
@@ -243,25 +353,66 @@ Runtime AI is allowed when correctness depends on runtime DOM plus semantic judg
 
 Runtime AI must output structured JSON to blackboard. Natural language may appear only as fields such as `reason`, `summary`, or `explanation`.
 
+Default RuntimeAI operators:
+
+- `semantic_select`
+- `semantic_extract`
+- `semantic_classify`
+- `semantic_summarize`
+
+RuntimeAI should not directly perform browser side effects by default. If the semantic result can be represented as structured data, the next browser operation should be a deterministic follow-up step.
+
+Preferred pattern:
+
+```text
+RuntimeAIArtifact: choose selected_project and write selected_project.url
+PrimitiveActionArtifact: navigate to {selected_project.url}
+DeterministicScriptArtifact: extract PR records from the selected project
+```
+
+Discouraged pattern:
+
+```text
+RuntimeAIArtifact: choose selected_project and click it inside the same runtime AI plan
+```
+
+Direct runtime AI side effects are allowed only when all are true:
+
+- the target cannot be represented as structured data for a deterministic follow-up;
+- the browser action itself depends on current semantic interpretation;
+- the contract explicitly sets `runtime_policy.allow_side_effect = true`;
+- the contract includes `runtime_policy.side_effect_reason`;
+- validation evidence proves the side effect happened.
+
 Example contract:
 
 ```json
 {
   "id": "step_1",
   "description": "Find the GitHub Trending repository most related to SKILL",
-  "step_goal": "select_skill_related_project",
-  "operation": "select",
-  "execution_strategy": "runtime_ai",
-  "page_scope": {
-    "type": "visible_collection",
-    "collection": "github_trending_repositories"
+  "intent": {
+    "goal": "select_skill_related_project",
+    "business_object": "github_repository"
   },
-  "selection_rule": {
-    "type": "semantic_relevance",
-    "query": "SKILL",
+  "inputs": {
+    "refs": [],
+    "params": {"query": "SKILL"}
+  },
+  "target": {
+    "type": "visible_collection",
+    "collection": "github_trending_repositories",
     "fields": ["repo_name", "description"]
   },
-  "output_contract": {
+  "operator": {
+    "type": "semantic_select",
+    "execution_strategy": "runtime_ai",
+    "selection_rule": {
+      "type": "semantic_relevance",
+      "query": "SKILL",
+      "fields": ["repo_name", "description"]
+    }
+  },
+  "outputs": {
     "blackboard_key": "selected_project",
     "schema": {
       "owner": "string",
@@ -273,9 +424,10 @@ Example contract:
   },
   "runtime_policy": {
     "requires_runtime_ai": true,
-    "runtime_ai_reason": "The selection depends on semantic relevance, not only exact text matching."
+    "runtime_ai_reason": "The selection depends on semantic relevance, not only exact text matching.",
+    "allow_side_effect": false
   },
-  "validation_policy": {
+  "validation": {
     "must": [
       {"type": "blackboard_key_exists", "ref": "selected_project.url"},
       {"type": "url_like", "ref": "selected_project.url"}
@@ -338,12 +490,22 @@ Example deterministic follow-up:
 ```json
 {
   "id": "step_2",
-  "step_goal": "open_selected_project_pulls",
-  "operation": "navigate",
-  "execution_strategy": "primitive_action",
-  "input_refs": ["selected_project.url"],
-  "params": {
+  "description": "Open the selected project pull requests page",
+  "intent": {
+    "goal": "open_selected_project_pulls",
+    "business_object": "github_repository"
+  },
+  "inputs": {
+    "refs": ["selected_project.url"],
+    "params": {}
+  },
+  "target": {
+    "type": "url",
     "url_template": "{selected_project.url}/pulls"
+  },
+  "operator": {
+    "type": "navigate",
+    "execution_strategy": "primitive_action"
   }
 }
 ```
@@ -360,6 +522,16 @@ await page.goto(f"{repo_url}/pulls", wait_until="domcontentloaded")
 ### 8.1 BaseSnapshot
 
 BaseSnapshot is captured once per page state and filtered at source.
+
+BaseSnapshot has two layers:
+
+1. `evidence`
+
+   Structured local evidence used by LocatorCompiler, ScriptCompiler, Validator, and debug tooling. This layer may be larger than the LLM-facing views and must preserve enough information to compile and validate reliably.
+
+2. `views`
+
+   Budgeted projections derived from evidence for specific consumers. These are optimized for LLM context control and human-readable diagnostics.
 
 It should include:
 
@@ -385,6 +557,30 @@ It should exclude or compress:
 - massive raw text blobs
 - unstable generated IDs when better semantic identifiers exist
 - repeated decorative nodes
+
+Evidence preservation requirements:
+
+- Preserve stable node identifiers inside the snapshot.
+- Preserve locator candidates, not only the selected locator.
+- Preserve href, role, accessible name, visible text excerpt, bbox, visibility, enabled state, and frame path.
+- Preserve repeated collection structure and sample items.
+- Preserve form label/control relationships.
+- Preserve enough ancestry to support scoped locators.
+
+View budget guidance:
+
+```json
+{
+  "overview_view": {"token_budget": 4000},
+  "action_view": {"max_nodes": 120},
+  "extraction_view": {"max_collections": 8, "max_items_per_collection": 25},
+  "semantic_view": {"token_budget": 8000},
+  "form_view": {"max_fields": 100},
+  "validation_view": {"max_evidence_items": 50}
+}
+```
+
+Budgets are not correctness rules. If a page exceeds a budget, the view must include truncation metadata so the Planner or Compiler can request a fresh or focused snapshot when needed.
 
 ### 8.2 SnapshotViews
 
@@ -448,7 +644,7 @@ Rules:
 - Use Python Playwright by default.
 - Avoid JavaScript and `page.evaluate` unless explicitly justified.
 - Prefer scoped locators over global selectors.
-- Return JSON-compatible output matching `output_contract`.
+- Return JSON-compatible output matching the contract `outputs.schema`.
 - Do not hard-code recorded entities unless the contract marks them fixed.
 - Do not use LLM at exported Skill runtime.
 
@@ -512,16 +708,30 @@ Every compile/execute/validate attempt produces an AttemptRecord.
   "compile_result": {},
   "execution_result": {},
   "validation_result": {},
-  "failure_evidence": {},
+  "failure_evidence": {
+    "failure_class": "artifact_failed",
+    "failure_type": "locator_ambiguous",
+    "stage": "executor",
+    "message": "The click locator matched multiple links.",
+    "details": {},
+    "repair_hint": "Use exact href or direct navigation."
+  },
   "next_action": "repair_artifact"
 }
 ```
 
-Failure taxonomy:
+Core failure classes:
 
-- `contract_bad`
-- `strategy_guardrail_violation`
+- `contract_invalid`
 - `snapshot_stale`
+- `artifact_failed`
+- `validation_failed`
+
+The orchestration loop routes by `failure_class`, not by dozens of fine-grained failure types.
+
+Fine-grained failure types:
+
+- `strategy_guardrail_violation`
 - `locator_not_found`
 - `locator_ambiguous`
 - `script_compile_error`
@@ -534,13 +744,10 @@ Failure taxonomy:
 
 Repair routing:
 
-- `contract_bad`: Planner revises contract.
-- `strategy_guardrail_violation`: Planner revises strategy in contract.
+- `contract_invalid`: Planner revises contract.
 - `snapshot_stale`: recapture BaseSnapshot.
-- `locator_not_found` or `locator_ambiguous`: LocatorCompiler repairs artifact.
-- `script_compile_error` or `script_runtime_error`: ScriptCompiler repairs artifact.
-- `runtime_ai_output_invalid`: RuntimeAI compiler/prompt repairs schema output.
-- `validation_failed`: Planner or Compiler repairs based on evidence.
+- `artifact_failed`: Compiler repairs artifact using failure evidence.
+- `validation_failed`: Validator provides evidence; Planner or Compiler repairs depending on whether the contract or artifact caused the mismatch.
 
 The second compiler attempt receives structured failure evidence, not only a natural-language error string.
 
@@ -554,6 +761,15 @@ skill.contract.json
 optional debug metadata
 ```
 
+Runtime authority:
+
+- `skill.py` is the execution authority.
+- `skill.contract.json` is the semantic, debug, regeneration, migration, and review authority.
+- Normal Skill execution must not invoke the SOP Planner.
+- Normal Skill execution must not invoke the Step Compiler.
+- RuntimeAIArtifact nodes may call the runtime semantic executor only for that node.
+- The runtime semantic executor must obey the node's structured output contract.
+
 Runtime behavior:
 
 - Primitive actions run directly.
@@ -563,6 +779,8 @@ Runtime behavior:
 - Validation can run in normal or debug mode.
 
 The generated `skill.py` should be driven by exported contract metadata where practical, rather than hand-expanded traces only.
+
+The exported `skill.py` must not rely on reinterpreting natural-language descriptions. If a value is required at runtime, it must come from runtime parameters, blackboard, compiled constants, or the current page.
 
 ## 14. GitHub Validation Scenarios
 
@@ -612,7 +830,35 @@ Expected design:
 - fill step consumes blackboard refs
 - validation checks field values or success state
 
-## 15. Migration Plan
+## 15. Architectural Invariants for Future Iterations
+
+The following invariants are intended to prevent a third architectural rewrite:
+
+1. New capabilities extend contracts before extending prompt behavior.
+
+   If a future scenario needs pagination, multi-tab handling, downloads, or human confirmation, the contract schema must gain or activate an explicit field before prompts start handling it implicitly.
+
+2. Every new execution behavior must declare its authority.
+
+   It must be clear whether behavior is decided by Planner, Compiler, RuntimeAIArtifact, Skill runtime parameters, or user intervention.
+
+3. Every machine-consumed value has a schema.
+
+   If later code reads it, it belongs in blackboard, runtime params, contract metadata, or validation evidence.
+
+4. Every repair loop has bounded ownership.
+
+   Planner repairs contracts. Compiler repairs artifacts. Snapshot Service refreshes stale observations. Validator reports evidence. No layer should repair another layer by guessing.
+
+5. Every exported Skill should be inspectable.
+
+   A user should be able to inspect the Skill and understand which steps are deterministic, which steps call runtime AI, what data flows between steps, and what validation evidence is expected.
+
+6. Debuggability is product behavior, not developer convenience.
+
+   If a Skill fails, the UI should be able to show the failing step, failure class, failure type, relevant evidence, and suggested repair direction.
+
+## 16. Migration Plan
 
 Phase 1: Add contract-first data models alongside existing RPA models.
 
@@ -630,7 +876,7 @@ Phase 7: Export `skill.contract.json` and update `skill.py` generation to consum
 
 Phase 8: Gate old ReAct path behind compatibility mode and make contract-first the default RPA Agent path.
 
-## 16. Open Decisions
+## 17. Open Decisions
 
 Resolved:
 
@@ -646,4 +892,3 @@ Still to decide before implementation:
 2. Whether `skill.contract.json` is mandatory for all exported Skills or only contract-first Skills.
 3. How much validation should run during normal exported Skill execution versus debug/test mode.
 4. Whether old recorded sessions should be migrated or only new sessions use contract-first pipeline.
-
