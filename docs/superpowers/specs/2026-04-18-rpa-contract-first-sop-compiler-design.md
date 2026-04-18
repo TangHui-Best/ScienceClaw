@@ -188,29 +188,82 @@ Architectural response:
 
 ## 4. System Architecture
 
-The pipeline is:
+The product architecture is a human-in-the-loop SOP compiler. Users and AI may alternate during recording:
+
+- users provide precise UI operations through manual browser actions;
+- users provide logic, data-processing, or semantic operations through natural language;
+- the system normalizes both sources into the same committed unit.
+
+The committed unit is always:
+
+```text
+StepContract + Artifact + ValidationEvidence
+```
+
+`source` describes where a step came from. `execution_strategy` describes how it will be replayed. They are different axes:
+
+```text
+source = manual | ai
+execution_strategy = primitive_action | deterministic_script | runtime_ai
+```
+
+Examples:
+
+- a manually clicked Pull Requests tab is `source=manual`, `execution_strategy=primitive_action`;
+- a natural-language "click Pull requests" attempt is `source=ai`, `execution_strategy=primitive_action`;
+- "find the project most related to SKILL" is `source=ai`, `execution_strategy=runtime_ai`;
+- "extract the first 10 PR titles and creators" is `source=ai`, `execution_strategy=deterministic_script`.
+
+The recording execution path is not a one-shot multi-step plan. It is a step-by-step Contract ReAct loop:
 
 ```text
 User SOP
--> BaseSnapshot capture
--> SOP Planner proposes StepContract
--> SnapshotView derivation
--> Step Compiler generates Artifact
--> Execution Sandbox executes candidate Artifact
--> Validator checks evidence
--> Committer stores only validated steps
+-> Recording Orchestrator
+-> while not done:
+     accept one input event:
+       - manual browser event
+       - natural-language user instruction
+     capture current BaseSnapshot if page state changed
+     if input is manual:
+       ManualEventAdapter proposes one primitive StepContract + Artifact
+     if input is natural language:
+       Planner proposes exactly one next StepContract from the current page state
+       Step Compiler generates one Artifact
+       Execution Sandbox executes the candidate Artifact
+     Validator checks evidence
+     Committer stores only the validated step
+     Blackboard updates
+     Snapshot is marked stale if page state changed
 -> Skill Builder exports skill.py + skill.contract.json
 ```
+
+One-shot `steps[]` planning is allowed only for offline analysis, UX previews, or diagnostics. It must not be the recording execution path because later steps often depend on DOM state and blackboard values produced by earlier validated steps.
+
+### 4.0 Recording Orchestrator
+
+Responsibilities:
+
+- Maintain the global SOP goal, committed steps, blackboard, failure evidence, and current page state.
+- Route manual browser events to ManualEventAdapter.
+- Route natural-language instructions to the one-step Planner loop.
+- Recapture BaseSnapshot after navigation, manual changes, DOM-changing artifacts, or stale-snapshot validation failures.
+- Bound retries by layer ownership: Planner repairs contracts, Compiler repairs artifacts, Snapshot Service refreshes stale state, Validator reports evidence.
+- Commit only validated steps, regardless of whether the source is manual or AI.
+- Decide whether a natural-language instruction is complete, needs another step, or should ask the user to perform a precise manual operation.
+
+The Orchestrator is the only component that may coordinate multiple steps. Planner, Compiler, Executor, and Validator each operate on one candidate step at a time.
 
 ### 4.1 SOP Planner
 
 Responsibilities:
 
 - Understand the global SOP goal.
-- Propose one step contract at a time through a structured planner envelope.
+- Propose exactly one next step contract through a structured planner envelope.
+- Use the current BaseSnapshot and blackboard state. It must not guess future DOM from pages that have not been opened yet.
 - Choose `execution_strategy` as part of the step operator.
 - Define input references, output contracts, validation policy, and runtime policy in separate fields.
 - Revise the same contract when given structured failure evidence.
+- Return `done` or `need_user` instead of inventing extra steps when the current instruction is already satisfied or a precise UI operation is better performed manually.
 
 The Planner does not generate final Playwright scripts directly.
 
@@ -223,6 +276,7 @@ Planner output envelope:
     "final_outputs": ["pr_list"],
     "known_constraints": ["output PR records as a strict array"]
   },
+  "status": "next_step",
   "current_step": {
     "intent": {},
     "inputs": {},
@@ -243,6 +297,26 @@ Planner output envelope:
 ```
 
 The envelope may be produced by one LLM call, but the fields must remain separate so failures can be routed precisely. For example, an invalid output schema is not the same problem as a wrong business intent.
+
+Allowed `status` values:
+
+- `next_step`: execute and validate `current_step`;
+- `done`: no more AI-generated steps are needed for the current natural-language instruction;
+- `need_user`: the next operation is precise UI targeting that exceeded bounded AI attempts or is safer as a manual action.
+
+The Planner may describe the full intended SOP in `sop_context`, but it must not output a future executable step that depends on a future page state.
+
+### 4.1.1 ManualEventAdapter
+
+Responsibilities:
+
+- Convert recorded browser events such as click, fill, select, press, and manual navigation into primitive StepContracts and Artifacts.
+- Preserve high-quality locator candidates from the existing recorder/codegen-style locator system.
+- Add validation policy from observable effects when possible, such as URL change, visible target, input value, modal state, or page change.
+- Mark `source=manual` on the StepContract metadata.
+- Avoid business-semantic interpretation. ManualEventAdapter records what the user did; it does not infer why beyond user-visible descriptions.
+
+Manual steps use the same Validator, Committer, Skill Builder, and replay path as AI-generated steps.
 
 ### 4.2 Snapshot Service
 
@@ -292,6 +366,8 @@ Responsibilities:
 - Return structured execution evidence.
 - Avoid committing anything directly.
 
+For manual steps, execution has already happened in the browser. The sandbox does not replay the action during recording; it records evidence from the observed post-action state and leaves replay to generated Skill testing. Validator still decides whether the manual event is committable.
+
 ### 4.5 Validator
 
 Responsibilities:
@@ -329,6 +405,7 @@ Responsibilities:
 ```json
 {
   "id": "step_2",
+  "source": "ai",
   "description": "Open the selected repository pull requests page",
   "intent": {
     "goal": "open_selected_repo_prs",
@@ -377,6 +454,7 @@ Responsibilities:
 
 Field ownership:
 
+- `source`: origin of the committed step, such as `manual` or `ai`. It is not an execution strategy.
 - `intent`: business meaning and user-visible purpose.
 - `inputs`: blackboard references and runtime parameters required by this step.
 - `target`: the object, URL, collection, form field, row, card, or semantic scope this step operates on.
@@ -401,6 +479,24 @@ Local hard guardrails:
 - `runtime_ai` must provide `runtime_ai_reason` and structured `outputs`.
 
 The system does not implement a local strategy fallback engine. If the chosen strategy fails validation, structured failure evidence is returned to the Planner, which revises the same contract.
+
+### 5.2 Source Semantics
+
+Allowed `source` values:
+
+- `manual`: the step came from a browser event performed by the user during recording.
+- `ai`: the step came from a natural-language instruction interpreted by the Contract Planner.
+
+`source` must not change Skill replay behavior by itself. Replay behavior is determined by `execution_strategy` and the compiled Artifact.
+
+Manual steps are encouraged for precise UI targeting because the user can disambiguate page intent better than an agent guessing selectors. However, the system must still support AI-generated primitive actions for users who describe precise operations in natural language.
+
+AI-generated precise UI actions are bounded:
+
+- Planner may propose `primitive_action` for direct navigation, click, fill, or extract operations.
+- Compiler must use LocatorCompiler and quality gates.
+- Executor and Validator may attempt a small bounded repair loop.
+- If the action remains ambiguous or fails validation, Orchestrator should return `need_user` and invite a manual operation instead of looping indefinitely.
 
 ## 6. RuntimeAIArtifact and Structured Output
 
@@ -819,6 +915,8 @@ Structural equivalence checks before replay:
 
 ReplayValidator runs after export and before declaring the Skill testable. It should catch missing refs, lost schemas, hard-coded selected entities, and regenerated behavior before browser replay begins when possible.
 
+Replay equivalence must not treat manual steps as a special export path. A `source=manual` step and a `source=ai` step are both exported through the same artifact-driven runtime model.
+
 ## 14. AttemptRecord and Failure Evidence
 
 Every compile/execute/validate attempt produces an AttemptRecord.
@@ -867,6 +965,8 @@ Fine-grained failure types:
 - `validation_failed`
 - `permission_or_login_required`
 - `user_intervention_required`
+- `blackboard_ref_missing`
+- `future_dom_assumption`
 
 Repair routing:
 
@@ -876,6 +976,12 @@ Repair routing:
 - `validation_failed`: Validator provides evidence; Planner or Compiler repairs depending on whether the contract or artifact caused the mismatch.
 
 The second compiler attempt receives structured failure evidence, not only a natural-language error string.
+
+Special handling:
+
+- `user_intervention_required`: Orchestrator should pause the AI loop and invite a manual browser action instead of continuing blind retries.
+- `blackboard_ref_missing`: treat as a contract/dataflow failure, not as a selector bug. Planner must repair the producing or consuming step schema.
+- `future_dom_assumption`: treat as a Planner failure. The fix is to replan from the current page state, not to patch the artifact.
 
 ## 15. Exported Skill Runtime
 
@@ -941,6 +1047,46 @@ Expected design:
 - open PR page: primitive_action using `{selected_project.url}/pulls`
 - collect PR records: deterministic_script
 
+Required recording loop behavior:
+
+- Step 1 is planned and executed from the blank page snapshot.
+- The system recaptures snapshot after GitHub Trending loads.
+- Step 2 is planned from the actual Trending snapshot, not from the initial blank page.
+- Runtime AI writes `selected_project` with a schema that includes `url`.
+- Step 3 consumes `selected_project.url`; it must not reference a key that the previous step did not write.
+- The system recaptures snapshot after the repository or PR page is opened.
+- Step 4 is planned from the actual PR page snapshot.
+
+Human-in-the-loop variant:
+
+```text
+AI: open GitHub Trending
+AI: find/open the SKILL-related project
+Manual: user clicks Pull requests
+AI: extract the first 10 PR records
+```
+
+Expected design for the manual step:
+
+- ManualEventAdapter converts the click into `source=manual`, `execution_strategy=primitive_action`.
+- Validator checks the post-click page state, such as URL containing `/pulls` or PR list visibility.
+- Skill export treats this as a normal committed primitive artifact.
+
+AI-only compatibility variant:
+
+```text
+AI: open GitHub Trending
+AI: find/open the SKILL-related project
+AI: open Pull requests
+AI: extract the first 10 PR records
+```
+
+Required bounded behavior:
+
+- The "open Pull requests" step may still be planned as `primitive_action`.
+- If bounded locator repair fails, Orchestrator returns `need_user` instead of repeatedly guessing selectors.
+- Exported replay still uses the validated primitive artifact if the AI-generated click succeeds.
+
 ### Scenario C: Cross-step extraction and fill
 
 User goal:
@@ -968,39 +1114,59 @@ The following invariants are intended to prevent a third architectural rewrite:
 
    It must be clear whether behavior is decided by Planner, Compiler, RuntimeAIArtifact, Skill runtime parameters, or user intervention.
 
-3. Every machine-consumed value has a schema.
+3. Recording execution is step-by-step, never future-DOM planning.
+
+   The recording path must not execute a one-shot `steps[]` plan generated from an initial snapshot. Each AI step is planned against the current page state after previous validated steps have updated the browser and blackboard.
+
+4. Source and strategy remain separate.
+
+   `source=manual|ai` describes how the step entered the recording. `execution_strategy` describes how the exported Skill replays it. New code must not mix these axes.
+
+5. Manual steps use the same commit contract.
+
+   Manual browser events are not second-class replay traces. They must become StepContract + Artifact + ValidationEvidence before export.
+
+6. Every machine-consumed value has a schema.
 
    If later code reads it, it belongs in blackboard, runtime params, contract metadata, or validation evidence.
 
-4. Every repair loop has bounded ownership.
+7. Every repair loop has bounded ownership.
 
    Planner repairs contracts. Compiler repairs artifacts. Snapshot Service refreshes stale observations. Validator reports evidence. No layer should repair another layer by guessing.
 
-5. Every exported Skill should be inspectable.
+8. Every exported Skill should be inspectable.
 
    A user should be able to inspect the Skill and understand which steps are deterministic, which steps call runtime AI, what data flows between steps, and what validation evidence is expected.
 
-6. Debuggability is product behavior, not developer convenience.
+9. Debuggability is product behavior, not developer convenience.
 
    If a Skill fails, the UI should be able to show the failing step, failure class, failure type, relevant evidence, and suggested repair direction.
 
+10. Precise UI targeting is encouraged to be manual, but never assumed.
+
+   Product UX should encourage users to perform precise clicks, drags, and focus-sensitive interactions manually during recording. Architecture must still support AI-generated primitive actions when users express those steps in natural language.
+
 ## 18. Migration Plan
 
-Phase 1: Add contract-first data models alongside existing RPA models.
+Phase 1: Stabilize StepContract, Artifact, blackboard, validator, and export schema as the committed unit.
 
 Phase 2: Implement BaseSnapshot and SnapshotView adapter over the existing snapshot code.
 
-Phase 3: Implement Planner output contract and disable local semantic step-type coercion in the new pipeline.
+Phase 3: Add Recording Orchestrator and replace one-shot multi-step recording execution with a one-step Contract ReAct loop.
 
-Phase 4: Implement Compiler for primitive_action and deterministic_script.
+Phase 4: Add ManualEventAdapter so recorded browser events are committed through the same contract pipeline as AI-generated steps.
 
-Phase 5: Implement RuntimeAIArtifact with mandatory structured blackboard output.
+Phase 5: Implement Planner envelope with `status = next_step | done | need_user`, and disable local semantic step-type coercion in the new pipeline.
 
-Phase 6: Implement Validator and AttemptRecord.
+Phase 6: Implement Compiler for primitive_action and deterministic_script, with bounded AI primitive retries and explicit `need_user` fallback.
 
-Phase 7: Export `skill.contract.json` and update `skill.py` generation to consume blackboard refs.
+Phase 7: Implement RuntimeAIArtifact with mandatory structured blackboard output and decision-first semantics.
 
-Phase 8: Gate old ReAct path behind compatibility mode and make contract-first the default RPA Agent path.
+Phase 8: Complete Validator, AttemptRecord, and failure routing for `blackboard_ref_missing`, `future_dom_assumption`, and `user_intervention_required`.
+
+Phase 9: Export `skill.contract.json` and update `skill.py` generation to consume blackboard refs and preserve manual/AI committed artifacts equally.
+
+Phase 10: Gate old ReAct path behind compatibility mode and make contract-first the default RPA Agent path.
 
 ## 19. Open Decisions
 
@@ -1011,6 +1177,10 @@ Resolved:
 - Strategy is planner-owned; local code only applies hard guardrails.
 - DOM uses one BaseSnapshot with in-memory views, not multiple browser DOM captures per step.
 - The core version fully implements five core scenarios, not an MVP subset.
+- Recording execution is step-by-step, not one-shot multi-step planning.
+- `source` and `execution_strategy` are separate dimensions.
+- Manual browser events and AI-generated steps share the same commit/export model.
+- Precise UI interactions are encouraged to be manual in UX, but AI primitive actions remain supported as a bounded compatibility path.
 
 Still to decide before implementation:
 
@@ -1018,3 +1188,4 @@ Still to decide before implementation:
 2. Whether `skill.contract.json` is mandatory for all exported Skills or only contract-first Skills.
 3. How much validation should run during normal exported Skill execution versus debug/test mode.
 4. Whether old recorded sessions should be migrated or only new sessions use contract-first pipeline.
+5. Whether some manual actions, such as drag-and-drop or canvas interactions, need dedicated artifact subtypes beyond current primitive actions.
