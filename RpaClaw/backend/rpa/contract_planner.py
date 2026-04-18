@@ -8,7 +8,7 @@ from .contract_models import StepContract
 
 
 CONTRACT_PLANNER_SYSTEM_PROMPT = """
-You are the RPA Contract Planner. Return exactly one StepContract JSON object.
+You are the RPA Contract Planner. Return a JSON object with a "steps" array of StepContract objects.
 
 Your job is to classify the next SOP step into exactly one execution_strategy:
 
@@ -38,7 +38,10 @@ Hard constraints:
 - Prefer deterministic_script over runtime_ai when the rule is fully codable.
 - Prefer runtime_ai over deterministic_script when the rule requires semantic understanding at execution time.
 
-Return JSON only. Do not wrap it in prose.
+Return JSON only. Prefer:
+{"steps": [StepContract, StepContract, ...]}
+For backward compatibility, a single StepContract object is also accepted.
+Do not wrap it in prose.
 """.strip()
 
 
@@ -72,6 +75,36 @@ async def plan_step_contract(
     return parse_step_contract_response(_extract_response_text(response))
 
 
+async def plan_sop_contracts(
+    goal: str,
+    snapshot_view: Dict[str, Any],
+    blackboard_values: Dict[str, Any],
+    model_config: Optional[Dict[str, Any]] = None,
+) -> list[StepContract]:
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    from backend.deepagent.engine import get_llm_model
+
+    model = get_llm_model(config=model_config, streaming=False)
+    response = await model.ainvoke(
+        [
+            SystemMessage(content=CONTRACT_PLANNER_SYSTEM_PROMPT),
+            HumanMessage(
+                content=json.dumps(
+                    {
+                        "goal": goal,
+                        "snapshot_view": snapshot_view,
+                        "blackboard": blackboard_values,
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                )
+            ),
+        ]
+    )
+    return parse_step_contracts_response(_extract_response_text(response))
+
+
 def parse_step_contract_response(response: Any) -> StepContract:
     if isinstance(response, StepContract):
         return response
@@ -81,6 +114,22 @@ def parse_step_contract_response(response: Any) -> StepContract:
         raise ValueError("planner response must be JSON text or dict")
     payload = _extract_json_object(response)
     return StepContract(**payload)
+
+
+def parse_step_contracts_response(response: Any) -> list[StepContract]:
+    if isinstance(response, StepContract):
+        return [response]
+    if isinstance(response, list):
+        return [parse_step_contract_response(item) for item in response]
+
+    payload = response
+    if isinstance(response, str):
+        payload = _extract_json_object(response)
+    if isinstance(payload, dict) and isinstance(payload.get("steps"), list):
+        return [parse_step_contract_response(item) for item in payload["steps"]]
+    if isinstance(payload, dict):
+        return [parse_step_contract_response(payload)]
+    raise ValueError("planner response must be a StepContract or steps array")
 
 
 def _extract_response_text(response: Any) -> str:

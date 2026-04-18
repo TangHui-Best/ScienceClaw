@@ -1,7 +1,11 @@
 import unittest
 
 from backend.rpa.contract_models import ExecutionStrategy
-from backend.rpa.contract_planner import CONTRACT_PLANNER_SYSTEM_PROMPT, parse_step_contract_response
+from backend.rpa.contract_planner import (
+    CONTRACT_PLANNER_SYSTEM_PROMPT,
+    parse_step_contract_response,
+    parse_step_contracts_response,
+)
 
 
 class ContractPlannerTests(unittest.TestCase):
@@ -51,6 +55,43 @@ class ContractPlannerTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             parse_step_contract_response(text)
+
+    def test_parses_multi_step_sop_contract_response(self):
+        response = {
+            "steps": [
+                {
+                    "id": "open",
+                    "description": "Open page",
+                    "intent": {"goal": "open"},
+                    "target": {"type": "url", "url_template": "https://example.com"},
+                    "operator": {"type": "navigate", "execution_strategy": "primitive_action"},
+                    "outputs": {"blackboard_key": None, "schema": None},
+                    "validation": {"must": []},
+                    "runtime_policy": {"requires_runtime_ai": False},
+                },
+                {
+                    "id": "extract",
+                    "description": "Extract list",
+                    "intent": {"goal": "extract"},
+                    "target": {"type": "visible_collection", "collection": "items"},
+                    "operator": {
+                        "type": "extract_repeated_records",
+                        "execution_strategy": "deterministic_script",
+                        "selection_rule": {
+                            "row_selector": ".row",
+                            "fields": {"title": {"selector": "a"}},
+                        },
+                    },
+                    "outputs": {"blackboard_key": "items", "schema": {"type": "array"}},
+                    "validation": {"must": []},
+                    "runtime_policy": {"requires_runtime_ai": False},
+                },
+            ]
+        }
+
+        contracts = parse_step_contracts_response(response)
+
+        self.assertEqual([contract.id for contract in contracts], ["open", "extract"])
 
 
 if __name__ == "__main__":

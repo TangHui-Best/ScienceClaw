@@ -76,6 +76,50 @@ class ContractAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[-1]["event"], "agent_aborted")
         self.assertIn("bad artifact", events[-1]["data"]["message"])
 
+    async def test_multi_step_planner_output_commits_all_steps(self):
+        contracts = [
+            _contract(),
+            StepContract(
+                id="step_2",
+                description="Open second page",
+                intent={"goal": "open_second"},
+                target={"type": "url", "url_template": "https://example.org"},
+                operator={"type": "navigate", "execution_strategy": ExecutionStrategy.PRIMITIVE_ACTION},
+                outputs={"blackboard_key": None, "schema": None},
+                validation={"must": []},
+                runtime_policy=RuntimePolicy(requires_runtime_ai=False),
+            ),
+        ]
+
+        async def executor(contract, artifact, page, board):
+            return ExecutionResult(success=True, evidence={"url": artifact["target_url_template"]})
+
+        agent = RPAContractAgent(
+            planner=lambda goal, snapshot, board: contracts,
+            compiler=lambda contract: {
+                "kind": ArtifactKind.PRIMITIVE_ACTION,
+                "action": "goto",
+                "target_url_template": contract.target.url_template,
+            },
+            executor=executor,
+            validator=lambda contract, artifact, result, board, snapshot: ValidationResult(passed=True),
+            snapshot_builder=lambda page: {"url": "about:blank", "title": ""},
+        )
+
+        events = [
+            event
+            async for event in agent.run(
+                session_id="s1",
+                page=object(),
+                goal="open two pages",
+                board=Blackboard(),
+            )
+        ]
+
+        committed_event = next(event for event in events if event["event"] == "agent_contract_committed_steps")
+        self.assertEqual(len(committed_event["data"]["contract_steps"]), 2)
+        self.assertEqual(len(committed_event["data"]["display_steps"]), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

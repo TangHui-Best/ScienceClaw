@@ -9,7 +9,7 @@ from .contract_compiler import ContractCompiler
 from .contract_executor import ContractExecutor
 from .contract_models import StepContract
 from .contract_pipeline import ContractPipeline
-from .contract_planner import plan_step_contract
+from .contract_planner import plan_sop_contracts
 from .contract_validator import validate_recording_step
 from .snapshot_views import build_base_snapshot_from_legacy
 
@@ -48,33 +48,36 @@ class RPAContractAgent:
         ).execute
         validator = self.validator or validate_recording_step
 
-        pipeline = ContractPipeline(
-            planner=planner,
-            compiler=compiler,
-            executor=executor,
-            validator=validator,
-        )
-
         yield {"event": "agent_message", "data": {"message": "Planning contract-first RPA step"}}
-        result = await pipeline.run_step(goal, page=page, snapshot=snapshot, board=board)
-        if not result.success or result.committed_step is None:
-            yield {
-                "event": "agent_aborted",
-                "data": {
-                    "message": result.message or "Contract-first RPA step failed",
-                    "failure_class": result.failure_class.value if result.failure_class else None,
-                    "failure_type": result.failure_type,
-                    "recapture_required": result.recapture_required,
-                },
-            }
-            return
+        planned = await _maybe_await(planner(goal, snapshot, board))
+        contracts = _normalize_planned_contracts(planned)
+        committed_steps = []
+        for contract in contracts:
+            pipeline = ContractPipeline(
+                planner=lambda _goal, _snapshot, _board, planned_contract=contract: planned_contract,
+                compiler=compiler,
+                executor=executor,
+                validator=validator,
+            )
+            result = await pipeline.run_step(goal, page=page, snapshot=snapshot, board=board)
+            if not result.success or result.committed_step is None:
+                yield {
+                    "event": "agent_aborted",
+                    "data": {
+                        "message": result.message or "Contract-first RPA step failed",
+                        "failure_class": result.failure_class.value if result.failure_class else None,
+                        "failure_type": result.failure_type,
+                        "recapture_required": result.recapture_required,
+                    },
+                }
+                return
+            committed_steps.append(result.committed_step)
 
-        committed = result.committed_step
         yield {
             "event": "agent_contract_committed_steps",
             "data": {
-                "contract_steps": [_committed_step_payload(committed)],
-                "display_steps": [_display_step_payload(committed)],
+                "contract_steps": [_committed_step_payload(step) for step in committed_steps],
+                "display_steps": [_display_step_payload(step) for step in committed_steps],
                 "blackboard": board.values,
             },
         }
@@ -82,7 +85,7 @@ class RPAContractAgent:
             "event": "agent_done",
             "data": {
                 "message": "Contract-first RPA step committed",
-                "step_count": 1,
+                "step_count": len(committed_steps),
             },
         }
 
@@ -97,8 +100,8 @@ class RPAContractAgent:
 
     @staticmethod
     def _default_planner(model_config: Optional[Dict[str, Any]]):
-        async def planner(goal: str, snapshot: Any, board: Blackboard) -> StepContract:
-            return await plan_step_contract(goal, snapshot, board.values, model_config=model_config)
+        async def planner(goal: str, snapshot: Any, board: Blackboard) -> list[StepContract]:
+            return await plan_sop_contracts(goal, snapshot, board.values, model_config=model_config)
 
         return planner
 
@@ -171,3 +174,11 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, list):
         return [_jsonable(item) for item in value]
     return value
+
+
+def _normalize_planned_contracts(planned: Any) -> list[StepContract]:
+    if isinstance(planned, StepContract):
+        return [planned]
+    if isinstance(planned, list) and all(isinstance(item, StepContract) for item in planned):
+        return planned
+    raise ValueError("contract planner must return StepContract or list[StepContract]")
