@@ -126,6 +126,7 @@ class Settings(BaseSettings):
 
     # Storage backend: "mongo" (cloud) or "local" (edge)
     storage_backend: str = os.environ.get("STORAGE_BACKEND", "mongo")
+    rpa_agent_mode: str = os.environ.get("RPA_AGENT_MODE", "contract")
 
     # ── RPA_CLAW_HOME: 统一根目录，子目录自动派生 ──
     # 本地后端使用 RPA_CLAW_HOME，沙箱内使用 SANDBOX_RPA_CLAW_HOME（默认 /home/rpaclaw）
