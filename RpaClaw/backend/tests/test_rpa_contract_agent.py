@@ -71,6 +71,7 @@ class ContractAgentTests(unittest.IsolatedAsyncioTestCase):
         step_done_event = next(event for event in events if event["event"] == "agent_step_done")
         self.assertEqual(committed_event["data"]["contract_steps"][0]["contract"]["id"], "step_1")
         self.assertEqual(committed_event["data"]["display_steps"][0]["action"], "contract_step")
+        self.assertIsInstance(committed_event["data"]["display_steps"][0]["event_timestamp_ms"], int)
         self.assertEqual(thought_event["data"]["contract_id"], "step_1")
         self.assertEqual(action_event["data"]["description"], "Open page")
         self.assertEqual(step_done_event["data"]["step_count"], 1)

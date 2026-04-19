@@ -282,11 +282,13 @@ def _committed_step_payload(committed_step) -> Dict[str, Any]:
 
 def _display_step_payload(committed_step) -> Dict[str, Any]:
     contract = committed_step.contract
+    event_timestamp_ms = _committed_step_event_timestamp_ms(committed_step)
     return {
         "action": "contract_step",
         "source": "ai",
         "description": contract.description or contract.intent.goal,
         "tag": contract.operator.execution_strategy.value,
+        "event_timestamp_ms": event_timestamp_ms,
         "assistant_diagnostics": {
             "contract_id": contract.id,
             "execution_strategy": contract.operator.execution_strategy.value,
@@ -304,6 +306,16 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, list):
         return [_jsonable(item) for item in value]
     return value
+
+
+def _committed_step_event_timestamp_ms(committed_step) -> int | None:
+    evidence = getattr(committed_step, "validation_evidence", {}) or {}
+    value = evidence.get("committed_at_ms") if isinstance(evidence, dict) else None
+    try:
+        timestamp_ms = int(value)
+    except Exception:
+        return None
+    return timestamp_ms if timestamp_ms >= 946684800000 else None
 
 
 def _merge_committed_step(committed_steps: list[Any], new_step: Any) -> list[Any]:

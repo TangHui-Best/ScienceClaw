@@ -92,31 +92,57 @@ class ContractCompiler:
                 link_selector = {link_selector!r}
                 url_prefix = {url_prefix!r}
                 rows = await page.locator(collection_selector).all()
+                if not rows:
+                    fallback_collection_selector = (
+                        "article.Box-row, .Box-row, div.js-issue-row, "
+                        "[id^='issue_'], [aria-label*='Issue'], [aria-label*='Pull request']"
+                    )
+                    rows = await page.locator(fallback_collection_selector).all()
                 best = None
                 best_value = None
 
                 for row in rows:
                     try:
-                        value_text = (await row.locator(value_selector).first.inner_text()).strip()
+                        try:
+                            value_text = (await row.locator(value_selector).first.inner_text()).strip()
+                        except Exception:
+                            value_text = ""
+                        href = ""
+                        title = ""
+                        try:
+                            link = row.locator(link_selector).first
+                            href = await link.get_attribute("href")
+                            title = (await link.inner_text()).strip()
+                        except Exception:
+                            href = ""
+                        if not href:
+                            try:
+                                fallback_link = row.locator('a[href*="/issues/"], a[href*="/pull/"]').first
+                                href = await fallback_link.get_attribute("href")
+                                title = (await fallback_link.inner_text()).strip() or title
+                            except Exception:
+                                href = ""
+                        if not value_text:
+                            value_text = " ".join(
+                                part for part in [href or "", await row.inner_text()] if part
+                            )
                         normalized = value_text.replace(",", "").strip().lower()
-                        match = re.search(r"\\d+(?:\\.\\d+)?", normalized)
+                        match = re.search(r"(\\d+(?:\\.\\d+)?)\\s*([km])?\\b", normalized)
                         if not match:
                             continue
-                        value = float(match.group(0))
-                        if "k" in normalized:
+                        value = float(match.group(1))
+                        unit = (match.group(2) or "").lower()
+                        if unit == "k":
                             value *= 1000
-                        elif "m" in normalized:
+                        elif unit == "m":
                             value *= 1000000
 
-                        link = row.locator(link_selector).first
-                        href = await link.get_attribute("href")
-                        title = (await link.inner_text()).strip()
                         if not href:
                             continue
                         url = href if href.startswith(("http://", "https://")) else f"{{url_prefix}}{{href}}"
                         if best_value is None or value > best_value:
                             best_value = value
-                            best = {{"url": url, "title": title, "score": value}}
+                            best = {{"name": title, "title": title, "url": url, "score": value}}
                     except Exception:
                         continue
 
@@ -135,7 +161,15 @@ class ContractCompiler:
         row_selector = rule.get("row_selector")
         fields = rule.get("fields")
         limit = int(rule.get("limit") or 50)
+        allow_empty = bool(rule.get("allow_empty") or rule.get("empty_allowed"))
         result_key = contract.outputs.blackboard_key
+        output_schema = contract.outputs.schema_value if isinstance(contract.outputs.schema_value, dict) else {}
+        item_schema = output_schema.get("items") if isinstance(output_schema.get("items"), dict) else {}
+        required_fields = [
+            str(field).strip()
+            for field in (item_schema.get("required") or [])
+            if str(field).strip()
+        ]
 
         if not row_selector or not isinstance(fields, dict) or not fields:
             raise ContractCompileError("extract_repeated_records requires row_selector and fields")
@@ -148,6 +182,8 @@ class ContractCompiler:
                 row_selector = {row_selector!r}
                 fields = {fields!r}
                 limit = {limit!r}
+                allow_empty = {allow_empty!r}
+                required_fields = {required_fields!r}
                 rows = await page.locator(row_selector).all()
                 records = []
 
@@ -168,8 +204,12 @@ class ContractCompiler:
                         else:
                             value = await locator.inner_text()
                         record[field_name] = (value or "").strip()
+                    if required_fields and any(not str(record.get(field) or "").strip() for field in required_fields):
+                        continue
                     records.append(record)
 
+                if not records and not allow_empty:
+                    raise RuntimeError("AI script returned an empty record array")
                 return records
             """
         ).strip()

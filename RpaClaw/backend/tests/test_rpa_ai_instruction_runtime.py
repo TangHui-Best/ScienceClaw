@@ -644,6 +644,67 @@ class RuntimeAIInstructionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(results["selected_python_project"]["name"], "openai/openai-agents-python")
 
+    async def test_execute_ai_instruction_replans_act_schema_code_plan_syntax_error_to_structured_navigation(self):
+        step = {
+            "action": "ai_instruction",
+            "prompt": "Open the project most related to Python on the current page",
+            "instruction_kind": "semantic_select_and_navigate",
+            "input_scope": {"mode": "current_page"},
+            "output_expectation": {
+                "mode": "act",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "url": {"type": "string"},
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["name", "url", "reason"],
+                },
+            },
+            "execution_hint": {"max_reasoning_steps": 10},
+            "result_key": "selected_python_project",
+        }
+        page = _FakePage()
+        results = {}
+        captured_steps = []
+
+        async def fake_plan_ai_instruction(_page, current_step, model_config=None):
+            captured_steps.append(current_step)
+            if len(captured_steps) == 1:
+                return {
+                    "plan_type": "code",
+                    "code": (
+                        "async def run(page, results):\n"
+                        "    selected = {'url': 'https://github.com/openai/openai-agents-python'\n"
+                        "    return {'success': True, 'output': selected}"
+                    ),
+                }
+            return {
+                "plan_type": "structured",
+                "actions": [
+                    {
+                        "action": "navigate",
+                        "target_url": "https://github.com/openai/openai-agents-python",
+                    }
+                ],
+            }
+
+        with patch(
+            "backend.rpa.runtime_ai_instruction.build_page_snapshot",
+            new=AsyncMock(return_value={"url": page.url, "title": "Example", "frames": []}),
+        ), patch(
+            "backend.rpa.runtime_ai_instruction.plan_ai_instruction",
+            new=AsyncMock(side_effect=fake_plan_ai_instruction),
+        ):
+            result = await execute_ai_instruction(page, step, results=results)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(page.goto_calls[0][0], "https://github.com/openai/openai-agents-python")
+        self.assertEqual(results["selected_python_project"]["url"], "https://github.com/openai/openai-agents-python")
+        self.assertEqual(len(captured_steps), 2)
+        self.assertIn("invalid Python syntax", captured_steps[1]["planning_feedback"])
+
     async def test_execute_ai_instruction_replans_when_act_mode_only_returns_decision_text(self):
         step = {
             "action": "ai_instruction",

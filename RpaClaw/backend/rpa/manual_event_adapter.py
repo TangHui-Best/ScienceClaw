@@ -11,7 +11,7 @@ def adapt_manual_event_to_committed_step(event: Dict[str, Any]) -> CommittedStep
     description = str(event.get("description") or action or "manual step").strip()
     step_id = str(event.get("id") or f"manual_{action or 'step'}")
 
-    if action == "navigate":
+    if action in {"navigate", "navigate_click", "navigate_press", "open_tab_click"}:
         url = str(event.get("url") or "").strip()
         contract = StepContract(
             id=step_id,
@@ -33,11 +33,12 @@ def adapt_manual_event_to_committed_step(event: Dict[str, Any]) -> CommittedStep
             "validation": contract.validation.must,
             "action": "goto",
             "target_url_template": url,
+            "recorded_action": action,
         }
         return CommittedStep(
             contract=contract,
             artifact=artifact,
-            validation_evidence={"source": "manual", "action": "navigate", "url": url},
+            validation_evidence={"source": "manual", "action": action, "url": url},
         )
 
     locator = _select_locator(event)

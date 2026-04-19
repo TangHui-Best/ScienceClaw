@@ -63,8 +63,14 @@ Hard constraints:
 - Do not invent operator names like extract_and_parse, parse_list, analyze_page, or select_best_item.
 - For operator.type="rank_collection_numeric_max", operator.selection_rule must include:
   collection_selector, value_selector, link_selector, and optional url_prefix.
+- rank_collection_numeric_max standard output is an object with required fields: name, url, score.
+  Use outputs.schema={{"type":"object","required":["name","url","score"]}} unless the user requests additional fields.
+  The compiler may also include title as a compatibility alias, but downstream refs should use .name and .url.
 - For operator.type="extract_repeated_records", operator.selection_rule must include:
   row_selector, fields, and optional limit. fields must be an object of explicit field selectors.
+- For extract_repeated_records, outputs.schema should be an array schema with items.required for required fields.
+- For visible record collection requests such as "first/top N items" or "输出严格为数组", include validation.must with
+  {{"type":"min_records","key":outputs.blackboard_key,"count":1}} unless the user explicitly says empty results are allowed.
 - Example fields shape:
   "fields": {{"title": {{"selector": "a[id^='issue_']"}}, "creator": {{"selector": "a[href*='author%3A']"}}, "url": {{"selector": "a[id^='issue_']", "attribute": "href"}}}}
 - deterministic_script steps must write structured data to outputs.blackboard_key.
@@ -75,6 +81,10 @@ Hard constraints:
 - Prefer deterministic_script over runtime_ai when the rule is fully codable.
 - Prefer runtime_ai over deterministic_script when the rule requires semantic understanding at execution time.
 - Do not plan future steps that depend on future pages. Plan only the next executable step from the current page state.
+- If the current page is already on the required stable subpage, for example /pulls or /issues after a manual click,
+  do not emit another navigation step before the extraction; extract from the current page.
+- If the goal says to open/click/navigate to the item selected by a previous deterministic_script result and that
+  result is already in blackboard, plan a primitive_action navigate step to that blackboard URL instead of stopping.
 - Use status=need_user when precise UI targeting is ambiguous and should be done manually instead of guessing more selectors.
 - Use status=done when the current natural-language instruction is already satisfied and no extra AI-generated step is needed.
 - For click steps, avoid broad text locators when the page may contain duplicate labels. Prefer role-based locators with an exact accessible name.

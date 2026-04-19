@@ -97,7 +97,16 @@ def session_contract_committed_steps(session: Any) -> List[CommittedStep]:
             committed_from_steps.append(committed)
             seen_contract_ids.add(contract_id)
             continue
-        if source == "record" and action in {"navigate", "click", "fill", "press", "extract_text"}:
+        if source == "record" and action in {
+            "navigate",
+            "navigate_click",
+            "navigate_press",
+            "open_tab_click",
+            "click",
+            "fill",
+            "press",
+            "extract_text",
+        }:
             committed_from_steps.append(adapt_manual_event_to_committed_step(step.model_dump()))
 
     if committed_from_steps:
@@ -228,8 +237,21 @@ def _collect_blackboard_url_refs(values: Dict[str, Any]) -> List[tuple[str, str]
         refs.append((".".join(path), normalized.rstrip("/")))
 
     visit(values, [])
-    refs.sort(key=lambda item: len(item[1]), reverse=True)
+    refs.sort(key=lambda item: (_url_ref_rank(item[0]), -len(item[1]), item[0]))
     return refs
+
+
+def _url_ref_rank(path: str) -> int:
+    terminal = str(path or "").rsplit(".", 1)[-1].strip().lower()
+    if terminal == "url":
+        return 0
+    if terminal in {"target_url", "repo_url", "href"}:
+        return 1
+    if terminal in {"path", "repo_path"}:
+        return 2
+    if terminal == "value":
+        return 10
+    return 5
 
 
 def _generalize_committed_step_url(

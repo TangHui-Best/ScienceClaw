@@ -115,6 +115,59 @@ class ContractValidatorTests(unittest.TestCase):
 
         self.assertTrue(result.passed)
 
+    def test_validation_accepts_live_planner_aliases(self):
+        contract = _contract(
+            ExecutionStrategy.RUNTIME_AI,
+            "runtime_semantic_select",
+            outputs={
+                "blackboard_key": "selected_project",
+                "schema": {"type": "object", "required": ["url"]},
+            },
+            validation={
+                "must": [
+                    {"type": "key_present", "key": "selected_project.url"},
+                    {"type": "url_matches", "pattern": "/pulls"},
+                ]
+            },
+            runtime_policy=RuntimePolicy(
+                requires_runtime_ai=True,
+                runtime_ai_reason="Semantic relevance is required",
+            ),
+        )
+
+        result = validate_recording_step(
+            contract,
+            {"kind": ArtifactKind.RUNTIME_AI, "output_schema": {"type": "object"}},
+            ExecutionResult(success=True, evidence={"url": "https://github.com/a/b/pulls"}),
+            Blackboard(values={"selected_project": {"url": "https://github.com/a/b"}}),
+            snapshot=None,
+        )
+
+        self.assertTrue(result.passed)
+
+    def test_validation_aliases_fail_when_not_satisfied(self):
+        contract = _contract(
+            ExecutionStrategy.PRIMITIVE_ACTION,
+            "navigate",
+            validation={
+                "must": [
+                    {"type": "key_present", "key": "selected_project.url"},
+                    {"type": "url_matches", "pattern": "/pulls"},
+                ]
+            },
+        )
+
+        result = validate_recording_step(
+            contract,
+            {"kind": ArtifactKind.PRIMITIVE_ACTION, "action": "goto"},
+            ExecutionResult(success=True, evidence={"url": "https://github.com/a/b"}),
+            Blackboard(values={"selected_project": {}}),
+            snapshot=None,
+        )
+
+        self.assertFalse(result.passed)
+        self.assertIn(result.failure_type, {"key_present", "url_matches"})
+
     def test_replay_validation_catches_missing_input_refs(self):
         contract = _contract(
             ExecutionStrategy.PRIMITIVE_ACTION,

@@ -48,6 +48,7 @@ Rules:
 - Never import or use requests, httpx, urllib, fetch, or any external HTTP client. Work only with the current page, its DOM, and Playwright APIs.
 - For code plans in act mode, return a dict from run(page, results) that includes either a non-empty output or action_performed=true.
 - For semantic selection tasks in act mode, do not stop at returning only a chosen identifier/path. Prefer a real click/navigate plan. If you must return the selected target, use target_url/url/href/path/repo_path so runtime can execute it.
+- For act mode semantic selection/navigation steps, prefer a structured navigate plan after you decide the target from the snapshot. Do not generate Python code just to click or navigate to the selected target.
 - When opening a selected page or repository with a structured plan, prefer {"action":"navigate","url":"https://..."} over clicking a broad selector. Runtime also accepts target_url/href/path/repo_path aliases.
 - If you must click a link by href, use an exact href selector such as a[href="/owner/repo"]. Do not use broad contains selectors such as a[href*="owner/repo"], because they can also match stargazers, forks, comments, or subpage links.
 - If planning_feedback is present, treat it as a validation failure from the previous attempt and return a corrected replacement plan instead of repeating the same mistake.
@@ -390,14 +391,16 @@ def _is_retryable_execution_error(error: str) -> bool:
     lowered = normalized.lower()
     return (
         "disallowed code token" in lowered
-        or
-        "SyntaxError" in normalized
+        or "SyntaxError" in normalized
         or "syntaxerror" in lowered
         or "invalid syntax" in lowered
         or "Invalid or unexpected token" in normalized
         or "strict mode violation" in normalized
+        or "unmatched" in lowered
         or "EOF in multi-line string" in normalized
+        or "eof in multi-line" in lowered
         or "unterminated string" in lowered
+        or "was never closed" in lowered
         or "tokenerror" in lowered
         or "expression cannot contain assignment" in lowered
         or 'perhaps you meant "=="' in lowered

@@ -48,18 +48,20 @@ def validate_recording_step(
             if isinstance(value, str) and value.strip().lower() in _GENERIC_CHROME_TEXT:
                 return _fail("not_generic_chrome_text", "Extracted text is generic page chrome.")
 
-        elif rule_type == "url_contains":
+        elif rule_type in {"url_contains", "url_matches"}:
             expected = str(rule.get("value") or "")
+            if not expected:
+                expected = str(rule.get("pattern") or "")
             observed_url = _observed_url(execution_result, snapshot)
             if expected and expected not in observed_url:
-                return _fail("url_contains", f"Observed URL does not contain {expected!r}.")
+                return _fail(rule_type, f"Observed URL does not contain {expected!r}.")
 
-        elif rule_type == "blackboard_key":
+        elif rule_type in {"blackboard_key", "key_present"}:
             key = str(rule.get("key") or contract.outputs.blackboard_key or "")
             try:
                 blackboard.resolve_ref(key)
             except KeyError:
-                return _fail("blackboard_key", f"Missing blackboard key: {key}")
+                return _fail(rule_type, f"Missing blackboard key: {key}")
 
     return ValidationResult(
         passed=True,

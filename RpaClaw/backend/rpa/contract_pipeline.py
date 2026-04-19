@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
@@ -145,7 +146,10 @@ class ContractPipeline:
         committed = CommittedStep(
             contract=contract,
             artifact=artifact,
-            validation_evidence=dict(validation_result.evidence),
+            validation_evidence={
+                **dict(validation_result.evidence),
+                "committed_at_ms": int(time.time() * 1000),
+            },
         )
         self.committed_steps.append(committed)
         attempt = AttemptRecord(

@@ -507,6 +507,131 @@ class ContractRecorderIntegrationTests(unittest.TestCase):
         )
         self.assertLess(navigate_index, extract_index)
 
+    def test_build_contract_skill_preserves_manual_navigation_click_before_later_extract(self):
+        select_contract = StepContract(
+            id="select_python_related_project",
+            source="ai",
+            description="Open Python-related project",
+            intent={"goal": "open_python_project"},
+            target={"type": "page"},
+            operator={"type": "semantic_select", "execution_strategy": ExecutionStrategy.RUNTIME_AI},
+            outputs={
+                "blackboard_key": "selected_python_project",
+                "schema": {"type": "object", "required": ["url"]},
+            },
+            validation={"must": [{"type": "blackboard_key", "key": "selected_python_project.url"}]},
+            runtime_policy=RuntimePolicy(
+                requires_runtime_ai=True,
+                runtime_ai_reason="semantic relevance",
+                allow_side_effect=True,
+                side_effect_reason="open selected project",
+            ),
+        )
+        extract_contract = StepContract(
+            id="extract_top10_prs",
+            source="ai",
+            description="Collect the first 10 PRs",
+            intent={"goal": "extract_prs"},
+            target={"type": "page"},
+            operator={
+                "type": "extract_repeated_records",
+                "execution_strategy": ExecutionStrategy.DETERMINISTIC_SCRIPT,
+                "selection_rule": {
+                    "row_selector": ".js-issue-row",
+                    "fields": {
+                        "title": {"selector": "a.Link--primary"},
+                        "creator": {"selector": "a[data-hovercard-type='user']"},
+                    },
+                },
+            },
+            outputs={"blackboard_key": "top10_prs", "schema": {"type": "array"}},
+            validation={"must": [{"type": "min_records", "count": 1}]},
+            runtime_policy=RuntimePolicy(requires_runtime_ai=False),
+        )
+        selected_url = "https://github.com/openai/openai-agents-python"
+        base_time = datetime(2026, 1, 1)
+        session = RPASession(
+            id="s1",
+            user_id="u1",
+            sandbox_session_id="sandbox",
+            steps=[
+                RPAStep(
+                    id="display-select",
+                    action="contract_step",
+                    source="ai",
+                    description="Open Python-related project",
+                    event_timestamp_ms=int(base_time.timestamp() * 1000),
+                    assistant_diagnostics={"contract_id": "select_python_related_project"},
+                ),
+                RPAStep(
+                    id="manual-pulls",
+                    action="navigate_click",
+                    source="record",
+                    description="Click Pull requests and navigate",
+                    url=f"{selected_url}/pulls?q=is%3Apr",
+                    event_timestamp_ms=int((base_time + timedelta(seconds=1)).timestamp() * 1000),
+                    locator_candidates=[
+                        {
+                            "selected": True,
+                            "locator": {"method": "role", "role": "link", "name": "Pull requests", "exact": False},
+                        }
+                    ],
+                    validation={"url_contains": "/pulls"},
+                ),
+                RPAStep(
+                    id="display-extract",
+                    action="contract_step",
+                    source="ai",
+                    description="Collect the first 10 PRs",
+                    event_timestamp_ms=int((base_time + timedelta(seconds=2)).timestamp() * 1000),
+                    assistant_diagnostics={"contract_id": "extract_top10_prs"},
+                ),
+            ],
+            contract_steps=[
+                {
+                    "contract": select_contract.model_dump(by_alias=True),
+                    "artifact": {
+                        "kind": ArtifactKind.RUNTIME_AI,
+                        "prompt": "open selected project",
+                        "output_mode": "act",
+                        "allow_side_effect": True,
+                        "output_schema": {"type": "object", "required": ["url"]},
+                        "result_key": "selected_python_project",
+                    },
+                    "validation_evidence": {},
+                },
+                {
+                    "contract": extract_contract.model_dump(by_alias=True),
+                    "artifact": {
+                        "kind": ArtifactKind.DETERMINISTIC_SCRIPT,
+                        "result_key": "top10_prs",
+                        "code": "async def run(page, board):\n    return []",
+                    },
+                    "validation_evidence": {},
+                },
+            ],
+            contract_blackboard={
+                "selected_python_project": {
+                    "value": selected_url,
+                    "url": selected_url,
+                    "name": "openai/openai-agents-python",
+                }
+            },
+        )
+
+        committed = session_contract_committed_steps(session)
+        files = build_contract_skill_files_from_session(session, "skill", "desc")
+
+        self.assertEqual(
+            [step.contract.id for step in committed],
+            ["select_python_related_project", "manual-pulls", "extract_top10_prs"],
+        )
+        navigate_index = files["skill.py"].index("resolve_template('{selected_python_project.url}/pulls")
+        extract_index = files["skill.py"].index("board.write('top10_prs', _result)")
+        self.assertLess(navigate_index, extract_index)
+        self.assertNotIn("selected_python_project.value", files["skill.py"])
+        self.assertNotIn(f"{selected_url}/pulls", files["skill.py"])
+
     def test_build_contract_skill_generalizes_exact_selected_project_navigation(self):
         navigate_contract = StepContract(
             id="navigate_python_project",

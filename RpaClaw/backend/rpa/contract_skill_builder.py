@@ -286,12 +286,12 @@ def _validate_contract_output(step_id, rules, board, output_key, step_output, pa
             value = _validation_value(rule.get("key") or output_key, board, step_output)
             if isinstance(value, str) and value.strip().lower() in {"navigation menu", "skip to content", "menu", "search"}:
                 raise RuntimeError(f"Contract validation failed for {step_id}: extracted generic page chrome text")
-        elif rule_type == "url_contains":
-            expected = str(rule.get("value") or "")
+        elif rule_type in {"url_contains", "url_matches"}:
+            expected = str(rule.get("value") or rule.get("pattern") or "")
             observed_url = str(getattr(page, "url", "") or "")
             if expected and expected not in observed_url:
                 raise RuntimeError(f"Contract validation failed for {step_id}: URL does not contain {expected!r}")
-        elif rule_type == "blackboard_key":
+        elif rule_type in {"blackboard_key", "key_present"}:
             key = str(rule.get("key") or "").strip()
             if key:
                 board.resolve_ref(key)

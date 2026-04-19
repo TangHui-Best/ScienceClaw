@@ -27,6 +27,12 @@ class ContractPlannerTests(unittest.TestCase):
         self.assertIn("do not emit another step that only rewrites the same outputs.blackboard_key", CONTRACT_PLANNER_SYSTEM_PROMPT)
         self.assertIn("Prefer role-based locators with an exact accessible name", CONTRACT_PLANNER_SYSTEM_PROMPT)
         self.assertIn("outputs.schema must be a real JSON schema", CONTRACT_PLANNER_SYSTEM_PROMPT)
+        self.assertIn("validation.must", CONTRACT_PLANNER_SYSTEM_PROMPT)
+        self.assertIn("min_records", CONTRACT_PLANNER_SYSTEM_PROMPT)
+        self.assertIn("current page is already on the required stable subpage", CONTRACT_PLANNER_SYSTEM_PROMPT)
+        self.assertIn("rank_collection_numeric_max standard output", CONTRACT_PLANNER_SYSTEM_PROMPT)
+        self.assertIn("required fields: name, url, score", CONTRACT_PLANNER_SYSTEM_PROMPT)
+        self.assertIn("plan a primitive_action navigate step to that blackboard URL", CONTRACT_PLANNER_SYSTEM_PROMPT)
 
     def test_parses_fenced_json_step_contract(self):
         text = """
