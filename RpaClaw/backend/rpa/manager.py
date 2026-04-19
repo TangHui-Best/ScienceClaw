@@ -1151,7 +1151,7 @@ class RPASessionManager:
         step = RPAStep(id=str(uuid.uuid4()), **step_data)
         insert_at = len(session.steps)
         for index, existing_step in enumerate(session.steps):
-            if existing_step.source != step.source:
+            if not self._should_compare_step_order(step, existing_step):
                 continue
             if self._step_sorts_before(step, existing_step):
                 insert_at = index
@@ -1219,6 +1219,19 @@ class RPASessionManager:
             return incoming_sequence < existing_sequence
 
         return False
+
+    @staticmethod
+    def _should_compare_step_order(incoming_step: RPAStep, existing_step: RPAStep) -> bool:
+        if incoming_step.source == existing_step.source:
+            return True
+        # Browser events can arrive after a natural-language turn has already appended
+        # display steps. Use their browser event timestamp to restore the actual SOP
+        # timeline across manual and AI steps.
+        return (
+            incoming_step.source == "record"
+            and incoming_step.event_timestamp_ms is not None
+            and incoming_step.event_timestamp_ms >= 946684800000
+        )
 
     @staticmethod
     def _is_same_fill_target(existing_step: Optional[RPAStep], incoming_step: RPAStep) -> bool:

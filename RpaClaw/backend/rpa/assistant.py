@@ -531,6 +531,8 @@ def _structured_step_requires_ai_script(
     action = str(structured_intent.get("action") or "").strip().lower()
     if action not in {"click", "navigate"}:
         return False
+    if structured_intent.get("collection_hint") or structured_intent.get("ordinal"):
+        return False
 
     payload = " ".join(
         part for part in (
@@ -581,7 +583,11 @@ def _structured_step_requires_ai_script(
         return False
     if not any(pattern in payload for pattern in selection_target_patterns):
         return False
-    if _is_structured_runtime_ai_setup_step(structured_intent):
+    # A deterministic "find best/top/latest item and open it" step should not be
+    # accepted as a one-off click just because the current snapshot contains a
+    # concrete link name. That would hard-code the recording-time winner. Keep
+    # the setup exemption only for direct navigation to a known URL.
+    if action == "navigate" and _is_structured_runtime_ai_setup_step(structured_intent):
         return False
     return True
 
@@ -658,8 +664,8 @@ def _is_semantic_summary_step(step: Dict[str, Any]) -> bool:
         return False
     action = str(step.get("action") or "").strip().lower()
     instruction_kind = str(step.get("instruction_kind") or "").strip().lower()
-    if action == "ai_instruction" and instruction_kind in {"semantic_extract", "semantic_decision"}:
-        return True
+    if action == "ai_instruction":
+        return instruction_kind == "semantic_extract"
     return any(pattern in blob for pattern in REACT_RUNTIME_SEMANTIC_UNDERSTANDING_PATTERNS)
 
 
@@ -2782,10 +2788,10 @@ class RPAReActAgent:
             committed_output = ""
             abort_reason = ""
             last_failure_kind = self._candidate_kind(
-                active_candidate["ai_script_plan"],
-                active_candidate["structured_intent"],
-                active_candidate["ai_instruction_step"],
-                active_candidate["code"],
+                active_candidate.get("ai_script_plan"),
+                active_candidate.get("structured_intent"),
+                active_candidate.get("ai_instruction_step"),
+                active_candidate.get("code", ""),
             )
             repair_attempted = generation_repair_attempted
 
@@ -2803,14 +2809,14 @@ class RPAReActAgent:
                     return
                 before_observation = await _capture_page_observation(current_page)
 
-                active_structured_intent = active_candidate["structured_intent"]
-                active_ai_script_plan = active_candidate["ai_script_plan"]
-                active_ai_instruction_step = active_candidate["ai_instruction_step"]
-                active_code = active_candidate["code"]
-                active_description = active_candidate["description"]
-                active_parsed = active_candidate["parsed"]
+                active_structured_intent = active_candidate.get("structured_intent")
+                active_ai_script_plan = active_candidate.get("ai_script_plan")
+                active_ai_instruction_step = active_candidate.get("ai_instruction_step")
+                active_code = active_candidate.get("code", "")
+                active_description = active_candidate.get("description", "")
+                active_parsed = active_candidate.get("parsed", {})
                 last_failure_kind = self._candidate_kind(
-                    active_candidate["ai_script_plan"],
+                    active_ai_script_plan,
                     active_structured_intent,
                     active_ai_instruction_step,
                     active_code,
@@ -2900,7 +2906,7 @@ class RPAReActAgent:
                     {
                         "status": "failed_attempt",
                         "kind": self._candidate_kind(
-                            active_candidate["ai_script_plan"],
+                            active_ai_script_plan,
                             active_structured_intent,
                             active_ai_instruction_step,
                             active_code,
@@ -2962,11 +2968,11 @@ class RPAReActAgent:
                 return
 
             steps_done += 1
-            current_structured_signature = _structured_intent_signature(
-                committed_step_data if committed_step_data.get("action") in {"navigate", "click", "fill", "extract_text", "press"} else None
-            )
-            if not current_structured_signature and structured_intent:
-                current_structured_signature = _structured_intent_signature(structured_intent)
+            current_structured_signature = _structured_intent_signature(structured_intent)
+            if not current_structured_signature:
+                current_structured_signature = _structured_intent_signature(
+                    committed_step_data if committed_step_data.get("action") in {"navigate", "click", "fill", "extract_text", "press"} else None
+                )
             if current_structured_signature:
                 stall_score = 1
                 last_structured_signature = current_structured_signature
@@ -3418,7 +3424,7 @@ class RPAAssistant:
         execution_results: Optional[Dict[str, Any]] = None,
     ) -> tuple[Dict[str, Any], Optional[str], Optional[Dict[str, Any]]]:
         execution_results = execution_results if isinstance(execution_results, dict) else {}
-        parsed_response = self._parse_json(full_response) or {}
+        parsed_response = RPAReActAgent._parse_json(full_response) or {}
         ai_instruction = self._extract_ai_instruction(full_response)
         if ai_instruction:
             from backend.rpa.runtime_ai_instruction import execute_ai_instruction

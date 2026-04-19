@@ -5,7 +5,7 @@ import unittest
 import json
 from types import SimpleNamespace
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
@@ -1327,6 +1327,45 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.session.steps), 2)
         self.assertEqual([step.source for step in self.session.steps], ["ai", "record"])
         self.assertEqual([step.value for step in self.session.steps], ["assistant", "user"])
+
+    async def test_late_record_event_is_inserted_between_ai_steps_by_event_time(self):
+        await self.manager.add_step(
+            self.session.id,
+            {
+                "action": "contract_step",
+                "source": "ai",
+                "description": "Select project",
+                "timestamp": datetime(2026, 1, 1),
+                "assistant_diagnostics": {"contract_id": "select_project"},
+            },
+        )
+        await self.manager.add_step(
+            self.session.id,
+            {
+                "action": "contract_step",
+                "source": "ai",
+                "description": "Extract PRs",
+                "timestamp": datetime(2026, 1, 1) + timedelta(seconds=2),
+                "assistant_diagnostics": {"contract_id": "extract_prs"},
+            },
+        )
+
+        await self.manager.add_step(
+            self.session.id,
+            {
+                "action": "navigate",
+                "source": "record",
+                "description": "Navigate to Pull requests",
+                "url": "https://github.com/openai/openai-agents-python/pulls?q=is%3Apr",
+                "timestamp": datetime(2026, 1, 1) + timedelta(seconds=3),
+                "event_timestamp_ms": int((datetime(2026, 1, 1) + timedelta(seconds=1)).timestamp() * 1000),
+            },
+        )
+
+        self.assertEqual(
+            [step.description for step in self.session.steps],
+            ["Select project", "Navigate to Pull requests", "Extract PRs"],
+        )
 
     async def test_register_context_page_attaches_popup_signal_to_recent_click(self):
         source_page = _FakePage("https://example.com", "Example")

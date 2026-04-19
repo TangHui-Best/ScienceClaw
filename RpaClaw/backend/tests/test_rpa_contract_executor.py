@@ -39,6 +39,7 @@ class ContractExecutorTests(unittest.IsolatedAsyncioTestCase):
             ExecutionStrategy.PRIMITIVE_ACTION,
             "navigate",
             target={"type": "url", "url_template": "{selected_project.url}/pulls"},
+            inputs={"refs": ["selected_project.url"]},
         )
         artifact = {
             "kind": ArtifactKind.PRIMITIVE_ACTION,
@@ -57,6 +58,14 @@ class ContractExecutorTests(unittest.IsolatedAsyncioTestCase):
         contract = _contract(
             ExecutionStrategy.DETERMINISTIC_SCRIPT,
             "extract_repeated_records",
+            operator={
+                "type": "extract_repeated_records",
+                "execution_strategy": ExecutionStrategy.DETERMINISTIC_SCRIPT,
+                "selection_rule": {
+                    "row_selector": ".js-issue-row",
+                    "fields": {"title": {"selector": "a[id^='issue_']"}},
+                },
+            },
             outputs={"blackboard_key": "pr_list", "schema": {"type": "array"}},
         )
         artifact = {
@@ -103,6 +112,44 @@ class ContractExecutorTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result.success)
         self.assertEqual(board.resolve_ref("selected_project.reason"), "semantic match")
+
+    async def test_runtime_ai_prefers_blackboard_value_when_return_value_is_only_text(self):
+        async def fake_runtime_ai(page, contract, artifact, board):
+            board.write(
+                "selected_project",
+                {"url": "https://github.com/a/b", "reason": "semantic match"},
+            )
+            return "semantic match"
+
+        board = Blackboard()
+        contract = _contract(
+            ExecutionStrategy.RUNTIME_AI,
+            "runtime_semantic_select",
+            outputs={
+                "blackboard_key": "selected_project",
+                "schema": {"type": "object", "required": ["url", "reason"]},
+            },
+            runtime_policy=RuntimePolicy(
+                requires_runtime_ai=True,
+                runtime_ai_reason="Semantic relevance is required",
+            ),
+        )
+        artifact = {
+            "kind": ArtifactKind.RUNTIME_AI,
+            "result_key": "selected_project",
+            "output_schema": {"type": "object", "required": ["url", "reason"]},
+            "allow_side_effect": False,
+        }
+
+        result = await ContractExecutor(runtime_ai_executor=fake_runtime_ai).execute(
+            contract,
+            artifact,
+            FakePage(),
+            board,
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.output["url"], "https://github.com/a/b")
 
     async def test_runtime_ai_direct_side_effect_is_rejected_unless_allowed(self):
         async def fake_runtime_ai(page, contract, artifact, board):

@@ -30,6 +30,7 @@ class PlaywrightGeneratorTests(unittest.TestCase):
 
         script = generator.generate_script(steps, is_local=True)
 
+        self.assertIn("from backend.rpa.runtime_ai_instruction import execute_ai_instruction", script)
         self.assertIn("execute_ai_instruction(", script)
         self.assertIn('"action": "ai_instruction"', script)
         self.assertIn("Fill table B from table A by matching rows on name, then submit", script)

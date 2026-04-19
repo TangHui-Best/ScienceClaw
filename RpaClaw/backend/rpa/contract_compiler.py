@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from textwrap import dedent
 from typing import Any, Dict
 
@@ -181,9 +182,11 @@ class ContractCompiler:
         artifact = self._base_artifact(contract, ArtifactKind.RUNTIME_AI)
         artifact.update(
             {
-                "prompt": contract.description or contract.intent.goal,
+                "prompt": _build_runtime_ai_prompt(contract),
+                "global_goal": contract.intent.goal,
                 "instruction_kind": contract.operator.type,
-                "input_scope": {"mode": contract.target.type, "collection": contract.target.collection},
+                "input_scope": _build_runtime_input_scope(contract),
+                "output_mode": "act" if contract.runtime_policy.allow_side_effect else "extract",
                 "output_schema": contract.outputs.schema_value,
                 "result_key": contract.outputs.blackboard_key,
                 "allow_side_effect": contract.runtime_policy.allow_side_effect,
@@ -191,3 +194,48 @@ class ContractCompiler:
             }
         )
         return artifact
+
+
+def _build_runtime_ai_prompt(contract: StepContract) -> str:
+    local_description = (contract.description or "").strip()
+    blackboard_key = contract.outputs.blackboard_key or "result"
+    schema = contract.outputs.schema_value
+    schema_hint = ""
+    if isinstance(schema, dict):
+        properties = schema.get("properties")
+        if isinstance(properties, dict) and properties:
+            schema_hint = f"Return JSON fields: {', '.join(properties.keys())}."
+        else:
+            schema_hint = f"Return JSON matching schema: {json.dumps(schema, ensure_ascii=False)}."
+    target_hint = ""
+    if contract.target.type == "blackboard_ref" and contract.inputs.refs:
+        target_hint = f"Work only with blackboard refs: {', '.join(contract.inputs.refs)}."
+    elif contract.target.collection:
+        target_hint = f"Work only with the current visible collection '{contract.target.collection}'."
+    elif contract.target.type:
+        target_hint = f"Work only with the current {contract.target.type}."
+    base_prompt = (contract.intent.goal or local_description or "Complete the current semantic step.").strip()
+    action_hint = ""
+    if contract.runtime_policy.allow_side_effect:
+        action_hint = (
+            "This is an action step: perform the requested browser action during runtime, "
+            "then return the selected target as structured JSON."
+        )
+    return " ".join(
+        part
+        for part in [
+            base_prompt,
+            target_hint,
+            action_hint,
+            f"Write the structured result to blackboard key '{blackboard_key}'.",
+            schema_hint,
+            "Do not return plain text when structured JSON is required.",
+        ]
+        if part
+    ).strip()
+
+
+def _build_runtime_input_scope(contract: StepContract) -> Dict[str, Any]:
+    if contract.target.type == "blackboard_ref":
+        return {"mode": "blackboard_ref", "collection": contract.target.collection}
+    return {"mode": "current_page", "collection": contract.target.collection, "source_type": contract.target.type}

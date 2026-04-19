@@ -632,6 +632,11 @@ const sendMessage = async () => {
               if (data.output && data.output !== 'ok' && data.output !== 'None') {
                 chatMessages.value[msgIdx].text += `${chatMessages.value[msgIdx].text ? '\n' : ''}输出: ${data.output}`;
               }
+            } else if (eventType === 'agent_message') {
+              const message = data.message || data.text || '';
+              if (message) {
+                chatMessages.value[msgIdx].text += (chatMessages.value[msgIdx].text ? '\n' : '') + `💭 ${message}`;
+              }
             } else if (eventType === 'agent_thought') {
               chatMessages.value[msgIdx].text += (chatMessages.value[msgIdx].text ? '\n' : '') + `💭 ${data.text || ''}`;
             } else if (eventType === 'agent_action') {
@@ -652,12 +657,13 @@ const sendMessage = async () => {
               pendingConfirm.value = data;
             } else if (eventType === 'agent_done') {
               chatMessages.value[msgIdx].status = 'done';
-              chatMessages.value[msgIdx].text += `\n✅ 任务完成，共执行 ${data.total_steps ?? 0} 步`;
+              const stepCount = data.step_count ?? data.total_steps ?? 0;
+              chatMessages.value[msgIdx].text += `\n✅ 任务完成，共执行 ${stepCount} 步`;
               agentRunning.value = false;
               pendingConfirm.value = null;
             } else if (eventType === 'agent_aborted') {
               chatMessages.value[msgIdx].status = 'error';
-              chatMessages.value[msgIdx].text += `\n⚠️ Agent 已停止：${data.reason || ''}`;
+              chatMessages.value[msgIdx].text += `\n⚠️ Agent 已停止：${data.reason || data.message || ''}`;
               agentRunning.value = false;
               pendingConfirm.value = null;
             } else if (eventType === 'error') {

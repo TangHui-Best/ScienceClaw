@@ -120,6 +120,9 @@ def _render_step(index: int, step: CommittedStep) -> str:
     artifact = step.artifact
     kind = _artifact_kind(artifact)
     lines = [f"\n    # step {index}: {step.contract.id}\n"]
+    output_key = artifact.get("result_key") or step.contract.outputs.blackboard_key
+    validation_rules = list(step.contract.validation.must or [])
+    lines.append("    _step_output = None\n")
 
     if kind == ArtifactKind.PRIMITIVE_ACTION.value:
         action = artifact.get("action")
@@ -128,49 +131,65 @@ def _render_step(index: int, step: CommittedStep) -> str:
             lines.append(f"    _target_url = resolve_template({template!r}, board)\n")
             lines.append("    await current_page.goto(_target_url, wait_until='domcontentloaded')\n")
             lines.append("    await current_page.wait_for_load_state('domcontentloaded')\n")
+            lines.append("    _step_output = {'url': current_page.url}\n")
         elif action == "click":
             lines.append(f"    _locator = locator_from_payload(current_page, {_jsonable_repr(artifact.get('locator'))})\n")
             lines.append("    await _locator.click()\n")
+            lines.append("    _step_output = 'ok'\n")
         elif action == "fill":
             lines.append(f"    _locator = locator_from_payload(current_page, {_jsonable_repr(artifact.get('locator'))})\n")
             lines.append(f"    _value = resolve_template({artifact.get('value_template', '')!r}, board)\n")
             lines.append("    await _locator.fill(_value)\n")
+            lines.append("    _step_output = _value\n")
         elif action == "extract_text":
-            result_key = artifact.get("result_key") or step.contract.outputs.blackboard_key
             lines.append(f"    _locator = locator_from_payload(current_page, {_jsonable_repr(artifact.get('locator'))})\n")
             lines.append("    _text = await _locator.inner_text()\n")
-            if result_key:
-                lines.append(f"    board.write({result_key!r}, _text)\n")
+            lines.append("    _step_output = _text\n")
+            if output_key:
+                lines.append(f"    board.write({output_key!r}, _text)\n")
         else:
             lines.append(f"    raise RuntimeError('Unsupported primitive action: {action}')\n")
 
     elif kind == ArtifactKind.DETERMINISTIC_SCRIPT.value:
         code = str(artifact.get("code") or "")
-        result_key = artifact.get("result_key") or step.contract.outputs.blackboard_key
         lines.append(indent(code, "    "))
         lines.append("\n")
         lines.append("    _result = await run(current_page, board)\n")
-        if result_key:
-            lines.append(f"    board.write({result_key!r}, _result)\n")
+        lines.append("    _step_output = _result\n")
+        if output_key:
+            lines.append(f"    board.write({output_key!r}, _result)\n")
 
     elif kind == ArtifactKind.RUNTIME_AI.value:
-        result_key = artifact.get("result_key") or step.contract.outputs.blackboard_key
+        output_mode = artifact.get("output_mode") or (
+            "act" if artifact.get("allow_side_effect") or step.contract.runtime_policy.allow_side_effect else "extract"
+        )
         step_payload = {
             "action": "ai_instruction",
             "description": artifact.get("description", ""),
             "prompt": artifact.get("prompt", ""),
             "instruction_kind": artifact.get("instruction_kind", "runtime_semantic"),
             "input_scope": artifact.get("input_scope", {"mode": "current_page"}),
-            "output_expectation": {"mode": "extract", "schema": artifact.get("output_schema")},
+            "input_refs": artifact.get("input_refs", []),
+            "output_expectation": {"mode": output_mode, "schema": artifact.get("output_schema")},
             "execution_hint": {"requires_dom_snapshot": True, "allow_navigation": artifact.get("allow_side_effect", False)},
-            "result_key": result_key,
+            "result_key": output_key,
         }
         lines.append(f"    _runtime_step = _json.loads({_jsonable_json(step_payload)!r})\n")
         lines.append("    _result = await execute_ai_instruction(current_page, step=_runtime_step, results=board.values)\n")
-        if result_key:
-            lines.append(f"    board.write({result_key!r}, _result.get('output') if isinstance(_result, dict) and 'output' in _result else _result)\n")
+        lines.append("    if isinstance(_result, dict) and _result.get('success') is False:\n")
+        lines.append("        raise RuntimeError(_result.get('error') or _result.get('output') or 'runtime_ai step failed')\n")
+        lines.append("    _step_output = _result.get('output') if isinstance(_result, dict) and 'output' in _result else _result\n")
+        if output_key:
+            lines.append(f"    if {output_key!r} not in board.values:\n")
+            lines.append("        _runtime_payload = _result.get('output') if isinstance(_result, dict) and _result.get('output') not in (None, '') else _result\n")
+            lines.append(f"        board.write({output_key!r}, _runtime_payload)\n")
     else:
         lines.append(f"    raise RuntimeError('Unsupported artifact kind: {kind}')\n")
+
+    if validation_rules:
+        lines.append(
+            f"    _validate_contract_output({step.contract.id!r}, {_jsonable_repr(validation_rules)}, board, {output_key!r}, _step_output, current_page)\n"
+        )
 
     return "".join(lines)
 
@@ -251,6 +270,40 @@ def locator_from_payload(scope, payload):
     if method == "nested":
         return locator_from_payload(locator_from_payload(scope, payload.get("parent") or {}), payload.get("child") or {})
     return scope.locator(payload.get("value", "body"))
+
+
+def _validate_contract_output(step_id, rules, board, output_key, step_output, page):
+    for rule in rules or []:
+        if not isinstance(rule, dict):
+            continue
+        rule_type = rule.get("type")
+        if rule_type == "min_records":
+            value = _validation_value(rule.get("key") or output_key, board, step_output)
+            min_count = int(rule.get("count") or 1)
+            if not isinstance(value, list) or len(value) < min_count:
+                raise RuntimeError(f"Contract validation failed for {step_id}: expected at least {min_count} records")
+        elif rule_type == "not_generic_chrome_text":
+            value = _validation_value(rule.get("key") or output_key, board, step_output)
+            if isinstance(value, str) and value.strip().lower() in {"navigation menu", "skip to content", "menu", "search"}:
+                raise RuntimeError(f"Contract validation failed for {step_id}: extracted generic page chrome text")
+        elif rule_type == "url_contains":
+            expected = str(rule.get("value") or "")
+            observed_url = str(getattr(page, "url", "") or "")
+            if expected and expected not in observed_url:
+                raise RuntimeError(f"Contract validation failed for {step_id}: URL does not contain {expected!r}")
+        elif rule_type == "blackboard_key":
+            key = str(rule.get("key") or "").strip()
+            if key:
+                board.resolve_ref(key)
+
+
+def _validation_value(key, board, step_output):
+    if isinstance(key, str) and key.strip():
+        try:
+            return board.resolve_ref(key.strip())
+        except KeyError:
+            return None
+    return step_output
 '''.strip()
 
 

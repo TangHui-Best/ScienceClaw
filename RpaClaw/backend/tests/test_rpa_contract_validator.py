@@ -17,6 +17,17 @@ def _contract(strategy: ExecutionStrategy, operator_type: str, **overrides):
         "validation": {"must": []},
         "runtime_policy": RuntimePolicy(requires_runtime_ai=False),
     }
+    if strategy == ExecutionStrategy.DETERMINISTIC_SCRIPT:
+        payload["outputs"] = {"blackboard_key": "items", "schema": {"type": "array"}}
+        if operator_type == "extract_repeated_records":
+            payload["operator"] = {
+                "type": operator_type,
+                "execution_strategy": strategy,
+                "selection_rule": {
+                    "row_selector": "div.row",
+                    "fields": {"title": {"selector": "a.title"}},
+                },
+            }
     payload.update(overrides)
     return StepContract(**payload)
 

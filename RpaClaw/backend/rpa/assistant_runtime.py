@@ -769,6 +769,7 @@ def resolve_structured_intent(snapshot: Dict[str, Any], intent: Dict[str, Any]) 
     ordinal = intent.get("ordinal")
 
     if action == "navigate":
+        url = _extract_navigation_target("", intent) or str(intent.get("value") or "").strip()
         return {
             **intent,
             "resolved": {
@@ -779,7 +780,7 @@ def resolve_structured_intent(snapshot: Dict[str, Any], intent: Dict[str, Any]) 
                 "item_hint": {},
                 "ordinal": None,
                 "selected_locator_kind": "navigate",
-                "url": intent.get("value", ""),
+                "url": url,
             },
         }
 
@@ -1040,15 +1041,30 @@ def _resolve_result_ref(results: Optional[Dict[str, Any]], ref: Any) -> Any:
 def _extract_navigation_target(current_url: str, value: Any) -> str:
     candidates: List[str] = []
     if isinstance(value, str):
-        candidates.append(value)
+        normalized = value.strip()
+        if not normalized:
+            return ""
+        if (normalized.startswith("{") and normalized.endswith("}")) or (
+            normalized.startswith("[") and normalized.endswith("]")
+        ):
+            try:
+                parsed = json.loads(normalized)
+            except Exception:
+                parsed = None
+            if parsed is not None:
+                target = _extract_navigation_target(current_url, parsed)
+                if target:
+                    return target
+        candidates.append(normalized)
     elif isinstance(value, dict):
         for key in ("target_url", "url", "repo_url", "repo_path", "repo", "href", "path"):
             nested = value.get(key)
             if isinstance(nested, str):
                 candidates.append(nested)
-        output_value = value.get("output")
-        if isinstance(output_value, str):
-            candidates.append(output_value)
+        for key in ("target", "output", "data", "selected", "selection", "result"):
+            target = _extract_navigation_target(current_url, value.get(key))
+            if target:
+                return target
 
     for candidate in candidates:
         normalized = candidate.strip()
@@ -1068,11 +1084,14 @@ async def _execute_structured_intent(page, intent: Dict[str, Any], results: Opti
     if action == "navigate":
         url_from = intent.get("url_from")
         resolved_url_value = _resolve_result_ref(results, url_from) if url_from else None
+        current_url = getattr(page, "url", "") or ""
         url = (
-            _extract_navigation_target(getattr(page, "url", "") or "", resolved_url_value)
+            _extract_navigation_target(current_url, resolved_url_value)
             or (resolved_url_value.strip() if isinstance(resolved_url_value, str) else "")
-            or resolved.get("url")
-            or intent.get("value", "")
+            or _extract_navigation_target(current_url, intent)
+            or _extract_navigation_target(current_url, resolved)
+            or str(resolved.get("url") or "").strip()
+            or str(intent.get("value") or "").strip()
         )
         if not url:
             return {

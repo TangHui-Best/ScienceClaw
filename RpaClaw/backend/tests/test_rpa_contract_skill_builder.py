@@ -20,6 +20,17 @@ def _contract(strategy: ExecutionStrategy, operator_type: str, **overrides):
         "validation": {"must": []},
         "runtime_policy": RuntimePolicy(requires_runtime_ai=False),
     }
+    if strategy == ExecutionStrategy.DETERMINISTIC_SCRIPT:
+        payload["outputs"] = {"blackboard_key": "items", "schema": {"type": "array"}}
+        if operator_type == "extract_repeated_records":
+            payload["operator"] = {
+                "type": operator_type,
+                "execution_strategy": strategy,
+                "selection_rule": {
+                    "row_selector": "div.row",
+                    "fields": {"title": {"selector": "a.title"}},
+                },
+            }
     payload.update(overrides)
     return StepContract(**payload)
 
@@ -49,6 +60,7 @@ class ContractSkillBuilderTests(unittest.TestCase):
                 ExecutionStrategy.DETERMINISTIC_SCRIPT,
                 "extract_repeated_records",
                 outputs={"blackboard_key": "pr_list", "schema": {"type": "array"}},
+                validation={"must": [{"type": "min_records", "key": "pr_list", "count": 1}]},
             ),
             artifact={
                 "kind": ArtifactKind.DETERMINISTIC_SCRIPT,
@@ -62,6 +74,8 @@ class ContractSkillBuilderTests(unittest.TestCase):
 
         self.assertIn("async def run(page, board):", files["skill.py"])
         self.assertIn("board.write('pr_list'", files["skill.py"])
+        self.assertIn("_validate_contract_output('step_1'", files["skill.py"])
+        self.assertIn("'min_records'", files["skill.py"])
 
     def test_exported_script_resolves_blackboard_refs_dynamically(self):
         step = CommittedStep(
@@ -99,6 +113,43 @@ class ContractSkillBuilderTests(unittest.TestCase):
 
         self.assertNotIn("get_llm_model", files["skill.py"])
         self.assertNotIn("Extract PRs", files["skill.py"])
+
+    def test_runtime_ai_act_step_exports_act_mode_and_preserves_runtime_blackboard_value(self):
+        contract = _contract(
+            ExecutionStrategy.RUNTIME_AI,
+            "semantic_select",
+            target={"type": "page"},
+            outputs={
+                "blackboard_key": "selected_python_project",
+                "schema": {"type": "object", "required": ["url"]},
+            },
+            runtime_policy=RuntimePolicy(
+                requires_runtime_ai=True,
+                runtime_ai_reason="Semantic relevance must be evaluated at runtime",
+                allow_side_effect=True,
+                side_effect_reason="The selected project must be opened",
+            ),
+        )
+        step = CommittedStep(
+            contract=contract,
+            artifact={
+                "kind": ArtifactKind.RUNTIME_AI,
+                "prompt": "Open the project most related to Python and return name/url/reason.",
+                "output_mode": "act",
+                "output_schema": {"type": "object", "required": ["url"]},
+                "result_key": "selected_python_project",
+                "allow_side_effect": True,
+            },
+            validation_evidence={},
+        )
+
+        files = build_contract_skill_files("test_skill", "desc", [step])
+
+        self.assertIn('"mode": "act"', files["skill.py"])
+        self.assertIn("_result.get('success') is False", files["skill.py"])
+        self.assertIn("if 'selected_python_project' not in board.values:", files["skill.py"])
+        self.assertIn("_result.get('output') not in (None, '')", files["skill.py"])
+        self.assertIn("execute_ai_instruction(current_page, step=_runtime_step, results=board.values)", files["skill.py"])
 
     def test_manifest_passes_replay_validation_with_committed_steps(self):
         contract = _contract(

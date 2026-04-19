@@ -20,7 +20,11 @@ from backend.rpa.assistant import RPAReActAgent, _active_agents
 from backend.rpa.cdp_connector import get_cdp_connector
 from backend.rpa.blackboard import Blackboard
 from backend.rpa.contract_agent import RPAContractAgent
-from backend.rpa.contract_session import build_contract_skill_files_from_session, has_contract_steps
+from backend.rpa.contract_session import (
+    apply_session_contract_committed_steps,
+    build_contract_skill_files_from_session,
+    has_contract_steps,
+)
 from backend.rpa.screencast import SessionScreencastController
 from backend.user.dependencies import get_current_user, User
 from backend.config import settings
@@ -607,7 +611,7 @@ async def chat_with_assistant(
                     evt_type = event.get("event", "message")
                     evt_data = event.get("data", {})
                     if evt_type == "agent_contract_committed_steps":
-                        session.contract_steps.extend(evt_data.get("contract_steps") or [])
+                        apply_session_contract_committed_steps(session, evt_data.get("contract_steps") or [])
                         session.contract_blackboard = dict(evt_data.get("blackboard") or {})
                         current_steps = await rpa_manager.replace_steps_from(
                             session_id,

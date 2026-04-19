@@ -106,10 +106,16 @@ class ContractCompilerTests(unittest.TestCase):
         contract = _contract(
             ExecutionStrategy.RUNTIME_AI,
             "runtime_semantic_select",
+            description="打开和 SKILL 最相关的项目",
+            intent={"goal": "打开 https://github.com/trending，找到和 SKILL 最相关的项目并打开它"},
             target={"type": "visible_collection", "collection": "github_trending_repositories"},
             outputs={
                 "blackboard_key": "selected_project",
-                "schema": {"type": "object", "required": ["url", "reason"]},
+                "schema": {
+                    "type": "object",
+                    "properties": {"repo_url": {"type": "string"}, "reason": {"type": "string"}},
+                    "required": ["repo_url", "reason"],
+                },
             },
             runtime_policy=RuntimePolicy(
                 requires_runtime_ai=True,
@@ -121,8 +127,42 @@ class ContractCompilerTests(unittest.TestCase):
 
         self.assertEqual(artifact["kind"], ArtifactKind.RUNTIME_AI)
         self.assertEqual(artifact["result_key"], "selected_project")
-        self.assertEqual(artifact["output_schema"], {"type": "object", "required": ["url", "reason"]})
+        self.assertIn("selected_project", artifact["prompt"])
+        self.assertIn("repo_url", artifact["prompt"])
+        self.assertIn("SKILL", artifact["global_goal"])
         self.assertFalse(artifact["allow_side_effect"])
+
+    def test_compiles_runtime_ai_blackboard_ref_prompt_with_input_refs(self):
+        compiler = ContractCompiler()
+        contract = _contract(
+            ExecutionStrategy.RUNTIME_AI,
+            "semantic_filter",
+            description="Global SOP text that should not dominate the runtime prompt",
+            intent={"goal": "Filter the extracted trending_repos blackboard data to keep only SKILL-related repositories"},
+            inputs={"refs": ["trending_repos"]},
+            target={"type": "blackboard_ref"},
+            outputs={
+                "blackboard_key": "skill_repos",
+                "schema": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"name": {"type": "string"}, "url": {"type": "string"}},
+                    },
+                },
+            },
+            runtime_policy=RuntimePolicy(
+                requires_runtime_ai=True,
+                runtime_ai_reason="Semantic relevance is required",
+            ),
+        )
+
+        artifact = compiler.compile(contract)
+
+        self.assertEqual(artifact["input_scope"]["mode"], "blackboard_ref")
+        self.assertEqual(artifact["input_refs"], ["trending_repos"])
+        self.assertIn("trending_repos", artifact["prompt"])
+        self.assertIn("Filter the extracted trending_repos blackboard data", artifact["prompt"])
 
 
 if __name__ == "__main__":

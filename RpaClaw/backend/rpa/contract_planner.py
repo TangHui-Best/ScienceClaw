@@ -4,11 +4,20 @@ import json
 import re
 from typing import Any, Dict, Optional
 
-from .contract_models import StepContract
+from .contract_models import (
+    PlannerEnvelope,
+    StepContract,
+    SUPPORTED_DETERMINISTIC_OPERATORS,
+    SUPPORTED_PRIMITIVE_OPERATORS,
+)
 
 
-CONTRACT_PLANNER_SYSTEM_PROMPT = """
-You are the RPA Contract Planner. Return a JSON object with a "steps" array of StepContract objects.
+_SUPPORTED_PRIMITIVE_OPERATORS_TEXT = ", ".join(sorted(SUPPORTED_PRIMITIVE_OPERATORS))
+_SUPPORTED_DETERMINISTIC_OPERATORS_TEXT = ", ".join(sorted(SUPPORTED_DETERMINISTIC_OPERATORS))
+
+
+CONTRACT_PLANNER_SYSTEM_PROMPT = f"""
+You are the RPA Contract Planner. Return a JSON object planner envelope for exactly one next-step decision.
 
 Your job is to classify the next SOP step into exactly one execution_strategy:
 
@@ -31,20 +40,48 @@ Your job is to classify the next SOP step into exactly one execution_strategy:
    Natural language is allowed only inside JSON fields such as reason, summary, or explanation.
 
 Hard constraints:
+- Return one planner envelope object with:
+  - status: one of next_step, done, need_user
+  - current_step: a StepContract object only when status=next_step
+  - message: optional string
 - Each StepContract must use the exact schema keys: id, intent, target, operator, outputs, validation, runtime_policy.
+- description and intent.goal must describe only the local next step, not repeat the full global SOP.
 - Use id, not step_id. Use operator.type and operator.execution_strategy, not target.action or target.execution_strategy.
 - target.type is required. For navigation, use target.type="url" and target.url_template.
 - runtime_policy.runtime_ai_reason and runtime_policy.side_effect_reason must be strings, never null.
 - The StepContract is the only semantic source for Compiler, Executor, Validator, and Skill Builder.
 - Put all step-level constraints into structured fields, not only description.
 - For cross-step dataflow, put dotted blackboard refs in inputs.refs and URL/value templates in target.url_template.
+- If the next semantic step reasons over data that is already in blackboard, set target.type="blackboard_ref" and populate inputs.refs.
+- Do not extract the same visible list again when the required records already exist in blackboard; consume the existing blackboard data instead.
+- If the requested deliverable is already present in blackboard in the required structured shape, return status=done instead of planning another extraction step.
+- If a previous successful step already wrote outputs.blackboard_key and nothing has invalidated that result, do not emit another step that only rewrites the same outputs.blackboard_key.
+- For templated URLs or values, populate inputs.refs and use single-brace dotted refs such as {{selected_project.url}} or {{skill_repos.0.url}}.
+- Do not use double braces like {{{{selected_project.url}}}} and do not use bracket index syntax like [0] inside refs.
+- Supported primitive_action operator.type values only: {_SUPPORTED_PRIMITIVE_OPERATORS_TEXT}.
+- Supported deterministic_script operator.type values only: {_SUPPORTED_DETERMINISTIC_OPERATORS_TEXT}.
+- Do not invent operator names like extract_and_parse, parse_list, analyze_page, or select_best_item.
+- For operator.type="rank_collection_numeric_max", operator.selection_rule must include:
+  collection_selector, value_selector, link_selector, and optional url_prefix.
+- For operator.type="extract_repeated_records", operator.selection_rule must include:
+  row_selector, fields, and optional limit. fields must be an object of explicit field selectors.
+- Example fields shape:
+  "fields": {{"title": {{"selector": "a[id^='issue_']"}}, "creator": {{"selector": "a[href*='author%3A']"}}, "url": {{"selector": "a[id^='issue_']", "attribute": "href"}}}}
+- deterministic_script steps must write structured data to outputs.blackboard_key.
 - If runtime_ai is selected, runtime_policy.requires_runtime_ai must be true and runtime_ai_reason must explain why.
+- If runtime_ai is selected, outputs.schema must be a real JSON schema with type="object" or type="array"; do not use shorthand schemas such as {{"name":"string"}}.
+- If the user asks to open/click/navigate to the item selected by semantic relevance, make it one runtime_ai step with runtime_policy.allow_side_effect=true and structured outputs containing the selected item's url/name/reason. Do not split it into a semantic extract step followed by a hard-coded primitive navigate step.
+- For runtime_ai semantic act steps, still write the selected target to outputs.blackboard_key so later manual or deterministic steps can use refs such as {{selected_python_project.url}}.
 - Prefer deterministic_script over runtime_ai when the rule is fully codable.
 - Prefer runtime_ai over deterministic_script when the rule requires semantic understanding at execution time.
+- Do not plan future steps that depend on future pages. Plan only the next executable step from the current page state.
+- Use status=need_user when precise UI targeting is ambiguous and should be done manually instead of guessing more selectors.
+- Use status=done when the current natural-language instruction is already satisfied and no extra AI-generated step is needed.
+- For click steps, avoid broad text locators when the page may contain duplicate labels. Prefer role-based locators with an exact accessible name.
+- If a click target is ambiguous but the destination URL is deterministically derivable from blackboard data or current stable page structure, prefer a navigate step over an ambiguous click retry.
 
 Return JSON only. Prefer:
-{"steps": [StepContract, StepContract, ...]}
-For backward compatibility, a single StepContract object is also accepted.
+{{"status": "next_step", "current_step": StepContract, "message": ""}}
 Do not wrap it in prose.
 """.strip()
 
@@ -77,6 +114,36 @@ async def plan_step_contract(
         ]
     )
     return parse_step_contract_response(_extract_response_text(response), fallback_goal=goal)
+
+
+async def plan_next_step_envelope(
+    goal: str,
+    snapshot_view: Dict[str, Any],
+    blackboard_values: Dict[str, Any],
+    model_config: Optional[Dict[str, Any]] = None,
+) -> PlannerEnvelope:
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    from backend.deepagent.engine import get_llm_model
+
+    model = get_llm_model(config=model_config, streaming=False)
+    response = await model.ainvoke(
+        [
+            SystemMessage(content=CONTRACT_PLANNER_SYSTEM_PROMPT),
+            HumanMessage(
+                content=json.dumps(
+                    {
+                        "goal": goal,
+                        "snapshot_view": snapshot_view,
+                        "blackboard": blackboard_values,
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                )
+            ),
+        ]
+    )
+    return parse_planner_envelope_response(_extract_response_text(response), fallback_goal=goal)
 
 
 async def plan_sop_contracts(
@@ -113,11 +180,11 @@ def parse_step_contract_response(response: Any, fallback_goal: str = "") -> Step
     if isinstance(response, StepContract):
         return response
     if isinstance(response, dict):
-        return StepContract(**_normalize_step_contract_payload(response, fallback_goal=fallback_goal))
+        return StepContract(**_normalize_step_contract_payload(response, fallback_goal=_primary_goal_text(fallback_goal)))
     if not isinstance(response, str):
         raise ValueError("planner response must be JSON text or dict")
     payload = _extract_json_object(response)
-    return StepContract(**_normalize_step_contract_payload(payload, fallback_goal=fallback_goal))
+    return StepContract(**_normalize_step_contract_payload(payload, fallback_goal=_primary_goal_text(fallback_goal)))
 
 
 def parse_step_contracts_response(response: Any, fallback_goal: str = "") -> list[StepContract]:
@@ -134,6 +201,25 @@ def parse_step_contracts_response(response: Any, fallback_goal: str = "") -> lis
     if isinstance(payload, dict):
         return [parse_step_contract_response(payload, fallback_goal=fallback_goal)]
     raise ValueError("planner response must be a StepContract or steps array")
+
+
+def parse_planner_envelope_response(response: Any, fallback_goal: str = "") -> PlannerEnvelope:
+    payload = response
+    if isinstance(response, str):
+        payload = _extract_json_object(response)
+    if not isinstance(payload, dict):
+        raise ValueError("planner envelope response must be a JSON object")
+
+    status = str(payload.get("status") or "next_step").strip() or "next_step"
+    current_step_payload = payload.get("current_step")
+    current_step = None
+    if isinstance(current_step_payload, dict):
+        current_step = parse_step_contract_response(current_step_payload, fallback_goal=fallback_goal)
+    return PlannerEnvelope(
+        status=status,
+        current_step=current_step,
+        message=str(payload.get("message") or ""),
+    )
 
 
 def _extract_response_text(response: Any) -> str:
@@ -175,6 +261,8 @@ def _normalize_step_contract_payload(payload: Dict[str, Any], fallback_goal: str
 
     if "id" not in normalized and normalized.get("step_id"):
         normalized["id"] = normalized.get("step_id")
+    if "source" not in normalized or not str(normalized.get("source") or "").strip():
+        normalized["source"] = "ai"
 
     description = str(
         normalized.get("description")
@@ -231,3 +319,17 @@ def _normalize_step_contract_payload(payload: Dict[str, Any], fallback_goal: str
     normalized.setdefault("validation", {"must": []})
 
     return normalized
+
+
+def _primary_goal_text(goal: str) -> str:
+    text = str(goal or "").strip()
+    if not text:
+        return ""
+    separators = (
+        "\n\nPrevious planner/compiler failure:",
+        "\n\nPrevious step execution failed:",
+    )
+    for separator in separators:
+        if separator in text:
+            return text.split(separator, 1)[0].strip()
+    return text

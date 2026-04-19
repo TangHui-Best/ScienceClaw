@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urljoin
 
 from backend.deepagent.engine import get_llm_model
+from backend.rpa.blackboard import Blackboard
 from backend.rpa.assistant import _extract_llm_response_text
 from backend.rpa.assistant_runtime import (
     build_frame_path_from_frame,
@@ -47,7 +48,7 @@ Rules:
 - Never import or use requests, httpx, urllib, fetch, or any external HTTP client. Work only with the current page, its DOM, and Playwright APIs.
 - For code plans in act mode, return a dict from run(page, results) that includes either a non-empty output or action_performed=true.
 - For semantic selection tasks in act mode, do not stop at returning only a chosen identifier/path. Prefer a real click/navigate plan. If you must return the selected target, use target_url/url/href/path/repo_path so runtime can execute it.
-- When opening a selected page or repository, prefer returning target_url or a navigate action over clicking a broad selector.
+- When opening a selected page or repository with a structured plan, prefer {"action":"navigate","url":"https://..."} over clicking a broad selector. Runtime also accepts target_url/href/path/repo_path aliases.
 - If you must click a link by href, use an exact href selector such as a[href="/owner/repo"]. Do not use broad contains selectors such as a[href*="owner/repo"], because they can also match stargazers, forks, comments, or subpage links.
 - If planning_feedback is present, treat it as a validation failure from the previous attempt and return a corrected replacement plan instead of repeating the same mistake.
 - Keep the plan concise and executable within the provided reasoning budget.
@@ -63,6 +64,19 @@ Rules:
 - Keep the answer concise but specific.
 - If the user asks in Chinese, answer in Chinese.
 - If the extracted content is insufficient, say so briefly instead of inventing details.
+"""
+
+AI_INSTRUCTION_BLACKBOARD_SYSTEM_PROMPT = """You analyze structured blackboard data for a runtime AI instruction step.
+
+Return JSON only, matching the requested output schema exactly.
+
+Rules:
+- Use only the provided prompt, global_goal, input_refs, input_data, and output_schema.
+- Do not refer to the browser page or DOM when input_scope.mode is blackboard_ref.
+- Do not return prose outside JSON.
+- If output_schema.type is array, return a JSON array.
+- If output_schema.type is object, return a JSON object.
+- Keep field names exactly aligned with the schema.
 """
 
 
@@ -296,6 +310,38 @@ def _parse_plan_response_text(text: str) -> Dict[str, Any]:
     raise ValueError(f"AI instruction planner returned a non-JSON response: {excerpt}")
 
 
+def _parse_json_value_response(text: str) -> Any:
+    normalized = str(text or "").strip()
+    if not normalized:
+        raise ValueError("AI instruction returned an empty JSON response")
+
+    try:
+        return json.loads(normalized)
+    except Exception:
+        pass
+
+    match = re.search(r"```(?:json)?\s*(.*?)```", normalized, re.DOTALL | re.IGNORECASE)
+    if match:
+        return json.loads(match.group(1).strip())
+
+    match = re.search(r"(\{.*\}|\[.*\])", normalized, re.DOTALL)
+    if match:
+        return json.loads(match.group(1))
+
+    excerpt = _compact_text(normalized, max_len=180)
+    raise ValueError(f"AI instruction returned a non-JSON response: {excerpt}")
+
+
+def _resolve_input_refs(results: Dict[str, Any], input_refs: list[str]) -> Dict[str, Any]:
+    board = Blackboard(values=dict(results or {}))
+    resolved: Dict[str, Any] = {}
+    for ref in input_refs:
+        if not isinstance(ref, str) or not ref.strip():
+            continue
+        resolved[ref] = board.resolve_ref(ref.strip())
+    return resolved
+
+
 async def plan_ai_instruction(
     page,
     step: Dict[str, Any],
@@ -343,6 +389,8 @@ def _is_retryable_execution_error(error: str) -> bool:
     normalized = str(error or "")
     lowered = normalized.lower()
     return (
+        "disallowed code token" in lowered
+        or
         "SyntaxError" in normalized
         or "syntaxerror" in lowered
         or "invalid syntax" in lowered
@@ -357,9 +405,112 @@ def _is_retryable_execution_error(error: str) -> bool:
 
 
 def _normalize_output_value(value: Any) -> Any:
-    if isinstance(value, (dict, list)):
-        return json.dumps(value, ensure_ascii=False)
     return value
+
+
+def _candidate_extract_output(final_result: Dict[str, Any], result_key: Optional[str], results: Dict[str, Any]) -> Any:
+    candidate = final_result.get("output")
+    if candidate in (None, "") and result_key:
+        candidate = results.get(result_key)
+    if candidate in (None, "") and isinstance(final_result.get("data"), dict):
+        candidate = final_result.get("data")
+    return _normalize_output_value(candidate)
+
+
+def _candidate_structured_output(
+    final_result: Dict[str, Any],
+    result_key: Optional[str],
+    results: Dict[str, Any],
+    output_schema: Any,
+    current_url: str,
+) -> Any:
+    candidate = _candidate_extract_output(final_result, result_key, results)
+    if candidate in (None, ""):
+        candidate = final_result
+    return _normalize_value_for_schema(candidate, output_schema, current_url)
+
+
+def _normalize_value_for_schema(value: Any, schema: Any, current_url: str) -> Any:
+    if not isinstance(schema, dict) or schema.get("type") != "object":
+        return _normalize_output_value(value)
+    if isinstance(value, dict):
+        normalized = dict(value)
+    elif value in (None, ""):
+        normalized = {}
+    else:
+        normalized = {"value": value}
+
+    required = set(schema.get("required") or [])
+    properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+    wants_url = "url" in required or "url" in properties
+    if wants_url and not isinstance(normalized.get("url"), str):
+        target = _extract_navigation_target_from_value(current_url, normalized) or str(current_url or "").strip()
+        if target:
+            normalized["url"] = target
+
+    if "name" in required and not str(normalized.get("name") or "").strip() and isinstance(normalized.get("url"), str):
+        normalized["name"] = _name_from_url(normalized["url"])
+
+    if "reason" in required and not str(normalized.get("reason") or "").strip():
+        normalized["reason"] = str(
+            normalized.get("selection_reason")
+            or normalized.get("explanation")
+            or normalized.get("summary")
+            or "Selected by runtime AI instruction."
+        )
+
+    return _normalize_output_value(normalized)
+
+
+def _name_from_url(url: str) -> str:
+    normalized = str(url or "").split("?", 1)[0].rstrip("/")
+    parts = [part for part in normalized.split("/") if part]
+    if len(parts) >= 2:
+        return "/".join(parts[-2:])
+    return normalized or "selected_target"
+
+
+def _runtime_schema_matches(value: Any, schema: Any) -> bool:
+    if schema is None or not isinstance(schema, dict):
+        return True
+    expected_type = schema.get("type")
+    if expected_type == "object":
+        if not isinstance(value, dict):
+            return False
+        return all(field in value for field in (schema.get("required") or []))
+    if expected_type == "array":
+        if not isinstance(value, list):
+            return False
+        item_schema = schema.get("items") if isinstance(schema.get("items"), dict) else {}
+        required = item_schema.get("required") or []
+        for item in value:
+            if not isinstance(item, dict):
+                return False
+            if not all(field in item for field in required):
+                return False
+        return True
+    return True
+
+
+def _build_extract_schema_replan_feedback(schema: Any, actual: Any) -> str:
+    return (
+        "Previous extract plan returned output that did not match output_expectation.schema. "
+        f"Required schema: {json.dumps(schema, ensure_ascii=False, default=str)}. "
+        f"Actual output excerpt: {_compact_text(actual, 240)}. "
+        "Return a corrected replacement plan whose output is native JSON matching the schema exactly. "
+        "For object schemas return a dict/object, for array schemas return a list/array. Do not return prose."
+    )
+
+
+def _build_act_schema_replan_feedback(schema: Any, actual: Any) -> str:
+    return (
+        "Previous act-mode plan performed or attempted a browser action but did not produce structured output "
+        "matching output_expectation.schema. "
+        f"Required schema: {json.dumps(schema, ensure_ascii=False, default=str)}. "
+        f"Actual output excerpt: {_compact_text(actual, 240)}. "
+        "Return a corrected replacement plan that performs the action and returns native JSON matching the schema. "
+        "For selected projects/items, include url, name, and reason when requested."
+    )
 
 
 def _extract_navigation_target_from_value(current_url: str, value: Any) -> str:
@@ -590,6 +741,57 @@ async def _execute_code_plan(page, code: str, results: Dict[str, Any]) -> Dict[s
     return {"success": True, "output": _normalize_output_value(str(outcome) if outcome is not None else "")}
 
 
+async def _execute_blackboard_ref_ai_instruction(
+    step: Dict[str, Any],
+    results: Dict[str, Any],
+    model_config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    input_refs = [str(ref).strip() for ref in list(step.get("input_refs") or []) if str(ref).strip()]
+    if not input_refs:
+        return {
+            "success": False,
+            "error": "blackboard_ref input_scope requires input_refs",
+            "output": "",
+        }
+
+    try:
+        input_data = _resolve_input_refs(results, input_refs)
+    except KeyError as exc:
+        return {
+            "success": False,
+            "error": f"Missing blackboard ref: {exc}",
+            "output": "",
+        }
+
+    model = get_llm_model(config=model_config, streaming=False)
+    response = await model.ainvoke(
+        [
+            {"role": "system", "content": AI_INSTRUCTION_BLACKBOARD_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "prompt": step.get("prompt", ""),
+                        "global_goal": step.get("global_goal", ""),
+                        "instruction_kind": step.get("instruction_kind", "semantic_filter"),
+                        "input_scope": step.get("input_scope") or {"mode": "blackboard_ref"},
+                        "input_refs": input_refs,
+                        "input_data": input_data,
+                        "output_schema": (step.get("output_expectation") or {}).get("schema"),
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                ),
+            },
+        ]
+    )
+    output = _parse_json_value_response(_extract_llm_response_text(response))
+    result_key = step.get("result_key")
+    if result_key:
+        results[result_key] = output
+    return {"success": True, "output": output}
+
+
 async def _materialize_act_mode_result(
     page,
     final_result: Dict[str, Any],
@@ -633,6 +835,10 @@ async def _materialize_act_mode_result(
                 final_result["navigation_target"] = navigation_target
 
     if action_performed:
+        if "navigation_target" not in final_result:
+            observed_url = str(after_observation.get("url") or "").strip()
+            if observed_url:
+                final_result["navigation_target"] = observed_url
         return True, final_result, ""
 
     output = final_result.get("output", "")
@@ -657,14 +863,18 @@ async def execute_ai_instruction(
     model_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     input_scope = step.get("input_scope") or {}
-    if input_scope.get("mode") != "current_page":
+    input_mode = input_scope.get("mode")
+    if input_mode == "blackboard_ref":
+        return await _execute_blackboard_ref_ai_instruction(step, results, model_config=model_config)
+    if input_mode != "current_page":
         return {
             "success": False,
-            "error": f"Unsupported input_scope: {input_scope.get('mode')}",
+            "error": f"Unsupported input_scope: {input_mode}",
             "output": "",
         }
 
     output_expectation = step.get("output_expectation") or {}
+    output_schema = output_expectation.get("schema")
     result_key = step.get("result_key")
     act_mode = output_expectation.get("mode") == "act"
 
@@ -766,12 +976,21 @@ async def execute_ai_instruction(
                     return {"success": False, "error": failure_reason, "output": ""}
                 snapshot = await build_page_snapshot(page, build_frame_path_from_frame)
                 last_result: Dict[str, Any] = {"success": True, "output": ""}
+                structured_action_performed = False
                 action_observation_before = await _capture_page_observation(page)
                 for index, action in enumerate(actions):
                     resolved = resolve_structured_intent(snapshot, action)
                     last_result = await execute_structured_intent(page, resolved, results=results)
                     if not last_result.get("success"):
                         return last_result
+                    resolved_action = str(
+                        resolved.get("action")
+                        or resolved.get("type")
+                        or action.get("action")
+                        or ""
+                    ).strip().lower()
+                    if resolved_action in {"navigate", "click", "fill", "press"}:
+                        structured_action_performed = True
                     if index == len(actions) - 1:
                         continue
                     action_observation_after = await _capture_page_observation(page)
@@ -779,6 +998,8 @@ async def execute_ai_instruction(
                         snapshot = await build_page_snapshot(page, build_frame_path_from_frame)
                     action_observation_before = action_observation_after
                 final_result = last_result
+                if structured_action_performed and final_result.get("success") and act_mode:
+                    final_result["action_performed"] = True
                 if final_result.get("success") and act_mode:
                     action_ok, final_result, act_failure_reason = await _materialize_act_mode_result(
                         page,
@@ -796,9 +1017,49 @@ async def execute_ai_instruction(
                             continue
                         return {
                             "success": False,
-                            "error": "AI instruction completed without observable action in act mode",
+                            "error": "AI instruction completed with no observable action in act mode",
                             "output": final_result.get("output", ""),
                         }
+                    if result_key and output_schema:
+                        candidate = _candidate_structured_output(
+                            final_result,
+                            result_key,
+                            results,
+                            output_schema,
+                            getattr(page, "url", "") or "",
+                        )
+                        if not _runtime_schema_matches(candidate, output_schema):
+                            if attempt == 0:
+                                current_step = {
+                                    **step,
+                                    "planning_feedback": _build_act_schema_replan_feedback(output_schema, candidate),
+                                }
+                                continue
+                            return {
+                                "success": False,
+                                "error": "AI instruction act output does not match schema",
+                                "output": candidate,
+                            }
+                        final_result["output"] = candidate
+                        results[result_key] = candidate
+                if final_result.get("success") and output_expectation.get("mode") == "extract":
+                    candidate = _candidate_extract_output(final_result, result_key, results)
+                    if not _runtime_schema_matches(candidate, output_schema):
+                        if attempt == 0:
+                            current_step = {
+                                **step,
+                                "planning_feedback": _build_extract_schema_replan_feedback(output_schema, candidate),
+                            }
+                            continue
+                        return {
+                            "success": False,
+                            "error": "AI instruction output does not match extract schema",
+                            "output": candidate,
+                        }
+                    if candidate not in (None, ""):
+                        final_result["output"] = candidate
+                        if result_key:
+                            results[result_key] = candidate
                 break
             if plan_type == "code":
                 final_result = await _execute_code_plan(page, plan.get("code", ""), results)
@@ -832,9 +1093,49 @@ async def execute_ai_instruction(
                             continue
                         return {
                             "success": False,
-                            "error": "AI instruction completed without observable action in act mode",
+                            "error": "AI instruction completed with no observable action in act mode",
                             "output": final_result.get("output", ""),
                         }
+                    if result_key and output_schema:
+                        candidate = _candidate_structured_output(
+                            final_result,
+                            result_key,
+                            results,
+                            output_schema,
+                            getattr(page, "url", "") or "",
+                        )
+                        if not _runtime_schema_matches(candidate, output_schema):
+                            if attempt == 0:
+                                current_step = {
+                                    **step,
+                                    "planning_feedback": _build_act_schema_replan_feedback(output_schema, candidate),
+                                }
+                                continue
+                            return {
+                                "success": False,
+                                "error": "AI instruction act output does not match schema",
+                                "output": candidate,
+                            }
+                        final_result["output"] = candidate
+                        results[result_key] = candidate
+                if final_result.get("success") and output_expectation.get("mode") == "extract":
+                    candidate = _candidate_extract_output(final_result, result_key, results)
+                    if not _runtime_schema_matches(candidate, output_schema):
+                        if attempt == 0:
+                            current_step = {
+                                **step,
+                                "planning_feedback": _build_extract_schema_replan_feedback(output_schema, candidate),
+                            }
+                            continue
+                        return {
+                            "success": False,
+                            "error": "AI instruction output does not match extract schema",
+                            "output": candidate,
+                        }
+                    if candidate not in (None, ""):
+                        final_result["output"] = candidate
+                        if result_key:
+                            results[result_key] = candidate
                 break
             return {
                 "success": False,
@@ -864,14 +1165,16 @@ async def execute_ai_instruction(
         }
 
     if final_result.get("success") and output_expectation.get("mode") == "extract":
-        normalized_output = _normalize_output_value(final_result.get("output"))
-        if normalized_output in (None, "") and result_key:
-            normalized_output = results.get(result_key)
-        if normalized_output in (None, "") and isinstance(final_result.get("data"), dict):
-            normalized_output = _normalize_output_value(final_result.get("data"))
+        normalized_output = _candidate_extract_output(final_result, result_key, results)
         if normalized_output not in (None, ""):
             final_result["output"] = normalized_output
             if result_key:
                 results[result_key] = normalized_output
+
+    if final_result.get("success") and result_key:
+        normalized_output = _candidate_extract_output(final_result, result_key, results)
+        if normalized_output not in (None, "") and _runtime_schema_matches(normalized_output, output_schema):
+            final_result["output"] = normalized_output
+            results[result_key] = normalized_output
 
     return final_result

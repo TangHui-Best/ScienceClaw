@@ -121,6 +121,97 @@ class RuntimeAIInstructionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result["success"])
 
+    async def test_execute_ai_instruction_treats_same_page_structured_action_as_performed(self):
+        step = {
+            "action": "ai_instruction",
+            "prompt": "Open details drawer",
+            "input_scope": {"mode": "current_page"},
+            "output_expectation": {"mode": "act"},
+            "execution_hint": {"max_reasoning_steps": 10},
+        }
+        page = _FakePage()
+
+        with patch(
+            "backend.rpa.runtime_ai_instruction.build_page_snapshot",
+            new=AsyncMock(return_value={"url": page.url, "title": "Example", "frames": []}),
+        ), patch(
+            "backend.rpa.runtime_ai_instruction.plan_ai_instruction",
+            new=AsyncMock(
+                return_value={
+                    "plan_type": "structured",
+                    "actions": [
+                        {"action": "click", "description": "open details"}
+                    ],
+                }
+            ),
+        ), patch(
+            "backend.rpa.runtime_ai_instruction.execute_structured_intent",
+            new=AsyncMock(return_value={"success": True, "output": "opened"}),
+        ), patch(
+            "backend.rpa.runtime_ai_instruction.resolve_structured_intent",
+            return_value={"action": "click", "resolved": {"locator": "button"}},
+        ):
+            result = await execute_ai_instruction(page, step, results={})
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result["action_performed"])
+
+    async def test_execute_ai_instruction_supports_blackboard_ref_extract(self):
+        class _BlackboardModel:
+            async def ainvoke(self, messages):
+                self.messages = messages
+                return type(
+                    "Resp",
+                    (),
+                    {
+                        "content": (
+                            '[{"name":"android-reverse-engineering-skill",'
+                            '"url":"https://github.com/SimoneAvogadro/android-reverse-engineering-skill",'
+                            '"skill_relevance_reason":"Repository name directly contains skill"}]'
+                        ),
+                        "additional_kwargs": {},
+                    },
+                )()
+
+        step = {
+            "action": "ai_instruction",
+            "prompt": "Find which extracted repos are most related to SKILL",
+            "global_goal": "Open the repo most related to SKILL after filtering extracted records",
+            "input_scope": {"mode": "blackboard_ref"},
+            "input_refs": ["trending_repos"],
+            "output_expectation": {
+                "mode": "extract",
+                "schema": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["name", "url", "skill_relevance_reason"],
+                    },
+                },
+            },
+            "execution_hint": {"max_reasoning_steps": 5, "planning_timeout_s": 5},
+            "result_key": "skill_repos",
+        }
+        results = {
+            "trending_repos": [
+                {
+                    "name": "SimoneAvogadro / android-reverse-engineering-skill",
+                    "url": "https://github.com/SimoneAvogadro/android-reverse-engineering-skill",
+                    "description": "Android reverse engineering skill package",
+                }
+            ]
+        }
+
+        with patch(
+            "backend.rpa.runtime_ai_instruction.get_llm_model",
+            return_value=_BlackboardModel(),
+        ):
+            result = await execute_ai_instruction(_FakePage(), step, results=results)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["output"][0]["name"], "android-reverse-engineering-skill")
+        self.assertEqual(results["skill_repos"][0]["url"], "https://github.com/SimoneAvogadro/android-reverse-engineering-skill")
+
     async def test_execute_ai_instruction_uses_two_phase_fast_path_for_semantic_summary_extract(self):
         step = {
             "action": "ai_instruction",
@@ -195,6 +286,97 @@ class RuntimeAIInstructionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["output"], "Repo summary")
         self.assertEqual(results["project_summary"], "Repo summary")
+
+    async def test_execute_ai_instruction_preserves_structured_extract_output(self):
+        step = {
+            "action": "ai_instruction",
+            "prompt": "Select project",
+            "instruction_kind": "semantic_select",
+            "input_scope": {"mode": "current_page"},
+            "output_expectation": {
+                "mode": "extract",
+                "schema": {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}, "url": {"type": "string"}},
+                },
+            },
+            "execution_hint": {"max_reasoning_steps": 5},
+            "result_key": "selected_project",
+        }
+        page = _FakePage()
+        results = {}
+        selected_project = {"name": "owner/repo", "url": "https://github.com/owner/repo"}
+
+        with patch(
+            "backend.rpa.runtime_ai_instruction.build_page_snapshot",
+            new=AsyncMock(return_value={"url": page.url, "title": "Example", "frames": []}),
+        ), patch(
+            "backend.rpa.runtime_ai_instruction.plan_ai_instruction",
+            new=AsyncMock(
+                return_value={
+                    "plan_type": "code",
+                    "code": (
+                        "async def run(page, results):\n"
+                        f"    return {{'success': True, 'output': {selected_project!r}}}"
+                    ),
+                }
+            ),
+        ):
+            result = await execute_ai_instruction(page, step, results=results)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["output"], selected_project)
+        self.assertEqual(results["selected_project"], selected_project)
+
+    async def test_execute_ai_instruction_replans_when_extract_output_misses_schema(self):
+        step = {
+            "action": "ai_instruction",
+            "prompt": "Select project",
+            "instruction_kind": "semantic_select",
+            "input_scope": {"mode": "current_page"},
+            "output_expectation": {
+                "mode": "extract",
+                "schema": {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}, "url": {"type": "string"}},
+                    "required": ["name", "url"],
+                },
+            },
+            "execution_hint": {"max_reasoning_steps": 5},
+            "result_key": "selected_project",
+        }
+        page = _FakePage()
+        results = {}
+        plan_attempts = [
+            {
+                "plan_type": "code",
+                "code": "async def run(page, results):\n    return {'success': True, 'output': 'owner/repo'}",
+            },
+            {
+                "plan_type": "code",
+                "code": (
+                    "async def run(page, results):\n"
+                    "    return {'success': True, 'output': {'name': 'owner/repo', 'url': 'https://github.com/owner/repo'}}"
+                ),
+            },
+        ]
+
+        async def fake_plan_ai_instruction(_page, _step, model_config=None):
+            return plan_attempts.pop(0)
+
+        with patch(
+            "backend.rpa.runtime_ai_instruction.build_page_snapshot",
+            new=AsyncMock(return_value={"url": page.url, "title": "Example", "frames": []}),
+        ), patch(
+            "backend.rpa.runtime_ai_instruction.plan_ai_instruction",
+            new=AsyncMock(side_effect=fake_plan_ai_instruction),
+        ) as plan_ai_instruction:
+            result = await execute_ai_instruction(page, step, results=results)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["output"]["url"], "https://github.com/owner/repo")
+        self.assertEqual(results["selected_project"]["name"], "owner/repo")
+        self.assertEqual(plan_ai_instruction.await_count, 2)
 
     async def test_execute_ai_instruction_uses_best_effort_summary_when_fast_path_summary_times_out(self):
         step = {
@@ -315,6 +497,152 @@ class RuntimeAIInstructionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["action_performed"])
         self.assertEqual(result["navigation_target"], "https://example.com/forrestchang/andrej-karpathy-skills")
         self.assertEqual(page.goto_calls[0][0], "https://example.com/forrestchang/andrej-karpathy-skills")
+
+    async def test_execute_ai_instruction_act_mode_stores_structured_output_for_later_refs(self):
+        selected = {
+            "name": "openai/openai-agents-python",
+            "url": "https://github.com/openai/openai-agents-python",
+            "reason": "Python SDK project",
+        }
+        step = {
+            "action": "ai_instruction",
+            "prompt": "Open the project most related to Python on the current page",
+            "instruction_kind": "semantic_decision",
+            "input_scope": {"mode": "current_page"},
+            "output_expectation": {
+                "mode": "act",
+                "schema": {"type": "object", "required": ["name", "url", "reason"]},
+            },
+            "execution_hint": {"max_reasoning_steps": 10},
+            "result_key": "selected_python_project",
+        }
+        page = _FakePage()
+        results = {}
+
+        with patch(
+            "backend.rpa.runtime_ai_instruction.build_page_snapshot",
+            new=AsyncMock(return_value={"url": page.url, "title": "Example", "frames": []}),
+        ), patch(
+            "backend.rpa.runtime_ai_instruction.plan_ai_instruction",
+            new=AsyncMock(
+                return_value={
+                    "plan_type": "code",
+                    "code": (
+                        "async def run(page, results):\n"
+                        f"    return {{'success': True, 'output': {selected!r}}}"
+                    ),
+                }
+            ),
+        ):
+            result = await execute_ai_instruction(page, step, results=results)
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result["action_performed"])
+        self.assertEqual(result["output"], selected)
+        self.assertEqual(results["selected_python_project"]["url"], selected["url"])
+        self.assertEqual(page.goto_calls[0][0], selected["url"])
+
+    async def test_execute_ai_instruction_act_mode_synthesizes_structured_output_from_navigation(self):
+        step = {
+            "action": "ai_instruction",
+            "prompt": "Open the project most related to Python on the current page",
+            "instruction_kind": "runtime_ai",
+            "input_scope": {"mode": "current_page"},
+            "output_expectation": {
+                "mode": "act",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "url": {"type": "string"},
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["name", "url", "reason"],
+                },
+            },
+            "execution_hint": {"max_reasoning_steps": 10},
+            "result_key": "selected_python_project",
+        }
+        page = _FakePage()
+        results = {}
+
+        with patch(
+            "backend.rpa.runtime_ai_instruction.build_page_snapshot",
+            new=AsyncMock(return_value={"url": page.url, "title": "Example", "frames": []}),
+        ), patch(
+            "backend.rpa.runtime_ai_instruction.plan_ai_instruction",
+            new=AsyncMock(
+                return_value={
+                    "plan_type": "code",
+                    "code": (
+                        "async def run(page, results):\n"
+                        "    await page.goto('https://github.com/openai/openai-agents-python')\n"
+                        "    return {'success': True, 'output': '', 'action_performed': True}"
+                    ),
+                }
+            ),
+        ):
+            result = await execute_ai_instruction(page, step, results=results)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(
+            results["selected_python_project"]["url"],
+            "https://github.com/openai/openai-agents-python",
+        )
+        self.assertEqual(results["selected_python_project"]["name"], "openai/openai-agents-python")
+        self.assertTrue(results["selected_python_project"]["reason"])
+
+    async def test_execute_ai_instruction_structured_navigate_accepts_target_url_alias(self):
+        step = {
+            "action": "ai_instruction",
+            "prompt": "Open the project most related to Python on the current page",
+            "instruction_kind": "runtime_ai",
+            "input_scope": {"mode": "current_page"},
+            "output_expectation": {
+                "mode": "act",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "url": {"type": "string"},
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["name", "url", "reason"],
+                },
+            },
+            "execution_hint": {"max_reasoning_steps": 10},
+            "result_key": "selected_python_project",
+        }
+        page = _FakePage()
+        results = {}
+
+        with patch(
+            "backend.rpa.runtime_ai_instruction.build_page_snapshot",
+            new=AsyncMock(return_value={"url": page.url, "title": "Example", "frames": []}),
+        ), patch(
+            "backend.rpa.runtime_ai_instruction.plan_ai_instruction",
+            new=AsyncMock(
+                return_value={
+                    "plan_type": "structured",
+                    "actions": [
+                        {
+                            "action": "navigate",
+                            "target_url": "https://github.com/openai/openai-agents-python",
+                            "description": "Open selected Python project",
+                        }
+                    ],
+                }
+            ),
+        ):
+            result = await execute_ai_instruction(page, step, results=results)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(page.goto_calls[0][0], "https://github.com/openai/openai-agents-python")
+        self.assertEqual(
+            results["selected_python_project"]["url"],
+            "https://github.com/openai/openai-agents-python",
+        )
+        self.assertEqual(results["selected_python_project"]["name"], "openai/openai-agents-python")
 
     async def test_execute_ai_instruction_replans_when_act_mode_only_returns_decision_text(self):
         step = {
@@ -680,7 +1008,7 @@ class RuntimeAIInstructionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results["filtered_high_star_projects"], "repo-a: 12000 stars")
         self.assertEqual(result["output"], "repo-a: 12000 stars")
 
-    async def test_execute_ai_instruction_normalizes_dict_output_to_json_string(self):
+    async def test_execute_ai_instruction_preserves_dict_output_for_extract(self):
         step = {
             "action": "ai_instruction",
             "prompt": "总结当前项目内容",
@@ -712,11 +1040,11 @@ class RuntimeAIInstructionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["success"])
         self.assertEqual(
             result["output"],
-            '{"summary": "Repo summary", "language": "Python"}',
+            {"summary": "Repo summary", "language": "Python"},
         )
         self.assertEqual(
             results["project_summary"],
-            '{"summary": "Repo summary", "language": "Python"}',
+            {"summary": "Repo summary", "language": "Python"},
         )
 
     async def test_execute_ai_instruction_returns_explicit_timeout_error_for_code_plan(self):

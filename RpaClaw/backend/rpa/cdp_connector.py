@@ -56,7 +56,10 @@ class CDPConnector:
         async with self._lock:
             existing = self._browsers.get(session_key)
             if existing and existing.is_connected():
-                return existing
+                if await self._run_in_pw_loop(self._probe_browser(existing)):
+                    return existing
+                logger.warning("Cached CDP browser connection is stale; reconnecting")
+                await self._discard_browser(session_key)
 
             cdp_url = await self._fetch_cdp_url(session_id=session_id, user_id=user_id)
             logger.info(f"Connecting to browser via CDP: {cdp_url}")
@@ -76,6 +79,41 @@ class CDPConnector:
         pw = await async_playwright().start()
         browser = await pw.chromium.connect_over_cdp(cdp_url)
         return pw, browser
+
+    @staticmethod
+    async def _probe_browser(browser: Browser) -> bool:
+        """Return False when Playwright still looks connected but cannot create contexts."""
+        context = None
+        try:
+            context = await browser.new_context(no_viewport=True)
+            return True
+        except Exception:
+            return False
+        finally:
+            if context:
+                try:
+                    await context.close()
+                except Exception:
+                    pass
+
+    async def _discard_browser(self, session_key: str) -> None:
+        browser = self._browsers.pop(session_key, None)
+        playwright = self._playwrights.pop(session_key, None)
+        if self._pw_loop and self._pw_loop.is_running():
+            if browser:
+                try:
+                    await asyncio.wrap_future(
+                        asyncio.run_coroutine_threadsafe(browser.close(), self._pw_loop)
+                    )
+                except Exception:
+                    pass
+            if playwright:
+                try:
+                    await asyncio.wrap_future(
+                        asyncio.run_coroutine_threadsafe(playwright.stop(), self._pw_loop)
+                    )
+                except Exception:
+                    pass
 
     async def _fetch_cdp_url(
         self,
@@ -174,7 +212,10 @@ class LocalCDPConnector:
         """Get or create a local headful browser."""
         async with self._lock:
             if self._browser and self._browser.is_connected():
-                return self._browser
+                if await self._run_in_pw_loop(self._probe_browser(self._browser)):
+                    return self._browser
+                logger.warning("Cached local Playwright browser is stale; relaunching")
+                await self._discard_browser()
 
             logger.info("Launching local Playwright Chromium (headful)")
             self._playwright, self._browser = await self._run_in_pw_loop(
@@ -189,6 +230,43 @@ class LocalCDPConnector:
         pw = await async_playwright().start()
         browser = await pw.chromium.launch(headless=False)
         return pw, browser
+
+    @staticmethod
+    async def _probe_browser(browser: Browser) -> bool:
+        """Return False when the cached browser object cannot create a fresh context."""
+        context = None
+        try:
+            context = await browser.new_context(no_viewport=True)
+            return True
+        except Exception:
+            return False
+        finally:
+            if context:
+                try:
+                    await context.close()
+                except Exception:
+                    pass
+
+    async def _discard_browser(self) -> None:
+        browser = self._browser
+        playwright = self._playwright
+        self._browser = None
+        self._playwright = None
+        if self._pw_loop and self._pw_loop.is_running():
+            if browser:
+                try:
+                    await asyncio.wrap_future(
+                        asyncio.run_coroutine_threadsafe(browser.close(), self._pw_loop)
+                    )
+                except Exception:
+                    pass
+            if playwright:
+                try:
+                    await asyncio.wrap_future(
+                        asyncio.run_coroutine_threadsafe(playwright.stop(), self._pw_loop)
+                    )
+                except Exception:
+                    pass
 
     async def close(self):
         """Clean up browser and playwright."""

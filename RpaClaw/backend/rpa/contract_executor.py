@@ -132,8 +132,15 @@ class ContractExecutor:
             raise ExecutionError("runtime_ai returned side-effect evidence but side effects are not allowed")
 
         schema = artifact.get("output_schema") or contract.outputs.schema_value
-        _validate_schema(output, schema)
         result_key = artifact.get("result_key") or contract.outputs.blackboard_key
+        if result_key and not _schema_matches(output, schema):
+            try:
+                blackboard_value = board.resolve_ref(result_key)
+            except KeyError:
+                blackboard_value = None
+            if _schema_matches(blackboard_value, schema):
+                output = blackboard_value
+        _validate_schema(output, schema)
         if result_key:
             board.write(result_key, output, schema=schema)
 
@@ -184,6 +191,14 @@ def _validate_schema(value: Any, schema: Any) -> None:
             for field in required:
                 if field not in item:
                     raise ExecutionError(f"array item {index} is missing required field: {field}")
+
+
+def _schema_matches(value: Any, schema: Any) -> bool:
+    try:
+        _validate_schema(value, schema)
+    except ExecutionError:
+        return False
+    return True
 
 
 def _resolve_page_locator(page: Any, payload: Dict[str, Any]) -> Any:
