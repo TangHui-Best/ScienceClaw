@@ -20,7 +20,7 @@ import {
   getPreviewTestStatus,
   hasMatchingPreviewTest,
 } from '@/utils/rpaMcpConvert';
-import { buildRecordedStepSummary, buildSchemaSummary } from '@/utils/rpaMcpEditorView';
+import { buildRecordedStepSummary, buildSchemaSummary, shouldShowCookieSection } from '@/utils/rpaMcpEditorView';
 import { convertCookieInputToPlaywrightCookies, type CookieInputMode } from '@/utils/rpaMcpTest';
 import { showErrorToast, showSuccessToast } from '@/utils/toast';
 
@@ -336,6 +336,7 @@ const schemaSummary = computed(() => buildSchemaSummary({
   input_schema: preview.value?.input_schema,
   output_schema: preview.value?.output_schema,
 }));
+const showCookieSection = computed(() => shouldShowCookieSection(preview.value, cookieSectionOpen.value));
 const currentPreviewSignature = computed(() => buildPreviewDraftSignature({
   sessionId: sessionId.value,
   name: toolName.value,
@@ -866,7 +867,7 @@ onMounted(async () => {
               </label>
             </div>
 
-            <div v-if="preview.requires_cookies || cookieSectionOpen" class="mt-4 space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/[0.03]">
+            <div v-if="showCookieSection && preview" class="mt-4 space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/[0.03]">
               <div class="flex items-center justify-between gap-3">
                 <div>
                   <h3 class="text-sm font-bold">{{ t('MCP Editor Gateway test cookies') }}</h3>

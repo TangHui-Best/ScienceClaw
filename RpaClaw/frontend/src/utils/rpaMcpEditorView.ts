@@ -28,3 +28,11 @@ export function buildSchemaSummary(preview: { input_schema?: unknown; output_sch
     outputFields: countSchemaProperties(preview.output_schema),
   };
 }
+
+export function shouldShowCookieSection(
+  preview: { requires_cookies?: boolean } | null | undefined,
+  cookieSectionOpen: boolean,
+): boolean {
+  if (!preview) return false;
+  return Boolean(preview.requires_cookies || cookieSectionOpen);
+}

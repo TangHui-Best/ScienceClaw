@@ -4,6 +4,7 @@ import {
   buildRecordedStepSummary,
   buildSchemaSummary,
   countSchemaProperties,
+  shouldShowCookieSection,
 } from './rpaMcpEditorView';
 
 describe('countSchemaProperties', () => {
@@ -49,5 +50,17 @@ describe('buildSchemaSummary', () => {
       inputFields: 2,
       outputFields: 3,
     });
+  });
+});
+
+describe('shouldShowCookieSection', () => {
+  it('does not show the cookie editor while preview is unavailable', () => {
+    expect(shouldShowCookieSection(null, true)).toBe(false);
+  });
+
+  it('shows the cookie editor for required cookies or explicit expansion', () => {
+    expect(shouldShowCookieSection({ requires_cookies: true }, false)).toBe(true);
+    expect(shouldShowCookieSection({ requires_cookies: false }, true)).toBe(true);
+    expect(shouldShowCookieSection({ requires_cookies: false }, false)).toBe(false);
   });
 });
