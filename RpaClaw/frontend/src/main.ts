@@ -25,6 +25,7 @@ import RecorderPage from './pages/rpa/RecorderPage.vue'
 import ConfigurePage from './pages/rpa/ConfigurePage.vue'
 import TestPage from './pages/rpa/TestPage.vue'
 import McpConvertPage from './pages/rpa/McpConvertPage.vue'
+import McpToolEditorPage from './pages/tools/McpToolEditorPage.vue'
 import { configure } from "vue-gtag";
 
 configure({
@@ -68,7 +69,7 @@ export const router = createRouter({
         },
         {
           path: 'tools/mcp/new',
-          component: McpConvertPage,
+          component: McpToolEditorPage,
           meta: { requiresAuth: true }
         },
         {
