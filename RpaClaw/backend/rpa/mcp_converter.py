@@ -245,9 +245,9 @@ class RpaMcpConverter:
         }
         inferred_count = 0
 
-        for step in steps:
+        for step_index, step in enumerate(steps):
             action = str(step.get("action") or "")
-            if action not in {"fill", "select", "set_input_files"}:
+            if action not in {"fill", "select"}:
                 continue
             if self._is_auth_like_step(step):
                 continue
@@ -267,6 +267,8 @@ class RpaMcpConverter:
                 "description": str(step.get("description") or name),
                 "required": False,
                 "sensitive": False,
+                "source_step_index": step_index,
+                "source_step_id": str(step.get("id") or ""),
             }
 
         return inferred

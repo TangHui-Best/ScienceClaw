@@ -58,7 +58,7 @@ class RpaMcpSemanticInferer:
         context = self._build_context(steps, removed_step_details)
         try:
             response = await asyncio.wait_for(
-                model_client.ainvoke(self._messages(requested_name, requested_description, context)),
+                model_client.ainvoke(self._messages(requested_name, requested_description, context, fallback_params)),
                 timeout=max(1, int(settings.rpa_mcp_semantic_timeout_seconds)),
             )
             payload = self._parse_json(str(getattr(response, "content", "") or ""))
@@ -106,12 +106,14 @@ class RpaMcpSemanticInferer:
             "context_window": doc.get("context_window"),
         }
 
-    def _messages(self, requested_name: str, requested_description: str, context: dict[str, Any]) -> list[Any]:
+    def _messages(self, requested_name: str, requested_description: str, context: dict[str, Any], fallback_params: dict[str, Any]) -> list[Any]:
         return [
             SystemMessage(
                 content=(
                     "You infer MCP tool metadata from sanitized RPA browser steps. "
-                    "Return strict JSON only. Never add login, account, password, cookie, token, or credential parameters."
+                    "Return strict JSON only. Never add login, account, password, cookie, token, or credential parameters. "
+                    "Only recommend names, descriptions, types, and required flags for the provided candidate_params keys. "
+                    "Do not invent new parameters."
                 )
             ),
             HumanMessage(
@@ -120,14 +122,22 @@ class RpaMcpSemanticInferer:
                         "requested_name": requested_name,
                         "requested_description": requested_description,
                         "sanitized_context": context,
+                        "candidate_params": self._candidate_param_context(fallback_params),
                         "required_json_shape": {
                             "tool": {
                                 "tool_name": "snake_case",
                                 "display_name": "Human title",
                                 "description": "What the tool does",
                             },
-                            "input_schema": {"type": "object", "properties": {}, "required": []},
-                            "params": {},
+                            "param_recommendations": {
+                                "candidate_param_key": {
+                                    "name": "snake_case",
+                                    "description": "MCP caller-facing description",
+                                    "type": "string",
+                                    "required": False,
+                                    "confidence": 0.8,
+                                }
+                            },
                             "warnings": [],
                         },
                     },
@@ -135,6 +145,22 @@ class RpaMcpSemanticInferer:
                 )
             ),
         ]
+
+    def _candidate_param_context(self, fallback_params: dict[str, Any]) -> list[dict[str, Any]]:
+        candidates = []
+        for key, info in fallback_params.items():
+            info_dict = dict(info or {})
+            candidates.append(
+                {
+                    "key": key,
+                    "description": info_dict.get("description", ""),
+                    "type": info_dict.get("type", "string"),
+                    "example_value": "" if info_dict.get("sensitive") else info_dict.get("original_value", ""),
+                    "source_step_index": info_dict.get("source_step_index"),
+                    "source_step_id": info_dict.get("source_step_id"),
+                }
+            )
+        return candidates
 
     def _build_context(self, steps: list[dict[str, Any]], removed_step_details: list[dict[str, Any]]) -> dict[str, Any]:
         return {
@@ -198,48 +224,50 @@ class RpaMcpSemanticInferer:
         tool_name = self._snake_case(str(tool.get("tool_name") or requested_name or "rpa_tool"))
         display_name = str(tool.get("display_name") or requested_name or tool_name)
         description = str(tool.get("description") or requested_description or "")
-        schema = payload.get("input_schema") if isinstance(payload.get("input_schema"), dict) else {}
-        schema.setdefault("type", "object")
-        schema.setdefault("properties", {})
-        schema.setdefault("required", [])
-        params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+        params = payload.get("param_recommendations") if isinstance(payload.get("param_recommendations"), dict) else {}
+        if not params and isinstance(payload.get("params"), dict):
+            params = payload.get("params") or {}
         warnings = [str(item) for item in payload.get("warnings", []) if str(item).strip()]
 
         clean_params = {}
         clean_properties = {}
         clean_required = []
-        for raw_name, info in params.items():
-            name = self._snake_case(str(raw_name))
-            if not name or _SENSITIVE_PARAM_RE.search(name):
-                warnings.append(f"Dropped sensitive parameter recommendation: {raw_name}")
-                continue
-            info_dict = dict(info or {})
-            prop = dict((schema.get("properties") or {}).get(raw_name) or (schema.get("properties") or {}).get(name) or {})
-            if _SENSITIVE_PARAM_RE.search(str(prop.get("description") or "")) or _SENSITIVE_PARAM_RE.search(str(info_dict.get("description") or "")):
-                warnings.append(f"Dropped sensitive parameter recommendation: {raw_name}")
-                continue
-            prop.setdefault("type", "string")
-            prop.setdefault("description", str(info_dict.get("description") or name))
-            if info_dict.get("original_value") not in (None, ""):
-                prop["default"] = info_dict.get("original_value")
-            clean_properties[name] = prop
-            clean_params[name] = info_dict
-            clean_params[name]["description"] = prop["description"]
-            clean_params[name]["type"] = prop["type"]
-            if raw_name in schema.get("required", []) or name in schema.get("required", []) or clean_params[name].get("required"):
-                clean_required.append(name)
 
-        if not clean_params and fallback_params:
-            fallback = self._fallback(
-                requested_name,
-                requested_description,
-                fallback_params,
-                ["Semantic inference returned no usable parameters."],
-            )
-            fallback.tool_name = tool_name
-            fallback.display_name = display_name
-            fallback.description = description
-            return fallback
+        for raw_key in params.keys():
+            if raw_key not in fallback_params:
+                warnings.append(f"Dropped unknown parameter recommendation: {raw_key}")
+
+        used_names: set[str] = set()
+        for candidate_key, fallback_info in fallback_params.items():
+            fallback_info_dict = dict(fallback_info or {})
+            info_dict = dict(params.get(candidate_key) or {})
+            recommended_name = self._snake_case(str(info_dict.get("name") or candidate_key))
+            if not recommended_name or _SENSITIVE_PARAM_RE.search(recommended_name):
+                warnings.append(f"Dropped sensitive parameter recommendation: {candidate_key}")
+                recommended_name = self._snake_case(str(candidate_key))
+            if _SENSITIVE_PARAM_RE.search(str(info_dict.get("description") or "")):
+                warnings.append(f"Dropped sensitive parameter description recommendation: {candidate_key}")
+                description = str(fallback_info_dict.get("description") or recommended_name)
+            else:
+                description = str(info_dict.get("description") or fallback_info_dict.get("description") or recommended_name)
+            name = self._unique_name(recommended_name, used_names)
+            if not name:
+                continue
+            used_names.add(name)
+            param_type = self._safe_param_type(str(info_dict.get("type") or fallback_info_dict.get("type") or "string"))
+            prop = {"type": param_type, "description": description}
+            if fallback_info_dict.get("original_value") not in (None, "") and not fallback_info_dict.get("sensitive"):
+                prop["default"] = fallback_info_dict.get("original_value")
+            clean_properties[name] = prop
+            clean_params[name] = fallback_info_dict
+            clean_params[name]["source_param"] = candidate_key
+            clean_params[name]["description"] = description
+            clean_params[name]["type"] = param_type
+            clean_params[name]["required"] = bool(info_dict.get("required", fallback_info_dict.get("required", False)))
+            if info_dict.get("confidence") is not None:
+                clean_params[name]["confidence"] = info_dict.get("confidence")
+            if clean_params[name].get("required"):
+                clean_required.append(name)
 
         return RpaMcpSemanticRecommendation(
             source="ai_inferred",
@@ -296,3 +324,15 @@ class RpaMcpSemanticInferer:
     def _snake_case(self, value: str) -> str:
         normalized = re.sub(r"[^0-9a-zA-Z]+", "_", value.strip().lower()).strip("_")
         return normalized or "rpa_tool"
+
+    def _unique_name(self, base_name: str, used_names: set[str]) -> str:
+        name = base_name or "param"
+        if name not in used_names:
+            return name
+        suffix = 2
+        while f"{name}_{suffix}" in used_names:
+            suffix += 1
+        return f"{name}_{suffix}"
+
+    def _safe_param_type(self, value: str) -> str:
+        return value if value in {"string", "number", "integer", "boolean", "array", "object"} else "string"

@@ -296,6 +296,42 @@ def test_preview_strips_login_params_before_building_input_schema():
     assert properties["title"]["default"] == "Quarterly report"
 
 
+def test_preview_infers_candidate_params_like_skill_configure_page():
+    steps = [
+        {
+            "id": "fill-title",
+            "action": "fill",
+            "description": "Fill title",
+            "target": '{"method":"label","value":"Title"}',
+            "value": "Quarterly report",
+            "url": "https://example.com/editor",
+        },
+        {
+            "id": "upload-file",
+            "action": "set_input_files",
+            "description": "Upload attachment",
+            "target": '{"method":"css","value":"input[type=file]"}',
+            "value": "C:/tmp/report.pdf",
+            "url": "https://example.com/editor",
+        },
+    ]
+
+    preview = RpaMcpConverter().preview(
+        user_id="user-1",
+        session_id="session-1",
+        skill_name="editor_skill",
+        name="create report",
+        description="Create report",
+        steps=steps,
+        params={},
+    )
+
+    assert set(preview.params.keys()) == {"title"}
+    assert preview.params["title"]["source_step_index"] == 0
+    assert preview.params["title"]["source_step_id"] == "fill-title"
+    assert "file" not in preview.input_schema["properties"]
+
+
 @pytest.mark.anyio
 async def test_preview_with_semantics_uses_ai_recommendation_after_login_strip():
     steps = [

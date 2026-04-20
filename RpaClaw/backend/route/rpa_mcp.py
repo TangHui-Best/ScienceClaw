@@ -34,6 +34,9 @@ class PreviewRequest(BaseModel):
     description: str = ""
     allowed_domains: list[str] = Field(default_factory=list)
     post_auth_start_url: str = ""
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+    params: dict[str, Any] = Field(default_factory=dict)
+    schema_source: str = ""
 
 
 class SaveToolRequest(PreviewRequest):
@@ -85,17 +88,41 @@ async def get_rpa_session_steps(session_id: str, user_id: str) -> dict[str, Any]
     }
 
 
-def _preview_config_signature(*, session_id: str, user_id: str, name: str, description: str, allowed_domains: list[str], post_auth_start_url: str) -> str:
+def _preview_config_signature(
+    *,
+    session_id: str,
+    user_id: str,
+    name: str,
+    description: str,
+    allowed_domains: list[str],
+    post_auth_start_url: str,
+    input_schema: dict[str, Any] | None = None,
+    params: dict[str, Any] | None = None,
+) -> str:
     return json.dumps(
         {
             "session_id": session_id,
             "user_id": user_id,
             "allowed_domains": allowed_domains,
             "post_auth_start_url": post_auth_start_url,
+            "input_schema": input_schema or {},
+            "params": params or {},
         },
         ensure_ascii=False,
         sort_keys=True,
     )
+
+
+def _apply_confirmed_input_contract(preview: RpaMcpToolDefinition, body: Any) -> None:
+    input_schema = getattr(body, "input_schema", None)
+    params = getattr(body, "params", None)
+    schema_source = getattr(body, "schema_source", "")
+    if input_schema:
+        preview.input_schema = input_schema
+    if params:
+        preview.params = params
+    if schema_source:
+        preview.schema_source = schema_source
 
 
 async def _preview_payload(session_id: str, user_id: str, body: PreviewRequest | SaveToolRequest | PreviewTestRequest):
@@ -118,6 +145,7 @@ async def _preview_payload(session_id: str, user_id: str, body: PreviewRequest |
         preview.allowed_domains = body.allowed_domains
     if body.post_auth_start_url:
         preview.post_auth_start_url = body.post_auth_start_url
+    _apply_confirmed_input_contract(preview, body)
     config_signature = _preview_config_signature(
         session_id=session_id,
         user_id=user_id,
@@ -125,6 +153,8 @@ async def _preview_payload(session_id: str, user_id: str, body: PreviewRequest |
         description=preview.description,
         allowed_domains=preview.allowed_domains,
         post_auth_start_url=preview.post_auth_start_url,
+        input_schema=preview.input_schema,
+        params=preview.params,
     )
     draft = await _maybe_await(RpaMcpPreviewDraftRegistry().get(session_id, user_id, config_signature))
     if draft and draft.get("tested"):
@@ -246,6 +276,8 @@ async def test_preview_rpa_mcp_tool(session_id: str, body: PreviewTestRequest, c
             description=preview.description,
             allowed_domains=preview.allowed_domains,
             post_auth_start_url=preview.post_auth_start_url,
+            input_schema=preview.input_schema,
+            params=preview.params,
         )
         await RpaMcpPreviewDraftRegistry().save(
             session_id,
@@ -272,6 +304,8 @@ async def create_rpa_mcp_tool(session_id: str, body: SaveToolRequest, current_us
         description=preview.description,
         allowed_domains=preview.allowed_domains,
         post_auth_start_url=preview.post_auth_start_url,
+        input_schema=preview.input_schema,
+        params=preview.params,
     )
     draft = await RpaMcpPreviewDraftRegistry().get(session_id, str(current_user.id), config_signature)
     if not draft or not draft.get("tested"):
@@ -280,12 +314,7 @@ async def create_rpa_mcp_tool(session_id: str, body: SaveToolRequest, current_us
     preview.recommended_output_schema = draft.get("recommended_output_schema") or preview.recommended_output_schema
     preview.output_examples = draft.get("output_examples") or []
     preview.output_inference_report = draft.get("output_inference_report") or {}
-    if body.input_schema:
-        preview.input_schema = body.input_schema
-    if body.params:
-        preview.params = body.params
-    if body.schema_source:
-        preview.schema_source = body.schema_source
+    _apply_confirmed_input_contract(preview, body)
     preview.output_schema = body.output_schema or preview.recommended_output_schema
     preview.output_schema_confirmed = True
     saved = await RpaMcpToolRegistry().save(preview)

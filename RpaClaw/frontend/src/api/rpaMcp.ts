@@ -68,7 +68,7 @@ export interface RpaMcpToolItem extends RpaMcpPreview {
   enabled: boolean;
 }
 
-export async function previewRpaMcpTool(sessionId: string, payload: { name: string; description?: string; allowed_domains?: string[]; post_auth_start_url?: string }) {
+export async function previewRpaMcpTool(sessionId: string, payload: { name: string; description?: string; allowed_domains?: string[]; post_auth_start_url?: string; input_schema?: JsonSchemaObject; params?: Record<string, unknown>; schema_source?: RpaMcpSchemaSource }) {
   const response = await apiClient.post<ApiResponse<RpaMcpPreview>>(`/rpa-mcp/session/${encodeURIComponent(sessionId)}/preview`, payload);
   return response.data.data;
 }
@@ -80,6 +80,9 @@ export async function testPreviewRpaMcpTool(
     description?: string;
     allowed_domains?: string[];
     post_auth_start_url?: string;
+    input_schema?: JsonSchemaObject;
+    params?: Record<string, unknown>;
+    schema_source?: RpaMcpSchemaSource;
     cookies?: Array<Record<string, unknown>>;
     arguments?: Record<string, unknown>;
   },

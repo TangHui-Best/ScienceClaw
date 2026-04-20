@@ -1,4 +1,4 @@
-import type { RpaMcpExecutionResult } from '@/api/rpaMcp';
+import type { JsonSchemaObject, RpaMcpExecutionResult } from '@/api/rpaMcp';
 
 export type PreviewTestStatus = 'untested' | 'failed' | 'stale' | 'success';
 
@@ -8,6 +8,7 @@ export interface PreviewDraftSignatureInput {
   description: string;
   allowedDomains: string[];
   postAuthStartUrl: string;
+  inputSchema?: JsonSchemaObject;
 }
 
 export interface PreviewTestStatusInput {
@@ -50,6 +51,7 @@ export function buildPreviewDraftSignature(input: PreviewDraftSignatureInput): s
     session_id: input.sessionId.trim(),
     allowed_domains: normalizeList(input.allowedDomains),
     post_auth_start_url: input.postAuthStartUrl.trim(),
+    input_schema: input.inputSchema || undefined,
   });
 }
 

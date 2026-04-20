@@ -80,6 +80,10 @@ class _FakePreviewTestRegistry:
         return dict(payload)
 
 
+def _fake_preview_input_schema():
+    return {"type": "object", "properties": {"cookies": {"type": "array"}}, "required": ["cookies"]}
+
+
 def _build_rpa_mcp_app():
     app = FastAPI()
     app.include_router(rpa_mcp_route.router, prefix="/api/v1")
@@ -111,7 +115,7 @@ class _FakeConverter:
             "post_auth_start_url": "https://example.com/dashboard",
             "steps": kwargs["steps"],
             "params": kwargs["params"],
-            "input_schema": {"type": "object", "properties": {"cookies": {"type": "array"}}, "required": ["cookies"]},
+            "input_schema": _fake_preview_input_schema(),
             "output_schema": {
                 "type": "object",
                 "properties": {
@@ -487,6 +491,8 @@ def test_preview_route_surfaces_latest_inferred_schema_for_matching_draft(monkey
         description="Download invoice",
         allowed_domains=["example.com"],
         post_auth_start_url="https://example.com/dashboard",
+        input_schema=_fake_preview_input_schema(),
+        params={},
     )
     draft_registry.docs[("session-1", "user-1", config_signature)] = {
         "recommended_output_schema": {
@@ -521,6 +527,33 @@ def test_preview_route_surfaces_latest_inferred_schema_for_matching_draft(monkey
     assert response.json()["data"]["output_examples"] == [{"success": True}]
 
 
+def test_preview_payload_applies_user_confirmed_input_schema_for_preview_tests(monkeypatch):
+    converter = _FakeConverter()
+    draft_registry = _FakePreviewTestRegistry()
+
+    monkeypatch.setattr(rpa_mcp_route, "get_rpa_session_steps", _fake_steps)
+    monkeypatch.setattr(rpa_mcp_route, "RpaMcpConverter", lambda: converter)
+    monkeypatch.setattr(rpa_mcp_route, "RpaMcpPreviewDraftRegistry", lambda: draft_registry)
+
+    body = rpa_mcp_route.PreviewTestRequest(
+        name="download_invoice",
+        description="Download invoice",
+        input_schema={
+            "type": "object",
+            "properties": {"query": {"type": "string", "description": "Confirmed query"}},
+            "required": ["query"],
+        },
+        params={"query": {"original_value": "cancer", "description": "Confirmed query", "required": True}},
+        schema_source="user_edited",
+    )
+
+    preview = anyio.run(rpa_mcp_route._preview_payload, "session-1", "user-1", body)
+
+    assert preview.schema_source == "user_edited"
+    assert preview.input_schema["properties"]["query"]["description"] == "Confirmed query"
+    assert preview.params["query"]["original_value"] == "cancer"
+
+
 def test_create_tool_requires_matching_successful_preview_test(monkeypatch):
     app = _build_rpa_mcp_app()
     client = TestClient(app)
@@ -536,6 +569,57 @@ def test_create_tool_requires_matching_successful_preview_test(monkeypatch):
     response = client.post(
         "/api/v1/rpa-mcp/session/session-1/tools",
         json={"name": "download_invoice", "description": "Download invoice"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "A successful preview test is required before saving the tool"
+
+
+def test_create_tool_requires_retest_when_confirmed_input_schema_changes(monkeypatch):
+    app = _build_rpa_mcp_app()
+    client = TestClient(app)
+    converter = _FakeConverter()
+    registry = _FakeRegistry(_sample_tool())
+    draft_registry = _FakePreviewTestRegistry()
+
+    monkeypatch.setattr(rpa_mcp_route, "get_rpa_session_steps", _fake_steps)
+    monkeypatch.setattr(rpa_mcp_route, "RpaMcpConverter", lambda: converter)
+    monkeypatch.setattr(rpa_mcp_route, "RpaMcpToolRegistry", lambda: registry)
+    monkeypatch.setattr(rpa_mcp_route, "RpaMcpPreviewDraftRegistry", lambda: draft_registry)
+
+    old_signature = rpa_mcp_route._preview_config_signature(
+        session_id="session-1",
+        user_id="user-1",
+        name="download_invoice",
+        description="Download invoice",
+        allowed_domains=["example.com"],
+        post_auth_start_url="https://example.com/dashboard",
+        input_schema=_fake_preview_input_schema(),
+        params={},
+    )
+    draft_registry.docs[("session-1", "user-1", old_signature)] = {
+        "recommended_output_schema": {"type": "object", "properties": {"data": {"type": "object"}}},
+        "output_examples": [{"success": True}],
+        "output_inference_report": {"test_result_keys": []},
+        "tested": True,
+    }
+
+    response = client.post(
+        "/api/v1/rpa-mcp/session/session-1/tools",
+        json={
+            "name": "download_invoice",
+            "description": "Download invoice",
+            "allowed_domains": ["example.com"],
+            "post_auth_start_url": "https://example.com/dashboard",
+            "input_schema": {
+                "type": "object",
+                "properties": {"query": {"type": "string", "description": "Confirmed query"}},
+                "required": ["query"],
+            },
+            "params": {"query": {"original_value": "cancer", "type": "string", "description": "Confirmed query"}},
+            "schema_source": "user_edited",
+            "output_schema": {"type": "object", "properties": {"data": {"type": "object"}}},
+        },
     )
 
     assert response.status_code == 400
@@ -562,6 +646,8 @@ def test_create_tool_uses_successful_preview_test_artifacts(monkeypatch):
         description="Download invoice",
         allowed_domains=["example.com"],
         post_auth_start_url="https://example.com/dashboard",
+        input_schema=_fake_preview_input_schema(),
+        params={},
     )
     draft_registry.docs[("session-1", "user-1", config_signature)] = {
         "recommended_output_schema": {
@@ -695,6 +781,8 @@ def test_create_tool_allows_name_and_description_changes_after_successful_previe
         description="Download invoice",
         allowed_domains=["example.com"],
         post_auth_start_url="https://example.com/dashboard",
+        input_schema=_fake_preview_input_schema(),
+        params={},
     )
     draft_registry.docs[("session-1", "user-1", config_signature)] = {
         "recommended_output_schema": {"type": "object", "properties": {"data": {"type": "object"}}},
