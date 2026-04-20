@@ -42,6 +42,16 @@ def build_rpa_mcp_output_schema(data_schema: dict[str, Any] | None = None) -> di
     }
 
 
+def build_rpa_mcp_semantic_report(source: str = "rule_inferred") -> dict[str, Any]:
+    return {
+        "source": source,
+        "confidence": None,
+        "warnings": [],
+        "model": "",
+        "generated_at": "preview",
+    }
+
+
 class RpaMcpSource(BaseModel):
     type: str = "rpa_skill"
     session_id: str
@@ -69,11 +79,13 @@ class RpaMcpToolDefinition(BaseModel):
     steps: list[dict[str, Any]] = Field(default_factory=list)
     params: dict[str, Any] = Field(default_factory=dict)
     input_schema: dict[str, Any] = Field(default_factory=dict)
+    schema_source: str = "rule_inferred"
     output_schema: dict[str, Any] = Field(default_factory=build_rpa_mcp_output_schema)
     recommended_output_schema: dict[str, Any] = Field(default_factory=build_rpa_mcp_output_schema)
     output_schema_confirmed: bool = False
     output_examples: list[dict[str, Any]] = Field(default_factory=list)
     output_inference_report: dict[str, Any] = Field(default_factory=dict)
+    semantic_inference: dict[str, Any] = Field(default_factory=build_rpa_mcp_semantic_report)
     sanitize_report: RpaMcpSanitizeReport = Field(default_factory=RpaMcpSanitizeReport)
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)

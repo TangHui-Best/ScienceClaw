@@ -27,6 +27,8 @@ def test_rpa_mcp_tool_definition_defaults():
     assert tool.allowed_domains == ["example.com"]
     assert tool.sanitize_report.removed_step_details == []
     assert tool.sanitize_report.warnings == []
+    assert tool.semantic_inference["source"] == "rule_inferred"
+    assert tool.schema_source == "rule_inferred"
 
 
 def test_preview_strips_login_steps_and_sensitive_params():
