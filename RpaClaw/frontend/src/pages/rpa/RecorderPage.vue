@@ -18,6 +18,11 @@ import {
   isTerminalScreencastClose,
   shouldShowScreencastReconnectNotice,
 } from '@/utils/screencastReconnect';
+import {
+  getInitialRpaAgentProgress,
+  getRpaAgentProgressForEvent,
+  type RpaAgentMessageStatus,
+} from '@/utils/rpaAgentProgress';
 
 const router = useRouter();
 const route = useRoute();
@@ -183,7 +188,8 @@ interface ChatMessage {
   text: string;
   time: string;
   script?: string;
-  status?: 'streaming' | 'executing' | 'done' | 'error';
+  status?: RpaAgentMessageStatus;
+  processingLabel?: string;
   error?: string;
   showCode?: boolean;
   actions?: Array<{ description: string; code: string; showCode?: boolean }>;  // Track agent actions
@@ -196,7 +202,6 @@ interface ChatMessage {
 const chatMessages = ref<ChatMessage[]>([]);
 const newMessage = ref('');
 const sending = ref(false);
-const agentMode = ref(false);
 const agentRunning = ref(false);
 
 interface PendingConfirm {
@@ -653,12 +658,19 @@ const sendMessage = async () => {
   const userText = newMessage.value.trim();
   newMessage.value = '';
   sending.value = true;
-  if (agentMode.value) agentRunning.value = true;
+  agentRunning.value = true;
+  const initialProgress = getInitialRpaAgentProgress();
 
   const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   chatMessages.value.push({ role: 'user', text: userText, time: now });
 
-  const assistantMsg: ChatMessage = { role: 'assistant', text: '', time: now, status: 'streaming' };
+  const assistantMsg: ChatMessage = {
+    role: 'assistant',
+    text: '',
+    time: now,
+    status: initialProgress.status,
+    processingLabel: initialProgress.label,
+  };
   chatMessages.value.push(assistantMsg);
   const msgIdx = chatMessages.value.length - 1;
 
@@ -669,12 +681,13 @@ const sendMessage = async () => {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${localStorage.getItem('token') || ''}`,
       },
-      body: JSON.stringify({ message: userText, mode: agentMode.value ? 'react' : 'chat' }),
+      body: JSON.stringify({ message: userText, mode: 'trace_first' }),
     });
 
     if (!resp.ok || !resp.body) {
       chatMessages.value[msgIdx].text = '请求失败，请重试。';
       chatMessages.value[msgIdx].status = 'error';
+      chatMessages.value[msgIdx].processingLabel = '';
       sending.value = false;
       agentRunning.value = false;
       return;
@@ -701,6 +714,11 @@ const sendMessage = async () => {
           if (!raw) continue;
           try {
             const data = JSON.parse(raw);
+            const progress = getRpaAgentProgressForEvent(eventType);
+            if (progress) {
+              chatMessages.value[msgIdx].status = progress.status;
+              chatMessages.value[msgIdx].processingLabel = progress.label;
+            }
             if (eventType === 'message_chunk') {
               chatMessages.value[msgIdx].text += data.text || '';
             } else if (eventType === 'script') {
@@ -720,11 +738,13 @@ const sendMessage = async () => {
               }
             } else if (eventType === 'executing') {
               chatMessages.value[msgIdx].status = 'executing';
+              chatMessages.value[msgIdx].processingLabel = '正在执行浏览器操作...';
               if (!chatMessages.value[msgIdx].text.trim()) {
                 chatMessages.value[msgIdx].text = '代码已生成，正在执行浏览器操作。';
               }
             } else if (eventType === 'result') {
               chatMessages.value[msgIdx].status = data.success ? 'done' : 'error';
+              chatMessages.value[msgIdx].processingLabel = '';
               if (data.error) chatMessages.value[msgIdx].error = data.error;
               if (data.output && data.output !== 'ok' && data.output !== 'None') {
                 chatMessages.value[msgIdx].text += `${chatMessages.value[msgIdx].text ? '\n' : ''}输出: ${data.output}`;
@@ -793,6 +813,7 @@ const sendMessage = async () => {
   } catch (err: any) {
     chatMessages.value[msgIdx].text = `连接失败: ${err.message}`;
     chatMessages.value[msgIdx].status = 'error';
+    chatMessages.value[msgIdx].processingLabel = '';
     agentRunning.value = false;
   } finally {
     sending.value = false;
@@ -990,9 +1011,11 @@ const sendMessage = async () => {
               </div>
               <div>
                 <h3 class="text-gray-900 dark:text-gray-100 font-bold text-sm">AI 录制助手</h3>
-                <p class="text-[10px] font-bold" :class="agentRunning ? 'text-orange-500' : 'text-[#831bd7]'">
-                  {{ agentRunning ? 'Agent 运行中...' : (agentMode ? 'Agent 模式' : '已就绪 · 协助录制中') }}
-                </p>
+                <p
+                  class="text-[10px] font-bold"
+                  :class="agentRunning ? 'text-orange-500' : 'text-[#831bd7]'"
+                  v-text="agentRunning ? 'Agent 运行中...' : 'Trace-first 智能录制'"
+                ></p>
               </div>
             </div>
             <div class="flex items-center gap-2">
@@ -1001,18 +1024,6 @@ const sendMessage = async () => {
                 @click="abortAgent"
                 class="text-[10px] font-bold text-red-500 border border-red-200 dark:border-red-800 px-2 py-1 rounded-lg hover:bg-red-50 transition-colors"
               >中止</button>
-              <label class="flex items-center gap-1.5 cursor-pointer" :class="agentRunning ? 'opacity-50 pointer-events-none' : ''">
-                <span class="text-[10px] text-gray-500 dark:text-gray-400 font-medium">Agent</span>
-                <div
-                  @click="agentMode = !agentMode"
-                  class="w-8 h-4 rounded-full transition-colors relative"
-                  :class="agentMode ? 'bg-[#831bd7]' : 'bg-gray-300'"
-                >
-                  <div class="w-3 h-3 bg-white dark:bg-[#272728] rounded-full absolute top-0.5 transition-transform shadow-sm"
-                    :class="agentMode ? 'translate-x-4' : 'translate-x-0.5'"
-                  ></div>
-                </div>
-              </label>
             </div>
           </div>
         </div>
@@ -1028,13 +1039,13 @@ const sendMessage = async () => {
             :class="msg.role === 'user' ? 'items-end' : 'items-start'"
           >
             <div
-              class="max-w-[85%] p-3 rounded-2xl text-xs leading-relaxed"
+              class="max-w-[85%] min-w-0 overflow-hidden p-3 rounded-2xl text-xs leading-relaxed break-words [overflow-wrap:anywhere]"
               :class="msg.role === 'user' ? 'bg-[#831bd7] text-white rounded-tr-none shadow-md shadow-purple-100' : 'bg-white dark:bg-[#272728] text-gray-700 dark:text-gray-300 rounded-tl-none border border-gray-100 dark:border-gray-800'"
             >
               <!-- Message text with inline code blocks for agent actions -->
               <div v-if="msg.actions && msg.actions.length > 0">
                 <template v-for="(part, pidx) in msg.text.split(/(\[\[CODE_\d+\]\])/)" :key="pidx">
-                  <span v-if="!part.match(/\[\[CODE_(\d+)\]\]/)">{{ part }}</span>
+                  <span v-if="!part.match(/\[\[CODE_(\d+)\]\]/)" class="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{{ part }}</span>
                   <div v-else class="inline-block ml-2">
                     <button
                       @click="msg.actions[codeActionIndex(part)].showCode = !msg.actions[codeActionIndex(part)].showCode"
@@ -1047,10 +1058,10 @@ const sendMessage = async () => {
                   </div>
                 </template>
               </div>
-              <div v-else class="whitespace-pre-wrap">{{ msg.text }}</div>
+              <div v-else class="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{{ msg.text }}</div>
               <div v-if="msg.status === 'executing'" class="mt-2 flex items-center gap-1.5 text-[10px] text-[#831bd7] font-medium">
                 <div class="w-2 h-2 rounded-full bg-[#831bd7] animate-pulse"></div>
-                正在执行...
+                <span>{{ msg.processingLabel || '正在执行...' }}</span>
               </div>
               <div v-if="msg.status === 'error' && msg.error" class="mt-2 text-[10px] text-red-500 bg-red-50 dark:bg-red-900/30 p-2 rounded-lg">
                 {{ msg.error }}
@@ -1075,7 +1086,7 @@ const sendMessage = async () => {
                   <span class="ml-1">{{ msg.locatorSummary }}</span>
                 </div>
               </div>
-              <div v-if="msg.status === 'done' && msg.role === 'assistant' && !agentMode" class="mt-2 flex items-center gap-1 text-[10px] text-green-600 font-medium">
+              <div v-if="msg.status === 'done' && msg.role === 'assistant'" class="mt-2 flex items-center gap-1 text-[10px] text-green-600 font-medium">
                 <CheckCircle :size="10" /> 执行成功
               </div>
               <!-- Legacy script toggle (for non-agent mode) -->
@@ -1111,7 +1122,7 @@ const sendMessage = async () => {
               @keyup.enter="sendMessage"
               :disabled="sending || agentRunning"
               class="w-full bg-white dark:bg-[#272728] border border-gray-200 dark:border-gray-700 rounded-2xl py-3 pl-4 pr-12 text-xs focus:ring-2 focus:ring-[#831bd7] focus:border-transparent shadow-sm placeholder:text-gray-400 outline-none disabled:opacity-50"
-              :placeholder="agentRunning ? 'Agent 运行中...' : (sending ? 'AI 正在处理...' : (agentMode ? '描述目标任务...' : '向助手提问...'))"
+              :placeholder="agentRunning ? 'Agent 运行中...' : (sending ? 'AI 正在处理...' : '描述录制目标或操作...')"
               type="text"
             />
             <button

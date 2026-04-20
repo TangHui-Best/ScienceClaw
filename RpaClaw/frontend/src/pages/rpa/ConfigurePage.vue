@@ -12,6 +12,11 @@ import {
 } from 'lucide-vue-next';
 import { apiClient } from '@/api/client';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import {
+  getLegacyRpaSteps,
+  mapRpaConfigureDisplaySteps,
+  type RpaConfigureStep,
+} from '@/utils/rpaConfigureTimeline';
 
 const router = useRouter();
 const route = useRoute();
@@ -48,7 +53,7 @@ interface StepValidation {
   details?: string;
 }
 
-interface StepItem {
+interface StepItem extends RpaConfigureStep {
   id: string;
   action: string;
   target?: ParsedLocator | string | null;
@@ -60,6 +65,8 @@ interface StepItem {
   label?: string;
   sensitive?: boolean;
   url?: string;
+  source?: string;
+  configurable?: boolean;
 }
 
 interface ParamItem {
@@ -81,9 +88,11 @@ interface CredentialItem {
 }
 
 const steps = ref<StepItem[]>([]);
+const legacySteps = ref<StepItem[]>([]);
 const skillName = ref('');
 const skillDescription = ref('');
 const generatedScript = ref('');
+const scriptGenerating = ref(false);
 const params = ref<ParamItem[]>([]);
 const credentials = ref<CredentialItem[]>([]);
 const promotingStepIndex = ref<number | null>(null);
@@ -254,7 +263,10 @@ const getStepTitle = (step: StepItem) => {
   return `${getActionLabel(step.action)} ${formatLocator(step.target || step.label || '')}`;
 };
 
-const getStepLocatorSummary = (step: StepItem) => shortenText(formatLocator(step.target || step.label || ''), 72);
+const getStepLocatorSummary = (step: StepItem) => {
+  if (step.url && !step.target) return shortenText(step.url, 72);
+  return shortenText(formatLocator(step.target || step.label || ''), 72);
+};
 
 const toggleStep = (index: number) => {
   expandedStepIndex.value = expandedStepIndex.value === index ? null : index;
@@ -335,12 +347,13 @@ const loadSession = async () => {
   try {
     const resp = await apiClient.get(`/rpa/session/${sessionId.value}`);
     const session = resp.data.session;
-    steps.value = (session.steps || []) as StepItem[];
+    legacySteps.value = getLegacyRpaSteps(session) as StepItem[];
+    steps.value = mapRpaConfigureDisplaySteps(session) as StepItem[];
     loadFailed.value = false;
     error.value = null;
 
     const usedNames = new Set<string>();
-    params.value = steps.value
+    params.value = legacySteps.value
       .filter((step) => step.action === 'fill' || step.action === 'select')
       .map((step, index) => {
         let label = `参数${index + 1}`;
@@ -376,7 +389,7 @@ const loadSession = async () => {
         };
       });
 
-    const navStep = steps.value.find((step) => !!step.url);
+    const navStep = steps.value.find((step) => !!step.url) || legacySteps.value.find((step) => !!step.url);
     if (navStep?.url) {
       try {
         const url = new URL(navStep.url);
@@ -410,18 +423,21 @@ const buildParamMap = () => {
   return paramMap;
 };
 
-const generateScript = async () => {
+const generateScript = async (options: { openDrawer?: boolean } = { openDrawer: true }) => {
   try {
+    scriptGenerating.value = true;
     error.value = null;
     const resp = await apiClient.post(`/rpa/session/${sessionId.value}/generate`, {
       params: buildParamMap(),
     });
     generatedScript.value = resp.data.script || '';
-    isScriptDrawerOpen.value = true;
+    isScriptDrawerOpen.value = options.openDrawer !== false;
   } catch (err: any) {
     isScriptDrawerOpen.value = false;
     generatedScript.value = '';
     error.value = `生成脚本失败: ${err.response?.data?.detail || err.message}`;
+  } finally {
+    scriptGenerating.value = false;
   }
 };
 
@@ -437,9 +453,12 @@ const goToTest = () => {
   });
 };
 
-onMounted(() => {
-  loadSession();
+onMounted(async () => {
+  await loadSession();
   loadCredentials();
+  if (!loadFailed.value && sessionId.value) {
+    await generateScript({ openDrawer: false });
+  }
 });
 </script>
 
@@ -460,7 +479,8 @@ onMounted(() => {
           <button
             type="button"
             @click="generateScript"
-            class="inline-flex items-center gap-2 rounded-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#272728] px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 transition-colors hover:bg-gray-50 dark:hover:bg-[#444345]"
+            :disabled="scriptGenerating"
+            class="inline-flex items-center gap-2 rounded-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#272728] px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-300 transition-colors hover:bg-gray-50 dark:hover:bg-[#444345] disabled:cursor-not-allowed disabled:opacity-60"
           >
             <Code :size="16" />
             预览脚本
@@ -601,7 +621,7 @@ onMounted(() => {
                     </div>
                   </div>
 
-                  <div v-if="step.locator_candidates?.length" class="space-y-2">
+                  <div v-if="step.locator_candidates?.length && step.configurable !== false" class="space-y-2">
                     <div class="flex items-center justify-between">
                       <p class="text-sm font-bold text-gray-900 dark:text-gray-100">候选定位器</p>
                       <p class="text-xs text-gray-400 dark:text-gray-500">只在当前展开步骤中显示完整列表</p>
@@ -655,6 +675,29 @@ onMounted(() => {
         </section>
 
         <aside class="space-y-4 xl:sticky xl:top-24 xl:self-start">
+          <section class="rounded-3xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#272728] p-5 shadow-sm">
+            <div class="flex items-center justify-between gap-3">
+              <div class="min-w-0">
+                <h2 class="text-base font-extrabold">脚本预览</h2>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  {{ scriptGenerating ? '正在生成最终 Skill 脚本...' : (generatedScript ? '已根据录制 trace 生成最终脚本' : '脚本尚未生成') }}
+                </p>
+              </div>
+              <button
+                type="button"
+                class="shrink-0 rounded-full border border-[#831bd7]/25 px-3 py-1.5 text-xs font-semibold text-[#831bd7] transition-colors hover:bg-[#831bd7]/5 disabled:cursor-not-allowed disabled:opacity-50"
+                :disabled="!generatedScript || scriptGenerating"
+                @click="isScriptDrawerOpen = true"
+              >
+                查看完整脚本
+              </button>
+            </div>
+            <pre
+              v-if="generatedScript"
+              class="mt-4 max-h-56 overflow-auto rounded-2xl bg-[#0f1115] p-3 text-[11px] leading-5 text-emerald-300"
+            ><code>{{ generatedScript.slice(0, 1600) }}{{ generatedScript.length > 1600 ? '\n...' : '' }}</code></pre>
+          </section>
+
           <section class="rounded-3xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#272728] p-5 shadow-sm">
             <div class="flex items-center gap-3">
               <div class="flex h-10 w-10 items-center justify-center rounded-2xl bg-[#f4eaff] text-[#831bd7]">
