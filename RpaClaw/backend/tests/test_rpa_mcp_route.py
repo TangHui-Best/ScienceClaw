@@ -98,6 +98,9 @@ def _fake_steps(session_id: str, user_id: str):
 
 
 class _FakeConverter:
+    async def preview_with_semantics(self, **kwargs):
+        return self.preview(**kwargs)
+
     def preview(self, **kwargs):
         return SimpleNamespace(model_dump=lambda mode='python': {
             "id": "preview",
@@ -604,6 +607,72 @@ def test_create_tool_uses_successful_preview_test_artifacts(monkeypatch):
     assert response.json()["data"]["output_schema_confirmed"] is True
     assert registry.tool.output_schema["properties"]["data"]["properties"]["arguments"]["type"] == "object"
     assert registry.tool.output_examples[0]["data"]["browser"]["session_id"] == "sandbox-1"
+
+
+def test_create_rpa_mcp_tool_preserves_user_edited_input_schema(monkeypatch):
+    app = _build_rpa_mcp_app()
+    client = TestClient(app)
+    saved = {}
+
+    async def fake_preview_payload(session_id, user_id, body):
+        return rpa_mcp_route.RpaMcpToolDefinition(
+            id="preview",
+            user_id=user_id,
+            name=body.name,
+            tool_name="search_reports",
+            description=body.description,
+            allowed_domains=["example.com"],
+            post_auth_start_url="https://example.com/search",
+            steps=[],
+            params={"report_keyword": {"original_value": "cancer", "type": "string", "description": "Keyword"}},
+            input_schema={"type": "object", "properties": {"report_keyword": {"type": "string"}}, "required": []},
+            source={"session_id": session_id, "skill_name": "search_skill"},
+            schema_source="ai_inferred",
+            semantic_inference={"source": "ai_inferred", "confidence": 0.8, "warnings": [], "model": "fake", "generated_at": "preview"},
+        )
+
+    class FakeDraftRegistry:
+        async def get(self, *_args):
+            return {"tested": True, "recommended_output_schema": {"type": "object", "properties": {}, "required": []}}
+
+    class FakeToolRegistry:
+        async def save(self, tool):
+            saved["tool"] = tool
+            return tool
+
+    monkeypatch.setattr(rpa_mcp_route, "_preview_payload", fake_preview_payload)
+    monkeypatch.setattr(rpa_mcp_route, "RpaMcpPreviewDraftRegistry", lambda: FakeDraftRegistry())
+    monkeypatch.setattr(rpa_mcp_route, "RpaMcpToolRegistry", lambda: FakeToolRegistry())
+
+    response = client.post(
+        "/api/v1/rpa-mcp/session/session-1/tools",
+        json={
+            "name": "Search reports",
+            "description": "Search reports.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "User-edited search query."},
+                },
+                "required": ["query"],
+            },
+            "params": {
+                "query": {
+                    "original_value": "cancer",
+                    "type": "string",
+                    "description": "User-edited search query.",
+                    "required": True,
+                },
+            },
+            "schema_source": "user_edited",
+            "output_schema": {"type": "object", "properties": {}, "required": []},
+        },
+    )
+
+    assert response.status_code == 200
+    assert saved["tool"].schema_source == "user_edited"
+    assert "query" in saved["tool"].input_schema["properties"]
+    assert "report_keyword" not in saved["tool"].input_schema["properties"]
 
 
 def test_create_tool_allows_name_and_description_changes_after_successful_preview_test(monkeypatch):

@@ -37,6 +37,9 @@ class PreviewRequest(BaseModel):
 
 
 class SaveToolRequest(PreviewRequest):
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+    params: dict[str, Any] = Field(default_factory=dict)
+    schema_source: str = ""
     output_schema: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -46,6 +49,9 @@ class UpdateToolRequest(BaseModel):
     enabled: bool = True
     allowed_domains: list[str] = Field(default_factory=list)
     post_auth_start_url: str = ""
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+    params: dict[str, Any] = Field(default_factory=dict)
+    schema_source: str = ""
     output_schema: dict[str, Any] = Field(default_factory=dict)
     output_schema_confirmed: bool | None = None
 
@@ -94,7 +100,7 @@ def _preview_config_signature(*, session_id: str, user_id: str, name: str, descr
 
 async def _preview_payload(session_id: str, user_id: str, body: PreviewRequest | SaveToolRequest | PreviewTestRequest):
     payload = await _maybe_await(get_rpa_session_steps(session_id, user_id))
-    preview = RpaMcpConverter().preview(
+    preview = await RpaMcpConverter().preview_with_semantics(
         user_id=user_id,
         session_id=session_id,
         skill_name=payload.get('skill_name', ''),
@@ -274,6 +280,12 @@ async def create_rpa_mcp_tool(session_id: str, body: SaveToolRequest, current_us
     preview.recommended_output_schema = draft.get("recommended_output_schema") or preview.recommended_output_schema
     preview.output_examples = draft.get("output_examples") or []
     preview.output_inference_report = draft.get("output_inference_report") or {}
+    if body.input_schema:
+        preview.input_schema = body.input_schema
+    if body.params:
+        preview.params = body.params
+    if body.schema_source:
+        preview.schema_source = body.schema_source
     preview.output_schema = body.output_schema or preview.recommended_output_schema
     preview.output_schema_confirmed = True
     saved = await RpaMcpToolRegistry().save(preview)
@@ -311,6 +323,12 @@ async def update_rpa_mcp_tool(tool_id: str, body: UpdateToolRequest, current_use
         tool.allowed_domains = body.allowed_domains
     if "post_auth_start_url" in fields_set:
         tool.post_auth_start_url = body.post_auth_start_url
+    if "input_schema" in fields_set:
+        tool.input_schema = body.input_schema
+    if "params" in fields_set:
+        tool.params = body.params
+    if "schema_source" in fields_set and body.schema_source:
+        tool.schema_source = body.schema_source
     if "output_schema" in fields_set:
         tool.output_schema = body.output_schema
     if body.output_schema_confirmed is not None:
