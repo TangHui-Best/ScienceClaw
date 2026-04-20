@@ -611,6 +611,8 @@ const loadPreview = async (options: { preserveUserParamEdits?: boolean } = {}) =
     return;
   }
   loading.value = true;
+  const previousSuccessfulSignature = lastSuccessfulTestSignature.value;
+  const previousHasSuccessfulTest = hasSuccessfulTest.value;
   try {
     const baseName = typeof route.query.skillName === 'string' && route.query.skillName.trim() ? route.query.skillName.trim() : 'rpa_tool';
     if (!toolName.value) toolName.value = baseName;
@@ -640,8 +642,17 @@ const loadPreview = async (options: { preserveUserParamEdits?: boolean } = {}) =
     if (!options.preserveUserParamEdits) {
       setArgumentDefaults(paramFields.value);
     }
-    hasSuccessfulTest.value = Boolean(preview.value.output_examples?.length);
-    lastSuccessfulTestSignature.value = hasSuccessfulTest.value ? currentPreviewSignature.value : null;
+    const hasPersistedPreviewResult = Boolean(preview.value.output_examples?.length);
+    if (hasPersistedPreviewResult) {
+      hasSuccessfulTest.value = true;
+      lastSuccessfulTestSignature.value = currentPreviewSignature.value;
+    } else if (options.preserveUserParamEdits) {
+      hasSuccessfulTest.value = previousHasSuccessfulTest;
+      lastSuccessfulTestSignature.value = previousSuccessfulSignature;
+    } else {
+      hasSuccessfulTest.value = false;
+      lastSuccessfulTestSignature.value = null;
+    }
   } catch (error: any) {
     showErrorToast(error?.message || t('MCP Editor Failed to load MCP preview'));
   } finally {
