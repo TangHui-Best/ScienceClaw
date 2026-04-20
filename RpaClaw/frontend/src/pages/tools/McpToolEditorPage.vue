@@ -35,6 +35,21 @@ type GatewayParamField = {
   defaultValue?: unknown;
 };
 
+type EditableParam = {
+  id: string;
+  sourceKey: string;
+  name: string;
+  description: string;
+  type: string;
+  required: boolean;
+  enabled: boolean;
+  defaultValue: string;
+  originalValue?: unknown;
+  sourceStepIndex?: number;
+};
+
+const PARAM_TYPES = ['string', 'number', 'integer', 'boolean', 'array', 'object'];
+
 interface ParsedLocator {
   method?: string;
   role?: string;
@@ -88,6 +103,7 @@ const testResult = ref<RpaMcpExecutionResult | null>(null);
 const hasSuccessfulTest = ref(false);
 const lastSuccessfulTestSignature = ref<string | null>(null);
 const recordedSteps = ref<RecordedStepItem[]>([]);
+const recordedStepsMode = ref<'source-session' | 'tool-steps'>('tool-steps');
 const stepsLoading = ref(false);
 const promotingStepIndex = ref<number | null>(null);
 const expandedStepIndex = ref<number | null>(null);
@@ -103,6 +119,7 @@ const cookieDomain = ref('');
 const previewTestSection = ref<HTMLElement | null>(null);
 type ArgumentValue = string;
 const argumentValues = reactive<Record<string, ArgumentValue>>({});
+const editableParams = ref<EditableParam[]>([]);
 const source = computed(() => typeof route.query.source === 'string' ? route.query.source : '');
 const savedToolId = computed(() => typeof route.params.toolId === 'string' ? route.params.toolId : '');
 const editorMode = computed(() => typeof route.query.mode === 'string' ? route.query.mode : 'edit');
@@ -310,8 +327,44 @@ const clearArgumentValues = () => {
   Object.keys(argumentValues).forEach((key) => delete argumentValues[key]);
 };
 
-const getParamFields = (toolPreview: RpaMcpPreview | null): GatewayParamField[] => {
-  const schema = (toolPreview?.input_schema || {}) as { properties?: Record<string, any>; required?: string[] };
+const stringifyEditorValue = (value: unknown): string => {
+  if (value === undefined || value === null) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object') return JSON.stringify(value, null, 2);
+  return String(value);
+};
+
+const normalizeParamName = (value: string, fallback: string): string => {
+  const normalized = value
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/[^A-Za-z0-9_]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  const candidate = normalized || fallback || 'param';
+  return /^[A-Za-z_]/.test(candidate) ? candidate : `param_${candidate}`;
+};
+
+const parseParamDefaultValue = (type: string, value: string): unknown => {
+  const trimmed = value.trim();
+  if (trimmed === '') return undefined;
+  if (type === 'boolean') return trimmed === 'true';
+  if (type === 'number' || type === 'integer') {
+    const numericValue = Number(trimmed);
+    return Number.isNaN(numericValue) ? undefined : numericValue;
+  }
+  if (type === 'array' || type === 'object') {
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return undefined;
+    }
+  }
+  return value;
+};
+
+const getParamFieldsFromSchema = (inputSchema: JsonSchemaObject | null | undefined): GatewayParamField[] => {
+  const schema = (inputSchema || {}) as { properties?: Record<string, any>; required?: string[] };
   const properties = schema.properties && typeof schema.properties === 'object' ? schema.properties : {};
   const required = new Set(Array.isArray(schema.required) ? schema.required : []);
   return Object.entries(properties)
@@ -323,6 +376,118 @@ const getParamFields = (toolPreview: RpaMcpPreview | null): GatewayParamField[] 
       required: required.has(key),
       defaultValue: value?.default,
     }));
+};
+
+const getSourceParamInfo = (toolPreview: RpaMcpPreview, schemaKey: string) => {
+  const params = toolPreview.params || {};
+  if (params[schemaKey] && typeof params[schemaKey] === 'object') {
+    return params[schemaKey] as Record<string, any>;
+  }
+  const match = Object.values(params).find((value) => (
+    value && typeof value === 'object' && (value as Record<string, any>).source_param === schemaKey
+  ));
+  return (match && typeof match === 'object' ? match : {}) as Record<string, any>;
+};
+
+const hydrateEditableParams = (toolPreview: RpaMcpPreview | null, options: { preserveUserEdits?: boolean } = {}) => {
+  if (!toolPreview) {
+    editableParams.value = [];
+    return;
+  }
+  if (options.preserveUserEdits && editableParams.value.length) return;
+
+  const schema = (toolPreview.input_schema || {}) as JsonSchemaObject;
+  const properties = schema.properties && typeof schema.properties === 'object' ? schema.properties : {};
+  const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+  editableParams.value = Object.entries(properties)
+    .filter(([key]) => key !== 'cookies')
+    .map(([key, prop], index) => {
+      const info = getSourceParamInfo(toolPreview, key);
+      const schemaProp = (prop || {}) as Record<string, any>;
+      const originalValue = info.original_value ?? schemaProp.default;
+      const sourceStepIndex = typeof info.source_step_index === 'number' ? info.source_step_index : undefined;
+      return {
+        id: `param-${index}-${key}`,
+        sourceKey: String(info.source_param || key),
+        name: key,
+        description: String(schemaProp.description || info.description || ''),
+        type: typeof schemaProp.type === 'string' && PARAM_TYPES.includes(schemaProp.type) ? schemaProp.type : String(info.type || 'string'),
+        required: required.has(key) || Boolean(info.required),
+        enabled: true,
+        defaultValue: stringifyEditorValue(originalValue),
+        originalValue,
+        sourceStepIndex,
+      };
+    });
+};
+
+const buildConfirmedParams = () => {
+  const confirmed: Record<string, Record<string, unknown>> = {};
+  const usedNames = new Set<string>();
+  for (const param of editableParams.value) {
+    if (!param.enabled) continue;
+    let name = normalizeParamName(param.name, param.sourceKey);
+    if (usedNames.has(name)) {
+      let suffix = 2;
+      while (usedNames.has(`${name}_${suffix}`)) suffix += 1;
+      name = `${name}_${suffix}`;
+    }
+    usedNames.add(name);
+    const parsedDefault = parseParamDefaultValue(param.type, param.defaultValue);
+    confirmed[name] = {
+      original_value: parsedDefault !== undefined ? parsedDefault : param.originalValue,
+      type: param.type,
+      description: param.description,
+      required: param.required,
+      sensitive: false,
+      source_param: param.sourceKey,
+    };
+    if (param.sourceStepIndex !== undefined) {
+      confirmed[name].source_step_index = param.sourceStepIndex;
+    }
+  }
+  return confirmed;
+};
+
+const buildConfirmedInputSchema = (): JsonSchemaObject => {
+  const properties: Record<string, JsonSchemaObject> = {};
+  const required: string[] = [];
+  const baseSchema = (preview.value?.input_schema || {}) as JsonSchemaObject;
+  const baseProperties = baseSchema.properties && typeof baseSchema.properties === 'object' ? baseSchema.properties : {};
+  if (baseProperties.cookies) {
+    properties.cookies = baseProperties.cookies;
+    if (Array.isArray(baseSchema.required) && baseSchema.required.includes('cookies')) {
+      required.push('cookies');
+    }
+  }
+
+  const confirmedParams = buildConfirmedParams();
+  for (const [name, info] of Object.entries(confirmedParams)) {
+    const prop: JsonSchemaObject = {
+      type: typeof info.type === 'string' ? info.type : 'string',
+      description: typeof info.description === 'string' ? info.description : '',
+    };
+    const original = info.original_value;
+    if (original !== undefined && original !== null && original !== '') {
+      prop.default = original;
+    }
+    properties[name] = prop;
+    if (info.required) required.push(name);
+  }
+  return { type: 'object', properties, required };
+};
+
+const confirmedSchemaSource = () => (editableParams.value.length ? 'user_edited' : (preview.value?.schema_source || preview.value?.semantic_inference?.source || 'rule_inferred'));
+
+const setArgumentDefaults = (fields: GatewayParamField[]) => {
+  clearArgumentValues();
+  for (const field of fields) {
+    if (field.defaultValue !== undefined) {
+      argumentValues[field.key] = field.type === 'boolean' ? String(Boolean(field.defaultValue)) : stringifyEditorValue(field.defaultValue);
+    } else {
+      argumentValues[field.key] = field.type === 'boolean' ? 'false' : '';
+    }
+  }
 };
 
 const getAllowedCookieDomains = () => {
@@ -338,14 +503,23 @@ const getAllowedCookieDomains = () => {
   return Array.from(domains);
 };
 
-const paramFields = computed(() => getParamFields(preview.value));
+const confirmedInputSchema = computed(() => buildConfirmedInputSchema());
+const paramFields = computed(() => getParamFieldsFromSchema(confirmedInputSchema.value));
 const allowedCookieDomains = computed(() => getAllowedCookieDomains());
 const recordedStepSummary = computed(() => buildRecordedStepSummary(recordedSteps.value as unknown as Array<Record<string, any>>));
 const schemaSummary = computed(() => buildSchemaSummary({
-  input_schema: preview.value?.input_schema,
+  input_schema: confirmedInputSchema.value,
   output_schema: preview.value?.output_schema,
 }));
+const schemaSourceLabel = computed(() => {
+  const source = confirmedSchemaSource();
+  if (source === 'ai_inferred') return t('MCP Editor AI inferred');
+  if (source === 'user_edited') return t('MCP Editor User edited');
+  return t('MCP Editor Rule inferred');
+});
+const semanticWarnings = computed(() => preview.value?.semantic_inference?.warnings || []);
 const removedStepIndexSet = computed(() => new Set(preview.value?.sanitize_report?.removed_steps || []));
+const canHighlightRemovedSteps = computed(() => recordedStepsMode.value === 'source-session');
 const removedStepDetails = computed(() => {
   const details = preview.value?.sanitize_report?.removed_step_details || [];
   if (details.length) return details;
@@ -366,6 +540,7 @@ const currentPreviewSignature = computed(() => buildPreviewDraftSignature({
   description: description.value,
   allowedDomains: getAllowedDomains(),
   postAuthStartUrl: postAuthStartUrl.value,
+  inputSchema: confirmedInputSchema.value,
 }));
 const hasMatchingSuccessfulTest = computed(() => hasMatchingPreviewTest(currentPreviewSignature.value, lastSuccessfulTestSignature.value));
 const hasConfigChangesSinceLastTest = computed(() => Boolean(lastSuccessfulTestSignature.value) && !hasMatchingSuccessfulTest.value);
@@ -412,41 +587,58 @@ const pageDescription = computed(() => {
     : t('MCP Editor Edit MCP tool metadata, schemas, preview test state, and recorded steps.');
 });
 
-const isRemovedStep = (index: number) => removedStepIndexSet.value.has(index);
+const isRemovedStep = (index: number) => canHighlightRemovedSteps.value && removedStepIndexSet.value.has(index);
 
-const loadRecordedSession = async () => {
-  if (!sessionId.value) {
-    recordedSteps.value = [];
+const loadRecordedSession = async (sourceSessionId?: string, options: { silent?: boolean } = {}) => {
+  const targetSessionId = sourceSessionId || sessionId.value;
+  if (!targetSessionId) {
+    recordedSteps.value = preview.value?.steps ? (preview.value.steps as unknown as RecordedStepItem[]) : [];
+    recordedStepsMode.value = 'tool-steps';
     return;
   }
   stepsLoading.value = true;
   try {
-    const resp = await apiClient.get(`/rpa/session/${sessionId.value}`);
+    const resp = await apiClient.get(`/rpa/session/${targetSessionId}`);
     const session = resp.data.session;
     recordedSteps.value = (session.steps || []) as RecordedStepItem[];
+    recordedStepsMode.value = 'source-session';
   } catch (error: any) {
     console.error(error);
-    showErrorToast(error?.message || t('MCP Editor Failed to load recorded steps'));
+    recordedSteps.value = preview.value?.steps ? (preview.value.steps as unknown as RecordedStepItem[]) : [];
+    recordedStepsMode.value = 'tool-steps';
+    if (!options.silent) {
+      showErrorToast(error?.message || t('MCP Editor Failed to load recorded steps'));
+    }
   } finally {
     stepsLoading.value = false;
   }
 };
 
-const loadPreview = async () => {
+const loadPreview = async (options: { preserveUserParamEdits?: boolean } = {}) => {
   if (!sessionId.value) {
     loading.value = false;
     return;
   }
   loading.value = true;
+  const previousSuccessfulSignature = lastSuccessfulTestSignature.value;
+  const previousHasSuccessfulTest = hasSuccessfulTest.value;
   try {
     const baseName = typeof route.query.skillName === 'string' && route.query.skillName.trim() ? route.query.skillName.trim() : 'rpa_tool';
     if (!toolName.value) toolName.value = baseName;
     if (!description.value) description.value = typeof route.query.skillDescription === 'string' ? route.query.skillDescription : '';
+    const confirmedContract = options.preserveUserParamEdits && editableParams.value.length
+      ? {
+          input_schema: confirmedInputSchema.value,
+          params: buildConfirmedParams(),
+          schema_source: confirmedSchemaSource(),
+        }
+      : {};
     preview.value = await previewRpaMcpTool(sessionId.value, {
       name: toolName.value,
       description: description.value,
       allowed_domains: getAllowedDomains(),
       post_auth_start_url: postAuthStartUrl.value,
+      ...confirmedContract,
     });
     toolName.value = preview.value.name;
     description.value = preview.value.description || description.value;
@@ -455,16 +647,21 @@ const loadPreview = async () => {
     outputSchemaText.value = formatJsonBlock(preview.value.recommended_output_schema || preview.value.output_schema || {});
     cookieSectionOpen.value = Boolean(preview.value.requires_cookies);
     cookieDomain.value = allowedCookieDomains.value[0] || '';
-    clearArgumentValues();
-    for (const field of getParamFields(preview.value)) {
-      if (field.defaultValue !== undefined) {
-        argumentValues[field.key] = field.type === 'boolean' ? String(Boolean(field.defaultValue)) : String(field.defaultValue);
-      } else {
-        argumentValues[field.key] = field.type === 'boolean' ? 'false' : '';
-      }
+    hydrateEditableParams(preview.value, { preserveUserEdits: options.preserveUserParamEdits });
+    if (!options.preserveUserParamEdits) {
+      setArgumentDefaults(paramFields.value);
     }
-    hasSuccessfulTest.value = Boolean(preview.value.output_examples?.length);
-    lastSuccessfulTestSignature.value = hasSuccessfulTest.value ? currentPreviewSignature.value : null;
+    const hasPersistedPreviewResult = Boolean(preview.value.output_examples?.length);
+    if (hasPersistedPreviewResult) {
+      hasSuccessfulTest.value = true;
+      lastSuccessfulTestSignature.value = currentPreviewSignature.value;
+    } else if (options.preserveUserParamEdits) {
+      hasSuccessfulTest.value = previousHasSuccessfulTest;
+      lastSuccessfulTestSignature.value = previousSuccessfulSignature;
+    } else {
+      hasSuccessfulTest.value = false;
+      lastSuccessfulTestSignature.value = null;
+    }
   } catch (error: any) {
     showErrorToast(error?.message || t('MCP Editor Failed to load MCP preview'));
   } finally {
@@ -480,16 +677,11 @@ const applyToolToEditor = (tool: RpaMcpPreview) => {
   allowedDomainsText.value = (tool.allowed_domains || []).join('\n');
   outputSchemaText.value = formatJsonBlock(tool.output_schema || tool.recommended_output_schema || {});
   recordedSteps.value = (tool.steps || []) as unknown as RecordedStepItem[];
+  recordedStepsMode.value = 'tool-steps';
   cookieSectionOpen.value = Boolean(tool.requires_cookies);
   cookieDomain.value = allowedCookieDomains.value[0] || '';
-  clearArgumentValues();
-  for (const field of getParamFields(tool)) {
-    if (field.defaultValue !== undefined) {
-      argumentValues[field.key] = field.type === 'boolean' ? String(Boolean(field.defaultValue)) : String(field.defaultValue);
-    } else {
-      argumentValues[field.key] = field.type === 'boolean' ? 'false' : '';
-    }
-  }
+  hydrateEditableParams(tool);
+  setArgumentDefaults(paramFields.value);
   hasSuccessfulTest.value = true;
   lastSuccessfulTestSignature.value = currentPreviewSignature.value;
 };
@@ -501,19 +693,27 @@ const loadExistingTool = async () => {
   try {
     const tool = await getRpaMcpTool(savedToolId.value);
     applyToolToEditor(tool);
+    const sourceSessionId = typeof tool.source?.session_id === 'string' ? tool.source.session_id : '';
+    if (sourceSessionId) {
+      await loadRecordedSession(sourceSessionId, { silent: true });
+    } else {
+      stepsLoading.value = false;
+    }
   } catch (error: any) {
     console.error(error);
     showErrorToast(error?.message || t('MCP Editor Failed to load MCP tool'));
   } finally {
     loading.value = false;
-    stepsLoading.value = false;
+    if (recordedStepsMode.value !== 'source-session') {
+      stepsLoading.value = false;
+    }
   }
 };
 
 const buildArgumentsPayload = () => {
   const payload: Record<string, unknown> = {};
   for (const field of paramFields.value) {
-    const rawValue = argumentValues[field.key];
+    const rawValue = argumentValues[field.key] ?? (field.defaultValue !== undefined ? stringifyEditorValue(field.defaultValue) : '');
     const isBlank = rawValue === '' || rawValue === null || rawValue === undefined;
     if (isBlank) {
       if (field.required) {
@@ -569,6 +769,9 @@ const runPreviewTest = async () => {
         description: description.value,
         allowed_domains: getAllowedDomains(),
         post_auth_start_url: postAuthStartUrl.value,
+        input_schema: confirmedInputSchema.value,
+        params: buildConfirmedParams(),
+        schema_source: confirmedSchemaSource(),
         arguments: argumentsPayload,
         cookies: cookies as Array<Record<string, unknown>> | undefined,
       });
@@ -576,7 +779,7 @@ const runPreviewTest = async () => {
     hasSuccessfulTest.value = Boolean(testResult.value.success);
     lastSuccessfulTestSignature.value = testResult.value.success ? currentPreviewSignature.value : null;
     if (!isExistingTool.value) {
-      await loadPreview();
+      await loadPreview({ preserveUserParamEdits: true });
     }
     showSuccessToast(testResult.value.message || t('MCP Editor Preview test completed'));
   } catch (error: any) {
@@ -604,6 +807,9 @@ const saveTool = async () => {
       description: description.value,
       post_auth_start_url: postAuthStartUrl.value,
       allowed_domains: getAllowedDomains(),
+      input_schema: confirmedInputSchema.value,
+      params: buildConfirmedParams(),
+      schema_source: confirmedSchemaSource(),
       output_schema: parseJsonObjectText(outputSchemaText.value, t('Output schema JSON invalid')),
       output_schema_confirmed: true,
     };
@@ -722,6 +928,85 @@ onMounted(async () => {
                 <textarea v-model="allowedDomainsText" :disabled="isViewMode" rows="4" class="w-full rounded-md border border-slate-200 bg-white px-3 py-2 font-mono text-sm outline-none disabled:cursor-not-allowed disabled:opacity-70 dark:border-white/10 dark:bg-white/5" />
                 <span class="block text-xs text-slate-500 dark:text-slate-400">{{ t('MCP Editor Allowed domains hint') }}</span>
               </label>
+            </section>
+
+            <section class="rounded-lg border border-slate-200 bg-slate-50/70 p-4 dark:border-white/10 dark:bg-white/[0.03]">
+              <div class="mb-4 flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 class="text-base font-black">{{ t('MCP Editor Input parameters') }}</h2>
+                  <p class="text-sm text-slate-500 dark:text-slate-400">{{ t('MCP Editor Input parameters hint') }}</p>
+                </div>
+                <span class="rounded-full bg-white px-4 py-1.5 text-xs font-bold text-violet-700 shadow-sm ring-1 ring-violet-100 dark:bg-white/[0.06] dark:text-violet-200 dark:ring-white/10">
+                  {{ editableParams.filter((param) => param.enabled).length }} / {{ editableParams.length }}
+                </span>
+              </div>
+
+              <div v-if="editableParams.length === 0" class="rounded-2xl border border-dashed border-slate-300 bg-white/80 p-6 text-sm text-slate-500 dark:border-white/10 dark:bg-white/[0.04]">
+                {{ t('MCP Editor No input parameters') }}
+              </div>
+
+              <div v-else class="space-y-3">
+                <div
+                  v-for="param in editableParams"
+                  :key="param.id"
+                  class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-white/[0.04]"
+                  :class="param.enabled ? '' : 'opacity-60'"
+                >
+                  <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+                    <label class="inline-flex items-center gap-2 text-sm font-semibold">
+                      <input v-model="param.enabled" :disabled="isViewMode" type="checkbox" class="h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500 disabled:cursor-not-allowed" />
+                      {{ t('MCP Editor Parameter enabled') }}
+                    </label>
+                    <span class="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-500 dark:bg-white/10 dark:text-slate-400">
+                      {{ t('MCP Editor Source parameter') }} {{ param.sourceKey }}<template v-if="param.sourceStepIndex !== undefined"> · {{ t('MCP Editor Step number', { number: param.sourceStepIndex + 1 }) }}</template>
+                    </span>
+                  </div>
+
+                  <div class="grid gap-3 md:grid-cols-[minmax(0,1fr)_150px_120px]">
+                    <label class="block space-y-1.5">
+                      <span class="text-xs font-bold uppercase tracking-wide text-slate-400 dark:text-slate-500">{{ t('MCP Editor Parameter name') }}</span>
+                      <input v-model="param.name" :disabled="isViewMode || !param.enabled" class="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm outline-none disabled:cursor-not-allowed disabled:opacity-70 dark:border-white/10 dark:bg-white/5" />
+                    </label>
+                    <label class="block space-y-1.5">
+                      <span class="text-xs font-bold uppercase tracking-wide text-slate-400 dark:text-slate-500">{{ t('MCP Editor Parameter type') }}</span>
+                      <select v-model="param.type" :disabled="isViewMode || !param.enabled" class="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm outline-none disabled:cursor-not-allowed disabled:opacity-70 dark:border-white/10 dark:bg-white/5">
+                        <option v-for="type in PARAM_TYPES" :key="type" :value="type">{{ type }}</option>
+                      </select>
+                    </label>
+                    <label class="flex items-end gap-2 pb-2 text-sm font-semibold">
+                      <input v-model="param.required" :disabled="isViewMode || !param.enabled" type="checkbox" class="h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500 disabled:cursor-not-allowed" />
+                      {{ t('MCP Editor Parameter required') }}
+                    </label>
+                  </div>
+
+                  <label class="mt-3 block space-y-1.5">
+                    <span class="text-xs font-bold uppercase tracking-wide text-slate-400 dark:text-slate-500">{{ t('MCP Editor Parameter description') }}</span>
+                    <input v-model="param.description" :disabled="isViewMode || !param.enabled" class="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm outline-none disabled:cursor-not-allowed disabled:opacity-70 dark:border-white/10 dark:bg-white/5" />
+                  </label>
+
+                  <label class="mt-3 block space-y-1.5">
+                    <span class="text-xs font-bold uppercase tracking-wide text-slate-400 dark:text-slate-500">{{ t('MCP Editor Parameter default') }}</span>
+                    <textarea
+                      v-if="param.type === 'array' || param.type === 'object'"
+                      v-model="param.defaultValue"
+                      :disabled="isViewMode || !param.enabled"
+                      class="min-h-[88px] w-full rounded-md border border-slate-200 bg-white px-3 py-2 font-mono text-xs outline-none disabled:cursor-not-allowed disabled:opacity-70 dark:border-white/10 dark:bg-white/5"
+                      :placeholder="param.type === 'array' ? '[]' : '{}'"
+                    ></textarea>
+                    <select v-else-if="param.type === 'boolean'" v-model="param.defaultValue" :disabled="isViewMode || !param.enabled" class="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm outline-none disabled:cursor-not-allowed disabled:opacity-70 dark:border-white/10 dark:bg-white/5">
+                      <option value="true">true</option>
+                      <option value="false">false</option>
+                    </select>
+                    <input
+                      v-else
+                      v-model="param.defaultValue"
+                      :disabled="isViewMode || !param.enabled"
+                      class="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm outline-none disabled:cursor-not-allowed disabled:opacity-70 dark:border-white/10 dark:bg-white/5"
+                      :type="param.type === 'number' || param.type === 'integer' ? 'number' : 'text'"
+                    />
+                  </label>
+                </div>
+              </div>
             </section>
 
             <section class="rounded-lg border border-slate-200 bg-slate-50/70 p-4 dark:border-white/10 dark:bg-white/[0.03]">
@@ -1033,6 +1318,19 @@ onMounted(async () => {
             <h2 class="text-base font-black">{{ t('MCP Editor API & Schemas') }}</h2>
             <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ t('MCP Editor Schema hint') }}</p>
             <div v-if="preview" class="mt-4 space-y-4">
+              <div class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-white/10 dark:bg-white/[0.03]">
+                <div class="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                  <span class="rounded-full bg-white px-2.5 py-1 font-bold text-slate-700 ring-1 ring-slate-200 dark:bg-white/10 dark:text-slate-200 dark:ring-white/10">
+                    {{ schemaSourceLabel }}
+                  </span>
+                  <span v-if="preview.semantic_inference?.confidence !== null && preview.semantic_inference?.confidence !== undefined">
+                    {{ t('MCP Editor Confidence') }} {{ Math.round(Number(preview.semantic_inference.confidence) * 100) }}%
+                  </span>
+                </div>
+                <ul v-if="semanticWarnings.length" class="mt-2 list-disc pl-5 text-xs text-amber-700 dark:text-amber-200">
+                  <li v-for="warning in semanticWarnings" :key="warning">{{ warning }}</li>
+                </ul>
+              </div>
               <div>
                 <div class="mb-2 flex items-center justify-between gap-3">
                   <p class="text-sm font-semibold">{{ t('MCP Editor Input Schema') }}</p>
@@ -1040,7 +1338,7 @@ onMounted(async () => {
                     {{ schemaSummary.inputFields }} {{ t('MCP Editor fields') }}
                   </span>
                 </div>
-                <pre class="overflow-x-auto rounded-2xl border border-slate-200 bg-slate-50 p-3 text-xs dark:border-white/10 dark:bg-[#101115]"><code>{{ JSON.stringify(preview.input_schema || {}, null, 2) }}</code></pre>
+                <pre class="overflow-x-auto rounded-2xl border border-slate-200 bg-slate-50 p-3 text-xs dark:border-white/10 dark:bg-[#101115]"><code>{{ JSON.stringify(confirmedInputSchema, null, 2) }}</code></pre>
               </div>
               <div>
                 <div class="mb-2 flex items-center justify-between gap-3">

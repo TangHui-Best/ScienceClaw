@@ -11,6 +11,16 @@ export interface JsonSchemaObject {
   [key: string]: unknown;
 }
 
+export type RpaMcpSchemaSource = 'ai_inferred' | 'rule_inferred' | 'user_edited' | string;
+
+export interface RpaMcpSemanticInference {
+  source: RpaMcpSchemaSource;
+  confidence?: number | null;
+  warnings?: string[];
+  model?: string;
+  generated_at?: string;
+}
+
 export interface RpaMcpExecutionResult {
   success: boolean;
   message?: string;
@@ -37,6 +47,8 @@ export interface RpaMcpPreview {
   output_schema_confirmed?: boolean;
   output_examples?: Array<Record<string, unknown>>;
   output_inference_report?: Record<string, unknown>;
+  schema_source?: RpaMcpSchemaSource;
+  semantic_inference?: RpaMcpSemanticInference;
   sanitize_report: {
     removed_steps: number[];
     removed_step_details?: Array<{
@@ -56,7 +68,7 @@ export interface RpaMcpToolItem extends RpaMcpPreview {
   enabled: boolean;
 }
 
-export async function previewRpaMcpTool(sessionId: string, payload: { name: string; description?: string; allowed_domains?: string[]; post_auth_start_url?: string }) {
+export async function previewRpaMcpTool(sessionId: string, payload: { name: string; description?: string; allowed_domains?: string[]; post_auth_start_url?: string; input_schema?: JsonSchemaObject; params?: Record<string, unknown>; schema_source?: RpaMcpSchemaSource }) {
   const response = await apiClient.post<ApiResponse<RpaMcpPreview>>(`/rpa-mcp/session/${encodeURIComponent(sessionId)}/preview`, payload);
   return response.data.data;
 }
@@ -68,6 +80,9 @@ export async function testPreviewRpaMcpTool(
     description?: string;
     allowed_domains?: string[];
     post_auth_start_url?: string;
+    input_schema?: JsonSchemaObject;
+    params?: Record<string, unknown>;
+    schema_source?: RpaMcpSchemaSource;
     cookies?: Array<Record<string, unknown>>;
     arguments?: Record<string, unknown>;
   },

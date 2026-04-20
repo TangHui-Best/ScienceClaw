@@ -1,5 +1,42 @@
+import pytest
+
 from backend.rpa.mcp_converter import RpaMcpConverter
 from backend.rpa.mcp_models import RpaMcpToolDefinition
+
+
+class FakeSemanticInferer:
+    async def infer(self, **_kwargs):
+        from backend.rpa.mcp_semantic_inferer import RpaMcpSemanticRecommendation
+
+        return RpaMcpSemanticRecommendation(
+            source="ai_inferred",
+            tool_name="search_reports",
+            display_name="Search reports",
+            description="Search reports by keyword.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "report_keyword": {
+                        "type": "string",
+                        "description": "Keyword used to search reports.",
+                        "default": "cancer",
+                    },
+                },
+                "required": ["report_keyword"],
+            },
+            params={
+                "report_keyword": {
+                    "original_value": "cancer",
+                    "type": "string",
+                    "description": "Keyword used to search reports.",
+                    "required": True,
+                    "confidence": 0.9,
+                },
+            },
+            confidence=0.9,
+            warnings=[],
+            model="fake-model",
+        )
 
 
 def test_rpa_mcp_tool_definition_defaults():
@@ -27,6 +64,8 @@ def test_rpa_mcp_tool_definition_defaults():
     assert tool.allowed_domains == ["example.com"]
     assert tool.sanitize_report.removed_step_details == []
     assert tool.sanitize_report.warnings == []
+    assert tool.semantic_inference["source"] == "rule_inferred"
+    assert tool.schema_source == "rule_inferred"
 
 
 def test_preview_strips_login_steps_and_sensitive_params():
@@ -255,3 +294,76 @@ def test_preview_strips_login_params_before_building_input_schema():
     assert "account" not in properties
     assert "password" not in properties
     assert properties["title"]["default"] == "Quarterly report"
+
+
+def test_preview_infers_candidate_params_like_skill_configure_page():
+    steps = [
+        {
+            "id": "fill-title",
+            "action": "fill",
+            "description": "Fill title",
+            "target": '{"method":"label","value":"Title"}',
+            "value": "Quarterly report",
+            "url": "https://example.com/editor",
+        },
+        {
+            "id": "upload-file",
+            "action": "set_input_files",
+            "description": "Upload attachment",
+            "target": '{"method":"css","value":"input[type=file]"}',
+            "value": "C:/tmp/report.pdf",
+            "url": "https://example.com/editor",
+        },
+    ]
+
+    preview = RpaMcpConverter().preview(
+        user_id="user-1",
+        session_id="session-1",
+        skill_name="editor_skill",
+        name="create report",
+        description="Create report",
+        steps=steps,
+        params={},
+    )
+
+    assert set(preview.params.keys()) == {"title"}
+    assert preview.params["title"]["source_step_index"] == 0
+    assert preview.params["title"]["source_step_id"] == "fill-title"
+    assert "file" not in preview.input_schema["properties"]
+
+
+@pytest.mark.anyio
+async def test_preview_with_semantics_uses_ai_recommendation_after_login_strip():
+    steps = [
+        {
+            "action": "fill",
+            "description": "填写密码",
+            "target": '{"method":"label","value":"密码"}',
+            "value": "{{credential}}",
+            "url": "https://example.com/login",
+        },
+        {
+            "action": "fill",
+            "description": "填写搜索关键词",
+            "target": '{"method":"placeholder","value":"搜索关键词"}',
+            "value": "cancer",
+            "url": "https://example.com/search",
+        },
+    ]
+
+    preview = await RpaMcpConverter(semantic_inferer=FakeSemanticInferer()).preview_with_semantics(
+        user_id="user-1",
+        session_id="session-1",
+        skill_name="search_skill",
+        name="rpa_tool",
+        description="",
+        steps=steps,
+        params={},
+    )
+
+    assert preview.tool_name == "search_reports"
+    assert preview.name == "Search reports"
+    assert preview.description == "Search reports by keyword."
+    assert preview.schema_source == "ai_inferred"
+    assert "report_keyword" in preview.input_schema["properties"]
+    assert "password" not in preview.input_schema["properties"]

@@ -11,6 +11,7 @@ from backend.rpa.mcp_models import (
     RpaMcpToolDefinition,
     build_rpa_mcp_output_schema,
 )
+from backend.rpa.mcp_semantic_inferer import RpaMcpSemanticInferer
 
 
 _LOGIN_BUTTON_RE = re.compile(r"\b(login|log in|sign in|sign-in|signin)\b|登录|登入|登陆", re.IGNORECASE)
@@ -40,8 +41,9 @@ _PARAM_NAME_HINTS = [
 
 
 class RpaMcpConverter:
-    def __init__(self) -> None:
+    def __init__(self, semantic_inferer: RpaMcpSemanticInferer | None = None) -> None:
         self._generator = PlaywrightGenerator()
+        self._semantic_inferer = semantic_inferer
 
     def preview(self, *, user_id: str, session_id: str, skill_name: str, name: str, description: str, steps: list[dict], params: dict) -> RpaMcpToolDefinition:
         normalized = self._generator._normalize_step_signals(
@@ -53,16 +55,93 @@ class RpaMcpConverter:
         sanitized_steps, report = self._strip_login_steps(normalized, login_range)
         sanitized_params = self._strip_login_params(params, report)
         sanitized_params = self._infer_step_params(sanitized_steps, sanitized_params)
+        return self._build_preview_from_parts(
+            user_id=user_id,
+            session_id=session_id,
+            skill_name=skill_name,
+            name=name,
+            tool_name="",
+            description=description,
+            normalized_steps=normalized,
+            sanitized_steps=sanitized_steps,
+            sanitized_params=sanitized_params,
+            report=report,
+            semantic_recommendation=None,
+        )
+
+    async def preview_with_semantics(self, *, user_id: str, session_id: str, skill_name: str, name: str, description: str, steps: list[dict], params: dict) -> RpaMcpToolDefinition:
+        normalized = self._generator._normalize_step_signals(
+            self._generator._infer_missing_tab_transitions(
+                self._generator._deduplicate_steps(steps)
+            )
+        )
+        login_range = self._detect_login_range(normalized)
+        sanitized_steps, report = self._strip_login_steps(normalized, login_range)
+        sanitized_params = self._strip_login_params(params, report)
+        sanitized_params = self._infer_step_params(sanitized_steps, sanitized_params)
+        recommendation = await (self._semantic_inferer or RpaMcpSemanticInferer()).infer(
+            user_id=user_id,
+            requested_name=name,
+            requested_description=description,
+            steps=sanitized_steps,
+            removed_step_details=report.removed_step_details,
+            fallback_params=sanitized_params,
+        )
+        return self._build_preview_from_parts(
+            user_id=user_id,
+            session_id=session_id,
+            skill_name=skill_name,
+            name=recommendation.display_name or name,
+            tool_name=recommendation.tool_name,
+            description=recommendation.description or description,
+            normalized_steps=normalized,
+            sanitized_steps=sanitized_steps,
+            sanitized_params=recommendation.params or sanitized_params,
+            report=report,
+            semantic_recommendation=recommendation,
+        )
+
+    def _build_preview_from_parts(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        skill_name: str,
+        name: str,
+        tool_name: str,
+        description: str,
+        normalized_steps: list[dict],
+        sanitized_steps: list[dict],
+        sanitized_params: dict,
+        report: RpaMcpSanitizeReport,
+        semantic_recommendation,
+    ) -> RpaMcpToolDefinition:
         requires_cookies = bool(report.removed_steps)
-        allowed_domains = self._collect_domains(normalized)
-        post_auth_start_url = self._pick_post_auth_start_url(normalized, sanitized_steps)
-        input_schema = self._build_input_schema(sanitized_params, requires_cookies=requires_cookies)
+        allowed_domains = self._collect_domains(normalized_steps)
+        post_auth_start_url = self._pick_post_auth_start_url(normalized_steps, sanitized_steps)
+        input_schema = (
+            dict(semantic_recommendation.input_schema)
+            if semantic_recommendation
+            else self._build_input_schema(sanitized_params, requires_cookies=requires_cookies)
+        )
+        if requires_cookies and "cookies" not in (input_schema.get("properties") or {}):
+            input_schema.setdefault("properties", {})["cookies"] = {
+                "type": "array",
+                "description": "Playwright-compatible cookies for allowed domains",
+            }
+            input_schema.setdefault("required", [])
+            if "cookies" not in input_schema["required"]:
+                input_schema["required"].append("cookies")
         recommended_output_schema, inference_report = self._build_recommended_output_schema(sanitized_steps)
+        semantic_source = semantic_recommendation.source if semantic_recommendation else "rule_inferred"
+        semantic_warnings = list(semantic_recommendation.warnings) if semantic_recommendation else []
+        if semantic_warnings:
+            report.warnings.extend(semantic_warnings)
         return RpaMcpToolDefinition(
             id="preview",
             user_id=user_id,
             name=name,
-            tool_name=self._tool_name(name),
+            tool_name=tool_name or self._tool_name(name),
             description=description,
             requires_cookies=requires_cookies,
             source=RpaMcpSource(session_id=session_id, skill_name=skill_name),
@@ -75,6 +154,14 @@ class RpaMcpConverter:
             recommended_output_schema=recommended_output_schema,
             output_inference_report=inference_report,
             sanitize_report=report,
+            schema_source=semantic_source,
+            semantic_inference={
+                "source": semantic_source,
+                "confidence": semantic_recommendation.confidence if semantic_recommendation else None,
+                "warnings": semantic_warnings,
+                "model": semantic_recommendation.model if semantic_recommendation else "",
+                "generated_at": "preview",
+            },
         )
 
     def infer_output_from_execution(self, tool: RpaMcpToolDefinition, execution_result: dict) -> tuple[dict, dict]:
@@ -158,9 +245,9 @@ class RpaMcpConverter:
         }
         inferred_count = 0
 
-        for step in steps:
+        for step_index, step in enumerate(steps):
             action = str(step.get("action") or "")
-            if action not in {"fill", "select", "set_input_files"}:
+            if action not in {"fill", "select"}:
                 continue
             if self._is_auth_like_step(step):
                 continue
@@ -180,6 +267,8 @@ class RpaMcpConverter:
                 "description": str(step.get("description") or name),
                 "required": False,
                 "sensitive": False,
+                "source_step_index": step_index,
+                "source_step_id": str(step.get("id") or ""),
             }
 
         return inferred
