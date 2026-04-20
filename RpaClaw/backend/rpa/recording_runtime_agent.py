@@ -38,12 +38,15 @@ Rules:
 - Prefer Playwright locators and page.locator/query_selector_all over page.evaluate.
 - Avoid page.evaluate unless the snippet is short, read-only, and necessary.
 - Do not include shell, filesystem, network requests outside the current browser page, or infinite loops.
+- For search-engine tasks, if the user's goal is to search/open results, prefer navigating to the results URL with an encoded query. If the user explicitly asks to fill a search box, first target visible, enabled, editable input candidates instead of filling hidden DOM matches.
 - Do not leave the browser on API, JSON, raw, or other machine endpoints after an extract-only command.
 - For extract-only commands, prefer user-facing pages and restore the most recent user-facing page after any temporary helper navigation.
 - Do not include a separate done-check.
 - If extracting data, return structured JSON-serializable Python values.
 - For extract-only commands, do not return null/empty output unless the user explicitly allows empty results.
 - Set allow_empty_output=true only when the user explicitly says no result, empty list, or empty output is acceptable.
+- During repair, treat raw error logs and current page facts as authoritative. Any failure_analysis.hint is advisory only.
+- During repair after a fill/click actionability failure, inspect the page after failure and visible candidates before retrying the selector.
 """
 
 
@@ -114,19 +117,33 @@ class RecordingRuntimeAgent:
                 message="Recording command completed.",
             )
 
+        failed_page = await _page_state(page)
+        failed_snapshot = await _safe_page_snapshot(page)
+        compact_failed_snapshot = _compact_snapshot(failed_snapshot)
+        first_error = str(first_result.get("error") or "recording command failed")
+        first_failure_analysis = _classify_recording_failure(first_error)
         diagnostics = [
             RPATraceDiagnostic(
                 source="ai",
-                message=str(first_result.get("error") or "recording command failed"),
-                raw={"plan": _safe_jsonable(first_plan), "result": _safe_jsonable(first_result)},
+                message=first_error,
+                raw={
+                    "plan": _safe_jsonable(first_plan),
+                    "result": _safe_jsonable(first_result),
+                    "page_after_failure": failed_page.model_dump(mode="json"),
+                    "snapshot_after_failure": _safe_jsonable(compact_failed_snapshot),
+                    "failure_analysis": first_failure_analysis,
+                },
             )
         ]
 
         repair_payload = {
             **payload,
             "repair": {
-                "error": first_result.get("error"),
+                "error": first_error,
                 "failed_plan": first_plan,
+                "page_after_failure": failed_page.model_dump(mode="json"),
+                "snapshot_after_failure": compact_failed_snapshot,
+                "failure_analysis": first_failure_analysis,
             },
         }
         repair_plan = await self.planner(repair_payload)
@@ -156,11 +173,16 @@ class RecordingRuntimeAgent:
                 message="Recording command completed after one repair.",
             )
 
+        repair_error = str(repair_result.get("error") or "recording command repair failed")
         diagnostics.append(
             RPATraceDiagnostic(
                 source="ai",
-                message=str(repair_result.get("error") or "recording command repair failed"),
-                raw={"plan": _safe_jsonable(repair_plan), "result": _safe_jsonable(repair_result)},
+                message=repair_error,
+                raw={
+                    "plan": _safe_jsonable(repair_plan),
+                    "result": _safe_jsonable(repair_result),
+                    "failure_analysis": _classify_recording_failure(repair_error),
+                },
             )
         )
         return RecordingAgentResult(
@@ -326,6 +348,94 @@ def _parse_json_object(text: str) -> Dict[str, Any]:
     if parsed.get("action_type") == "run_python" and "async def run(page, results)" not in str(parsed.get("code") or ""):
         raise ValueError("Recording planner must return Python code defining async def run(page, results)")
     return parsed
+
+
+def _classify_recording_failure(error: Any) -> Dict[str, str]:
+    text = str(error or "").strip()
+    normalized = text.lower()
+    if not normalized:
+        return {"type": "unknown"}
+
+    if (
+        ("locator.fill" in normalized or "locator.click" in normalized or "fill action" in normalized or "click action" in normalized)
+        and (
+            "element is not visible" in normalized
+            or "not visible" in normalized
+            or "not editable" in normalized
+            or "not enabled" in normalized
+            or "visible, enabled and editable" in normalized
+        )
+    ):
+        return {
+            "type": "element_not_visible_or_not_editable",
+            "hint": (
+                "The locator matched or was attempted, but Playwright could not act on a visible/enabled/editable "
+                "element. In repair, inspect the page after failure and choose a truly visible interactive candidate; "
+                "for search goals, consider a direct encoded results URL unless the user explicitly needs UI typing."
+            ),
+        }
+
+    if "strict mode violation" in normalized:
+        return {
+            "type": "strict_locator_violation",
+            "hint": (
+                "The attempted locator matched multiple elements. In repair, prefer a more scoped Playwright "
+                "locator, role/name combination, or DOM scan that selects the intended element from candidates."
+            ),
+        }
+
+    if (
+        ("wait_for_selector" in normalized or "locator" in normalized)
+        and "timeout" in normalized
+        and ("waiting for" in normalized or "to be visible" in normalized)
+    ):
+        return {
+            "type": "selector_timeout",
+            "hint": (
+                "The previous attempt timed out waiting for a specific selector. In repair, re-check the current "
+                "page state first and consider resilient extraction through candidate link/row scanning instead "
+                "of only replacing one brittle selector with another."
+            ),
+        }
+
+    output_looks_empty = "output" in normalized and "empty" in normalized
+    if "returned no meaningful output" in normalized or "empty record" in normalized or output_looks_empty:
+        return {
+            "type": "empty_extract_output",
+            "hint": (
+                "The browser action ran but produced empty data. In repair, verify the page is the expected page, "
+                "then broaden extraction candidates or add field-level validation before accepting the result."
+            ),
+        }
+
+    if "net::" in normalized or "err_connection" in normalized or ("page.goto" in normalized and "timeout" in normalized):
+        return {
+            "type": "navigation_timeout_or_network",
+            "hint": (
+                "The failure happened during navigation or page loading. In repair, keep the raw network error in "
+                "mind, avoid assuming selector failure, and use the current browser state if navigation partially succeeded."
+            ),
+        }
+
+    if "syntaxerror" in normalized or "indentationerror" in normalized or "nameerror" in normalized:
+        return {
+            "type": "syntax_or_runtime_code_error",
+            "hint": (
+                "The generated Python failed before completing the browser task. In repair, fix the code shape first "
+                "while preserving the original user goal and current page context."
+            ),
+        }
+
+    if "expected navigation effect" in normalized or "url did not change" in normalized:
+        return {
+            "type": "wrong_page_or_no_goal_progress",
+            "hint": (
+                "The code did not produce the browser-visible effect requested by the user. In repair, distinguish "
+                "between extraction-only and action/navigation goals, then provide observable evidence for the intended effect."
+            ),
+        }
+
+    return {"type": "unknown"}
 
 
 def _normalize_result_key(value: Any) -> Optional[str]:

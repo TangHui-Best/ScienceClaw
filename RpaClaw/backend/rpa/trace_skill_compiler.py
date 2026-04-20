@@ -41,6 +41,15 @@ class TraceSkillCompiler:
             "        raise KeyError(ref)",
             "    return current",
             "",
+            "def _resolve_first_result_ref(results, refs):",
+            "    last_error = None",
+            "    for ref in refs:",
+            "        try:",
+            "            return _resolve_result_ref(results, ref)",
+            "        except KeyError as exc:",
+            "            last_error = exc",
+            "    raise last_error or KeyError(refs[0] if refs else '')",
+            "",
             "def _validate_non_empty_records(key, value):",
             "    if not isinstance(value, list) or not value:",
             "        raise RuntimeError(f'AI trace output {key} is empty')",
@@ -371,24 +380,43 @@ class TraceSkillCompiler:
         if not url:
             return ""
         for trace in reversed(previous_traces):
-            if not trace.output_key:
-                continue
+            result_expr = self._trace_result_url_expression(trace)
             output = trace.output if isinstance(trace.output, dict) else {}
             base = output.get("url") or output.get("value")
-            if isinstance(base, str) and base and url.startswith(base):
+            if result_expr and isinstance(base, str) and base and url.startswith(base):
                 suffix = url[len(base):]
-                return f"str(_resolve_result_ref(_results, {trace.output_key + '.url'!r})).rstrip('/') + {suffix!r}"
+                return f"str({result_expr}).rstrip('/') + {suffix!r}"
+            observed_base = _repo_base_from_url(trace.after_page.url) if trace.after_page.url else ""
+            if result_expr and observed_base and url.startswith(observed_base):
+                suffix = url[len(observed_base):]
+                return f"str({result_expr}).rstrip('/') + {suffix!r}"
         return ""
 
     def _previous_repo_url_expression(self, previous_traces: List[RPAAcceptedTrace]) -> str:
         for trace in reversed(previous_traces):
-            if trace.output_key and isinstance(trace.output, dict):
-                if trace.output.get("url"):
-                    return f"_resolve_result_ref(_results, {trace.output_key + '.url'!r})"
-                if trace.output.get("value"):
-                    return f"_resolve_result_ref(_results, {trace.output_key + '.value'!r})"
-            if trace.after_page.url and _is_github_repo_url(trace.after_page.url):
-                return repr(_repo_base_from_url(trace.after_page.url))
+            result_expr = self._trace_result_url_expression(trace)
+            if result_expr:
+                return result_expr
+        return ""
+
+    def _trace_result_url_expression(self, trace: RPAAcceptedTrace) -> str:
+        if not trace.output_key:
+            return ""
+        output = trace.output if isinstance(trace.output, dict) else {}
+        if output.get("url"):
+            return f"_resolve_result_ref(_results, {trace.output_key + '.url'!r})"
+        if output.get("value"):
+            return f"_resolve_result_ref(_results, {trace.output_key + '.value'!r})"
+        instruction = f"{trace.user_instruction or ''} {trace.description or ''}".lower()
+        if (
+            trace.trace_type == RPATraceType.AI_OPERATION
+            and (
+                _looks_like_highest_star(instruction)
+                or _looks_like_semantic_repo_selection(instruction, trace.output)
+                or _is_github_repo_url(trace.after_page.url)
+            )
+        ):
+            return f"_resolve_first_result_ref(_results, [{trace.output_key + '.url'!r}, {trace.output_key + '.value'!r}])"
         return ""
 
     def _manual_github_subpage_navigation(

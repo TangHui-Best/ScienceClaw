@@ -3,7 +3,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend.rpa.recording_runtime_agent import RecordingRuntimeAgent, _parse_json_object
+from backend.rpa.recording_runtime_agent import (
+    RecordingRuntimeAgent,
+    _classify_recording_failure,
+    _parse_json_object,
+)
 
 
 class _FakePage:
@@ -68,6 +72,123 @@ async def test_recording_runtime_agent_repairs_once_after_failure():
     assert len(calls) == 2
     assert result.trace.ai_execution.repair_attempted is True
     assert result.diagnostics[0].message == "boom"
+
+
+@pytest.mark.asyncio
+async def test_recording_runtime_agent_sends_advisory_failure_hint_to_repair_planner():
+    calls = []
+
+    async def planner(payload):
+        calls.append(payload)
+        if "repair" not in payload:
+            return {
+                "description": "Wait for brittle issue selector",
+                "action_type": "run_python",
+                "expected_effect": "extract",
+                "code": (
+                    "async def run(page, results):\n"
+                    "    raise TimeoutError('Page.wait_for_selector: Timeout 15000ms exceeded waiting for locator(\"[data-testid=issue-list]\")')"
+                ),
+            }
+        return {
+            "description": "Scan issue links",
+            "action_type": "run_python",
+            "expected_effect": "extract",
+            "output_key": "latest_issue",
+            "code": "async def run(page, results):\n    return {'latest_issue_title': 'Latest issue'}",
+        }
+
+    result = await RecordingRuntimeAgent(planner=planner).run(
+        page=_FakePage(),
+        instruction="find the latest issue title",
+        runtime_results={},
+    )
+
+    repair_payload = calls[1]["repair"]
+    assert result.success is True
+    assert result.diagnostics[0].message.startswith("Page.wait_for_selector")
+    assert repair_payload["error"].startswith("Page.wait_for_selector")
+    assert repair_payload["failure_analysis"]["type"] == "selector_timeout"
+    assert "hint" in repair_payload["failure_analysis"]
+    assert "confidence" not in repair_payload["failure_analysis"]
+    assert result.diagnostics[0].raw["failure_analysis"]["type"] == "selector_timeout"
+
+
+def test_classify_recording_failure_returns_unknown_without_hint_for_unseen_errors():
+    analysis = _classify_recording_failure("some new browser error shape")
+
+    assert analysis == {"type": "unknown"}
+
+
+def test_classify_recording_failure_identifies_selector_timeout_without_confidence():
+    analysis = _classify_recording_failure(
+        'Page.wait_for_selector: Timeout 15000ms exceeded waiting for locator("a.Link--primary[href*=issues]")'
+    )
+
+    assert analysis["type"] == "selector_timeout"
+    assert "hint" in analysis
+    assert "confidence" not in analysis
+
+
+def test_classify_recording_failure_identifies_actionability_failure_before_selector_timeout():
+    analysis = _classify_recording_failure(
+        "Locator.fill: Timeout 60000ms exceeded\n"
+        "Call log:\n"
+        "  - waiting for locator(\"#kw\")\n"
+        "    - locator resolved to <input id=\"kw\" />\n"
+        "  - attempting fill action\n"
+        "    - element is not visible\n"
+        "    - waiting for element to be visible, enabled and editable"
+    )
+
+    assert analysis["type"] == "element_not_visible_or_not_editable"
+    assert "hint" in analysis
+    assert "confidence" not in analysis
+
+
+@pytest.mark.asyncio
+async def test_recording_runtime_agent_repair_payload_includes_page_after_failure():
+    calls = []
+
+    async def planner(payload):
+        calls.append(payload)
+        if "repair" not in payload:
+            return {
+                "description": "Open search engine and fill hidden input",
+                "action_type": "run_python",
+                "expected_effect": "mixed",
+                "code": (
+                    "async def run(page, results):\n"
+                    "    await page.goto('https://www.baidu.com')\n"
+                    "    raise RuntimeError('Locator.fill: Timeout 60000ms exceeded; element is not visible')"
+                ),
+            }
+        return {
+            "description": "Search by visible input",
+            "action_type": "run_python",
+            "expected_effect": "navigate",
+            "output_key": "search_result",
+            "code": (
+                "async def run(page, results):\n"
+                "    await page.goto('https://www.baidu.com/s?wd=pi-hole%2Fpi-hole')\n"
+                "    return {'url': page.url}"
+            ),
+        }
+
+    page = _FakePage()
+    page.url = "https://github.com/pi-hole/pi-hole"
+    result = await RecordingRuntimeAgent(planner=planner).run(
+        page=page,
+        instruction='填写"pi-hole/pi-hole"到搜索框点击搜索',
+        runtime_results={},
+    )
+
+    repair = calls[1]["repair"]
+    assert result.success is True
+    assert calls[1]["page"]["url"] == "https://github.com/pi-hole/pi-hole"
+    assert repair["page_after_failure"]["url"] == "https://www.baidu.com"
+    assert repair["snapshot_after_failure"]["url"] == "https://www.baidu.com"
+    assert repair["failure_analysis"]["type"] == "element_not_visible_or_not_editable"
 
 
 @pytest.mark.asyncio
