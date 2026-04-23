@@ -633,6 +633,7 @@ async def chat_with_assistant(
                     page=page,
                     instruction=request.message,
                     runtime_results=session.runtime_results.values,
+                    debug_context={"session_id": session_id},
                 )
                 await _apply_recording_agent_result(session_id, result)
 

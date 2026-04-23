@@ -236,6 +236,45 @@ def test_compact_recording_snapshot_uses_clean_mode_when_full_details_fit_budget
     assert all("value_locator" in pair for pair in pairs)
     assert any(region["kind"] == "action_group" for region in compact["region_catalogue"])
 
+
+def test_default_char_budget_keeps_medium_detail_snapshot_clean():
+    snapshot = _build_snapshot()
+    for index in range(50):
+        y = 330 + index * 30
+        snapshot["content_nodes"].extend(
+            [
+                {
+                    "node_id": f"label-extra-{index}",
+                    "container_id": "basic-section",
+                    "semantic_kind": "label",
+                    "role": "label",
+                    "text": f"扩展字段{index}",
+                    "bbox": {"x": 24, "y": y, "width": 80, "height": 20},
+                    "locator": {"method": "text", "value": f"扩展字段{index}"},
+                    "element_snapshot": {"tag": "label", "text": f"扩展字段{index}"},
+                },
+                {
+                    "node_id": f"value-extra-{index}",
+                    "container_id": "basic-section",
+                    "semantic_kind": "field_value",
+                    "role": "",
+                    "text": "这是一个用于测试默认快照预算的中等长度字段值",
+                    "bbox": {"x": 140, "y": y, "width": 280, "height": 20},
+                    "locator": {"method": "text", "value": f"值{index}"},
+                    "element_snapshot": {
+                        "tag": "span",
+                        "text": "这是一个用于测试默认快照预算的中等长度字段值",
+                        "class": "field-value",
+                    },
+                    "data_field": f"extra_{index}",
+                },
+            ]
+        )
+
+    assert compact_recording_snapshot(snapshot, "提取单据基本信息中的信息", char_budget=12000)["mode"] == "tiered_snapshot"
+    assert compact_recording_snapshot(snapshot, "提取单据基本信息中的信息")["mode"] == "clean_snapshot"
+
+
 def test_sampled_region_keeps_kind_specific_details():
     label_value_region = {
         "region_id": "detail-1",

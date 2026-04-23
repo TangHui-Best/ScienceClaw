@@ -108,7 +108,7 @@ def tier_regions(regions: Sequence[Dict[str, Any]], instruction: str) -> Dict[st
     }
 
 
-def compact_recording_snapshot(snapshot: Dict[str, Any], instruction: str, *, char_budget: int = 12000) -> Dict[str, Any]:
+def compact_recording_snapshot(snapshot: Dict[str, Any], instruction: str, *, char_budget: int = 20000) -> Dict[str, Any]:
     regions = build_structured_regions(snapshot)
     tiers = tier_regions(regions, instruction)
     clean_payload = _build_clean_payload(snapshot, regions, tiers["region_catalogue"])

@@ -264,7 +264,7 @@ async def test_recording_runtime_agent_forwards_instruction_into_snapshot_compac
     compact_calls = []
     planner_calls = []
 
-    def fake_compact_recording_snapshot(snapshot, instruction, *, char_budget=12000):
+    def fake_compact_recording_snapshot(snapshot, instruction, *, char_budget=20000):
         compact_calls.append(
             {
                 "instruction": instruction,
@@ -335,7 +335,7 @@ async def test_recording_runtime_agent_dumps_initial_snapshot_when_debug_dir_is_
         "mode": "clean_snapshot",
         "url": "https://github.com/trending",
         "title": "Trending",
-        "expanded_regions": [{"title": "Trending repositories"}],
+        "expanded_regions": [{"title": "Claude Code SDK"}],
         "sampled_regions": [],
         "region_catalogue": [],
     }
@@ -343,7 +343,7 @@ async def test_recording_runtime_agent_dumps_initial_snapshot_when_debug_dir_is_
     async def fake_build_page_snapshot(*_args, **_kwargs):
         return raw_snapshot
 
-    def fake_compact_recording_snapshot(_snapshot, _instruction, *, char_budget=12000):
+    def fake_compact_recording_snapshot(_snapshot, _instruction, *, char_budget=20000):
         return compact_snapshot
 
     async def planner(_payload):
@@ -356,8 +356,9 @@ async def test_recording_runtime_agent_dumps_initial_snapshot_when_debug_dir_is_
 
     debug_dir = Path(__file__).resolve().parents[1] / "recording_debug_test_output"
     debug_dir.mkdir(exist_ok=True)
-    for existing in debug_dir.glob("recording-snapshot-*.json"):
-        existing.unlink()
+    for pattern in ("*-snapshot-*.json", "*-attempt-*.json", "*-code-*.py", "snapshot-*.json", "attempt-*.json", "code-*.py", "recording-snapshot-*.json", "recording-attempt-*.json", "recording-code-*.py"):
+        for existing in debug_dir.glob(pattern):
+            existing.unlink()
 
     monkeypatch.setenv("RPA_RECORDING_DEBUG_SNAPSHOT_DIR", str(debug_dir))
     monkeypatch.setattr("backend.rpa.recording_runtime_agent.build_page_snapshot", fake_build_page_snapshot)
@@ -367,20 +368,31 @@ async def test_recording_runtime_agent_dumps_initial_snapshot_when_debug_dir_is_
         page=_FakePage(),
         instruction="打开和Claudecode最相关的项目",
         runtime_results={"previous": "value"},
+        debug_context={"session_id": "sess-debug-1"},
     )
 
-    files = list(debug_dir.glob("recording-snapshot-*.json"))
+    session_debug_dir = debug_dir / "sess-debug-1"
+    files = list(session_debug_dir.glob("*-snapshot-*.json"))
     assert result.success is True
     assert len(files) == 1
+    assert not list(debug_dir.glob("*-snapshot-*.json"))
+    assert files[0].name == "001-initial-snapshot-打开和Claudecode最相关的项目.json"
 
     payload = json.loads(files[0].read_text(encoding="utf-8"))
     assert payload["stage"] == "initial"
+    assert payload["debug_context"]["session_id"] == "sess-debug-1"
     assert payload["instruction"] == "打开和Claudecode最相关的项目"
     assert payload["raw_snapshot"] == raw_snapshot
     assert payload["compact_snapshot"] == compact_snapshot
+    assert payload["snapshot_metrics"]["raw_snapshot"]["content_node_count"] == 1
+    assert payload["snapshot_metrics"]["compact_snapshot"]["mode"] == "clean_snapshot"
+    assert payload["snapshot_comparison"]["classification"] == "present_in_both"
     assert payload["runtime_results"] == {"previous": "value"}
-    for file in files:
-        file.unlink()
+    for pattern in ("*-snapshot-*.json", "*-attempt-*.json", "*-code-*.py", "snapshot-*.json", "attempt-*.json", "code-*.py", "recording-snapshot-*.json", "recording-attempt-*.json", "recording-code-*.py"):
+        for file in session_debug_dir.glob(pattern):
+            file.unlink()
+    if session_debug_dir.exists():
+        session_debug_dir.rmdir()
 
 
 @pytest.mark.asyncio
@@ -408,7 +420,7 @@ async def test_recording_runtime_agent_dumps_repair_snapshot_after_first_failure
     async def fake_build_page_snapshot(*_args, **_kwargs):
         return raw_snapshots.pop(0)
 
-    def fake_compact_recording_snapshot(snapshot, _instruction, *, char_budget=12000):
+    def fake_compact_recording_snapshot(snapshot, _instruction, *, char_budget=20000):
         return {
             "mode": "clean_snapshot",
             "url": snapshot.get("url", ""),
@@ -440,8 +452,9 @@ async def test_recording_runtime_agent_dumps_repair_snapshot_after_first_failure
 
     debug_dir = Path(__file__).resolve().parents[1] / "recording_debug_test_output"
     debug_dir.mkdir(exist_ok=True)
-    for existing in debug_dir.glob("recording-snapshot-*.json"):
-        existing.unlink()
+    for pattern in ("*-snapshot-*.json", "*-attempt-*.json", "*-code-*.py", "snapshot-*.json", "attempt-*.json", "code-*.py", "recording-snapshot-*.json", "recording-attempt-*.json", "recording-code-*.py"):
+        for existing in debug_dir.glob(pattern):
+            existing.unlink()
 
     monkeypatch.setenv("RPA_RECORDING_DEBUG_SNAPSHOT_DIR", str(debug_dir))
     monkeypatch.setattr("backend.rpa.recording_runtime_agent.build_page_snapshot", fake_build_page_snapshot)
@@ -453,17 +466,39 @@ async def test_recording_runtime_agent_dumps_repair_snapshot_after_first_failure
         runtime_results={},
     )
 
-    files = sorted(debug_dir.glob("recording-snapshot-*.json"))
+    files = sorted(debug_dir.glob("*-snapshot-*.json"))
+    attempt_files = sorted(debug_dir.glob("*-attempt-*.json"))
+    code_files = sorted(debug_dir.glob("*-code-*.py"))
     payloads = [json.loads(path.read_text(encoding="utf-8")) for path in files]
     repair_payload = next(item for item in payloads if item["stage"] == "repair")
+    attempt_payloads = [json.loads(path.read_text(encoding="utf-8")) for path in attempt_files]
+    failed_attempt = next(item for item in attempt_payloads if item["stage"] == "initial_attempt")
 
     assert result.success is True
     assert len(files) == 2
+    assert len(attempt_files) == 2
+    assert len(code_files) == 2
+    assert [path.name for path in files] == [
+        "001-initial-snapshot-打开和Claudecode最相关的项目.json",
+        "003-repair-snapshot-打开和Claudecode最相关的项目.json",
+    ]
+    assert [path.name for path in attempt_files] == [
+        "002-initial_attempt-attempt-Broken_search_strategy.json",
+        "004-repair_attempt-attempt-Recovered.json",
+    ]
+    assert [path.name for path in code_files] == [
+        "002-initial_attempt-code-Broken_search_strategy.py",
+        "004-repair_attempt-code-Recovered.py",
+    ]
     assert calls[1]["repair"]["snapshot_after_failure"]["url"] == "https://github.com/search"
     assert repair_payload["compact_snapshot"]["url"] == "https://github.com/search"
     assert repair_payload["error"].startswith("Locator.click")
     assert repair_payload["failure_analysis"]["type"] == "selector_timeout"
-    for file in files:
+    assert failed_attempt["plan"]["description"] == "Broken search strategy"
+    assert failed_attempt["generated_code"].startswith("async def run")
+    assert failed_attempt["execution_result"]["success"] is False
+    assert failed_attempt["failure_analysis"]["type"] == "selector_timeout"
+    for file in files + attempt_files + code_files:
         file.unlink()
 
 

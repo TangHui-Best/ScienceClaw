@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import inspect
 import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -16,6 +17,9 @@ from .assistant_runtime import build_page_snapshot
 from .frame_selectors import build_frame_path
 from .snapshot_compression import compact_recording_snapshot
 from .trace_models import RPAAcceptedTrace, RPAAIExecution, RPAPageState, RPATraceDiagnostic, RPATraceType
+
+
+logger = logging.getLogger(__name__)
 
 
 RECORDING_RUNTIME_SYSTEM_PROMPT = """You operate exactly one RPA recording command.
@@ -87,8 +91,10 @@ class RecordingRuntimeAgent:
         page: Any,
         instruction: str,
         runtime_results: Optional[Dict[str, Any]] = None,
+        debug_context: Optional[Dict[str, Any]] = None,
     ) -> RecordingAgentResult:
         runtime_results = runtime_results if runtime_results is not None else {}
+        debug_context = dict(debug_context or {})
         before = await _page_state(page)
         snapshot = await _safe_page_snapshot(page)
         compact_snapshot = _compact_snapshot(snapshot, instruction)
@@ -105,6 +111,7 @@ class RecordingRuntimeAgent:
             raw_snapshot=snapshot,
             compact_snapshot=compact_snapshot,
             runtime_results=runtime_results,
+            debug_context=debug_context,
         )
 
         first_plan = await self.planner(payload)
@@ -115,6 +122,15 @@ class RecordingRuntimeAgent:
             plan=first_plan,
             result=first_result,
             before=before,
+        )
+        _write_recording_attempt_debug(
+            "initial_attempt",
+            instruction=instruction,
+            page_state=before.model_dump(mode="json"),
+            plan=first_plan,
+            execution_result=first_result,
+            failure_analysis=None if first_result.get("success") else _classify_recording_failure(first_result.get("error")),
+            debug_context=debug_context,
         )
         if first_result.get("success"):
             trace = await self._accepted_trace(
@@ -138,6 +154,11 @@ class RecordingRuntimeAgent:
         compact_failed_snapshot = _compact_snapshot(failed_snapshot, instruction)
         first_error = str(first_result.get("error") or "recording command failed")
         first_failure_analysis = _classify_recording_failure(first_error)
+        logger.warning(
+            "[RPA] recording command first attempt failed type=%s error=%s",
+            first_failure_analysis.get("type", "unknown"),
+            first_error[:300],
+        )
         _write_recording_snapshot_debug(
             "repair",
             instruction=instruction,
@@ -145,6 +166,7 @@ class RecordingRuntimeAgent:
             raw_snapshot=failed_snapshot,
             compact_snapshot=compact_failed_snapshot,
             runtime_results=runtime_results,
+            debug_context=debug_context,
             extra={
                 "failed_plan": _safe_jsonable(first_plan),
                 "error": first_error,
@@ -184,6 +206,15 @@ class RecordingRuntimeAgent:
             result=repair_result,
             before=before,
         )
+        _write_recording_attempt_debug(
+            "repair_attempt",
+            instruction=instruction,
+            page_state=failed_page.model_dump(mode="json"),
+            plan=repair_plan,
+            execution_result=repair_result,
+            failure_analysis=None if repair_result.get("success") else _classify_recording_failure(repair_result.get("error")),
+            debug_context=debug_context,
+        )
         if repair_result.get("success"):
             trace = await self._accepted_trace(
                 page,
@@ -203,6 +234,12 @@ class RecordingRuntimeAgent:
             )
 
         repair_error = str(repair_result.get("error") or "recording command repair failed")
+        repair_failure_analysis = _classify_recording_failure(repair_error)
+        logger.warning(
+            "[RPA] recording command repair failed type=%s error=%s",
+            repair_failure_analysis.get("type", "unknown"),
+            repair_error[:300],
+        )
         diagnostics.append(
             RPATraceDiagnostic(
                 source="ai",
@@ -210,7 +247,7 @@ class RecordingRuntimeAgent:
                 raw={
                     "plan": _safe_jsonable(repair_plan),
                     "result": _safe_jsonable(repair_result),
-                    "failure_analysis": _classify_recording_failure(repair_error),
+                    "failure_analysis": repair_failure_analysis,
                 },
             )
         )
@@ -750,6 +787,7 @@ def _write_recording_snapshot_debug(
     raw_snapshot: Dict[str, Any],
     compact_snapshot: Dict[str, Any],
     runtime_results: Dict[str, Any],
+    debug_context: Optional[Dict[str, Any]] = None,
     extra: Optional[Dict[str, Any]] = None,
 ) -> None:
     debug_dir = _resolve_recording_snapshot_debug_dir()
@@ -757,16 +795,26 @@ def _write_recording_snapshot_debug(
         return
 
     try:
-        target_dir = _resolve_recording_snapshot_debug_path(debug_dir)
+        debug_context = dict(debug_context or {})
+        target_dir = _resolve_recording_snapshot_debug_path(debug_dir, debug_context=debug_context)
         target_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-        filename = f"recording-snapshot-{timestamp}-{stage}-{uuid4().hex[:8]}.json"
+        sequence = _next_debug_sequence(target_dir)
+        filename = _debug_filename(
+            sequence=sequence,
+            stage=stage,
+            kind="snapshot",
+            label=instruction,
+            extension="json",
+        )
         payload: Dict[str, Any] = {
             "stage": stage,
+            "debug_context": debug_context,
             "instruction": instruction,
             "page": page_state,
             "raw_snapshot": raw_snapshot,
             "compact_snapshot": compact_snapshot,
+            "snapshot_metrics": _build_snapshot_debug_metrics(raw_snapshot, compact_snapshot),
+            "snapshot_comparison": _compare_instruction_snapshot_presence(instruction, raw_snapshot, compact_snapshot),
             "runtime_results": runtime_results,
         }
         if extra:
@@ -775,8 +823,176 @@ def _write_recording_snapshot_debug(
             json.dumps(_safe_jsonable(payload), ensure_ascii=False, indent=2, default=str),
             encoding="utf-8",
         )
+        logger.info("[RPA-DIAG] snapshot dump written stage=%s path=%s", stage, target_dir / filename)
     except Exception:
+        logger.warning("[RPA-DIAG] snapshot dump failed stage=%s", stage, exc_info=True)
         return
+
+
+def _write_recording_attempt_debug(
+    stage: str,
+    *,
+    instruction: str,
+    page_state: Dict[str, Any],
+    plan: Dict[str, Any],
+    execution_result: Dict[str, Any],
+    failure_analysis: Optional[Dict[str, Any]] = None,
+    debug_context: Optional[Dict[str, Any]] = None,
+) -> None:
+    debug_dir = _resolve_recording_snapshot_debug_dir()
+    if not debug_dir:
+        return
+
+    try:
+        debug_context = dict(debug_context or {})
+        target_dir = _resolve_recording_snapshot_debug_path(debug_dir, debug_context=debug_context)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        sequence = _next_debug_sequence(target_dir)
+        label = str(plan.get("description") or instruction or stage)
+        json_path = target_dir / _debug_filename(
+            sequence=sequence,
+            stage=stage,
+            kind="attempt",
+            label=label,
+            extension="json",
+        )
+        code = str(plan.get("code") or "")
+        payload: Dict[str, Any] = {
+            "stage": stage,
+            "debug_context": debug_context,
+            "instruction": instruction,
+            "page": page_state,
+            "plan": _safe_jsonable(plan),
+            "generated_code": code,
+            "execution_result": _safe_jsonable(execution_result),
+        }
+        if failure_analysis:
+            payload["failure_analysis"] = failure_analysis
+        if code:
+            code_path = target_dir / _debug_filename(
+                sequence=sequence,
+                stage=stage,
+                kind="code",
+                label=label,
+                extension="py",
+            )
+            code_path.write_text(code, encoding="utf-8")
+            payload["generated_code_path"] = str(code_path)
+        json_path.write_text(
+            json.dumps(_safe_jsonable(payload), ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
+        logger.info("[RPA-DIAG] attempt dump written stage=%s path=%s", stage, json_path)
+    except Exception:
+        logger.warning("[RPA-DIAG] attempt dump failed stage=%s", stage, exc_info=True)
+        return
+
+
+def _build_snapshot_debug_metrics(raw_snapshot: Dict[str, Any], compact_snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    content_nodes = list(raw_snapshot.get("content_nodes") or [])
+    actionable_nodes = list(raw_snapshot.get("actionable_nodes") or [])
+    containers = list(raw_snapshot.get("containers") or [])
+    expanded_regions = list(compact_snapshot.get("expanded_regions") or [])
+    sampled_regions = list(compact_snapshot.get("sampled_regions") or [])
+    catalogue = list(compact_snapshot.get("region_catalogue") or [])
+    return {
+        "raw_snapshot": {
+            "frame_count": len(raw_snapshot.get("frames") or []),
+            "content_node_count": len(content_nodes),
+            "actionable_node_count": len(actionable_nodes),
+            "container_count": len(containers),
+            "content_node_limit_hit": len(content_nodes) >= 160,
+            "actionable_node_limit_hit": len(actionable_nodes) >= 120,
+            "semantic_kind_counts": _count_by_key(content_nodes, "semantic_kind"),
+            "container_kind_counts": _count_by_key(containers, "container_kind"),
+        },
+        "compact_snapshot": {
+            "mode": compact_snapshot.get("mode", ""),
+            "char_size": len(json.dumps(_safe_jsonable(compact_snapshot), ensure_ascii=False, sort_keys=True, default=str)),
+            "expanded_region_count": len(expanded_regions),
+            "sampled_region_count": len(sampled_regions),
+            "catalogue_region_count": len(catalogue),
+            "expanded_region_titles": _region_titles(expanded_regions),
+            "sampled_region_titles": _region_titles(sampled_regions),
+            "region_kind_counts": _count_by_key(expanded_regions + sampled_regions + catalogue, "kind"),
+        },
+    }
+
+
+def _compare_instruction_snapshot_presence(
+    instruction: str,
+    raw_snapshot: Dict[str, Any],
+    compact_snapshot: Dict[str, Any],
+) -> Dict[str, Any]:
+    terms = _diagnostic_instruction_terms(instruction)
+    if not terms:
+        return {"classification": "no_instruction_terms", "terms": []}
+
+    raw_text = _diagnostic_text_blob(raw_snapshot)
+    compact_text = _diagnostic_text_blob(compact_snapshot)
+    raw_hits = [term for term in terms if term in raw_text]
+    compact_hits = [term for term in terms if term in compact_text]
+    if raw_hits and compact_hits:
+        classification = "present_in_both"
+    elif raw_hits and not compact_hits:
+        classification = "missing_in_compact"
+    elif not raw_hits:
+        classification = "missing_in_raw"
+    else:
+        classification = "present_in_compact_only"
+    return {
+        "classification": classification,
+        "terms": terms,
+        "raw_hits": raw_hits,
+        "compact_hits": compact_hits,
+    }
+
+
+def _count_by_key(items: List[Dict[str, Any]], key: str) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for item in items:
+        value = str(item.get(key) or "unknown")
+        counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
+def _region_titles(regions: List[Dict[str, Any]]) -> List[str]:
+    titles: List[str] = []
+    for region in regions[:20]:
+        title = str(region.get("title") or region.get("summary") or region.get("region_id") or "").strip()
+        if title:
+            titles.append(title[:120])
+    return titles
+
+
+def _diagnostic_instruction_terms(instruction: str) -> List[str]:
+    text = _normalize_debug_text(instruction)
+    terms: List[str] = []
+    for match in re.findall(r"[a-z0-9][a-z0-9_-]{2,}", text):
+        terms.append(match)
+    compact_cjk = "".join(ch for ch in text if "\u4e00" <= ch <= "\u9fff")
+    if len(compact_cjk) >= 4:
+        terms.append(compact_cjk)
+    for index in range(max(len(compact_cjk) - 1, 0)):
+        gram = compact_cjk[index : index + 2]
+        if gram:
+            terms.append(gram)
+    seen: set[str] = set()
+    deduped: List[str] = []
+    for term in terms:
+        if term in seen:
+            continue
+        seen.add(term)
+        deduped.append(term)
+    return deduped[:30]
+
+
+def _diagnostic_text_blob(value: Any) -> str:
+    return _normalize_debug_text(json.dumps(_safe_jsonable(value), ensure_ascii=False, default=str))
+
+
+def _normalize_debug_text(value: Any) -> str:
+    return re.sub(r"\s+", "", str(value or "").lower())
 
 
 def _resolve_recording_snapshot_debug_dir() -> str:
@@ -792,11 +1008,36 @@ def _resolve_recording_snapshot_debug_dir() -> str:
         return ""
 
 
-def _resolve_recording_snapshot_debug_path(debug_dir: str) -> Path:
+def _resolve_recording_snapshot_debug_path(debug_dir: str, *, debug_context: Optional[Dict[str, Any]] = None) -> Path:
     path = Path(str(debug_dir or "").strip()).expanduser()
-    if path.is_absolute():
-        return path
-    return Path(__file__).resolve().parents[3] / path
+    resolved = path if path.is_absolute() else Path(__file__).resolve().parents[3] / path
+    session_id = str((debug_context or {}).get("session_id") or "").strip()
+    if not session_id:
+        return resolved
+    return resolved / _safe_debug_path_segment(session_id)
+
+
+def _next_debug_sequence(target_dir: Path) -> int:
+    max_seen = 0
+    for pattern in ("*-snapshot-*.json", "*-attempt-*.json", "*-code-*.py", "snapshot-*.json", "attempt-*.json", "code-*.py"):
+        for path in target_dir.glob(pattern):
+            match = re.match(r"^(?:snapshot|attempt|code)-(\d+)-|^(\d+)-", path.name)
+            if match:
+                max_seen = max(max_seen, int(match.group(1) or match.group(2)))
+    return max_seen + 1
+
+
+def _debug_filename(*, sequence: int, stage: str, kind: str, label: str, extension: str) -> str:
+    stage_segment = _safe_debug_path_segment(stage, max_length=40, allow_unicode=False)
+    label_segment = _safe_debug_path_segment(label, max_length=48, allow_unicode=True)
+    return f"{sequence:03d}-{stage_segment}-{kind}-{label_segment}.{extension}"
+
+
+def _safe_debug_path_segment(value: str, *, max_length: int = 120, allow_unicode: bool = False) -> str:
+    pattern = r"[^\w\u4e00-\u9fff_.-]+" if allow_unicode else r"[^a-zA-Z0-9_.-]+"
+    segment = re.sub(pattern, "_", str(value or "").strip(), flags=re.UNICODE)
+    segment = segment.strip("._")
+    return segment[:max_length] or "unknown"
 
 
 def _safe_jsonable(value: Any) -> Any:
