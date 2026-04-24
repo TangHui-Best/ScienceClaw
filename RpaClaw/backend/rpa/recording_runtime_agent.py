@@ -18,13 +18,22 @@ from pydantic import BaseModel, Field
 from .assistant_runtime import build_page_snapshot
 from .frame_selectors import build_frame_path
 from .snapshot_compression import compact_recording_snapshot
-from .trace_models import RPAAcceptedTrace, RPAAIExecution, RPAPageState, RPATraceDiagnostic, RPATraceType
+from .trace_models import (
+    RPAAcceptedTrace,
+    RPAAIExecution,
+    RPALocatorStabilityCandidate,
+    RPALocatorStabilityMetadata,
+    RPAPageState,
+    RPATraceDiagnostic,
+    RPATraceType,
+)
 
 
 logger = logging.getLogger(__name__)
 
 
 _GENERATED_CODE_FILENAME = "<recording_runtime_agent>"
+_RANDOM_LIKE_ATTR_RE = re.compile(r"(?i)(?:[a-z]+[-_])?[a-z0-9]{6,}[a-z][a-z0-9]*")
 
 
 RECORDING_RUNTIME_SYSTEM_PROMPT = """You operate exactly one RPA recording command.
@@ -165,6 +174,7 @@ class RecordingRuntimeAgent:
                 first_result,
                 before,
                 repair_attempted=False,
+                snapshot=snapshot,
             )
             return RecordingAgentResult(
                 success=True,
@@ -269,6 +279,7 @@ class RecordingRuntimeAgent:
                 repair_result,
                 before,
                 repair_attempted=True,
+                snapshot=failed_snapshot,
             )
             return RecordingAgentResult(
                 success=True,
@@ -321,10 +332,12 @@ class RecordingRuntimeAgent:
         before: RPAPageState,
         *,
         repair_attempted: bool,
+        snapshot: Optional[Dict[str, Any]] = None,
     ) -> RPAAcceptedTrace:
         after = await _page_state(page)
         output = result.get("output")
         output_key = _normalize_result_key(plan.get("output_key"))
+        locator_stability = _build_locator_stability_metadata(plan, snapshot or {})
         return RPAAcceptedTrace(
             trace_type=RPATraceType.AI_OPERATION,
             source="ai",
@@ -341,6 +354,7 @@ class RecordingRuntimeAgent:
                 error=result.get("error"),
                 repair_attempted=repair_attempted,
             ),
+            locator_stability=locator_stability,
         )
 
     async def _default_planner(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -668,6 +682,19 @@ async def _ensure_expected_effect(
         action_type = str(plan.get("action_type") or "").strip().lower()
         if action_type == expected_effect:
             return {**result, "effect": {"type": expected_effect, "action_performed": True}}
+        if expected_effect == "click" and action_type == "run_python":
+            after = await _page_state(page)
+            if _url_changed(before.url, after.url):
+                effect = dict(result.get("effect") or {})
+                effect.update(
+                    {
+                        "type": "click",
+                        "action_performed": True,
+                        "observed_url_change": True,
+                        "url": after.url,
+                    }
+                )
+                return {**result, "effect": effect}
         return {
             **result,
             "success": False,
@@ -810,6 +837,87 @@ def _normalize_target_url(value: str, *, base_url: str = "") -> str:
     if text.startswith("/") and base_url:
         return urljoin(base_url, text)
     return ""
+
+
+def _extract_primary_locator_from_code(code: str) -> Dict[str, Any]:
+    match = re.search(r"page\.locator\((?P<quote>['\"])(?P<selector>.+?)(?P=quote)\)", code or "")
+    if not match:
+        return {}
+    return {"method": "css", "value": match.group("selector")}
+
+
+def _extract_unstable_signals(locator: Dict[str, Any]) -> List[Dict[str, Any]]:
+    if locator.get("method") != "css":
+        return []
+    selector = str(locator.get("value") or "")
+    signals: List[Dict[str, Any]] = []
+    patterns = {
+        "data-testid": re.compile(r"""\[\s*data-testid\s*=\s*["']([^"']+)["']\s*\]"""),
+        "data-test": re.compile(r"""\[\s*data-test\s*=\s*["']([^"']+)["']\s*\]"""),
+        "id": re.compile(r"""#([A-Za-z0-9_-]+)"""),
+        "class": re.compile(r"""\.([A-Za-z0-9_-]+)"""),
+    }
+    for attribute, pattern in patterns.items():
+        for match in pattern.finditer(selector):
+            value = match.group(1)
+            if _RANDOM_LIKE_ATTR_RE.search(value):
+                signals.append({"attribute": attribute, "value": value})
+    return signals
+
+
+def _build_anchor_candidate(anchor_title: str, role: str, name: str) -> RPALocatorStabilityCandidate:
+    return RPALocatorStabilityCandidate(
+        locator={
+            "method": "nested",
+            "parent": {"method": "text", "value": anchor_title},
+            "child": {"method": "role", "role": role, "name": name},
+        },
+        source="snapshot_anchor_scope",
+        confidence="high",
+    )
+
+
+def _build_locator_stability_metadata(
+    plan: Dict[str, Any],
+    snapshot: Dict[str, Any],
+) -> Optional[RPALocatorStabilityMetadata]:
+    primary_locator = _extract_primary_locator_from_code(str(plan.get("code") or ""))
+    if not primary_locator:
+        return None
+
+    unstable_signals = _extract_unstable_signals(primary_locator)
+    if not unstable_signals:
+        return None
+
+    fallback_metadata = RPALocatorStabilityMetadata(
+        primary_locator=primary_locator,
+        unstable_signals=unstable_signals,
+    )
+
+    for node in snapshot.get("actionable_nodes") or []:
+        locator = node.get("locator") or {}
+        role = str(node.get("role") or locator.get("role") or "").strip()
+        name = str(node.get("name") or locator.get("name") or node.get("text") or "").strip()
+        if not role or not name:
+            continue
+        anchor = str((node.get("container") or {}).get("title") or "").strip()
+        alternate_locators = [
+            RPALocatorStabilityCandidate(
+                locator={"method": "role", "role": role, "name": name},
+                source="snapshot_actionable_node",
+                confidence="high",
+            )
+        ]
+        if anchor:
+            alternate_locators.append(_build_anchor_candidate(anchor, role, name))
+        return RPALocatorStabilityMetadata(
+            primary_locator=primary_locator,
+            stable_self_signals={"role": role, "name": name},
+            stable_anchor_signals={"title": anchor} if anchor else {},
+            unstable_signals=unstable_signals,
+            alternate_locators=alternate_locators,
+        )
+    return fallback_metadata
 
 
 async def _safe_page_snapshot(page: Any) -> Dict[str, Any]:

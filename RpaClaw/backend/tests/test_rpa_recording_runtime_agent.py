@@ -10,10 +10,12 @@ from backend.rpa.recording_runtime_agent import (
     RecordingRuntimeAgent,
     RECORDING_RUNTIME_SYSTEM_PROMPT,
     _classify_recording_failure,
+    _ensure_expected_effect,
     _parse_json_object,
     _resolve_recording_snapshot_debug_dir,
     _resolve_recording_snapshot_debug_path,
 )
+from backend.rpa.trace_models import RPAPageState
 
 
 class _FakePage:
@@ -22,11 +24,26 @@ class _FakePage:
     async def title(self):
         return "Example"
 
+    def locator(self, _selector):
+        return _FakeLocator()
+
     async def goto(self, url, wait_until=None):
         self.url = url
 
     async def wait_for_load_state(self, _state):
         return None
+
+
+class _FakeLocator:
+    async def click(self):
+        return None
+
+
+class _FakeNavigatedPage(_FakePage):
+    url = "https://github.com/HKUDS/RAG-Anything"
+
+    async def title(self):
+        return "GitHub - HKUDS/RAG-Anything"
 
 
 @pytest.fixture(autouse=True)
@@ -129,6 +146,132 @@ async def test_recording_runtime_agent_accepts_successful_python_plan():
     assert result.trace.output_key == "page_title"
     assert result.trace.output == {"title": "Example"}
     assert result.trace.ai_execution.repair_attempted is False
+
+
+@pytest.mark.asyncio
+async def test_recording_runtime_agent_attaches_locator_stability_metadata_when_available():
+    async def planner(_payload):
+        return {
+            "description": "Open stable action menu",
+            "action_type": "run_python",
+            "expected_effect": "extract",
+            "output_key": "opened_menu",
+            "code": (
+                "async def run(page, results):\n"
+                "    await page.locator('[data-testid=\"menu-btn-a1b2c3d4\"]').click()\n"
+                "    return {'opened': True}"
+            ),
+        }
+
+    result = await RecordingRuntimeAgent(planner=planner).run(
+        page=_FakePage(),
+        instruction="inspect the action menu button",
+        runtime_results={},
+    )
+
+    assert result.success is True
+    metadata = result.trace.locator_stability
+    assert metadata is not None
+    assert metadata.primary_locator["method"] == "css"
+    assert metadata.unstable_signals[0]["attribute"] == "data-testid"
+
+
+@pytest.mark.asyncio
+async def test_recording_runtime_agent_keeps_trace_success_when_no_locator_stability_metadata_is_found():
+    async def planner(_payload):
+        return {
+            "description": "Return summary",
+            "action_type": "run_python",
+            "expected_effect": "extract",
+            "output_key": "summary",
+            "code": "async def run(page, results):\n    return {'summary': 'ok'}",
+        }
+
+    result = await RecordingRuntimeAgent(planner=planner).run(
+        page=_FakePage(),
+        instruction="summarize page",
+        runtime_results={},
+    )
+
+    assert result.success is True
+    assert result.trace.locator_stability is None
+
+
+@pytest.mark.asyncio
+async def test_recording_runtime_agent_extracts_stable_self_and_anchor_signals_from_snapshot(monkeypatch):
+    snapshot = {
+        "url": "https://example.test/dashboard",
+        "title": "Dashboard",
+        "actionable_nodes": [
+            {
+                "role": "button",
+                "name": "Open menu",
+                "text": "Open menu",
+                "locator": {"method": "role", "role": "button", "name": "Open menu"},
+                "container": {"title": "Quarterly Report"},
+            }
+        ],
+        "content_nodes": [],
+        "containers": [],
+        "frames": [],
+    }
+
+    async def fake_build_page_snapshot(_page, _build_frame_path):
+        return snapshot
+
+    monkeypatch.setattr("backend.rpa.recording_runtime_agent.build_page_snapshot", fake_build_page_snapshot)
+
+    async def planner(_payload):
+        return {
+            "description": "Inspect report menu",
+            "action_type": "run_python",
+            "expected_effect": "extract",
+            "code": (
+                "async def run(page, results):\n"
+                "    await page.locator('[data-testid=\"menu-btn-a1b2c3d4\"]').click()\n"
+                "    return {'opened': True}"
+            ),
+        }
+
+    result = await RecordingRuntimeAgent(planner=planner).run(
+        page=_FakePage(),
+        instruction="inspect the report menu button",
+        runtime_results={},
+    )
+
+    assert result.success is True
+    metadata = result.trace.locator_stability
+    assert metadata is not None
+    assert metadata.stable_self_signals["role"] == "button"
+    assert metadata.stable_self_signals["name"] == "Open menu"
+    assert metadata.stable_anchor_signals["title"] == "Quarterly Report"
+    assert metadata.alternate_locators[0].locator == {
+        "method": "role",
+        "role": "button",
+        "name": "Open menu",
+    }
+
+
+@pytest.mark.asyncio
+async def test_ensure_expected_effect_accepts_run_python_click_when_url_changes():
+    page = _FakeNavigatedPage()
+    result = await _ensure_expected_effect(
+        page=page,
+        instruction="click the third project",
+        plan={
+            "action_type": "run_python",
+            "expected_effect": "click",
+            "code": 'async def run(page, results):\n    await page.get_by_role("link", name="HKUDS / RAG-Anything").click()',
+        },
+        result={"success": True, "output": None},
+        before=RPAPageState(url="https://github.com/trending", title="Trending repositories on GitHub today · GitHub"),
+    )
+
+    assert result["success"] is True
+    assert result["effect"]["type"] == "click"
+    assert result["effect"]["action_performed"] is True
+    assert result["effect"]["observed_url_change"] is True
+    assert result["effect"]["url"] == "https://github.com/HKUDS/RAG-Anything"
 
 
 @pytest.mark.asyncio
