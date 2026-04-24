@@ -312,15 +312,11 @@ const hide = () => {
   disconnectScreencast();
 };
 
-const writeExecution = (toolName: string, command: string, output?: string, status?: string) => {
-  terminalRef.value?.writeExecution(toolName, command, output, status);
-};
-
 onBeforeUnmount(() => {
   disconnectScreencast();
 });
 
-defineExpose({ show, hide, visible, writeExecution });
+defineExpose({ show, hide, visible });
 </script>
 
 <style scoped>

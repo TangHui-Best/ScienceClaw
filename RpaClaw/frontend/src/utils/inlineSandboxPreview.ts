@@ -6,18 +6,6 @@ const BROWSER_TOOLS = new Set([
   'sandbox_browser_execute_action',
 ]);
 
-const SANDBOX_TOOLS = new Set([
-  'execute',
-  'sandbox_execute_bash',
-  'sandbox_execute_code',
-  'sandbox_file_operations',
-  'sandbox_str_replace_editor',
-  'sandbox_get_context',
-  'sandbox_get_packages',
-  'sandbox_convert_to_markdown',
-  'sandbox_exec',
-]);
-
 export interface InlineSandboxToolItem {
   type: string;
   tool?: {
@@ -30,37 +18,39 @@ export interface InlineSandboxToolItem {
   };
 }
 
-const canInspectSandboxBrowser = (toolFunction: string, isSandboxProxy = false) => {
+const isInlineBrowserPreviewTool = (toolFunction: string) => {
   if (!toolFunction) return false;
-  if (isSandboxProxy) return true;
-  if (BROWSER_TOOLS.has(toolFunction) || SANDBOX_TOOLS.has(toolFunction)) return true;
-  return toolFunction.startsWith('browser_') || toolFunction.startsWith('terminal_') || toolFunction.startsWith('sandbox_');
+  if (BROWSER_TOOLS.has(toolFunction)) return true;
+  return toolFunction.startsWith('browser_');
+};
+
+const getLatestTool = (items: InlineSandboxToolItem[] = []) => {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i];
+    if (item.type === 'tool' && item.tool) {
+      return item.tool;
+    }
+  }
+
+  return null;
 };
 
 export const getInlineSandboxPreviewMode = (items: InlineSandboxToolItem[] = []): InlineSandboxPreviewMode => {
-  for (let i = items.length - 1; i >= 0; i--) {
-    const item = items[i];
-    if (item.type !== 'tool' || !item.tool) continue;
+  const latestTool = getLatestTool(items);
+  if (!latestTool) return 'none';
 
-    const fn = item.tool.function || item.tool.name || '';
-    if (canInspectSandboxBrowser(fn, !!item.tool.tool_meta?.sandbox)) return 'browser';
-  }
+  const fn = latestTool.function || latestTool.name || '';
+  if (isInlineBrowserPreviewTool(fn)) return 'browser';
 
   return 'none';
 };
 
 export const hasActiveInlineSandboxPreviewTool = (items: InlineSandboxToolItem[] = []): boolean => {
-  for (let i = items.length - 1; i >= 0; i--) {
-    const item = items[i];
-    if (item.type !== 'tool' || !item.tool) continue;
+  const latestTool = getLatestTool(items);
+  if (!latestTool) return false;
 
-    const fn = item.tool.function || item.tool.name || '';
-    if (!canInspectSandboxBrowser(fn, !!item.tool.tool_meta?.sandbox)) continue;
+  const fn = latestTool.function || latestTool.name || '';
+  if (!isInlineBrowserPreviewTool(fn)) return false;
 
-    if (item.tool.status === 'calling') {
-      return true;
-    }
-  }
-
-  return false;
+  return latestTool.status === 'calling';
 };

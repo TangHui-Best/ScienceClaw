@@ -2204,6 +2204,26 @@ async def activate_session_browser_tab(
     })
 
 
+@router.get("/{session_id}/browser/tabs", response_model=ApiResponse)
+async def list_session_browser_tabs(
+    session_id: str,
+    current_user: User = Depends(require_user),
+) -> ApiResponse:
+    if settings.storage_backend != "local":
+        raise HTTPException(status_code=400, detail="Local mode only")
+
+    try:
+        session = await async_get_science_session(session_id)
+        if session.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied")
+    except ScienceSessionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return ApiResponse(data={
+        "tabs": browser_preview_registry.list_tabs(session_id),
+    })
+
+
 @router.websocket("/{session_id}/browser/screencast")
 async def session_browser_screencast(websocket: WebSocket, session_id: str):
     """Stream a local-mode chat browser page via CDP screencast with tab switching."""

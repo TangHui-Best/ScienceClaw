@@ -257,6 +257,11 @@ import {
   hasActiveInlineSandboxPreviewTool,
   type InlineSandboxPreviewMode,
 } from '../utils/inlineSandboxPreview';
+import {
+  getInlineBrowserPreviewSignalAction,
+  shouldPollInlineBrowserPreviewSignal,
+} from '../utils/inlineBrowserPreviewSignal';
+import { isLocalMode } from '../utils/sandbox';
 
 const router = useRouter()
 const { t, locale } = useI18n()
@@ -265,6 +270,7 @@ const { currentUser } = useAuth()
 const { updateSessionTitle } = useSessionListUpdate()
 const { onSessionUpdated } = useSessionNotifications()
 const INLINE_SANDBOX_HIDE_DELAY_MS = 2500;
+const INLINE_BROWSER_SIGNAL_POLL_MS = 800;
 
 // Models related state
 const models = ref<ModelConfig[]>([]);
@@ -327,7 +333,10 @@ const {
 const { groupedMessages } = useMessageGrouper(messages);
 const inlineSandboxMode = ref<InlineSandboxPreviewMode>('none');
 const inlineSandboxDismissed = ref(false);
+const inlineBrowserSignalEnabled = computed(() => isLocalMode());
 let inlineSandboxHideTimer: ReturnType<typeof setTimeout> | null = null;
+let inlineBrowserSignalPollTimer: ReturnType<typeof setInterval> | null = null;
+let inlineBrowserSignalRequestToken = 0;
 
 // 最后一个 process 组的索引（推理失败时会先 push 一条 assistant 消息，此时最后一组不是 process，需用此判断当前轮次的 process 组）
 const lastProcessGroupIndex = computed(() => {
@@ -389,6 +398,13 @@ const clearInlineSandboxHideTimer = () => {
   }
 };
 
+const clearInlineBrowserSignalPollTimer = () => {
+  if (inlineBrowserSignalPollTimer) {
+    clearInterval(inlineBrowserSignalPollTimer);
+    inlineBrowserSignalPollTimer = null;
+  }
+};
+
 const hideInlineSandboxPreview = () => {
   clearInlineSandboxHideTimer();
   inlineSandboxMode.value = 'none';
@@ -413,7 +429,77 @@ const handleInlineSandboxBrowserEnded = () => {
   scheduleInlineSandboxHide();
 };
 
+const applyInlineBrowserSignal = (hasBrowserTabs: boolean) => {
+  const action = getInlineBrowserPreviewSignalAction({
+    loading: isLoading.value,
+    dismissed: inlineSandboxDismissed.value,
+    hasBrowserTabs,
+    mode: inlineSandboxMode.value,
+  });
+
+  if (action === 'show') {
+    clearInlineSandboxHideTimer();
+    inlineSandboxMode.value = 'browser';
+    return;
+  }
+
+  if (action === 'schedule-hide') {
+    scheduleInlineSandboxHide();
+    return;
+  }
+
+  if (action === 'hide') {
+    hideInlineSandboxPreview();
+  }
+};
+
+const refreshInlineSandboxPreviewFromBrowserSignal = async () => {
+  if (!inlineBrowserSignalEnabled.value || !sessionId.value) return;
+
+  const requestToken = ++inlineBrowserSignalRequestToken;
+  const targetSessionId = sessionId.value;
+
+  try {
+    const tabs = await agentApi.getSessionBrowserTabs(targetSessionId);
+    if (
+      requestToken !== inlineBrowserSignalRequestToken
+      || _unmounted
+      || sessionId.value !== targetSessionId
+    ) {
+      return;
+    }
+    applyInlineBrowserSignal(tabs.length > 0);
+  } catch {
+    if (
+      requestToken !== inlineBrowserSignalRequestToken
+      || _unmounted
+      || sessionId.value !== targetSessionId
+    ) {
+      return;
+    }
+    applyInlineBrowserSignal(false);
+  }
+};
+
+const syncInlineBrowserSignalPolling = () => {
+  clearInlineBrowserSignalPollTimer();
+
+  if (!shouldPollInlineBrowserPreviewSignal({
+    enabled: inlineBrowserSignalEnabled.value,
+    sessionId: sessionId.value,
+    dismissed: inlineSandboxDismissed.value,
+  })) {
+    return;
+  }
+
+  void refreshInlineSandboxPreviewFromBrowserSignal();
+  inlineBrowserSignalPollTimer = setInterval(() => {
+    void refreshInlineSandboxPreviewFromBrowserSignal();
+  }, INLINE_BROWSER_SIGNAL_POLL_MS);
+};
+
 const syncInlineSandboxPreviewFromActivity = () => {
+  if (inlineBrowserSignalEnabled.value) return;
   if (!isLoading.value || inlineSandboxDismissed.value) return;
   const mode = getInlineSandboxPreviewMode(activityItems.value);
   if (mode === 'browser') {
@@ -428,6 +514,11 @@ watch(
     activityItems.value.map(item => `${item.id}:${item.tool?.function || item.tool?.name || ''}:${item.tool?.status || ''}`).join('|'),
   ] as const,
   ([loading]) => {
+    if (inlineBrowserSignalEnabled.value) {
+      syncInlineBrowserSignalPolling();
+      return;
+    }
+
     const hasActivePreviewTool = hasActiveInlineSandboxPreviewTool(activityItems.value);
 
     if (hasActivePreviewTool) {
@@ -441,6 +532,21 @@ watch(
 
     scheduleInlineSandboxHide();
   },
+);
+
+watch(
+  () => [
+    sessionId.value,
+    isLoading.value,
+    inlineSandboxDismissed.value,
+    inlineSandboxMode.value,
+    inlineBrowserSignalEnabled.value,
+  ] as const,
+  () => {
+    inlineBrowserSignalRequestToken += 1;
+    syncInlineBrowserSignalPolling();
+  },
+  { immediate: true },
 );
 
 
@@ -672,7 +778,11 @@ const handleToolEvent = (toolData: ToolEventData) => {
         timestamp: toolContent.timestamp || Date.now(),
       });
     }
-    syncInlineSandboxPreviewFromActivity();
+    if (inlineBrowserSignalEnabled.value) {
+      void refreshInlineSandboxPreviewFromBrowserSignal();
+    } else {
+      syncInlineSandboxPreviewFromActivity();
+    }
     activityPanelRef.value?.show();
   }
 }
@@ -1250,6 +1360,8 @@ onUnmounted(() => {
   console.log('[ChatPage] onUnmounted, sessionId:', sessionId.value);
   _unmounted = true;
   clearInlineSandboxHideTimer();
+  clearInlineBrowserSignalPollTimer();
+  inlineBrowserSignalRequestToken += 1;
   if (cancelCurrentChat.value) {
     cancelCurrentChat.value();
     cancelCurrentChat.value = null;

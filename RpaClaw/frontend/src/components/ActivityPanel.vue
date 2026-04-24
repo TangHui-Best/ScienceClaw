@@ -247,7 +247,10 @@ import SandboxPreview from './SandboxPreview.vue';
 import type { ToolContent } from '../types/message';
 import type { PlanEventData } from '../types/event';
 import type { SandboxPreviewMode } from '../utils/sandbox';
-import { getPreviewMode } from '../utils/sandbox';
+import {
+  buildActivitySandboxTerminalHistory,
+  type ActivitySandboxExecEntry,
+} from '../utils/activitySandboxTerminal';
 import { useResizeObserver } from '../composables/useResizeObserver';
 import { eventBus } from '../utils/eventBus';
 import { EVENT_SHOW_FILE_PANEL, EVENT_SHOW_TOOL_PANEL, EVENT_SHOW_ACTIVITY_PANEL } from '../constants/event';
@@ -439,74 +442,24 @@ watch(aggregatedThinkingContent, scrollThoughtsToBottom);
 watch(() => toolItems.value.length, scrollToolsToBottom);
 watch(() => props.plan, () => {}, { deep: true });
 
-/**
- * Extract a display-friendly command string from tool args.
- */
-function extractCommand(tool: ToolContent): string {
-  const args = tool.args;
-  if (!args || typeof args !== 'object') return '';
-  return args.command || args.code || args.script || args.path || args.file || args.url || args.action || '';
-}
+const sandboxHistory = ref<ActivitySandboxExecEntry[]>([]);
 
-/**
- * Extract output text from tool result content.
- */
-function extractOutput(tool: ToolContent): string {
-  const c = tool.content;
-  if (!c) return '';
-  if (typeof c === 'string') {
-    try {
-      const parsed = JSON.parse(c);
-      return parsed.stdout || parsed.output || parsed.text || c;
-    } catch {
-      return c;
+function syncSandboxTools() {
+  const nextHistory = buildActivitySandboxTerminalHistory(props.items);
+
+  sandboxHistory.value = nextHistory;
+
+  if (nextHistory.length === 0) {
+    if (!props.isLoading) {
+      activeSandboxMode.value = 'none';
     }
+    return;
   }
-  if (typeof c === 'object') {
-    return (c as any).stdout || (c as any).output || (c as any).text || JSON.stringify(c);
-  }
-  return String(c);
+
+  activeSandboxMode.value = 'terminal';
 }
 
-const writtenToolCalls = new Set<string>();
-
-export interface SandboxExecEntry {
-  toolName: string;
-  command: string;
-  output?: string;
-  status: string;
-}
-
-const sandboxHistory = ref<SandboxExecEntry[]>([]);
-
-function scanSandboxTools() {
-  for (const item of props.items) {
-    if (item.type !== 'tool' || !item.tool) continue;
-    const fn = item.tool.function || item.tool.name || '';
-    const mode = getPreviewMode(fn, !!item.tool.tool_meta?.sandbox);
-    if (mode !== 'terminal') continue;
-
-    const callId = item.tool.tool_call_id || item.id;
-
-    if (item.tool.status === 'calling' && !writtenToolCalls.has(callId + ':calling')) {
-      activeSandboxMode.value = 'terminal';
-      writtenToolCalls.add(callId + ':calling');
-      sandboxHistory.value.push({ toolName: fn, command: extractCommand(item.tool), status: 'calling' });
-    }
-
-    if (item.tool.status === 'called' && !writtenToolCalls.has(callId + ':called')) {
-      activeSandboxMode.value = 'terminal';
-      if (!writtenToolCalls.has(callId + ':calling')) {
-        writtenToolCalls.add(callId + ':calling');
-        sandboxHistory.value.push({ toolName: fn, command: extractCommand(item.tool), status: 'calling' });
-      }
-      writtenToolCalls.add(callId + ':called');
-      sandboxHistory.value.push({ toolName: fn, command: extractCommand(item.tool), output: extractOutput(item.tool), status: 'called' });
-    }
-  }
-}
-
-watch(() => props.items.map(i => `${i.id}:${i.tool?.function || i.tool?.name || ''}:${i.tool?.status}`).join(','), scanSandboxTools);
+watch(() => props.items, syncSandboxTools, { deep: true, immediate: true });
 
 const show = () => {
   eventBus.emit(EVENT_SHOW_ACTIVITY_PANEL);
