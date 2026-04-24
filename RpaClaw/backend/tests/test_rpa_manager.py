@@ -55,6 +55,7 @@ class _FakePage:
         self._title = title
         self.context = context or _FakeContext()
         self.main_frame = SimpleNamespace(url=url)
+        self.frames = []
         self.handlers = {}
         self.bring_to_front_calls = 0
         self.goto_calls = []
@@ -713,6 +714,13 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         emit_block = js.split("function emit(evt)", 1)[1].split("function emitAction", 1)[0]
         self.assertIn("if (!evt.tab_id && window.__rpa_tab_id)", emit_block)
         self.assertIn("evt.tab_id = window.__rpa_tab_id;", emit_block)
+
+    def test_capture_js_uses_document_scoped_install_guard(self):
+        js = MANAGER_MODULE.CAPTURE_JS
+        self.assertIn("var docMarker = '__rpa_capture_installed__';", js)
+        self.assertIn("if (document[docMarker]) return;", js)
+        self.assertIn("document[docMarker] = true;", js)
+        self.assertNotIn("window.__rpa_injected", js)
 
     def test_capture_js_no_longer_implements_raw_dom_listeners_inline(self):
         js = MANAGER_MODULE.CAPTURE_JS

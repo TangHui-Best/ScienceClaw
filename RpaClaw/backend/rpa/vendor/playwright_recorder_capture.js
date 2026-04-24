@@ -1,7 +1,8 @@
 (() => {
-    if (window.__rpa_injected) return;
-    window.__rpa_injected = true;
-    window.__rpa_paused = false;
+    var docMarker = '__rpa_capture_installed__';
+    if (document[docMarker]) return;
+    document[docMarker] = true;
+    if (typeof window.__rpa_paused === 'undefined') window.__rpa_paused = false;
 
     function norm(value) {
         return (value || '').replace(/\s+/g, ' ').trim();
