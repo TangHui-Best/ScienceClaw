@@ -161,11 +161,38 @@
         return pattern.test(el.className);
     }
 
+    function closestElement(el, selector) {
+        if (!el || !el.closest) return null;
+        return el.closest(selector);
+    }
+
     function isMenuLikeElement(el) {
         if (!el || !el.getAttribute) return false;
         var role = (el.getAttribute('role') || '').toLowerCase();
         if (role === 'menu' || role === 'listbox') return true;
         return hasClassToken(el, /(menu|dropdown|popover|popup|listbox)/i);
+    }
+
+    function hasMenuPopupNearby(el) {
+        if (!el) return false;
+        var next = el.nextElementSibling;
+        if (isMenuLikeElement(next)) return true;
+
+        var parent = el.parentElement;
+        if (!parent) return false;
+
+        for (var child = parent.firstElementChild; child; child = child.nextElementSibling) {
+            if (child === el) continue;
+            if (isMenuLikeElement(child)) return true;
+        }
+
+        var container = closestElement(el, 'details, .js-details-container, [data-menu-trigger], [data-dropdown]');
+        if (!container) return false;
+        for (var cur = container.firstElementChild; cur; cur = cur.nextElementSibling) {
+            if (cur === el || cur.contains(el)) continue;
+            if (isMenuLikeElement(cur)) return true;
+        }
+        return false;
     }
 
     function isMenuItemElement(el) {
@@ -187,8 +214,8 @@
         var hasPopup = (el.getAttribute('aria-haspopup') || '').toLowerCase();
         if (hasPopup === 'menu' || hasPopup === 'listbox' || hasPopup === 'true') return true;
         if (el.hasAttribute('aria-expanded')) return true;
-        if (role === 'button' || role === 'link') return true;
-        return el.tagName === 'BUTTON' || el.tagName === 'A';
+        var isInteractiveTriggerLike = role === 'button' || role === 'link' || el.tagName === 'BUTTON' || el.tagName === 'A';
+        return isInteractiveTriggerLike && hasMenuPopupNearby(el);
     }
 
     function mergeSignals(existingSignals, patchSignals) {
@@ -211,7 +238,7 @@
                 }
             });
         }
-        if (action === 'click' && isMenuItemElement(target)) {
+        if ((action === 'click' || action === 'hover') && isMenuItemElement(target)) {
             next.signals = mergeSignals(next.signals, {
                 menu_context: {
                     is_menu_item: true

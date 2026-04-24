@@ -1063,6 +1063,8 @@ class RPASessionManager:
             self._pending_hover_candidates.pop(session_id, None)
 
     def _queue_hover_candidate(self, session_id: str, evt: Dict[str, Any]) -> None:
+        if self._is_menu_item_event(evt):
+            return
         locator_signature = self._event_locator_signature(evt)
         if not locator_signature:
             return
@@ -1103,6 +1105,10 @@ class RPASessionManager:
     def _is_menu_item_click(cls, evt: Dict[str, Any]) -> bool:
         if evt.get("action") != "click":
             return False
+        return cls._is_menu_item_event(evt)
+
+    @classmethod
+    def _is_menu_item_event(cls, evt: Dict[str, Any]) -> bool:
         signals = evt.get("signals")
         menu_context = signals.get("menu_context") if isinstance(signals, dict) else None
         if isinstance(menu_context, dict) and menu_context.get("is_menu_item") is True:

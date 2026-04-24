@@ -1442,6 +1442,52 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.session.steps[0].description, '悬停到 link("Open Source")')
         self.assertEqual(self.session.steps[1].description, '点击 link("Security Lab")')
 
+    async def test_menu_item_hover_does_not_replace_generic_trigger_hover(self):
+        page = _FakePage("https://example.com", "Example")
+        tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "hover",
+                "tab_id": tab_id,
+                "tag": "A",
+                "timestamp": 1000,
+                "sequence": 10,
+                "locator": {"method": "role", "role": "link", "name": "Open Source"},
+            },
+        )
+
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "hover",
+                "tab_id": tab_id,
+                "tag": "A",
+                "timestamp": 1100,
+                "sequence": 11,
+                "locator": {"method": "role", "role": "link", "name": "Security Lab"},
+                "signals": {"menu_context": {"is_menu_item": True}},
+            },
+        )
+
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "click",
+                "tab_id": tab_id,
+                "tag": "A",
+                "timestamp": 1200,
+                "sequence": 12,
+                "locator": {"method": "role", "role": "link", "name": "Security Lab"},
+                "signals": {"menu_context": {"is_menu_item": True}},
+            },
+        )
+
+        self.assertEqual([step.action for step in self.session.steps], ["hover", "click"])
+        self.assertEqual(self.session.steps[0].description, '悬停到 link("Open Source")')
+        self.assertEqual(self.session.steps[1].description, '点击 link("Security Lab")')
+
     async def test_stop_session_waits_for_pending_events_before_marking_stopped(self):
         context = _FakeContext()
         self.manager.attach_context(self.session.id, context)
