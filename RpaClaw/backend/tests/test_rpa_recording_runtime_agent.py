@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import backend.rpa.recording_runtime_agent as recording_runtime_agent
 from backend.rpa.recording_runtime_agent import (
     RecordingRuntimeAgent,
     RECORDING_RUNTIME_SYSTEM_PROMPT,
@@ -39,6 +40,41 @@ class _FakeLocator:
         return None
 
 
+class _FakeListPage(_FakePage):
+    def __init__(self):
+        self.url = "https://github.com/trending"
+        self.clicked = []
+        self._selectors = {
+            "h2.lh-condensed a": ["alpha / one", "beta / two", "gamma / three"],
+            "a.download-link": ["Download", "Download", "Download"],
+        }
+
+    def locator(self, selector):
+        return _FakeListLocator(self, selector, self._selectors.get(selector, []))
+
+
+class _FakeListLocator:
+    def __init__(self, page, selector, values, index=None):
+        self.page = page
+        self.selector = selector
+        self.values = values
+        self.index = index
+
+    def nth(self, index):
+        return _FakeListLocator(self.page, self.selector, self.values, index)
+
+    async def count(self):
+        return len(self.values)
+
+    async def inner_text(self):
+        return self.values[self.index or 0]
+
+    async def click(self):
+        self.page.clicked.append((self.selector, self.index or 0))
+        if self.selector == "h2.lh-condensed a":
+            self.page.url = f"https://github.com/{self.values[self.index or 0].replace(' / ', '/')}"
+
+
 class _FakeNavigatedPage(_FakePage):
     url = "https://github.com/HKUDS/RAG-Anything"
 
@@ -64,6 +100,213 @@ def _find_region_with_pair(snapshot, label, value):
             if pair.get("label") == label and pair.get("value") == value:
                 return region
     return None
+
+
+def _ordinal_snapshot():
+    containers = []
+    actionable_nodes = []
+    repos = ["alpha / one", "beta / two", "gamma / three"]
+    for index, repo in enumerate(repos):
+        container_id = f"repo-{index}"
+        containers.append(
+            {
+                "container_id": container_id,
+                "container_kind": "card_group",
+                "name": repo,
+                "bbox": {"x": 10, "y": 100 + index * 90, "width": 800, "height": 80},
+            }
+        )
+        actionable_nodes.append(
+            {
+                "node_id": f"title-{index}",
+                "container_id": container_id,
+                "role": "link",
+                "name": repo,
+                "text": repo,
+                "href": f"/{repo.replace(' / ', '/')}",
+                "collection_container_selector": "article",
+                "collection_item_selector": "h2.lh-condensed a",
+                "collection_item_count": len(repos),
+            }
+        )
+        actionable_nodes.append(
+            {
+                "node_id": f"download-{index}",
+                "container_id": container_id,
+                "role": "link",
+                "name": "Download",
+                "text": "Download",
+                "href": f"/{repo.replace(' / ', '/')}/archive.zip",
+                "collection_container_selector": "article",
+                "collection_item_selector": "a.download-link",
+                "collection_item_count": len(repos),
+            }
+        )
+    return {
+        "url": "https://github.com/trending",
+        "title": "Trending repositories",
+        "frames": [],
+        "content_nodes": [],
+        "containers": containers,
+        "actionable_nodes": actionable_nodes,
+    }
+
+
+def _ordinal_frame_collection_snapshot():
+    return {
+        "url": "https://github.com/trending",
+        "title": "Trending repositories",
+        "actionable_nodes": [],
+        "content_nodes": [],
+        "containers": [],
+        "frames": [
+            {
+                "frame_path": [],
+                "frame_hint": "main document",
+                "elements": [],
+                "collections": [
+                    {
+                        "kind": "repeated_items",
+                        "item_count": 5,
+                        "container_hint": {"locator": {"method": "css", "value": "li"}},
+                        "item_hint": {
+                            "locator": {"method": "css", "value": "button.js-details-target"},
+                            "role": "button",
+                        },
+                        "items": [
+                            {"index": 3, "tag": "button", "role": "button", "name": "Platform"},
+                            {"index": 4, "tag": "button", "role": "button", "name": "Solutions"},
+                            {"index": 5, "tag": "button", "role": "button", "name": "Resources"},
+                            {"index": 6, "tag": "button", "role": "button", "name": "Open Source"},
+                            {"index": 7, "tag": "button", "role": "button", "name": "Enterprise"},
+                        ],
+                    },
+                    {
+                        "kind": "repeated_items",
+                        "item_count": 12,
+                        "container_hint": {
+                            "locator": {
+                                "method": "css",
+                                "value": "div.position-relative.container-lg div div article div",
+                            }
+                        },
+                        "item_hint": {"locator": {"method": "css", "value": "a"}, "role": "link"},
+                        "items": [
+                            {"index": 26, "tag": "a", "role": "link", "name": "7,684"},
+                            {"index": 27, "tag": "a", "role": "link", "name": "1,199"},
+                            {"index": 35, "tag": "a", "role": "link", "name": "4,864"},
+                            {"index": 36, "tag": "a", "role": "link", "name": "402"},
+                        ],
+                    },
+                    {
+                        "kind": "repeated_items",
+                        "item_count": 12,
+                        "container_hint": {
+                            "locator": {
+                                "method": "css",
+                                "value": "div.position-relative.container-lg div div article",
+                            }
+                        },
+                        "item_hint": {
+                            "locator": {"method": "css", "value": "h2.lh-condensed a"},
+                            "role": "link",
+                        },
+                        "items": [
+                            {"index": 25, "tag": "a", "role": "link", "name": "Alishahryar1 / free-claude-code"},
+                            {"index": 34, "tag": "a", "role": "link", "name": "huggingface / ml-intern"},
+                            {"index": 42, "tag": "a", "role": "link", "name": "google / osv-scanner"},
+                        ],
+                    },
+                ],
+            }
+        ],
+    }
+
+
+def test_ordinal_overlay_builds_relative_first_item_name_plan():
+    build_plan = getattr(recording_runtime_agent, "_build_ordinal_overlay_plan")
+
+    plan = build_plan("get the first project name", _ordinal_snapshot())
+
+    assert plan is not None
+    assert plan["expected_effect"] == "extract"
+    assert "page.locator('h2.lh-condensed a').nth(0)" in plan["code"]
+    assert "alpha / one" not in plan["code"]
+
+
+def test_ordinal_overlay_builds_first_n_names_plan():
+    build_plan = getattr(recording_runtime_agent, "_build_ordinal_overlay_plan")
+
+    plan = build_plan("get the first 2 project names", _ordinal_snapshot())
+
+    assert plan is not None
+    assert plan["expected_effect"] == "extract"
+    assert "_limit = min(2, await _items.count())" in plan["code"]
+    assert "return _result" in plan["code"]
+
+
+def test_ordinal_overlay_uses_frame_collection_when_actionable_nodes_are_unannotated():
+    build_plan = getattr(recording_runtime_agent, "_build_ordinal_overlay_plan")
+
+    plan = build_plan("获取第一个项目的名称", _ordinal_frame_collection_snapshot())
+
+    assert plan is not None
+    assert "page.locator('h2.lh-condensed a').nth(0)" in plan["code"]
+    assert "Alishahryar1 / free-claude-code" not in plan["code"]
+
+
+def test_ordinal_overlay_builds_second_download_plan():
+    build_plan = getattr(recording_runtime_agent, "_build_ordinal_overlay_plan")
+
+    plan = build_plan("点击第二项名字进行下载", _ordinal_snapshot())
+
+    assert plan is not None
+    assert plan["expected_effect"] == "none"
+    assert "page.locator('a.download-link').nth(1).click()" in plan["code"]
+    assert "beta / two" not in plan["code"]
+
+
+def test_ordinal_overlay_falls_back_for_identical_action_only_collection():
+    build_plan = getattr(recording_runtime_agent, "_build_ordinal_overlay_plan")
+    snapshot = _ordinal_snapshot()
+    snapshot["actionable_nodes"] = [
+        node for node in snapshot["actionable_nodes"] if str(node.get("node_id", "")).startswith("download-")
+    ]
+
+    plan = build_plan("click the first item", snapshot)
+
+    assert plan is None
+
+
+def test_ordinal_overlay_falls_back_for_semantic_selection():
+    build_plan = getattr(recording_runtime_agent, "_build_ordinal_overlay_plan")
+
+    plan = build_plan("open the project most related to python", _ordinal_snapshot())
+
+    assert plan is None
+
+
+@pytest.mark.asyncio
+async def test_recording_runtime_agent_uses_ordinal_overlay_without_planner(monkeypatch):
+    async def fake_build_page_snapshot(*_args, **_kwargs):
+        return _ordinal_snapshot()
+
+    async def planner(_payload):
+        raise AssertionError("planner should not be called for high-confidence ordinal tasks")
+
+    monkeypatch.setattr("backend.rpa.recording_runtime_agent.build_page_snapshot", fake_build_page_snapshot)
+
+    page = _FakeListPage()
+    result = await RecordingRuntimeAgent(planner=planner).run(
+        page=page,
+        instruction="get the first project name",
+        runtime_results={},
+    )
+
+    assert result.success is True
+    assert result.output == "alpha / one"
+    assert "page.locator('h2.lh-condensed a').nth(0)" in result.trace.ai_execution.code
+    assert "alpha / one" not in result.trace.ai_execution.code
 
 
 def test_backend_rpa_package_import_is_lazy():

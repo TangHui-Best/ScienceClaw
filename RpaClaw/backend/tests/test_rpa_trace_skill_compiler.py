@@ -132,6 +132,45 @@ def test_compiler_uniquifies_duplicate_ai_output_keys():
     assert "_results['pr_basic_info_3'] = _result" in script
 
 
+def test_compiler_preserves_ai_positional_collection_locator_when_locator_stability_has_alternate():
+    script = TraceSkillCompiler().generate_script(
+        [
+            RPAAcceptedTrace(
+                trace_id="ordinal-1",
+                trace_type=RPATraceType.AI_OPERATION,
+                source="ai",
+                user_instruction="获取第一个项目的名称",
+                description="Extract ordinal item title",
+                output_key="ordinal_item_name",
+                output="Alishahryar1 / free-claude-code",
+                ai_execution=RPAAIExecution(
+                    language="python",
+                    code=(
+                        "async def run(page, results):\n"
+                        "    _item = page.locator('h2.lh-condensed a').nth(0)\n"
+                        "    return (await _item.inner_text()).strip()"
+                    ),
+                ),
+                locator_stability=RPALocatorStabilityMetadata(
+                    primary_locator={"method": "css", "value": "h2.lh-condensed a"},
+                    unstable_signals=[{"type": "css"}],
+                    alternate_locators=[
+                        RPALocatorStabilityCandidate(
+                            locator={"method": "role", "role": "link", "name": "Skip to content"},
+                            confidence="high",
+                        )
+                    ],
+                ),
+            )
+        ],
+        is_local=True,
+    )
+    body = _execute_body(script)
+
+    assert "page.locator('h2.lh-condensed a').nth(0)" in body
+    assert "Skip to content" not in body
+
+
 def test_compiler_uses_source_ref_for_dataflow_fill():
     trace = RPAAcceptedTrace(
         trace_id="fill-1",

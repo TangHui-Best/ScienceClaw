@@ -702,8 +702,14 @@ def _rewrite_random_like_locator_in_code(code: str, trace: RPAAcceptedTrace) -> 
     selector = str(primary_locator.get("value") or "")
     if not selector:
         return code
+    if _code_uses_positional_collection_locator(code, selector):
+        return code
     replacement_expr = _locator_expression("page", replacement_locator)
     return code.replace(f"page.locator({selector!r})", replacement_expr)
+
+
+def _code_uses_positional_collection_locator(code: str, selector: str) -> bool:
+    return f"page.locator({selector!r}).nth(" in str(code or "")
 
 
 def _looks_like_highest_star(text: str) -> bool:

@@ -148,7 +148,9 @@ class RecordingRuntimeAgent:
             debug_context=debug_context,
         )
 
-        first_plan = await self.planner(payload)
+        first_plan = _build_ordinal_overlay_plan(instruction, snapshot)
+        if not first_plan:
+            first_plan = await self.planner(payload)
         first_result = await self.executor(page, first_plan, runtime_results)
         first_result = await _ensure_expected_effect(
             page=page,
@@ -493,6 +495,392 @@ def _parse_json_object(text: str) -> Dict[str, Any]:
     if parsed.get("action_type") == "run_python" and "async def run(page, results)" not in str(parsed.get("code") or ""):
         raise ValueError("Recording planner must return Python code defining async def run(page, results)")
     return parsed
+
+
+def _build_ordinal_overlay_plan(instruction: str, snapshot: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    intent = _detect_ordinal_intent(instruction)
+    if not intent:
+        return None
+
+    action = _detect_ordinal_action(instruction)
+    if not action:
+        return None
+
+    collection = _extract_repeated_candidate_collection(snapshot)
+    if not collection:
+        return None
+
+    items = list(collection.get("items") or [])
+    selector = str(collection.get("primary_selector") or "")
+    if not selector or not items:
+        return None
+
+    kind = intent["kind"]
+    index = int(intent.get("index") or 0)
+    if kind == "last":
+        index = len(items) - 1
+    if kind in {"nth", "last"} and (index < 0 or index >= len(items)):
+        return None
+
+    if kind == "first_n":
+        limit = int(intent.get("limit") or 0)
+        if limit <= 0:
+            return None
+        return _ordinal_first_n_titles_plan(selector, limit)
+
+    if action == "extract_title":
+        return _ordinal_extract_title_plan(selector, index)
+
+    if action == "click_secondary":
+        secondary_selector = _select_secondary_action_selector(collection, instruction)
+        if not secondary_selector:
+            return None
+        return _ordinal_click_plan(secondary_selector, index, description="Click ordinal item action")
+
+    if action == "click_primary":
+        return _ordinal_click_plan(selector, index, description="Click ordinal item")
+
+    return None
+
+
+def _detect_ordinal_intent(instruction: str) -> Optional[Dict[str, int | str]]:
+    text = str(instruction or "").strip().lower()
+    if not text:
+        return None
+
+    first_n = re.search(r"\bfirst\s+(\d+)\b", text) or re.search(r"前\s*(\d+)", text)
+    if first_n:
+        return {"kind": "first_n", "limit": int(first_n.group(1))}
+
+    nth = re.search(r"\b(?:number|item|row)\s+(\d+)\b", text) or re.search(r"第\s*(\d+)\s*(?:个|项|条|行)?", text)
+    if nth:
+        return {"kind": "nth", "index": max(int(nth.group(1)) - 1, 0)}
+
+    if any(token in text for token in ("第一个", "第一项", "第一条", "第一行", "first")):
+        return {"kind": "nth", "index": 0}
+    if any(token in text for token in ("第二个", "第二项", "第二条", "第二行", "second")):
+        return {"kind": "nth", "index": 1}
+    if any(token in text for token in ("最后一个", "最后一项", "最后一条", "最后一行", "last")):
+        return {"kind": "last", "index": -1}
+    return None
+
+
+def _detect_ordinal_action(instruction: str) -> str:
+    text = str(instruction or "").strip().lower()
+    semantic_terms = (
+        "most related",
+        "best match",
+        "highest",
+        "most relevant",
+        "compare",
+        "summarize",
+        "summary",
+        "最相关",
+        "最高",
+        "最多",
+        "最佳",
+        "比较",
+        "总结",
+    )
+    if any(term in text for term in semantic_terms):
+        return ""
+    if any(term in text for term in ("download", "下载")):
+        return "click_secondary"
+    if any(term in text for term in ("click", "open", "visit", "go to", "点击", "打开", "进入")):
+        return "click_primary"
+    if any(term in text for term in ("name", "title", "text", "名称", "名字", "标题", "获取", "抓取", "提取")):
+        return "extract_title"
+    return ""
+
+
+def _extract_repeated_candidate_collection(snapshot: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for node in snapshot.get("actionable_nodes") or []:
+        selector = str(node.get("collection_item_selector") or "").strip()
+        count = int(node.get("collection_item_count") or 0)
+        label = _node_label(node)
+        if not selector or count < 2 or not label:
+            continue
+        if _looks_like_secondary_action_label(label):
+            continue
+        if str(node.get("role") or "").strip().lower() not in {"link", "button"}:
+            continue
+        grouped.setdefault(selector, []).append(node)
+
+    if not grouped:
+        return _extract_repeated_candidate_collection_from_frames(snapshot)
+
+    grouped = {
+        selector: nodes
+        for selector, nodes in grouped.items()
+        if len({_node_label(node).lower() for node in nodes}) >= 2
+        and any(_looks_like_primary_item_label(_node_label(node)) for node in nodes)
+    }
+    if not grouped:
+        return _extract_repeated_candidate_collection_from_frames(snapshot)
+
+    selector, nodes = max(
+        grouped.items(),
+        key=lambda item: _score_ordinal_primary_collection(
+            item[0],
+            [_node_label(node) for node in item[1]],
+            len(item[1]),
+        ),
+    )
+    items = []
+    for index, node in enumerate(_sort_snapshot_nodes(nodes)):
+        label = _node_label(node)
+        if not label:
+            continue
+        items.append(
+            {
+                "index": index,
+                "title": label,
+                "container_id": str(node.get("container_id") or ""),
+                "primary_selector": selector,
+            }
+        )
+    if len(items) < 2:
+        return None
+
+    secondary = _extract_secondary_action_selectors(snapshot, items)
+    return {
+        "kind": "repeated_candidates",
+        "source": "raw_snapshot",
+        "primary_selector": selector,
+        "items": items,
+        "secondary_selectors": secondary,
+    }
+
+
+def _extract_repeated_candidate_collection_from_frames(snapshot: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    candidates: List[Dict[str, Any]] = []
+    for frame in snapshot.get("frames") or []:
+        collections = list(frame.get("collections") or [])
+        for collection in collections:
+            if str(collection.get("kind") or "") != "repeated_items":
+                continue
+            selector = _collection_item_css_selector(collection)
+            if not selector:
+                continue
+            role = str((collection.get("item_hint") or {}).get("role") or "").strip().lower()
+            if role and role not in {"link", "button"}:
+                continue
+
+            items: List[Dict[str, Any]] = []
+            labels: List[str] = []
+            for item in collection.get("items") or []:
+                label = _node_label(item)
+                if not _looks_like_primary_item_label(label):
+                    continue
+                labels.append(label)
+                items.append(
+                    {
+                        "index": len(items),
+                        "title": label,
+                        "container_id": "",
+                        "primary_selector": selector,
+                    }
+                )
+
+            if len(items) < 2 or len({label.lower() for label in labels}) < 2:
+                continue
+
+            candidates.append(
+                {
+                    "kind": "repeated_candidates",
+                    "source": "raw_snapshot.frames.collections",
+                    "primary_selector": selector,
+                    "items": items,
+                    "secondary_selectors": _extract_frame_secondary_action_selectors(collections, collection),
+                    "_score": _score_ordinal_primary_collection(
+                        selector,
+                        labels,
+                        int(collection.get("item_count") or len(items)),
+                    ),
+                }
+            )
+
+    if not candidates:
+        return None
+
+    selected = max(candidates, key=lambda item: item["_score"])
+    selected.pop("_score", None)
+    return selected
+
+
+def _collection_item_css_selector(collection: Dict[str, Any]) -> str:
+    item_hint = collection.get("item_hint") if isinstance(collection, dict) else {}
+    locator = item_hint.get("locator") if isinstance(item_hint, dict) else {}
+    if not isinstance(locator, dict) or locator.get("method") != "css":
+        return ""
+    return str(locator.get("value") or "").strip()
+
+
+def _extract_frame_secondary_action_selectors(
+    collections: List[Dict[str, Any]],
+    primary_collection: Dict[str, Any],
+) -> Dict[str, str]:
+    primary_container = _collection_container_css_selector(primary_collection)
+    if not primary_container:
+        return {}
+
+    selectors: Dict[str, str] = {}
+    for collection in collections:
+        if collection is primary_collection:
+            continue
+        if _collection_container_css_selector(collection) != primary_container:
+            continue
+        selector = _collection_item_css_selector(collection)
+        if not selector:
+            continue
+        labels = [_node_label(item) for item in collection.get("items") or []]
+        if sum(1 for label in labels if "download" in label.lower() or "下载" in label) >= 2:
+            selectors["download"] = selector
+    return selectors
+
+
+def _collection_container_css_selector(collection: Dict[str, Any]) -> str:
+    container_hint = collection.get("container_hint") if isinstance(collection, dict) else {}
+    locator = container_hint.get("locator") if isinstance(container_hint, dict) else {}
+    if not isinstance(locator, dict) or locator.get("method") != "css":
+        return ""
+    return str(locator.get("value") or "").strip()
+
+
+def _extract_secondary_action_selectors(
+    snapshot: Dict[str, Any],
+    items: List[Dict[str, Any]],
+) -> Dict[str, str]:
+    item_container_ids = {str(item.get("container_id") or "") for item in items if item.get("container_id")}
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for node in snapshot.get("actionable_nodes") or []:
+        container_id = str(node.get("container_id") or "")
+        if container_id not in item_container_ids:
+            continue
+        label = _node_label(node).lower()
+        selector = str(node.get("collection_item_selector") or "").strip()
+        if not selector:
+            continue
+        if "download" in label or "下载" in label:
+            grouped.setdefault("download", []).append(node)
+
+    selectors: Dict[str, str] = {}
+    for action, nodes in grouped.items():
+        by_selector: Dict[str, int] = {}
+        for node in nodes:
+            selector = str(node.get("collection_item_selector") or "").strip()
+            by_selector[selector] = by_selector.get(selector, 0) + 1
+        selector, count = max(by_selector.items(), key=lambda item: item[1])
+        if count >= min(2, len(items)):
+            selectors[action] = selector
+    return selectors
+
+
+def _select_secondary_action_selector(collection: Dict[str, Any], instruction: str) -> str:
+    text = str(instruction or "").lower()
+    secondary = collection.get("secondary_selectors") if isinstance(collection, dict) else {}
+    if ("download" in text or "下载" in text) and isinstance(secondary, dict):
+        return str(secondary.get("download") or "")
+    return ""
+
+
+def _ordinal_extract_title_plan(selector: str, index: int) -> Dict[str, Any]:
+    code = (
+        "async def run(page, results):\n"
+        f"    _item = page.locator({selector!r}).nth({index})\n"
+        "    return (await _item.inner_text()).strip()"
+    )
+    return {
+        "description": "Extract ordinal item title",
+        "action_type": "run_python",
+        "expected_effect": "extract",
+        "output_key": "ordinal_item_name",
+        "code": code,
+        "ordinal_overlay": True,
+    }
+
+
+def _ordinal_first_n_titles_plan(selector: str, limit: int) -> Dict[str, Any]:
+    code = (
+        "async def run(page, results):\n"
+        f"    _items = page.locator({selector!r})\n"
+        f"    _limit = min({limit}, await _items.count())\n"
+        "    _result = []\n"
+        "    for _index in range(_limit):\n"
+        "        _result.append((await _items.nth(_index).inner_text()).strip())\n"
+        "    return _result"
+    )
+    return {
+        "description": "Extract first ordinal item titles",
+        "action_type": "run_python",
+        "expected_effect": "extract",
+        "output_key": "ordinal_item_names",
+        "code": code,
+        "ordinal_overlay": True,
+    }
+
+
+def _ordinal_click_plan(selector: str, index: int, *, description: str) -> Dict[str, Any]:
+    code = (
+        "async def run(page, results):\n"
+        f"    await page.locator({selector!r}).nth({index}).click()\n"
+        "    return {'action_performed': True}"
+    )
+    return {
+        "description": description,
+        "action_type": "run_python",
+        "expected_effect": "none",
+        "output_key": "ordinal_item_action",
+        "code": code,
+        "ordinal_overlay": True,
+    }
+
+
+def _node_label(node: Dict[str, Any]) -> str:
+    return " ".join(str(node.get(key) or "").strip() for key in ("name", "text") if str(node.get(key) or "").strip()).strip()
+
+
+def _looks_like_primary_item_label(label: str) -> bool:
+    text = str(label or "").strip()
+    if not text or _looks_like_secondary_action_label(text):
+        return False
+    return bool(re.search(r"[A-Za-z\u4e00-\u9fff]", text))
+
+
+def _score_ordinal_primary_collection(selector: str, labels: List[str], item_count: int) -> tuple[int, int, int, int, int, int]:
+    meaningful_labels = [label for label in labels if _looks_like_primary_item_label(label)]
+    distinct_count = len({label.lower() for label in meaningful_labels})
+    heading_selector = 1 if re.search(r"(^|\s)h[1-6](\.|\s|$)", selector) else 0
+    slash_pair_count = sum(1 for label in meaningful_labels if re.search(r"\S+\s*/\s*\S+", label))
+    average_length = int(sum(len(label) for label in meaningful_labels) / max(len(meaningful_labels), 1))
+    return (
+        heading_selector,
+        slash_pair_count,
+        min(int(item_count or 0), 25),
+        distinct_count,
+        min(average_length, 80),
+        len(meaningful_labels),
+    )
+
+
+def _sort_snapshot_nodes(nodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return sorted(
+        nodes,
+        key=lambda node: (
+            int((node.get("bbox") or {}).get("y", 0) or 0),
+            int((node.get("bbox") or {}).get("x", 0) or 0),
+            int(node.get("index") or 0),
+            str(node.get("node_id") or ""),
+        ),
+    )
+
+
+def _looks_like_secondary_action_label(label: str) -> bool:
+    text = str(label or "").strip().lower()
+    if not text:
+        return True
+    return any(token in text for token in ("download", "下载", "star", "fork", "signed in"))
 
 
 def _classify_recording_failure(error: Any) -> Dict[str, str]:
