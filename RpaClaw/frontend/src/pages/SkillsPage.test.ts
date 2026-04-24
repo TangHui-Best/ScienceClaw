@@ -73,3 +73,62 @@ describe('SkillsPage delete confirmation', () => {
     app.unmount();
   });
 });
+
+describe('SkillsPage skill summaries', () => {
+  afterEach(() => {
+    document.body.innerHTML = '';
+    vi.clearAllMocks();
+  });
+
+  it('shows the skill description instead of file names in cards', async () => {
+    getSkills.mockResolvedValue([
+      {
+        name: 'brainstorming',
+        description: 'Generate and refine feature ideas before implementation.',
+        blocked: false,
+        builtin: true,
+        files: ['SKILL.md', 'spec-document-reviewer-prompt.md'],
+      },
+    ]);
+
+    const { app, root } = await mountSkillsPage('en');
+    const pageText = root.textContent || '';
+
+    expect(pageText).toContain('Generate and refine feature ideas before implementation.');
+    expect(pageText).not.toContain('SKILL.md');
+    expect(pageText).not.toContain('spec-document-reviewer-prompt.md');
+
+    app.unmount();
+  });
+
+  it('filters skills by description text', async () => {
+    getSkills.mockResolvedValue([
+      {
+        name: 'brainstorming',
+        description: 'Generate and refine feature ideas before implementation.',
+        blocked: false,
+        builtin: true,
+        files: ['SKILL.md'],
+      },
+      {
+        name: 'weather',
+        description: 'Check the weather forecast for a city.',
+        blocked: false,
+        builtin: true,
+        files: ['SKILL.md'],
+      },
+    ]);
+
+    const { app, root } = await mountSkillsPage('en');
+    const searchInput = root.querySelector<HTMLInputElement>('input');
+    searchInput!.value = 'forecast';
+    searchInput!.dispatchEvent(new Event('input'));
+    await nextTick();
+
+    const pageText = root.textContent || '';
+    expect(pageText).toContain('weather');
+    expect(pageText).not.toContain('brainstorming');
+
+    app.unmount();
+  });
+});

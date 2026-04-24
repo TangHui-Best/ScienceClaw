@@ -20,7 +20,7 @@
             <input v-model="searchQuery" type="text" :placeholder="t('Search skills...')"
               class="w-64 bg-white/10 backdrop-blur-sm border border-white/10 rounded-lg pl-9 pr-3 py-2 text-sm text-white placeholder-white/30 focus:outline-none focus:bg-white/15 focus:border-white/25 focus:ring-1 focus:ring-white/20 transition-all duration-200">
           </div>
-          <button 
+          <button
             @click="router.push('/rpa/recorder')"
             class="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg flex items-center gap-2 font-bold transition-all"
           >
@@ -59,7 +59,6 @@
           class="skill-card group relative rounded-xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-[#1e1e1e] cursor-pointer overflow-hidden"
           :style="{ '--delay': `${Math.min(idx, 20) * 30}ms` }"
           @click="openSkill(skill)">
-          <!-- Hover glow -->
           <div class="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none">
             <div class="absolute -inset-px rounded-xl bg-gradient-to-r from-violet-400/20 via-fuchsia-400/20 to-pink-400/20"></div>
           </div>
@@ -87,14 +86,11 @@
                 </button>
               </div>
             </div>
-            <!-- File list preview -->
-            <div class="space-y-0.5 text-[10px] font-mono text-[var(--text-tertiary)] min-h-[2.5rem]">
-              <div v-for="file in (skill.files || []).slice(0, 3)" :key="file" class="flex items-center gap-1.5 truncate">
-                <span class="opacity-40">{{ file.endsWith('/') ? '📁' : '📄' }}</span>
-                <span>{{ file }}</span>
-              </div>
-              <div v-if="(skill.files || []).length > 3" class="opacity-40">+{{ skill.files.length - 3 }} more</div>
-            </div>
+
+            <p class="skill-summary min-h-[2.75rem] text-xs leading-5 text-[var(--text-secondary)]">
+              {{ getSkillSummary(skill) }}
+            </p>
+
             <div class="mt-3 flex items-center justify-between">
               <span v-if="skill.builtin" class="text-[10px] px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 font-medium">Built-in</span>
               <span v-else-if="skill.blocked" class="text-[10px] px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400 font-medium">Blocked</span>
@@ -184,6 +180,8 @@ const getSkillGradient = (name: string) => {
   return gradientPalette[Math.abs(hash) % gradientPalette.length];
 };
 
+const getSkillSummary = (skill: ExternalSkillItem) => skill.description?.trim() || t('No description');
+
 const openSkill = (skill: ExternalSkillItem) => { router.push(`/chat/skills/${skill.name}`); };
 
 onMounted(async () => {
@@ -194,7 +192,12 @@ onMounted(async () => {
 
 const filteredSkills = computed(() => {
   if (!searchQuery.value) return skills.value;
-  return skills.value.filter(s => s.name.toLowerCase().includes(searchQuery.value.toLowerCase()));
+  const normalizedQuery = searchQuery.value.toLowerCase();
+  return skills.value.filter((skill) => {
+    const name = skill.name.toLowerCase();
+    const description = skill.description?.toLowerCase() || '';
+    return name.includes(normalizedQuery) || description.includes(normalizedQuery);
+  });
 });
 
 const handleToggleBlock = async (skill: ExternalSkillItem) => {
@@ -221,6 +224,13 @@ const executeDelete = async () => {
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 .skill-card:hover { transform: translateY(-2px); box-shadow: 0 12px 28px -8px rgba(0,0,0,0.08), 0 4px 12px -4px rgba(0,0,0,0.04); }
+
+.skill-summary {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
 
 .modal-enter-active { transition: all 0.25s ease-out; }
 .modal-leave-active { transition: all 0.2s ease-in; }
