@@ -200,6 +200,55 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.session.traces[0].trace_type, "navigation")
         self.assertEqual(self.session.traces[0].after_page.url, "https://example.test")
 
+    async def test_add_step_records_manual_recorded_action_for_recoverable_locator(self):
+        await self.manager.add_step(
+            self.session.id,
+            {
+                "action": "fill",
+                "target": "",
+                "description": '输入 "foo" 到 None',
+                "value": "foo",
+                "source": "record",
+                "locator_candidates": [
+                    {
+                        "kind": "role",
+                        "playwright_locator": 'page.get_by_role("textbox").first',
+                        "selected": True,
+                    }
+                ],
+                "validation": {"status": "ok"},
+            },
+        )
+
+        self.assertEqual(len(self.session.recorded_actions), 1)
+        self.assertEqual(len(self.session.recording_diagnostics), 0)
+        self.assertEqual(self.session.recorded_actions[0].target["method"], "nth")
+
+    async def test_add_step_records_manual_diagnostic_for_unrecoverable_locator(self):
+        await self.manager.add_step(
+            self.session.id,
+            {
+                "action": "click",
+                "target": "",
+                "description": "点击 None",
+                "source": "record",
+                "locator_candidates": [
+                    {
+                        "playwright_locator": 'page.locator(".unknown")',
+                        "selected": True,
+                    }
+                ],
+                "validation": {"status": "ok"},
+            },
+        )
+
+        self.assertEqual(len(self.session.recorded_actions), 0)
+        self.assertEqual(len(self.session.recording_diagnostics), 1)
+        self.assertEqual(
+            self.session.recording_diagnostics[0].failure_reason,
+            "canonical_target_missing",
+        )
+
     async def test_create_session_uses_https_ignoring_context(self):
         fake_browser = _FakeBrowser()
 

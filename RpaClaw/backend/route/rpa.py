@@ -18,6 +18,7 @@ from backend.rpa.executor import ScriptExecutor
 from backend.rpa.skill_exporter import SkillExporter
 from backend.rpa.assistant import RPAAssistant, RPAReActAgent, _active_agents
 from backend.rpa.recording_runtime_agent import RecordingRuntimeAgent, RecordingAgentResult
+from backend.rpa.trace_recorder import recorded_action_to_trace
 from backend.rpa.trace_skill_compiler import TraceSkillCompiler
 from backend.rpa.cdp_connector import get_cdp_connector
 from backend.rpa.screencast import SessionScreencastController
@@ -71,6 +72,14 @@ class PromoteLocatorRequest(BaseModel):
 
 
 def _generate_session_script(session, params: Dict[str, Any], *, test_mode: bool = False) -> str:
+    if getattr(session, "recorded_actions", None):
+        derived_traces = [recorded_action_to_trace(action) for action in session.recorded_actions]
+        return trace_compiler.generate_script(
+            derived_traces,
+            params,
+            is_local=(settings.storage_backend == "local"),
+            test_mode=test_mode,
+        )
     if getattr(session, "traces", None):
         return trace_compiler.generate_script(
             session.traces,
@@ -85,6 +94,15 @@ def _generate_session_script(session, params: Dict[str, Any], *, test_mode: bool
         is_local=(settings.storage_backend == "local"),
         test_mode=test_mode,
     )
+
+
+def _ensure_no_unresolved_manual_diagnostics(session) -> None:
+    diagnostics = getattr(session, "recording_diagnostics", None) or []
+    if diagnostics:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{len(diagnostics)} unresolved diagnostics must be resolved before generation",
+        )
 
 
 async def _apply_recording_agent_result(session_id: str, result: RecordingAgentResult) -> None:
@@ -423,6 +441,7 @@ async def generate_script(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    _ensure_no_unresolved_manual_diagnostics(session)
     script = _generate_session_script(session, request.params)
     return {"status": "success", "script": script}
 
@@ -437,6 +456,7 @@ async def test_script(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    _ensure_no_unresolved_manual_diagnostics(session)
     steps = [step.model_dump() for step in session.steps]
     script = _generate_session_script(session, request.params, test_mode=True)
 

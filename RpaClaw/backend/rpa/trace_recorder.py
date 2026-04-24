@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List
 
+from .manual_recording_models import ManualRecordedAction
 from .trace_locator_utils import normalize_locator, normalize_locator_candidates
 from .trace_models import (
     RPAAcceptedTrace,
@@ -77,6 +78,32 @@ def manual_step_to_trace(step: Dict[str, Any]) -> RPAAcceptedTrace:
         value=_step_get(step, "value"),
         output_key=_step_get(step, "result_key"),
         output=_step_get(step, "output"),
+    )
+
+
+def recorded_action_to_trace(action: ManualRecordedAction) -> RPAAcceptedTrace:
+    page_state = action.page_state if isinstance(action.page_state, dict) else {}
+    locator = normalize_locator(action.target or {})
+    locator_candidates = [{"locator": locator, "selected": True}] if locator else []
+    trace_type = (
+        RPATraceType.NAVIGATION
+        if action.action_kind.value == "navigate"
+        else RPATraceType.MANUAL_ACTION
+    )
+    after_page = RPAPageState(
+        url=str(page_state.get("url", "") or ""),
+        title=str(page_state.get("title", "") or ""),
+    )
+    return RPAAcceptedTrace(
+        trace_id=f"trace-recorded-action-{action.action_kind.value}",
+        trace_type=trace_type,
+        source="manual",
+        action=action.action_kind.value,
+        description=action.description,
+        after_page=after_page,
+        locator_candidates=locator_candidates,
+        validation=dict(action.validation or {}),
+        value=action.value,
     )
 
 

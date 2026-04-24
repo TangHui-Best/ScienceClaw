@@ -13,6 +13,8 @@ from playwright.async_api import Page, BrowserContext
 
 from .cdp_connector import get_cdp_connector
 from .frame_selectors import build_frame_path
+from .manual_recording_models import ManualRecordedAction, ManualRecordingDiagnostic
+from .manual_recording_normalizer import build_manual_recording_outcome
 from .playwright_security import get_context_kwargs
 from .trace_models import RPAAcceptedTrace, RPATraceDiagnostic, RPARuntimeResults
 from .trace_recorder import infer_dataflow_for_fill, manual_step_to_trace
@@ -69,6 +71,8 @@ class RPASession(BaseModel):
     start_time: datetime = Field(default_factory=datetime.now)
     status: str = "recording"  # recording, stopped, testing, saved
     steps: List[RPAStep] = Field(default_factory=list)
+    recorded_actions: List[ManualRecordedAction] = Field(default_factory=list)
+    recording_diagnostics: List[ManualRecordingDiagnostic] = Field(default_factory=list)
     traces: List[RPAAcceptedTrace] = Field(default_factory=list)
     trace_diagnostics: List[RPATraceDiagnostic] = Field(default_factory=list)
     runtime_results: RPARuntimeResults = Field(default_factory=RPARuntimeResults)
@@ -1157,10 +1161,32 @@ class RPASessionManager:
                 return next_step
 
         session.steps.insert(insert_at, step)
+        self._record_manual_action_outcome(session, step)
         await self._record_manual_trace_for_step(session_id, step)
 
         await self._broadcast_step(session_id, step)
         return step
+
+    @staticmethod
+    def _record_manual_action_outcome(session: RPASession, step: RPAStep) -> None:
+        if step.source != "record":
+            return
+
+        outcome = build_manual_recording_outcome(
+            action=step.action,
+            description=step.description or "",
+            target=step.target or "",
+            locator_candidates=step.locator_candidates,
+            validation=step.validation,
+            value=step.value,
+            element_snapshot=step.element_snapshot,
+            page_state={"url": step.url or ""},
+            signals=step.signals,
+        )
+        if outcome.accepted_action is not None:
+            session.recorded_actions.append(outcome.accepted_action)
+        if outcome.diagnostic is not None:
+            session.recording_diagnostics.append(outcome.diagnostic)
 
     @staticmethod
     def _step_event_ts_ms(step: RPAStep) -> int:

@@ -3,6 +3,7 @@ import importlib
 import pytest
 
 from backend.rpa.manager import RPASession
+from backend.rpa.manual_recording_models import ManualActionKind, ManualRecordedAction, ManualRecordingDiagnostic
 from backend.rpa.recording_runtime_agent import RecordingAgentResult
 from backend.rpa.trace_models import RPAAcceptedTrace, RPAAIExecution, RPATraceType
 
@@ -28,6 +29,67 @@ def test_generate_session_script_prefers_traces_over_legacy_steps():
 
     assert "Auto-generated skill from RPA trace recording" in script
     assert "top10_prs" in script
+
+
+def test_generate_session_script_uses_recorded_actions_when_present():
+    session = RPASession(id="s2", user_id="u2", sandbox_session_id="sandbox")
+    session.recorded_actions.append(
+        ManualRecordedAction(
+            action_kind=ManualActionKind.CLICK,
+            description='点击 button("Search")',
+            target={"method": "role", "role": "button", "name": "Search"},
+            validation={"status": "ok"},
+        )
+    )
+
+    script = ROUTE_MODULE._generate_session_script(session, {}, test_mode=True)
+
+    assert "get_by_role('button'" in script or 'get_by_role("button"' in script
+    assert 'name="Search"' in script or "name='Search'" in script or "name=\"Search\"" in script
+
+
+@pytest.mark.asyncio
+async def test_generate_script_blocks_when_recording_diagnostics_exist():
+    manager = ROUTE_MODULE.rpa_manager
+    session = RPASession(id="route-diagnostic-generate", user_id="u1", sandbox_session_id="sandbox")
+    session.recording_diagnostics.append(
+        ManualRecordingDiagnostic(
+            related_action_kind=ManualActionKind.FILL,
+            failure_reason="canonical_target_missing",
+        )
+    )
+    manager.sessions[session.id] = session
+
+    try:
+        user = type("User", (), {"id": "u1"})()
+        with pytest.raises(ROUTE_MODULE.HTTPException) as exc_info:
+            await ROUTE_MODULE.generate_script(session.id, ROUTE_MODULE.GenerateRequest(), user)
+        assert exc_info.value.status_code == 400
+        assert "diagnostic" in exc_info.value.detail
+    finally:
+        manager.sessions.pop(session.id, None)
+
+
+@pytest.mark.asyncio
+async def test_test_script_blocks_when_recording_diagnostics_exist():
+    manager = ROUTE_MODULE.rpa_manager
+    session = RPASession(id="route-diagnostic-test", user_id="u1", sandbox_session_id="sandbox")
+    session.recording_diagnostics.append(
+        ManualRecordingDiagnostic(
+            related_action_kind=ManualActionKind.CLICK,
+            failure_reason="canonical_target_missing",
+        )
+    )
+    manager.sessions[session.id] = session
+
+    try:
+        user = type("User", (), {"id": "u1"})()
+        with pytest.raises(ROUTE_MODULE.HTTPException) as exc_info:
+            await ROUTE_MODULE.test_script(session.id, ROUTE_MODULE.GenerateRequest(), user)
+        assert exc_info.value.status_code == 400
+        assert "diagnostic" in exc_info.value.detail
+    finally:
+        manager.sessions.pop(session.id, None)
 
 
 @pytest.mark.asyncio
