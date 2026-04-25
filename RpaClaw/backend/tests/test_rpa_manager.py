@@ -319,6 +319,33 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.session.recorded_actions), 0)
         self.assertEqual(len(self.session.recording_diagnostics), 0)
 
+    async def test_delete_step_removes_corresponding_manual_trace_only(self):
+        step = await self.manager.add_step(
+            self.session.id,
+            {
+                "action": "click",
+                "target": json.dumps({"method": "role", "role": "button", "name": "Search"}),
+                "description": 'click button("Search")',
+                "source": "record",
+                "validation": {"status": "ok"},
+            },
+        )
+        self.session.traces.append(
+            TRACE_MODELS_MODULE.RPAAcceptedTrace(
+                trace_id="trace-ai-keep",
+                trace_type=TRACE_MODELS_MODULE.RPATraceType.AI_OPERATION,
+                source="ai",
+                action="extract",
+                description="keep ai trace",
+            )
+        )
+
+        deleted = await self.manager.delete_step(self.session.id, 0)
+
+        self.assertTrue(deleted)
+        self.assertNotIn(f"trace-{step.id}", [trace.trace_id for trace in self.session.traces])
+        self.assertEqual([trace.trace_id for trace in self.session.traces], ["trace-ai-keep"])
+
     async def test_fill_merge_rebuilds_recorded_action_value(self):
         await self.manager.add_step(
             self.session.id,

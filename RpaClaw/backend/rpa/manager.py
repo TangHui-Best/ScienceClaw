@@ -636,8 +636,14 @@ class RPASessionManager:
         session = self.sessions.get(session_id)
         if not session or step_index < 0 or step_index >= len(session.steps):
             return False
-        session.steps.pop(step_index)
+        deleted_step = session.steps.pop(step_index)
         self._rebuild_manual_recording_state(session)
+        deleted_trace_id = f"trace-{deleted_step.id}"
+        session.traces = [
+            trace
+            for trace in session.traces
+            if not (trace.source == "manual" and trace.trace_id == deleted_trace_id)
+        ]
         return True
 
     @staticmethod
