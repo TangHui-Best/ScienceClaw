@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 _GENERATED_CODE_FILENAME = "<recording_runtime_agent>"
 _RANDOM_LIKE_ATTR_RE = re.compile(r"(?i)(?:[a-z]+[-_])?[a-z0-9]{6,}[a-z][a-z0-9]*")
+_DOWNLOAD_EVENT_DRAIN_TIMEOUT_S = 0.5
 
 
 RECORDING_RUNTIME_SYSTEM_PROMPT = """You operate exactly one RPA recording command.
@@ -430,6 +431,7 @@ class RecordingRuntimeAgent:
                 return {"success": False, "error": "No run(page, results) function defined", "output": ""}
             navigation_history: List[str] = []
             download_events: List[Dict[str, Any]] = []
+            download_observed = asyncio.get_running_loop().create_future()
             original_goto = getattr(page, "goto", None)
             goto_wrapped = False
             download_handler_attached = False
@@ -441,6 +443,8 @@ class RecordingRuntimeAgent:
                         "url": str(getattr(page, "url", "") or ""),
                     }
                 )
+                if not download_observed.done():
+                    download_observed.set_result(True)
 
             if callable(original_goto):
                 async def tracked_goto(url: str, *args: Any, **kwargs: Any) -> Any:
@@ -470,6 +474,14 @@ class RecordingRuntimeAgent:
                     output = await output
                 if download_handler_attached:
                     await asyncio.sleep(0)
+                    if not download_events and _should_drain_download_events(plan, code):
+                        try:
+                            await asyncio.wait_for(
+                                asyncio.shield(download_observed),
+                                timeout=_DOWNLOAD_EVENT_DRAIN_TIMEOUT_S,
+                            )
+                        except asyncio.TimeoutError:
+                            pass
             finally:
                 if download_handler_attached:
                     remover = getattr(page, "remove_listener", None) or getattr(page, "off", None)
@@ -1409,6 +1421,25 @@ def _expected_effect(plan: Dict[str, Any], instruction: str) -> str:
 def _normalize_expected_effect(value: Any) -> str:
     normalized = str(value or "").strip().lower()
     return normalized if normalized in {"extract", "navigate", "click", "fill", "mixed", "none"} else "extract"
+
+
+def _should_drain_download_events(plan: Dict[str, Any], code: str) -> bool:
+    action_type = str(plan.get("action_type") or "").strip().lower()
+    if action_type in {"click", "press"}:
+        return True
+    if action_type != "run_python":
+        return False
+    return any(
+        token in code
+        for token in (
+            ".click(",
+            ".press(",
+            ".check(",
+            ".uncheck(",
+            ".select_option(",
+            ".set_input_files(",
+        )
+    )
 
 
 def _normalize_bool(value: Any) -> bool:

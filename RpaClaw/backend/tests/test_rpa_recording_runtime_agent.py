@@ -1,3 +1,4 @@
+import asyncio
 import importlib
 import json
 import sys
@@ -51,8 +52,18 @@ class _FakePage:
             if hasattr(result, "__await__"):
                 await result
 
+    def trigger_download_later(self, filename, delay=0.05):
+        async def emit():
+            await asyncio.sleep(delay)
+            await self.trigger_download(filename)
+
+        asyncio.create_task(emit())
+
 
 class _FakeLocator:
+    def nth(self, _index):
+        return self
+
     async def click(self):
         return None
 
@@ -1462,6 +1473,34 @@ async def test_recording_runtime_agent_records_download_signal_from_ai_code():
     assert result.success is True
     assert result.trace.signals["download"]["filename"] == "report.xlsx"
     assert result.trace.signals["download"]["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_recording_runtime_agent_waits_briefly_for_click_triggered_download():
+    async def planner(_payload):
+        return {
+            "description": "Click table row column action",
+            "action_type": "run_python",
+            "expected_effect": "none",
+            "output_key": "table_row_action",
+            "code": (
+                "async def run(page, results):\n"
+                "    page.trigger_download_later('delayed-report.xlsx')\n"
+                "    await page.locator('tbody tr').nth(0).click()\n"
+                "    return {'action_performed': True}"
+            ),
+        }
+
+    page = _FakePage()
+    result = await RecordingRuntimeAgent(planner=planner).run(
+        page=page,
+        instruction="click the first file name in the export table",
+        runtime_results={},
+    )
+
+    assert result.success is True
+    assert result.trace.signals["download"]["filename"] == "delayed-report.xlsx"
+    assert result.trace.output_key == "table_row_action"
 
 
 @pytest.mark.asyncio
