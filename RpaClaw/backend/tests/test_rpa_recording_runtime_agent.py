@@ -391,6 +391,77 @@ def test_table_ordinal_lane_falls_back_without_column_match():
     assert plan is None
 
 
+def _named_multi_table_view_snapshot():
+    snapshot = _table_view_snapshot()
+    edm_table = snapshot["table_views"][0]
+    edm_table["title"] = "EDM Request"
+    edm_table["title_source"] = "nearest_preceding_heading"
+    edm_table["nearby_headings"] = ["EDM Request"]
+    edm_table["columns"][2]["column_id"] = "col_2"
+    edm_table["columns"][2]["header"] = "File Name"
+    edm_table["columns"][3]["column_id"] = "col_3"
+    edm_table["columns"][3]["header"] = "Export Status"
+    edm_table["rows"][0]["cells"][0]["column_id"] = "col_2"
+    edm_table["rows"][0]["cells"][0]["column_header"] = "File Name"
+    edm_table["rows"][0]["cells"][0]["text"] = "EquipmentConfigurationLevelSplitDataSheet_17728130.xlsx"
+    edm_table["rows"][0]["cells"][0]["actions"][0]["locator"]["value"] = 'td[data-colid="col_2"] a'
+    edm_table["rows"][0]["locator_hints"] = [{"kind": "playwright", "expression": "page.locator('tbody tr').nth(0)"}]
+    edm_table["rows"][1]["cells"][0]["column_id"] = "col_2"
+    edm_table["rows"][1]["cells"][0]["column_header"] = "File Name"
+    edm_table["rows"][1]["locator_hints"] = [{"kind": "playwright", "expression": "page.locator('tbody tr').nth(1)"}]
+    jalor_table = {
+        **edm_table,
+        "title": "Jalor Request",
+        "nearby_headings": ["Jalor Request"],
+    }
+    snapshot["table_views"] = [jalor_table, edm_table]
+    snapshot["actionable_nodes"] = [
+        {
+            "role": "link",
+            "name": "Home",
+            "text": "Home",
+            "collection_item_selector": "div a",
+            "collection_item_count": 6,
+        },
+        {
+            "role": "link",
+            "name": "Request",
+            "text": "Request",
+            "collection_item_selector": "div a",
+            "collection_item_count": 6,
+        },
+    ]
+    return snapshot
+
+
+def test_table_ordinal_lane_scopes_named_table_without_observed_row_text():
+    build_plan = getattr(recording_runtime_agent, "_build_table_ordinal_overlay_plan")
+
+    plan = build_plan("获取EDM Request表格中第一行的File Name", _named_multi_table_view_snapshot())
+
+    assert plan is not None
+    assert plan["table_ordinal_overlay"] is True
+    assert "get_by_text('EDM Request', exact=True)" in plan["code"]
+    assert "following::table" in plan["code"]
+    assert "col_2" in plan["code"]
+    assert "div a" not in plan["code"]
+    assert "EquipmentConfigurationLevelSplitDataSheet_17728130.xlsx" not in plan["code"]
+
+
+def test_table_ordinal_lane_extracts_first_n_rows_as_headered_records():
+    build_plan = getattr(recording_runtime_agent, "_build_table_ordinal_overlay_plan")
+
+    plan = build_plan("获取EDM Request表格中前三行的信息", _named_multi_table_view_snapshot())
+
+    assert plan is not None
+    assert plan["table_ordinal_overlay"] is True
+    assert plan["expected_effect"] == "extract"
+    assert "get_by_text('EDM Request', exact=True)" in plan["code"]
+    assert "_limit = min(3, await _rows.count())" in plan["code"]
+    assert "'File Name'" in plan["code"]
+    assert "'Export Status'" in plan["code"]
+
+
 @pytest.mark.asyncio
 async def test_recording_runtime_agent_uses_ordinal_overlay_without_planner(monkeypatch):
     async def fake_build_page_snapshot(*_args, **_kwargs):

@@ -522,6 +522,13 @@ def _build_table_ordinal_overlay_plan(instruction: str, snapshot: Dict[str, Any]
     rows = list(table.get("rows") or [])
     if not rows:
         return None
+    if str(intent.get("kind") or "") == "first_n":
+        if action != "extract_title":
+            return None
+        limit = int(intent.get("limit") or 0)
+        if limit <= 0:
+            return None
+        return _table_first_n_rows_plan(table, limit)
     index = _ordinal_index_from_intent(intent, len(rows))
     if index is None:
         return None
@@ -529,9 +536,7 @@ def _build_table_ordinal_overlay_plan(instruction: str, snapshot: Dict[str, Any]
     if not column:
         return None
 
-    row_selector = _table_row_selector(table)
-    if not row_selector:
-        return None
+    rows_setup = _table_rows_setup_code(table)
     column_id = str(column.get("column_id") or "")
     if column_id:
         cell_selector = f"td[data-colid={column_id!r}]"
@@ -545,7 +550,8 @@ def _build_table_ordinal_overlay_plan(instruction: str, snapshot: Dict[str, Any]
             return None
         code = (
             "async def run(page, results):\n"
-            f"    _row = page.locator({row_selector!r}).nth({index})\n"
+            f"{rows_setup}"
+            f"    _row = _rows.nth({index})\n"
             f"    await _row.locator({action_selector!r}).click()\n"
             "    return {'action_performed': True}"
         )
@@ -560,7 +566,8 @@ def _build_table_ordinal_overlay_plan(instruction: str, snapshot: Dict[str, Any]
 
     code = (
         "async def run(page, results):\n"
-        f"    _row = page.locator({row_selector!r}).nth({index})\n"
+        f"{rows_setup}"
+        f"    _row = _rows.nth({index})\n"
         f"    return (await _row.locator({cell_selector!r}).inner_text()).strip()"
     )
     return {
@@ -587,7 +594,27 @@ def _select_table_view(snapshot: Dict[str, Any], instruction: str) -> Optional[D
     tables = [table for table in list(snapshot.get("table_views") or []) if table.get("rows")]
     if not tables:
         return None
-    return max(tables, key=lambda table: len(table.get("rows") or []))
+    return max(tables, key=lambda table: _score_table_view_for_instruction(table, instruction))
+
+
+def _score_table_view_for_instruction(table: Dict[str, Any], instruction: str) -> int:
+    text = str(instruction or "").lower()
+    score = len(table.get("rows") or [])
+    title_parts = [str(table.get("title") or "")]
+    title_parts.extend(str(item or "") for item in table.get("nearby_headings") or [])
+    for title in title_parts:
+        normalized = title.strip().lower()
+        if not normalized:
+            continue
+        if normalized in text:
+            score += 100
+        elif all(token in text for token in normalized.split()):
+            score += 40
+    for column in table.get("columns") or []:
+        header = str(column.get("header") or "").strip().lower()
+        if header and header in text:
+            score += 20
+    return score
 
 
 def _select_table_column(table: Dict[str, Any], instruction: str) -> Optional[Dict[str, Any]]:
@@ -626,6 +653,63 @@ def _table_row_selector(table: Dict[str, Any]) -> str:
             if match:
                 return match.group(2)
     return "tbody tr"
+
+
+def _table_rows_setup_code(table: Dict[str, Any]) -> str:
+    title = str(table.get("title") or "").strip()
+    row_selector = _table_row_selector(table)
+    if title:
+        return (
+            f"    _heading = page.get_by_text({title!r}, exact=True).first\n"
+            "    if await _heading.count():\n"
+            "        _rows = _heading.locator(\"xpath=following::table[.//tbody/tr][1]//tbody/tr\")\n"
+            "    else:\n"
+            f"        _rows = page.locator({row_selector!r})\n"
+        )
+    return f"    _rows = page.locator({row_selector!r})\n"
+
+
+def _table_first_n_rows_plan(table: Dict[str, Any], limit: int) -> Optional[Dict[str, Any]]:
+    columns = []
+    for column in table.get("columns") or []:
+        header = str(column.get("header") or "").strip()
+        if not header:
+            continue
+        column_id = str(column.get("column_id") or "").strip()
+        if column_id:
+            selector = f"td[data-colid={column_id!r}]"
+        else:
+            index = int(column.get("index") or 0) + 1
+            selector = f"td:nth-child({index})"
+        columns.append((header, selector))
+    if not columns:
+        return None
+
+    rows_setup = _table_rows_setup_code(table)
+    column_specs = repr(columns)
+    code = (
+        "async def run(page, results):\n"
+        f"{rows_setup}"
+        f"    _limit = min({limit}, await _rows.count())\n"
+        f"    _columns = {column_specs}\n"
+        "    _records = []\n"
+        "    for _i in range(_limit):\n"
+        "        _row = _rows.nth(_i)\n"
+        "        _record = {}\n"
+        "        for _header, _selector in _columns:\n"
+        "            _cell = _row.locator(_selector)\n"
+        "            _record[_header] = (await _cell.inner_text()).strip() if await _cell.count() else ''\n"
+        "        _records.append(_record)\n"
+        "    return _records"
+    )
+    return {
+        "description": "Extract first table rows",
+        "action_type": "run_python",
+        "expected_effect": "extract",
+        "output_key": "table_rows",
+        "code": code,
+        "table_ordinal_overlay": True,
+    }
 
 
 def _table_column_action_selector(table: Dict[str, Any], index: int, column: Dict[str, Any]) -> str:
@@ -697,13 +781,17 @@ def _detect_ordinal_intent(instruction: str) -> Optional[Dict[str, int | str]]:
     if not text:
         return None
 
-    first_n = re.search(r"\bfirst\s+(\d+)\b", text) or re.search(r"前\s*(\d+)", text)
+    first_n = re.search(r"\bfirst\s+(\d+)\b", text) or re.search(r"前\s*([0-9一二三四五六七八九十两]+)", text)
     if first_n:
-        return {"kind": "first_n", "limit": int(first_n.group(1))}
+        limit = _parse_ordinal_number(first_n.group(1))
+        if limit is not None:
+            return {"kind": "first_n", "limit": limit}
 
-    nth = re.search(r"\b(?:number|item|row)\s+(\d+)\b", text) or re.search(r"第\s*(\d+)\s*(?:个|项|条|行)?", text)
+    nth = re.search(r"\b(?:number|item|row)\s+(\d+)\b", text) or re.search(r"第\s*([0-9一二三四五六七八九十两]+)\s*(?:个|项|条|行)?", text)
     if nth:
-        return {"kind": "nth", "index": max(int(nth.group(1)) - 1, 0)}
+        number = _parse_ordinal_number(nth.group(1))
+        if number is not None:
+            return {"kind": "nth", "index": max(number - 1, 0)}
 
     if any(token in text for token in ("第一个", "第一项", "第一条", "第一行", "first")):
         return {"kind": "nth", "index": 0}
@@ -711,6 +799,26 @@ def _detect_ordinal_intent(instruction: str) -> Optional[Dict[str, int | str]]:
         return {"kind": "nth", "index": 1}
     if any(token in text for token in ("最后一个", "最后一项", "最后一条", "最后一行", "last")):
         return {"kind": "last", "index": -1}
+    return None
+
+
+def _parse_ordinal_number(value: str) -> Optional[int]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return int(text)
+    digits = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+    if text in digits:
+        return digits[text]
+    if text == "十":
+        return 10
+    if text.startswith("十") and len(text) == 2 and text[1] in digits:
+        return 10 + digits[text[1]]
+    if text.endswith("十") and len(text) == 2 and text[0] in digits:
+        return digits[text[0]] * 10
+    if "十" in text and len(text) == 3 and text[0] in digits and text[2] in digits:
+        return digits[text[0]] * 10 + digits[text[2]]
     return None
 
 
