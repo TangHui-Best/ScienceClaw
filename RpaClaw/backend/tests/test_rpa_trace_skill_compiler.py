@@ -410,6 +410,46 @@ def test_ai_operation_with_existing_expect_download_is_not_wrapped_twice():
     assert script.count("expect_download()") == 1
 
 
+def test_standalone_download_trace_after_ai_operation_merges_into_trigger():
+    traces = [
+        RPAAcceptedTrace(
+            trace_id="ai-click-export-file",
+            trace_type=RPATraceType.AI_OPERATION,
+            source="ai",
+            user_instruction="click the first file name in the export table",
+            description="Click table row column action",
+            output_key="table_row_action",
+            output={"action_performed": True},
+            ai_execution=RPAAIExecution(
+                language="python",
+                code=(
+                    "async def run(page, results):\n"
+                    "    _row = page.locator('tbody tr').nth(0)\n"
+                    "    await _row.locator('td[data-colid=\"col_25\"] a').click()\n"
+                    "    return {'action_performed': True}"
+                ),
+            ),
+        ),
+        RPAAcceptedTrace(
+            trace_id="download-export-file",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            source="manual",
+            action="download",
+            description="下载文件 Conclusion excelExport_17728726_20260425155427.xlsx",
+            value="Conclusion excelExport_17728726_20260425155427.xlsx",
+        ),
+    ]
+
+    script = TraceSkillCompiler().generate_script(traces, is_local=True)
+    body = _execute_body(script)
+
+    assert "async with current_page.expect_download() as _dl_info:" in body
+    assert "            _result = await run(current_page, _results)" in body
+    assert "_dl = await _dl_info.value" in body
+    assert "No stable locator was recorded for this manual action" not in body
+    assert "_trace_start(_trace_logger, 1, '下载文件" not in body
+
+
 def test_manual_navigation_signal_click_compiles_to_expect_navigation():
     trace = RPAAcceptedTrace(
         trace_id="menu-settings",

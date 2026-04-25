@@ -22,13 +22,52 @@ class TraceSkillCompiler:
         self._compiled_output_keys: Dict[int, str] = {}
         self._param_lookup = self._build_param_lookup(params or {})
         self._param_cursors: Dict[str, int] = {}
-        trace_list = list(traces)
+        trace_list = self._normalize_download_traces(list(traces))
         execute_skill_func = "\n".join(self._render_execute_skill(trace_list))
         return _runner_template(is_local).format(
             execute_skill_func=execute_skill_func,
             launch_kwargs=repr(get_chromium_launch_kwargs(headless=False)),
             context_kwargs=repr(get_context_kwargs()),
         )
+
+    @classmethod
+    def _normalize_download_traces(cls, traces: List[RPAAcceptedTrace]) -> List[RPAAcceptedTrace]:
+        normalized: List[RPAAcceptedTrace] = []
+        for trace in traces:
+            if cls._is_standalone_download_trace(trace) and normalized:
+                previous = normalized[-1]
+                if cls._can_attach_download_signal(previous):
+                    previous = previous.model_copy(deep=True)
+                    signals = dict(previous.signals or {})
+                    download_signal = dict(signals.get("download") or {})
+                    filename = str(trace.value or "").strip()
+                    if filename:
+                        download_signal.setdefault("filename", filename)
+                    for key, value in (trace.signals or {}).items():
+                        if key == "download" and isinstance(value, dict):
+                            for download_key, download_value in value.items():
+                                if download_value is not None:
+                                    download_signal.setdefault(download_key, download_value)
+                        elif value is not None:
+                            download_signal.setdefault(key, value)
+                    signals["download"] = download_signal
+                    previous.signals = signals
+                    normalized[-1] = previous
+                    continue
+            normalized.append(trace)
+        return normalized
+
+    @staticmethod
+    def _is_standalone_download_trace(trace: RPAAcceptedTrace) -> bool:
+        return trace.trace_type == RPATraceType.MANUAL_ACTION and str(trace.action or "") == "download"
+
+    @staticmethod
+    def _can_attach_download_signal(trace: RPAAcceptedTrace) -> bool:
+        if trace.trace_type == RPATraceType.AI_OPERATION:
+            return bool(trace.ai_execution and trace.ai_execution.code)
+        if trace.trace_type != RPATraceType.MANUAL_ACTION:
+            return False
+        return str(trace.action or "") in {"click", "press", "navigate_click", "navigate_press"}
 
     def _render_execute_skill(self, traces: List[RPAAcceptedTrace]) -> List[str]:
         lines = [
