@@ -550,6 +550,63 @@ def test_navigation_after_selected_project_uses_dynamic_result_url():
     assert "+ '/pulls'" in script
 
 
+def test_navigation_after_action_result_without_url_uses_current_page_not_result_ref():
+    traces = [
+        RPAAcceptedTrace(
+            trace_type=RPATraceType.AI_OPERATION,
+            description="Click ordinal item",
+            output_key="ordinal_item_action",
+            output={"action_performed": True},
+            after_page=RPAPageState(url="https://github.com/owner/recorded-repo"),
+            ai_execution=RPAAIExecution(
+                code=(
+                    "async def run(page, results):\n"
+                    "    await page.locator('h2.lh-condensed a').nth(0).click()\n"
+                    "    return {'action_performed': True}"
+                ),
+            ),
+        ),
+        RPAAcceptedTrace(
+            trace_type=RPATraceType.NAVIGATION,
+            after_page=RPAPageState(url="https://github.com/owner/recorded-repo/pulls"),
+        ),
+    ]
+
+    script = TraceSkillCompiler().generate_script(traces, is_local=True)
+    body = _execute_body(script)
+
+    assert "_resolve_first_result_ref(_results, ['ordinal_item_action.url', 'ordinal_item_action.value'])" not in body
+    assert "https://github.com/owner/recorded-repo/pulls" not in body
+    assert "_trace_page_url(current_page)" in body
+    assert "+ '/pulls'" in body
+
+
+def test_navigation_after_manual_action_that_already_reached_url_is_skipped():
+    traces = [
+        RPAAcceptedTrace(
+            trace_type=RPATraceType.MANUAL_ACTION,
+            action="click",
+            description='点击 link("Pull requests")',
+            after_page=RPAPageState(url="https://github.com/owner/repo/pulls"),
+            locator_candidates=[
+                {"locator": {"method": "role", "role": "link", "name": "Pull requests"}, "selected": True},
+            ],
+        ),
+        RPAAcceptedTrace(
+            trace_type=RPATraceType.NAVIGATION,
+            description="导航到 https://github.com/owner/repo/pulls",
+            after_page=RPAPageState(url="https://github.com/owner/repo/pulls"),
+        ),
+    ]
+
+    script = TraceSkillCompiler().generate_script(traces, is_local=True)
+    body = _execute_body(script)
+
+    assert "get_by_role('link', name='Pull requests').click()" in body
+    assert "goto(_target_url" not in body
+    assert "导航到 https://github.com/owner/repo/pulls" not in body
+
+
 def test_semantic_project_selection_compiles_to_runtime_ai_not_recorded_click():
     traces = [
         RPAAcceptedTrace(

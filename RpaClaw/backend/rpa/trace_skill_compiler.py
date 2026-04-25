@@ -22,7 +22,9 @@ class TraceSkillCompiler:
         self._compiled_output_keys: Dict[int, str] = {}
         self._param_lookup = self._build_param_lookup(params or {})
         self._param_cursors: Dict[str, int] = {}
-        trace_list = self._normalize_download_traces(list(traces))
+        trace_list = self._normalize_redundant_navigation_traces(
+            self._normalize_download_traces(list(traces))
+        )
         execute_skill_func = "\n".join(self._render_execute_skill(trace_list))
         return _runner_template(is_local).format(
             execute_skill_func=execute_skill_func,
@@ -68,6 +70,22 @@ class TraceSkillCompiler:
         if trace.trace_type != RPATraceType.MANUAL_ACTION:
             return False
         return str(trace.action or "") in {"click", "press", "navigate_click", "navigate_press"}
+
+    @classmethod
+    def _normalize_redundant_navigation_traces(cls, traces: List[RPAAcceptedTrace]) -> List[RPAAcceptedTrace]:
+        normalized: List[RPAAcceptedTrace] = []
+        for trace in traces:
+            if trace.trace_type == RPATraceType.NAVIGATION and normalized:
+                previous_url = cls._normalized_url(normalized[-1].after_page.url)
+                current_url = cls._normalized_url(trace.after_page.url or str(trace.value or ""))
+                if previous_url and current_url and previous_url == current_url:
+                    continue
+            normalized.append(trace)
+        return normalized
+
+    @staticmethod
+    def _normalized_url(url: str) -> str:
+        return str(url or "").strip().rstrip("/")
 
     def _render_execute_skill(self, traces: List[RPAAcceptedTrace]) -> List[str]:
         lines = [
@@ -518,6 +536,9 @@ class TraceSkillCompiler:
             if result_expr and observed_base and url.startswith(observed_base):
                 suffix = url[len(observed_base):]
                 return f"str({result_expr}).rstrip('/') + {suffix!r}"
+            if observed_base and url.startswith(observed_base):
+                suffix = url[len(observed_base):]
+                return f"str(_trace_page_url(current_page)).rstrip('/') + {suffix!r}"
         return ""
 
     def _trace_result_url_expression(self, trace: RPAAcceptedTrace) -> str:
@@ -529,7 +550,7 @@ class TraceSkillCompiler:
             return f"_resolve_result_ref(_results, {key + '.url'!r})"
         if output.get("value"):
             return f"_resolve_result_ref(_results, {key + '.value'!r})"
-        if trace.trace_type == RPATraceType.AI_OPERATION and not isinstance(trace.output, list):
+        if trace.trace_type == RPATraceType.AI_OPERATION and trace.output is None:
             return f"_resolve_first_result_ref(_results, [{key + '.url'!r}, {key + '.value'!r}])"
         return ""
 
