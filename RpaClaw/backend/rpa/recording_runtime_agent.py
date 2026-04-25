@@ -76,6 +76,15 @@ Rules:
 - If an expanded region is a label_value_group and the user asks for field names or values, keep extraction focused on that region or supporting locator evidence instead of scanning every table.
 - Avoid treating tables as the default fallback for field extraction when a more relevant label_value_group is present.
 - snapshot.region_catalogue is page context only.
+- Structured snapshot views:
+  - For table/list/grid tasks, inspect `snapshot.table_views` before generic `expanded_regions`.
+  - `table_views[].columns` describes column ids, headers, and inferred roles.
+  - `table_views[].rows[].cells` describes row-local cell text and row-local actions.
+  - For ordinal table tasks, prefer row-relative and column-relative Playwright locators.
+  - Do not use observed row text as the primary selector when the instruction is ordinal.
+  - For detail extraction, inspect `snapshot.detail_views` before scanning generic text or tables.
+  - `detail_views[].fields` preserves label, value, data_prop, required, visible, and value_kind.
+  - Treat hidden fields as diagnostic unless the user explicitly asks for hidden/default/internal values.
 - Snapshot 结构契约：
   - `evidence` 是页面事实，用于理解当前区域的文本、字段、表头、样例行或可操作项。
   - `locator_hints`、`locator`、`label_locator`、`value_locator`、`actions[].locator` 是可执行定位线索，生成 Playwright 代码时应优先使用这些字段。
@@ -1468,6 +1477,8 @@ def _build_snapshot_debug_metrics(raw_snapshot: Dict[str, Any], compact_snapshot
     expanded_regions = list(compact_snapshot.get("expanded_regions") or [])
     sampled_regions = list(compact_snapshot.get("sampled_regions") or [])
     catalogue = list(compact_snapshot.get("region_catalogue") or [])
+    table_views = list(compact_snapshot.get("table_views") or [])
+    detail_views = list(compact_snapshot.get("detail_views") or [])
     return {
         "raw_snapshot": {
             "frame_count": len(raw_snapshot.get("frames") or []),
@@ -1485,8 +1496,16 @@ def _build_snapshot_debug_metrics(raw_snapshot: Dict[str, Any], compact_snapshot
             "expanded_region_count": len(expanded_regions),
             "sampled_region_count": len(sampled_regions),
             "catalogue_region_count": len(catalogue),
+            "table_view_count": len(table_views),
+            "detail_view_count": len(detail_views),
             "expanded_region_titles": _region_titles(expanded_regions),
             "sampled_region_titles": _region_titles(sampled_regions),
+            "table_view_titles": _region_titles(table_views),
+            "detail_view_titles": [
+                str(view.get("section_title") or view.get("title") or "").strip()[:120]
+                for view in detail_views[:20]
+                if str(view.get("section_title") or view.get("title") or "").strip()
+            ],
             "region_kind_counts": _count_by_key(expanded_regions + sampled_regions + catalogue, "kind"),
         },
     }

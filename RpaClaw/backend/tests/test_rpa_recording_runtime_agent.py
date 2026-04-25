@@ -351,6 +351,14 @@ def test_recording_runtime_prompt_defines_result_return_contract():
     assert "locator_hints" in RECORDING_RUNTIME_SYSTEM_PROMPT
 
 
+def test_recording_runtime_prompt_prefers_structured_snapshot_views():
+    assert "table_views" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "detail_views" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "row-relative" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "column-relative" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "Do not use observed row text as the primary selector when the instruction is ordinal" in RECORDING_RUNTIME_SYSTEM_PROMPT
+
+
 def test_recording_snapshot_debug_dir_falls_back_to_backend_settings(monkeypatch):
     monkeypatch.delenv("RPA_RECORDING_DEBUG_SNAPSHOT_DIR", raising=False)
     monkeypatch.setitem(
@@ -700,6 +708,60 @@ async def test_recording_runtime_agent_payload_includes_structured_regions(monke
     region = _find_region_with_pair(calls[0]["snapshot"], "购买人", "李雨晨")
     assert region is not None
     assert "region_catalogue" in calls[0]["snapshot"]
+
+
+@pytest.mark.asyncio
+async def test_recording_runtime_agent_forwards_structured_views_to_planner(monkeypatch):
+    snapshot = {
+        "url": "https://example.test/grid",
+        "title": "Grid",
+        "frames": [],
+        "actionable_nodes": [],
+        "content_nodes": [],
+        "containers": [],
+        "table_views": [
+            {
+                "kind": "table_view",
+                "columns": [{"index": 0, "column_id": "col_25", "header": "文件名称", "role": "file_link"}],
+                "rows": [
+                    {
+                        "index": 0,
+                        "cells": [
+                            {
+                                "column_id": "col_25",
+                                "column_header": "文件名称",
+                                "text": "File_189.xlsx",
+                                "actions": [],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+        "detail_views": [],
+    }
+    calls = []
+
+    async def fake_build_page_snapshot(_page, _build_frame_path):
+        return snapshot
+
+    async def fake_planner(payload):
+        calls.append(payload)
+        return {
+            "description": "Extract grid",
+            "action_type": "run_python",
+            "expected_effect": "extract",
+            "code": "async def run(page, results):\n    return 'ok'",
+            "output_key": "grid_result",
+        }
+
+    monkeypatch.setattr("backend.rpa.recording_runtime_agent.build_page_snapshot", fake_build_page_snapshot)
+
+    agent = RecordingRuntimeAgent(planner=fake_planner)
+    result = await agent.run(page=_FakePage(), instruction="提取第一行文件名称", runtime_results={})
+
+    assert result.success is True
+    assert calls[0]["snapshot"]["table_views"][0]["columns"][0]["header"] == "文件名称"
 
 
 @pytest.mark.asyncio
