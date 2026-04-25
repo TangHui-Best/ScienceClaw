@@ -112,7 +112,7 @@ def tier_regions(regions: Sequence[Dict[str, Any]], instruction: str) -> Dict[st
     }
 
 
-def compact_recording_snapshot(snapshot: Dict[str, Any], instruction: str, *, char_budget: int = 20000) -> Dict[str, Any]:
+def compact_recording_snapshot(snapshot: Dict[str, Any], instruction: str, *, char_budget: int = 60000) -> Dict[str, Any]:
     regions = build_structured_regions(snapshot)
     tiers = tier_regions(regions, instruction)
     clean_payload = _build_clean_payload(snapshot, regions, tiers["region_catalogue"])
@@ -127,6 +127,8 @@ def compact_recording_snapshot(snapshot: Dict[str, Any], instruction: str, *, ch
         "mode": "tiered_snapshot",
         "url": snapshot.get("url", ""),
         "title": snapshot.get("title", ""),
+        "table_views": _compact_table_views(snapshot),
+        "detail_views": _compact_detail_views(snapshot),
         "expanded_regions": expanded_regions,
         "sampled_regions": sampled_regions,
         "region_catalogue": tiers["region_catalogue"],
@@ -141,10 +143,82 @@ def _build_clean_payload(
     return {
         "url": snapshot.get("url", ""),
         "title": snapshot.get("title", ""),
+        "table_views": _compact_table_views(snapshot),
+        "detail_views": _compact_detail_views(snapshot),
         "expanded_regions": [_expanded_region(region) for region in regions],
         "sampled_regions": [],
         "region_catalogue": list(region_catalogue),
     }
+
+
+def _compact_table_views(snapshot: Dict[str, Any], *, row_limit: int = 10, cell_limit: int = 12) -> List[Dict[str, Any]]:
+    views: List[Dict[str, Any]] = []
+    for view in list(snapshot.get("table_views") or [])[:8]:
+        rows = []
+        for row in list(view.get("rows") or [])[:row_limit]:
+            cells = []
+            for cell in list(row.get("cells") or [])[:cell_limit]:
+                cells.append(
+                    {
+                        "column_id": cell.get("column_id", ""),
+                        "column_index": cell.get("column_index"),
+                        "column_header": cell.get("column_header", ""),
+                        "text": cell.get("text", ""),
+                        "value_kind": cell.get("value_kind", ""),
+                        "actions": list(cell.get("actions") or cell.get("row_local_actions") or [])[:4],
+                    }
+                )
+            rows.append(
+                {
+                    "index": row.get("index"),
+                    "cells": cells,
+                    "locator_hints": list(row.get("locator_hints") or [])[:2],
+                }
+            )
+        views.append(
+            {
+                "kind": "table_view",
+                "title": view.get("title", ""),
+                "title_source": view.get("title_source", ""),
+                "nearby_headings": list(view.get("nearby_headings") or [])[:4],
+                "framework_hint": view.get("framework_hint", ""),
+                "frame_path": list(view.get("frame_path") or []),
+                "row_count_observed": view.get("row_count_observed", 0),
+                "columns": list(view.get("columns") or [])[:cell_limit],
+                "rows": rows,
+                "auxiliary_text": list(view.get("auxiliary_text") or [])[:5],
+            }
+        )
+    return views
+
+
+def _compact_detail_views(snapshot: Dict[str, Any], *, field_limit: int = 40) -> List[Dict[str, Any]]:
+    views: List[Dict[str, Any]] = []
+    for view in list(snapshot.get("detail_views") or [])[:12]:
+        fields = []
+        for field in list(view.get("fields") or [])[:field_limit]:
+            fields.append(
+                {
+                    "label": field.get("label", ""),
+                    "value": field.get("value", ""),
+                    "data_prop": field.get("data_prop", ""),
+                    "required": bool(field.get("required")),
+                    "visible": bool(field.get("visible", True)),
+                    "hidden_reason": field.get("hidden_reason", ""),
+                    "value_kind": field.get("value_kind", ""),
+                    "locator_hints": list(field.get("locator_hints") or [])[:2],
+                }
+            )
+        views.append(
+            {
+                "kind": "detail_view",
+                "section_title": view.get("section_title", ""),
+                "section_locator": view.get("section_locator") or {},
+                "frame_path": list(view.get("frame_path") or []),
+                "fields": fields,
+            }
+        )
+    return views
 
 
 def _build_region(

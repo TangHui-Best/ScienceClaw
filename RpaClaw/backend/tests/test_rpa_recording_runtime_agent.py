@@ -286,6 +286,182 @@ def test_ordinal_overlay_falls_back_for_semantic_selection():
     assert plan is None
 
 
+def _table_view_snapshot():
+    return {
+        "url": "https://example.test/grid",
+        "title": "Grid",
+        "frames": [],
+        "actionable_nodes": [],
+        "content_nodes": [],
+        "containers": [],
+        "table_views": [
+            {
+                "kind": "table_view",
+                "framework_hint": "aui-grid",
+                "columns": [
+                    {"index": 0, "column_id": "col_23", "header": "", "role": "row_index"},
+                    {"index": 1, "column_id": "col_24", "header": "", "role": "selection"},
+                    {"index": 2, "column_id": "col_25", "header": "文件名称", "role": "file_link"},
+                    {"index": 3, "column_id": "col_28", "header": "导出状态", "role": "status"},
+                ],
+                "rows": [
+                    {
+                        "index": 0,
+                        "cells": [
+                            {
+                                "column_id": "col_25",
+                                "column_index": 2,
+                                "column_header": "文件名称",
+                                "text": "File_189.xlsx",
+                                "actions": [
+                                    {
+                                        "kind": "link",
+                                        "label": "File_189.xlsx",
+                                        "locator": {
+                                            "method": "relative_css",
+                                            "scope": "row",
+                                            "value": "td[data-colid='col_25'] a",
+                                        },
+                                    }
+                                ],
+                            },
+                            {"column_id": "col_28", "column_index": 3, "column_header": "导出状态", "text": "FINISH", "actions": []},
+                        ],
+                        "locator_hints": [{"kind": "playwright", "expression": "page.locator('table.aui-grid__body tbody tr').nth(0)"}],
+                    },
+                    {
+                        "index": 1,
+                        "cells": [
+                            {
+                                "column_id": "col_25",
+                                "column_index": 2,
+                                "column_header": "文件名称",
+                                "text": "File_380.xlsx",
+                                "actions": [
+                                    {
+                                        "kind": "link",
+                                        "label": "File_380.xlsx",
+                                        "locator": {
+                                            "method": "relative_css",
+                                            "scope": "row",
+                                            "value": "td[data-colid='col_25'] a",
+                                        },
+                                    }
+                                ],
+                            },
+                            {"column_id": "col_28", "column_index": 3, "column_header": "导出状态", "text": "FINISH", "actions": []},
+                        ],
+                        "locator_hints": [{"kind": "playwright", "expression": "page.locator('table.aui-grid__body tbody tr').nth(1)"}],
+                    },
+                ],
+            }
+        ],
+        "detail_views": [],
+    }
+
+
+def test_table_ordinal_lane_clicks_first_row_named_column_link():
+    build_plan = getattr(recording_runtime_agent, "_build_table_ordinal_overlay_plan")
+
+    plan = build_plan("点击第一行的文件名称", _table_view_snapshot())
+
+    assert plan is not None
+    assert plan["table_ordinal_overlay"] is True
+    assert "table.aui-grid__body tbody tr" in plan["code"]
+    assert "td[data-colid='col_25'] a" in plan["code"]
+    assert "File_189.xlsx" not in plan["code"]
+
+
+def test_table_ordinal_lane_extracts_second_row_status():
+    build_plan = getattr(recording_runtime_agent, "_build_table_ordinal_overlay_plan")
+
+    plan = build_plan("提取第二行的导出状态", _table_view_snapshot())
+
+    assert plan is not None
+    assert "nth(1)" in plan["code"]
+    assert "td[data-colid='col_28']" in plan["code"]
+    assert plan["expected_effect"] == "extract"
+
+
+def test_table_ordinal_lane_falls_back_without_column_match():
+    build_plan = getattr(recording_runtime_agent, "_build_table_ordinal_overlay_plan")
+
+    plan = build_plan("点击第一行的审批按钮", _table_view_snapshot())
+
+    assert plan is None
+
+
+def _named_multi_table_view_snapshot():
+    snapshot = _table_view_snapshot()
+    edm_table = snapshot["table_views"][0]
+    edm_table["title"] = "EDM Request"
+    edm_table["title_source"] = "nearest_preceding_heading"
+    edm_table["nearby_headings"] = ["EDM Request"]
+    edm_table["columns"][2]["column_id"] = "col_2"
+    edm_table["columns"][2]["header"] = "File Name"
+    edm_table["columns"][3]["column_id"] = "col_3"
+    edm_table["columns"][3]["header"] = "Export Status"
+    edm_table["rows"][0]["cells"][0]["column_id"] = "col_2"
+    edm_table["rows"][0]["cells"][0]["column_header"] = "File Name"
+    edm_table["rows"][0]["cells"][0]["text"] = "EquipmentConfigurationLevelSplitDataSheet_17728130.xlsx"
+    edm_table["rows"][0]["cells"][0]["actions"][0]["locator"]["value"] = 'td[data-colid="col_2"] a'
+    edm_table["rows"][0]["locator_hints"] = [{"kind": "playwright", "expression": "page.locator('tbody tr').nth(0)"}]
+    edm_table["rows"][1]["cells"][0]["column_id"] = "col_2"
+    edm_table["rows"][1]["cells"][0]["column_header"] = "File Name"
+    edm_table["rows"][1]["locator_hints"] = [{"kind": "playwright", "expression": "page.locator('tbody tr').nth(1)"}]
+    jalor_table = {
+        **edm_table,
+        "title": "Jalor Request",
+        "nearby_headings": ["Jalor Request"],
+    }
+    snapshot["table_views"] = [jalor_table, edm_table]
+    snapshot["actionable_nodes"] = [
+        {
+            "role": "link",
+            "name": "Home",
+            "text": "Home",
+            "collection_item_selector": "div a",
+            "collection_item_count": 6,
+        },
+        {
+            "role": "link",
+            "name": "Request",
+            "text": "Request",
+            "collection_item_selector": "div a",
+            "collection_item_count": 6,
+        },
+    ]
+    return snapshot
+
+
+def test_table_ordinal_lane_scopes_named_table_without_observed_row_text():
+    build_plan = getattr(recording_runtime_agent, "_build_table_ordinal_overlay_plan")
+
+    plan = build_plan("获取EDM Request表格中第一行的File Name", _named_multi_table_view_snapshot())
+
+    assert plan is not None
+    assert plan["table_ordinal_overlay"] is True
+    assert "get_by_text('EDM Request', exact=True)" in plan["code"]
+    assert "following::table" in plan["code"]
+    assert "col_2" in plan["code"]
+    assert "div a" not in plan["code"]
+    assert "EquipmentConfigurationLevelSplitDataSheet_17728130.xlsx" not in plan["code"]
+
+
+def test_table_ordinal_lane_extracts_first_n_rows_as_headered_records():
+    build_plan = getattr(recording_runtime_agent, "_build_table_ordinal_overlay_plan")
+
+    plan = build_plan("获取EDM Request表格中前三行的信息", _named_multi_table_view_snapshot())
+
+    assert plan is not None
+    assert plan["table_ordinal_overlay"] is True
+    assert plan["expected_effect"] == "extract"
+    assert "get_by_text('EDM Request', exact=True)" in plan["code"]
+    assert "_limit = min(3, await _rows.count())" in plan["code"]
+    assert "'File Name'" in plan["code"]
+    assert "'Export Status'" in plan["code"]
+
+
 @pytest.mark.asyncio
 async def test_recording_runtime_agent_uses_ordinal_overlay_without_planner(monkeypatch):
     async def fake_build_page_snapshot(*_args, **_kwargs):
@@ -349,6 +525,14 @@ def test_recording_runtime_prompt_defines_result_return_contract():
     assert "internal_ref" in RECORDING_RUNTIME_SYSTEM_PROMPT
     assert "不是 DOM id、CSS selector 或 Playwright locator" in RECORDING_RUNTIME_SYSTEM_PROMPT
     assert "locator_hints" in RECORDING_RUNTIME_SYSTEM_PROMPT
+
+
+def test_recording_runtime_prompt_prefers_structured_snapshot_views():
+    assert "table_views" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "detail_views" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "row-relative" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "column-relative" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "Do not use observed row text as the primary selector when the instruction is ordinal" in RECORDING_RUNTIME_SYSTEM_PROMPT
 
 
 def test_recording_snapshot_debug_dir_falls_back_to_backend_settings(monkeypatch):
@@ -700,6 +884,60 @@ async def test_recording_runtime_agent_payload_includes_structured_regions(monke
     region = _find_region_with_pair(calls[0]["snapshot"], "购买人", "李雨晨")
     assert region is not None
     assert "region_catalogue" in calls[0]["snapshot"]
+
+
+@pytest.mark.asyncio
+async def test_recording_runtime_agent_forwards_structured_views_to_planner(monkeypatch):
+    snapshot = {
+        "url": "https://example.test/grid",
+        "title": "Grid",
+        "frames": [],
+        "actionable_nodes": [],
+        "content_nodes": [],
+        "containers": [],
+        "table_views": [
+            {
+                "kind": "table_view",
+                "columns": [{"index": 0, "column_id": "col_25", "header": "文件名称", "role": "file_link"}],
+                "rows": [
+                    {
+                        "index": 0,
+                        "cells": [
+                            {
+                                "column_id": "col_25",
+                                "column_header": "文件名称",
+                                "text": "File_189.xlsx",
+                                "actions": [],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+        "detail_views": [],
+    }
+    calls = []
+
+    async def fake_build_page_snapshot(_page, _build_frame_path):
+        return snapshot
+
+    async def fake_planner(payload):
+        calls.append(payload)
+        return {
+            "description": "Extract grid",
+            "action_type": "run_python",
+            "expected_effect": "extract",
+            "code": "async def run(page, results):\n    return 'ok'",
+            "output_key": "grid_result",
+        }
+
+    monkeypatch.setattr("backend.rpa.recording_runtime_agent.build_page_snapshot", fake_build_page_snapshot)
+
+    agent = RecordingRuntimeAgent(planner=fake_planner)
+    result = await agent.run(page=_FakePage(), instruction="提取第一行文件名称", runtime_results={})
+
+    assert result.success is True
+    assert calls[0]["snapshot"]["table_views"][0]["columns"][0]["header"] == "文件名称"
 
 
 @pytest.mark.asyncio

@@ -76,6 +76,15 @@ Rules:
 - If an expanded region is a label_value_group and the user asks for field names or values, keep extraction focused on that region or supporting locator evidence instead of scanning every table.
 - Avoid treating tables as the default fallback for field extraction when a more relevant label_value_group is present.
 - snapshot.region_catalogue is page context only.
+- Structured snapshot views:
+  - For table/list/grid tasks, inspect `snapshot.table_views` before generic `expanded_regions`.
+  - `table_views[].columns` describes column ids, headers, and inferred roles.
+  - `table_views[].rows[].cells` describes row-local cell text and row-local actions.
+  - For ordinal table tasks, prefer row-relative and column-relative Playwright locators.
+  - Do not use observed row text as the primary selector when the instruction is ordinal.
+  - For detail extraction, inspect `snapshot.detail_views` before scanning generic text or tables.
+  - `detail_views[].fields` preserves label, value, data_prop, required, visible, and value_kind.
+  - Treat hidden fields as diagnostic unless the user explicitly asks for hidden/default/internal values.
 - Snapshot 结构契约：
   - `evidence` 是页面事实，用于理解当前区域的文本、字段、表头、样例行或可操作项。
   - `locator_hints`、`locator`、`label_locator`、`value_locator`、`actions[].locator` 是可执行定位线索，生成 Playwright 代码时应优先使用这些字段。
@@ -148,7 +157,9 @@ class RecordingRuntimeAgent:
             debug_context=debug_context,
         )
 
-        first_plan = _build_ordinal_overlay_plan(instruction, snapshot)
+        first_plan = _build_table_ordinal_overlay_plan(instruction, snapshot)
+        if not first_plan:
+            first_plan = _build_ordinal_overlay_plan(instruction, snapshot)
         if not first_plan:
             first_plan = await self.planner(payload)
         first_result = await self.executor(page, first_plan, runtime_results)
@@ -497,6 +508,228 @@ def _parse_json_object(text: str) -> Dict[str, Any]:
     return parsed
 
 
+def _build_table_ordinal_overlay_plan(instruction: str, snapshot: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    intent = _detect_ordinal_intent(instruction)
+    if not intent:
+        return None
+    action = _detect_ordinal_action(instruction)
+    if action not in {"click_primary", "extract_title"}:
+        return None
+
+    table = _select_table_view(snapshot, instruction)
+    if not table:
+        return None
+    rows = list(table.get("rows") or [])
+    if not rows:
+        return None
+    if str(intent.get("kind") or "") == "first_n":
+        if action != "extract_title":
+            return None
+        limit = int(intent.get("limit") or 0)
+        if limit <= 0:
+            return None
+        return _table_first_n_rows_plan(table, limit)
+    index = _ordinal_index_from_intent(intent, len(rows))
+    if index is None:
+        return None
+    column = _select_table_column(table, instruction)
+    if not column:
+        return None
+
+    rows_setup = _table_rows_setup_code(table)
+    column_id = str(column.get("column_id") or "")
+    if column_id:
+        cell_selector = f"td[data-colid={column_id!r}]"
+    else:
+        col_index = int(column.get("index") or 0) + 1
+        cell_selector = f"td:nth-child({col_index})"
+
+    if action == "click_primary":
+        action_selector = _table_column_action_selector(table, index, column)
+        if not action_selector:
+            return None
+        code = (
+            "async def run(page, results):\n"
+            f"{rows_setup}"
+            f"    _row = _rows.nth({index})\n"
+            f"    await _row.locator({action_selector!r}).click()\n"
+            "    return {'action_performed': True}"
+        )
+        return {
+            "description": "Click table row column action",
+            "action_type": "run_python",
+            "expected_effect": "none",
+            "output_key": "table_row_action",
+            "code": code,
+            "table_ordinal_overlay": True,
+        }
+
+    code = (
+        "async def run(page, results):\n"
+        f"{rows_setup}"
+        f"    _row = _rows.nth({index})\n"
+        f"    return (await _row.locator({cell_selector!r}).inner_text()).strip()"
+    )
+    return {
+        "description": "Extract table row column value",
+        "action_type": "run_python",
+        "expected_effect": "extract",
+        "output_key": "table_row_value",
+        "code": code,
+        "table_ordinal_overlay": True,
+    }
+
+
+def _ordinal_index_from_intent(intent: Dict[str, int | str], row_count: int) -> Optional[int]:
+    kind = str(intent.get("kind") or "")
+    if kind == "last":
+        return row_count - 1 if row_count else None
+    if kind == "first_n":
+        return None
+    index = int(intent.get("index") or 0)
+    return index if 0 <= index < row_count else None
+
+
+def _select_table_view(snapshot: Dict[str, Any], instruction: str) -> Optional[Dict[str, Any]]:
+    tables = [table for table in list(snapshot.get("table_views") or []) if table.get("rows")]
+    if not tables:
+        return None
+    return max(tables, key=lambda table: _score_table_view_for_instruction(table, instruction))
+
+
+def _score_table_view_for_instruction(table: Dict[str, Any], instruction: str) -> int:
+    text = str(instruction or "").lower()
+    score = len(table.get("rows") or [])
+    title_parts = [str(table.get("title") or "")]
+    title_parts.extend(str(item or "") for item in table.get("nearby_headings") or [])
+    for title in title_parts:
+        normalized = title.strip().lower()
+        if not normalized:
+            continue
+        if normalized in text:
+            score += 100
+        elif all(token in text for token in normalized.split()):
+            score += 40
+    for column in table.get("columns") or []:
+        header = str(column.get("header") or "").strip().lower()
+        if header and header in text:
+            score += 20
+    return score
+
+
+def _select_table_column(table: Dict[str, Any], instruction: str) -> Optional[Dict[str, Any]]:
+    text = str(instruction or "").lower()
+    columns = list(table.get("columns") or [])
+    scored: List[tuple[int, Dict[str, Any]]] = []
+    for column in columns:
+        header = str(column.get("header") or "").lower()
+        role = str(column.get("role") or "").lower()
+        score = 0
+        if header and header in text:
+            score += 6
+        if any(token and token in text for token in header.replace("_", " ").split()):
+            score += 3
+        if role and role in text:
+            score += 3
+        if role == "file_link" and any(term in text for term in ("file", "文件", "名称", "名字")):
+            score += 5
+        if role == "status" and any(term in text for term in ("status", "状态")):
+            score += 5
+        if role == "selection" and any(term in text for term in ("checkbox", "勾选", "选择")):
+            score += 5
+        if score:
+            scored.append((score, column))
+    if not scored:
+        return None
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return scored[0][1]
+
+
+def _table_row_selector(table: Dict[str, Any]) -> str:
+    for row in table.get("rows") or []:
+        for hint in row.get("locator_hints") or []:
+            expression = str(hint.get("expression") or "")
+            match = re.search(r"page\.locator\((['\"])(.*?)\1\)\.nth\(\d+\)", expression)
+            if match:
+                return match.group(2)
+    return "tbody tr"
+
+
+def _table_rows_setup_code(table: Dict[str, Any]) -> str:
+    title = str(table.get("title") or "").strip()
+    row_selector = _table_row_selector(table)
+    if title:
+        return (
+            f"    _heading = page.get_by_text({title!r}, exact=True).first\n"
+            "    if await _heading.count():\n"
+            "        _rows = _heading.locator(\"xpath=following::table[.//tbody/tr][1]//tbody/tr\")\n"
+            "    else:\n"
+            f"        _rows = page.locator({row_selector!r})\n"
+        )
+    return f"    _rows = page.locator({row_selector!r})\n"
+
+
+def _table_first_n_rows_plan(table: Dict[str, Any], limit: int) -> Optional[Dict[str, Any]]:
+    columns = []
+    for column in table.get("columns") or []:
+        header = str(column.get("header") or "").strip()
+        if not header:
+            continue
+        column_id = str(column.get("column_id") or "").strip()
+        if column_id:
+            selector = f"td[data-colid={column_id!r}]"
+        else:
+            index = int(column.get("index") or 0) + 1
+            selector = f"td:nth-child({index})"
+        columns.append((header, selector))
+    if not columns:
+        return None
+
+    rows_setup = _table_rows_setup_code(table)
+    column_specs = repr(columns)
+    code = (
+        "async def run(page, results):\n"
+        f"{rows_setup}"
+        f"    _limit = min({limit}, await _rows.count())\n"
+        f"    _columns = {column_specs}\n"
+        "    _records = []\n"
+        "    for _i in range(_limit):\n"
+        "        _row = _rows.nth(_i)\n"
+        "        _record = {}\n"
+        "        for _header, _selector in _columns:\n"
+        "            _cell = _row.locator(_selector)\n"
+        "            _record[_header] = (await _cell.inner_text()).strip() if await _cell.count() else ''\n"
+        "        _records.append(_record)\n"
+        "    return _records"
+    )
+    return {
+        "description": "Extract first table rows",
+        "action_type": "run_python",
+        "expected_effect": "extract",
+        "output_key": "table_rows",
+        "code": code,
+        "table_ordinal_overlay": True,
+    }
+
+
+def _table_column_action_selector(table: Dict[str, Any], index: int, column: Dict[str, Any]) -> str:
+    column_id = str(column.get("column_id") or "")
+    rows = list(table.get("rows") or [])
+    if index >= len(rows):
+        return ""
+    for cell in rows[index].get("cells") or []:
+        if column_id and str(cell.get("column_id") or "") != column_id:
+            continue
+        actions = list(cell.get("actions") or cell.get("row_local_actions") or [])
+        for action in actions:
+            locator = action.get("locator") if isinstance(action, dict) else {}
+            if isinstance(locator, dict) and locator.get("scope") == "row" and locator.get("value"):
+                return str(locator.get("value"))
+    if column_id:
+        return f"td[data-colid={column_id!r}] a, td[data-colid={column_id!r}] button"
+    return ""
+
+
 def _build_ordinal_overlay_plan(instruction: str, snapshot: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     intent = _detect_ordinal_intent(instruction)
     if not intent:
@@ -548,13 +781,17 @@ def _detect_ordinal_intent(instruction: str) -> Optional[Dict[str, int | str]]:
     if not text:
         return None
 
-    first_n = re.search(r"\bfirst\s+(\d+)\b", text) or re.search(r"前\s*(\d+)", text)
+    first_n = re.search(r"\bfirst\s+(\d+)\b", text) or re.search(r"前\s*([0-9一二三四五六七八九十两]+)", text)
     if first_n:
-        return {"kind": "first_n", "limit": int(first_n.group(1))}
+        limit = _parse_ordinal_number(first_n.group(1))
+        if limit is not None:
+            return {"kind": "first_n", "limit": limit}
 
-    nth = re.search(r"\b(?:number|item|row)\s+(\d+)\b", text) or re.search(r"第\s*(\d+)\s*(?:个|项|条|行)?", text)
+    nth = re.search(r"\b(?:number|item|row)\s+(\d+)\b", text) or re.search(r"第\s*([0-9一二三四五六七八九十两]+)\s*(?:个|项|条|行)?", text)
     if nth:
-        return {"kind": "nth", "index": max(int(nth.group(1)) - 1, 0)}
+        number = _parse_ordinal_number(nth.group(1))
+        if number is not None:
+            return {"kind": "nth", "index": max(number - 1, 0)}
 
     if any(token in text for token in ("第一个", "第一项", "第一条", "第一行", "first")):
         return {"kind": "nth", "index": 0}
@@ -562,6 +799,26 @@ def _detect_ordinal_intent(instruction: str) -> Optional[Dict[str, int | str]]:
         return {"kind": "nth", "index": 1}
     if any(token in text for token in ("最后一个", "最后一项", "最后一条", "最后一行", "last")):
         return {"kind": "last", "index": -1}
+    return None
+
+
+def _parse_ordinal_number(value: str) -> Optional[int]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return int(text)
+    digits = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+    if text in digits:
+        return digits[text]
+    if text == "十":
+        return 10
+    if text.startswith("十") and len(text) == 2 and text[1] in digits:
+        return 10 + digits[text[1]]
+    if text.endswith("十") and len(text) == 2 and text[0] in digits:
+        return digits[text[0]] * 10
+    if "十" in text and len(text) == 3 and text[0] in digits and text[2] in digits:
+        return digits[text[0]] * 10 + digits[text[2]]
     return None
 
 
@@ -1468,6 +1725,8 @@ def _build_snapshot_debug_metrics(raw_snapshot: Dict[str, Any], compact_snapshot
     expanded_regions = list(compact_snapshot.get("expanded_regions") or [])
     sampled_regions = list(compact_snapshot.get("sampled_regions") or [])
     catalogue = list(compact_snapshot.get("region_catalogue") or [])
+    table_views = list(compact_snapshot.get("table_views") or [])
+    detail_views = list(compact_snapshot.get("detail_views") or [])
     return {
         "raw_snapshot": {
             "frame_count": len(raw_snapshot.get("frames") or []),
@@ -1485,8 +1744,16 @@ def _build_snapshot_debug_metrics(raw_snapshot: Dict[str, Any], compact_snapshot
             "expanded_region_count": len(expanded_regions),
             "sampled_region_count": len(sampled_regions),
             "catalogue_region_count": len(catalogue),
+            "table_view_count": len(table_views),
+            "detail_view_count": len(detail_views),
             "expanded_region_titles": _region_titles(expanded_regions),
             "sampled_region_titles": _region_titles(sampled_regions),
+            "table_view_titles": _region_titles(table_views),
+            "detail_view_titles": [
+                str(view.get("section_title") or view.get("title") or "").strip()[:120]
+                for view in detail_views[:20]
+                if str(view.get("section_title") or view.get("title") or "").strip()
+            ],
             "region_kind_counts": _count_by_key(expanded_regions + sampled_regions + catalogue, "kind"),
         },
     }
