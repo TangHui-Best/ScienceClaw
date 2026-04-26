@@ -1,4 +1,5 @@
 import importlib
+from datetime import datetime
 
 import pytest
 
@@ -151,6 +152,72 @@ def test_generate_session_script_keeps_ai_traces_when_recorded_actions_replace_m
 
     assert "selected_repo" in script
     assert "get_by_role('button'" in script or 'get_by_role(\"button\"' in script
+
+
+def test_session_traces_for_compile_preserves_manual_ai_manual_order():
+    session = RPASession(id="s-order", user_id="u-order", sandbox_session_id="sandbox")
+    session.steps.extend(
+        [
+            RPAStep(
+                id="step-first",
+                action="click",
+                target='{"method": "role", "role": "button", "name": "First"}',
+                description="First manual action",
+                timestamp=datetime.fromtimestamp(1),
+                event_timestamp_ms=1000,
+            ),
+            RPAStep(
+                id="step-second",
+                action="click",
+                target='{"method": "role", "role": "button", "name": "Second"}',
+                description="Second manual action",
+                timestamp=datetime.fromtimestamp(3),
+                event_timestamp_ms=3000,
+            ),
+        ]
+    )
+    session.recorded_actions.extend(
+        [
+            ManualRecordedAction(
+                step_id="step-first",
+                action_kind=ManualActionKind.CLICK,
+                description="First manual action",
+                target={"method": "role", "role": "button", "name": "First"},
+                validation={"status": "ok"},
+            ),
+            ManualRecordedAction(
+                step_id="step-second",
+                action_kind=ManualActionKind.CLICK,
+                description="Second manual action",
+                target={"method": "role", "role": "button", "name": "Second"},
+                validation={"status": "ok"},
+            ),
+        ]
+    )
+    session.traces.append(
+        RPAAcceptedTrace(
+            trace_id="trace-ai-middle",
+            trace_type=RPATraceType.AI_OPERATION,
+            source="ai",
+            description="AI middle action",
+            started_at=datetime.fromtimestamp(2),
+            ended_at=datetime.fromtimestamp(2),
+            ai_execution=RPAAIExecution(code="async def run(page, results):\n    return {}"),
+        )
+    )
+
+    traces = ROUTE_MODULE._session_traces_for_compile(session)
+
+    assert [trace.description for trace in traces] == [
+        "First manual action",
+        "AI middle action",
+        "Second manual action",
+    ]
+    assert [step["description"] for step in ROUTE_MODULE.session_to_mcp_steps(session)] == [
+        "First manual action",
+        "AI middle action",
+        "Second manual action",
+    ]
 
 
 def test_build_session_recording_meta_preserves_step_fields_in_trace_and_legacy_steps():

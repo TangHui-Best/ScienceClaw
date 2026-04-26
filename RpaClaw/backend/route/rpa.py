@@ -1,6 +1,7 @@
 import json
 import logging
 import asyncio
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 from typing import Dict, Any
@@ -80,28 +81,10 @@ class PromoteLocatorRequest(BaseModel):
 
 
 def _generate_session_script(session, params: Dict[str, Any], *, test_mode: bool = False) -> str:
-    if getattr(session, "recorded_actions", None):
-        derived_manual_traces = {
-            trace.trace_id: trace
-            for trace in (recorded_action_to_trace(action) for action in session.recorded_actions)
-        }
-        _merge_recorded_action_trace_metadata(session, derived_manual_traces)
-        traces_for_compile = []
-        for trace in getattr(session, "traces", None) or []:
-            if trace.source == "manual" and trace.trace_id in derived_manual_traces:
-                traces_for_compile.append(derived_manual_traces.pop(trace.trace_id))
-            else:
-                traces_for_compile.append(trace)
-        traces_for_compile.extend(derived_manual_traces.values())
+    traces_for_compile = _session_traces_for_compile(session)
+    if traces_for_compile:
         return trace_compiler.generate_script(
             traces_for_compile,
-            params,
-            is_local=(settings.storage_backend == "local"),
-            test_mode=test_mode,
-        )
-    if getattr(session, "traces", None):
-        return trace_compiler.generate_script(
-            session.traces,
             params,
             is_local=(settings.storage_backend == "local"),
             test_mode=test_mode,
@@ -204,6 +187,39 @@ def _merge_step_metadata_into_trace(trace: RPAAcceptedTrace, step) -> None:
     trace.signals = merged_signals
 
 
+def _trace_order_ms(trace: RPAAcceptedTrace) -> float | None:
+    started_at = getattr(trace, "started_at", None)
+    if started_at is not None:
+        try:
+            return started_at.timestamp() * 1000
+        except OSError:
+            return (
+                started_at.replace(tzinfo=None) - datetime(1970, 1, 1)
+            ).total_seconds() * 1000
+
+    recording = (trace.signals or {}).get("recording") if isinstance(trace.signals, dict) else None
+    if isinstance(recording, dict):
+        value = recording.get("event_timestamp_ms")
+        if isinstance(value, (int, float)):
+            return float(value)
+    return None
+
+
+def _order_traces_by_recording_time(traces: list[RPAAcceptedTrace]) -> list[RPAAcceptedTrace]:
+    keyed_traces: list[tuple[int, float, int, RPAAcceptedTrace]] = []
+    for index, trace in enumerate(traces):
+        order_ms = _trace_order_ms(trace)
+        keyed_traces.append((0 if order_ms is not None else 1, order_ms or 0, index, trace))
+
+    return [
+        trace
+        for _, _, _, trace in sorted(
+            keyed_traces,
+            key=lambda item: (item[0], item[1], item[2]),
+        )
+    ]
+
+
 def _session_traces_for_compile(session) -> list[RPAAcceptedTrace]:
     if getattr(session, "recorded_actions", None):
         derived_manual_traces = {
@@ -218,7 +234,7 @@ def _session_traces_for_compile(session) -> list[RPAAcceptedTrace]:
             else:
                 traces_for_compile.append(trace)
         traces_for_compile.extend(derived_manual_traces.values())
-        return traces_for_compile
+        return _order_traces_by_recording_time(traces_for_compile)
     return list(getattr(session, "traces", None) or [])
 
 
@@ -266,6 +282,8 @@ def _merge_recorded_action_trace_metadata(session, derived_manual_traces: Dict[s
         if original:
             derived.before_page = original.before_page
             derived.after_page = original.after_page
+            derived.started_at = original.started_at
+            derived.ended_at = original.ended_at
             derived.signals = dict(original.signals or {})
             if original.locator_candidates:
                 derived.locator_candidates = original.locator_candidates
@@ -277,6 +295,10 @@ def _merge_recorded_action_trace_metadata(session, derived_manual_traces: Dict[s
                 derived.output = original.output
         if step:
             _merge_step_metadata_into_trace(derived, step)
+            if not original and getattr(step, "timestamp", None) is not None:
+                derived.started_at = step.timestamp
+            if derived.ended_at is None or (not original and getattr(step, "timestamp", None) is not None):
+                derived.ended_at = derived.started_at
             if not derived.frame_path:
                 derived.frame_path = list(getattr(step, "frame_path", None) or [])
 

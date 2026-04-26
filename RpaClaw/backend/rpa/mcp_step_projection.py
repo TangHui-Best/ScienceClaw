@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from .manual_recording_models import ManualRecordedAction
@@ -29,10 +30,75 @@ def _step_by_id(session: Any) -> dict[str, Any]:
 def _merge_step_metadata(trace: RPAAcceptedTrace, step: Any | None) -> RPAAcceptedTrace:
     if step is None:
         return trace
+    timestamp = getattr(step, "timestamp", None)
+    if timestamp is not None:
+        trace.started_at = timestamp
+        trace.ended_at = timestamp
+
     signals = getattr(step, "signals", None)
+    merged_signals: dict[str, Any] = dict(trace.signals or {})
     if isinstance(signals, dict) and signals:
-        trace.signals = {**(trace.signals or {}), **signals}
+        merged_signals.update(signals)
+
+    recording_signal: dict[str, Any] = {}
+    for key in ("sequence", "event_timestamp_ms"):
+        value = getattr(step, key, None)
+        if value is not None:
+            recording_signal[key] = value
+    if recording_signal:
+        existing = merged_signals.get("recording") if isinstance(merged_signals.get("recording"), dict) else {}
+        merged_signals["recording"] = {**existing, **recording_signal}
+
+    trace.signals = merged_signals
     return trace
+
+
+def _trace_order_ms(trace: RPAAcceptedTrace) -> float | None:
+    started_at = getattr(trace, "started_at", None)
+    if started_at is not None:
+        try:
+            return started_at.timestamp() * 1000
+        except OSError:
+            return (
+                started_at.replace(tzinfo=None) - datetime(1970, 1, 1)
+            ).total_seconds() * 1000
+
+    recording = (trace.signals or {}).get("recording") if isinstance(trace.signals, dict) else None
+    if isinstance(recording, dict):
+        value = recording.get("event_timestamp_ms")
+        if isinstance(value, (int, float)):
+            return float(value)
+    return None
+
+
+def _step_order_ms(step: Any | None) -> float | None:
+    if step is None:
+        return None
+    timestamp = getattr(step, "timestamp", None)
+    if timestamp is not None:
+        try:
+            return timestamp.timestamp() * 1000
+        except OSError:
+            return (
+                timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)
+            ).total_seconds() * 1000
+    event_timestamp_ms = getattr(step, "event_timestamp_ms", None)
+    if isinstance(event_timestamp_ms, (int, float)):
+        return float(event_timestamp_ms)
+    return None
+
+
+def _order_projected_steps(projected: list[tuple[float | None, int, dict[str, Any]]]) -> list[dict[str, Any]]:
+    return [
+        step
+        for _, _, _, step in sorted(
+            (
+                (0 if order_ms is not None else 1, order_ms or 0, index, step)
+                for order_ms, index, step in projected
+            ),
+            key=lambda item: (item[0], item[1], item[2]),
+        )
+    ]
 
 
 def recorded_action_to_mcp_step(action: ManualRecordedAction, *, step: Any | None = None) -> dict[str, Any]:
@@ -95,6 +161,8 @@ def session_to_mcp_steps(session: Any) -> list[dict[str, Any]]:
 
     if not recorded_actions and not traces:
         return [step.model_dump(mode="json") for step in legacy_steps]
+    if not recorded_actions:
+        return [trace_to_mcp_step(trace) for trace in traces]
 
     steps_by_id = _step_by_id(session)
     actions_by_trace_id = {
@@ -103,19 +171,24 @@ def session_to_mcp_steps(session: Any) -> list[dict[str, Any]]:
         if action.step_id
     }
     emitted_action_ids: set[str] = set()
-    projected: list[dict[str, Any]] = []
+    projected: list[tuple[float | None, int, dict[str, Any]]] = []
 
-    for trace in traces:
+    for index, trace in enumerate(traces):
         replacement = actions_by_trace_id.get(trace.trace_id)
         if replacement is not None:
-            projected.append(recorded_action_to_mcp_step(replacement, step=steps_by_id.get(replacement.step_id)))
+            step = steps_by_id.get(replacement.step_id)
+            order_ms = _step_order_ms(step)
+            if order_ms is None:
+                order_ms = _trace_order_ms(trace)
+            projected.append((order_ms, index, recorded_action_to_mcp_step(replacement, step=step)))
             emitted_action_ids.add(replacement.step_id)
             continue
-        projected.append(trace_to_mcp_step(trace))
+        projected.append((_trace_order_ms(trace), index, trace_to_mcp_step(trace)))
 
-    for action in recorded_actions:
+    for offset, action in enumerate(recorded_actions, start=len(projected)):
         if action.step_id in emitted_action_ids:
             continue
-        projected.append(recorded_action_to_mcp_step(action, step=steps_by_id.get(action.step_id)))
+        step = steps_by_id.get(action.step_id)
+        projected.append((_step_order_ms(step), offset, recorded_action_to_mcp_step(action, step=step)))
 
-    return projected
+    return _order_projected_steps(projected)
