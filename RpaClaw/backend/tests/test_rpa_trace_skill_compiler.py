@@ -392,6 +392,38 @@ def test_manual_popup_click_compiles_to_expect_popup_and_switches_page():
     assert "current_page = new_page" in body
 
 
+def test_manual_popup_click_registers_source_tab_before_switching_to_new_page():
+    traces = [
+        RPAAcceptedTrace(
+            trace_id="popup-export",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            action="click",
+            description='click text("Export all")',
+            locator_candidates=[
+                {"locator": {"method": "text", "value": "Export all", "exact": True}, "selected": True},
+            ],
+            signals={"popup": {"source_tab_id": "tab-root", "target_tab_id": "tab-export"}},
+        ),
+        RPAAcceptedTrace(
+            trace_id="switch-root",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            action="switch_tab",
+            description="Switch back to root tab",
+            signals={"tab": {"source_tab_id": "tab-export", "target_tab_id": "tab-root"}},
+        ),
+    ]
+
+    script = TraceSkillCompiler().generate_script(traces, is_local=True)
+    body = _execute_body(script)
+
+    source_registration = 'tabs.setdefault("tab-root", current_page)'
+    popup_wait = "async with current_page.expect_popup() as popup_info:"
+    assert source_registration in body
+    assert body.index(source_registration) < body.index(popup_wait)
+    assert 'tabs["tab-export"] = new_page' in body
+    assert 'current_page = tabs["tab-root"]' in body
+
+
 def test_manual_switch_tab_trace_compiles_to_page_context_switch():
     trace = RPAAcceptedTrace(
         trace_id="switch-to-sales",

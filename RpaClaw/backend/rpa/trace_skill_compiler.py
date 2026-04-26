@@ -391,6 +391,9 @@ class TraceSkillCompiler:
             lines.append(f"{outer_indent}async with current_page.expect_download() as _dl_info:")
             outer_indent += "    "
         if popup_signal:
+            source_tab_id = str(popup_signal.get("source_tab_id") or "").strip()
+            if source_tab_id:
+                lines.append(f"{outer_indent}tabs.setdefault({json.dumps(source_tab_id, ensure_ascii=False)}, current_page)")
             lines.append(f"{outer_indent}async with current_page.expect_popup() as popup_info:")
             outer_indent += "    "
         lines.append(f"{outer_indent}{interaction}")
