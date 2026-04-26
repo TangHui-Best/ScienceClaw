@@ -538,19 +538,18 @@ def test_ai_operation_with_existing_expect_download_is_not_wrapped_twice():
 def test_standalone_download_trace_after_ai_operation_merges_into_trigger():
     traces = [
         RPAAcceptedTrace(
-            trace_id="ai-click-export-file",
+            trace_id="ai-click-download-link",
             trace_type=RPATraceType.AI_OPERATION,
             source="ai",
-            user_instruction="click the first file name in the export table",
-            description="Click table row column action",
-            output_key="table_row_action",
+            user_instruction="click the report download link",
+            description="Click report download link",
+            output_key="download_action",
             output={"action_performed": True},
             ai_execution=RPAAIExecution(
                 language="python",
                 code=(
                     "async def run(page, results):\n"
-                    "    _row = page.locator('tbody tr').nth(0)\n"
-                    "    await _row.locator('td[data-colid=\"col_25\"] a').click()\n"
+                    "    await page.get_by_role('link', name='report.xlsx').click()\n"
                     "    return {'action_performed': True}"
                 ),
             ),
@@ -573,6 +572,91 @@ def test_standalone_download_trace_after_ai_operation_merges_into_trigger():
     assert "_dl = await _dl_info.value" in body
     assert "No stable locator was recorded for this manual action" not in body
     assert "_trace_start(_trace_logger, 1, '下载文件" not in body
+
+
+def test_standalone_export_table_download_trace_merges_as_export_task():
+    traces = [
+        RPAAcceptedTrace(
+            trace_id="ai-click-export-file",
+            trace_type=RPATraceType.AI_OPERATION,
+            source="ai",
+            user_instruction="click the first file name in the export table",
+            description="Click table row column action",
+            output_key="table_row_action",
+            output={"action_performed": True},
+            ai_execution=RPAAIExecution(
+                language="python",
+                code=(
+                    "async def run(page, results):\n"
+                    "    _heading = page.get_by_text('导出列表', exact=True).first\n"
+                    "    if await _heading.count():\n"
+                    "        _rows = _heading.locator(\"xpath=following::table[.//tbody/tr][1]//tbody/tr\")\n"
+                    "    else:\n"
+                    "        _rows = page.locator('tbody tr')\n"
+                    "    _row = _rows.nth(0)\n"
+                    "    await _row.locator('td[data-colid=\"col_25\"] a').click()\n"
+                    "    return {'action_performed': True}"
+                ),
+            ),
+        ),
+        RPAAcceptedTrace(
+            trace_id="download-export-file",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            source="manual",
+            action="download",
+            description="Download file",
+            value="Conclusion excelExport_17733824_20260426211105.xlsx",
+        ),
+    ]
+
+    script = TraceSkillCompiler().generate_script(traces, is_local=True)
+    body = _execute_body(script)
+
+    assert "_download_from_export_task(" in body
+    assert "            _result = await run(current_page, _results)" not in body
+    assert "async with current_page.expect_download() as _dl_info:" not in body
+
+
+def test_ai_export_task_download_signal_compiles_to_export_task_helper():
+    trace = RPAAcceptedTrace(
+        trace_id="ai-click-export-file",
+        trace_type=RPATraceType.AI_OPERATION,
+        source="ai",
+        user_instruction="click the first file name in the export table",
+        description="Click table row column action",
+        output_key="table_row_action",
+        output={"action_performed": True},
+        signals={
+            "download": {
+                "filename": "Conclusion excelExport_17733824_20260426211105.xlsx",
+                "trigger_mode": "export_task",
+            }
+        },
+        ai_execution=RPAAIExecution(
+            language="python",
+            code=(
+                "async def run(page, results):\n"
+                "    _heading = page.get_by_text('导出列表', exact=True).first\n"
+                "    if await _heading.count():\n"
+                "        _rows = _heading.locator(\"xpath=following::table[.//tbody/tr][1]//tbody/tr\")\n"
+                "    else:\n"
+                "        _rows = page.locator('tbody tr')\n"
+                "    _row = _rows.nth(0)\n"
+                "    await _row.locator('td[data-colid=\"col_25\"] a').click()\n"
+                "    return {'action_performed': True}"
+            ),
+        ),
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    body = _execute_body(script)
+
+    assert "_download_from_export_task(" in body
+    assert "table_heading='导出列表'" in body
+    assert "action_selector='td[data-colid=\"col_25\"] a'" in body
+    assert "            _result = await run(current_page, _results)" not in body
+    assert '_results["download_Conclusion_excelExport_17733824_20260426211105"]' in body
+    assert "_results['table_row_action'] = _result" in body
 
 
 def test_manual_navigation_signal_click_compiles_to_expect_navigation():

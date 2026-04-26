@@ -77,6 +77,7 @@ class RPASession(BaseModel):
     traces: List[RPAAcceptedTrace] = Field(default_factory=list)
     trace_diagnostics: List[RPATraceDiagnostic] = Field(default_factory=list)
     runtime_results: RPARuntimeResults = Field(default_factory=RPARuntimeResults)
+    pending_download_events: List[Dict[str, Any]] = Field(default_factory=list)
     sandbox_session_id: str
     paused: bool = False  # pause event recording during AI execution
     active_tab_id: Optional[str] = None
@@ -590,6 +591,18 @@ class RPASessionManager:
                 )
                 self._append_step_description(step, f" 并下载文件 {suggested}")
                 await self._broadcast_step(session_id, step)
+                return
+            session = self.sessions.get(session_id)
+            if session and session.paused:
+                session.pending_download_events.append(
+                    {
+                        "filename": suggested,
+                        "url": getattr(page, "url", ""),
+                        "tab_id": tab_id,
+                        "opener_tab_id": opener_tab_id,
+                        "event_timestamp_ms": int(datetime.now().timestamp() * 1000),
+                    }
+                )
                 return
             # Fallback: no preceding click found, record standalone
             evt = {
@@ -1546,9 +1559,35 @@ class RPASessionManager:
         session = self.sessions.get(session_id)
         if not session:
             raise ValueError(f"Session {session_id} not found")
+        self._merge_pending_downloads_into_trace(session, trace)
         session.traces.append(trace)
         await self._broadcast_trace(session_id, trace)
         return session.traces
+
+    @staticmethod
+    def _merge_pending_downloads_into_trace(session: RPASession, trace: RPAAcceptedTrace) -> None:
+        if not session.pending_download_events:
+            return
+        if trace.source != "ai":
+            return
+        signals = dict(trace.signals or {})
+        if isinstance(signals.get("download"), dict):
+            return
+        downloads = list(session.pending_download_events)
+        first = dict(downloads[0])
+        download_signal = {
+            "filename": first.get("filename", ""),
+            "url": first.get("url", ""),
+            "tab_id": first.get("tab_id"),
+            "opener_tab_id": first.get("opener_tab_id"),
+            "event_timestamp_ms": first.get("event_timestamp_ms"),
+            "count": len(downloads),
+        }
+        if len(downloads) > 1:
+            download_signal["files"] = downloads
+        signals["download"] = {key: value for key, value in download_signal.items() if value is not None}
+        trace.signals = signals
+        session.pending_download_events.clear()
 
     async def append_trace_diagnostic(self, session_id: str, diagnostic: RPATraceDiagnostic) -> List[RPATraceDiagnostic]:
         session = self.sessions.get(session_id)

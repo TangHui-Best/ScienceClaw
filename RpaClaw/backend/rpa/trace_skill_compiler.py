@@ -52,6 +52,7 @@ class TraceSkillCompiler:
                                     download_signal.setdefault(download_key, download_value)
                         elif value is not None:
                             download_signal.setdefault(key, value)
+                    cls._classify_download_signal(previous, download_signal)
                     signals["download"] = download_signal
                     previous.signals = signals
                     normalized[-1] = previous
@@ -70,6 +71,24 @@ class TraceSkillCompiler:
         if trace.trace_type != RPATraceType.MANUAL_ACTION:
             return False
         return str(trace.action or "") in {"click", "press", "navigate_click", "navigate_press"}
+
+    @classmethod
+    def _classify_download_signal(cls, trace: RPAAcceptedTrace, download_signal: Dict[str, Any]) -> None:
+        if download_signal.get("trigger_mode"):
+            return
+        code = str(trace.ai_execution.code or "") if trace.ai_execution else ""
+        if trace.trace_type == RPATraceType.AI_OPERATION and cls._looks_like_export_task_download_code(code):
+            download_signal["trigger_mode"] = "export_task"
+
+    @staticmethod
+    def _looks_like_export_task_download_code(code: str) -> bool:
+        text = str(code or "")
+        return (
+            "tbody tr" in text
+            and "td[data-colid=" in text
+            and ".locator(" in text
+            and ".click(" in text
+        )
 
     @classmethod
     def _normalize_redundant_navigation_traces(cls, traces: List[RPAAcceptedTrace]) -> List[RPAAcceptedTrace]:
@@ -114,6 +133,42 @@ class TraceSkillCompiler:
             "def _validate_non_empty_records(key, value):",
             "    if not isinstance(value, list) or not value:",
             "        raise RuntimeError(f'AI trace output {key} is empty')",
+            "",
+            "async def _download_from_export_task(page, kwargs, results, download_key, *, table_heading='', action_selector='a', row_index=0, timeout_ms=60000):",
+            "    import os as _os",
+            "    _dl_dir = kwargs.get('_downloads_dir', '.')",
+            "    _os.makedirs(_dl_dir, exist_ok=True)",
+            "    deadline = time.perf_counter() + (timeout_ms / 1000)",
+            "    last_error = None",
+            "    while time.perf_counter() < deadline:",
+            "        try:",
+            "            if table_heading:",
+            "                heading = page.get_by_text(table_heading, exact=True).first",
+            "                if await heading.count():",
+            "                    rows = heading.locator(\"xpath=following::table[.//tbody/tr][1]//tbody/tr\")",
+            "                else:",
+            "                    rows = page.locator('tbody tr')",
+            "            else:",
+            "                rows = page.locator('tbody tr')",
+            "            if await rows.count() <= row_index:",
+            "                await page.wait_for_timeout(1000)",
+            "                continue",
+            "            row = rows.nth(row_index)",
+            "            action = row.locator(action_selector).first",
+            "            if not await action.count() or not await action.is_visible() or not await action.is_enabled():",
+            "                await page.wait_for_timeout(1000)",
+            "                continue",
+            "            async with page.expect_download(timeout=3000) as _dl_info:",
+            "                await action.click()",
+            "            _dl = await _dl_info.value",
+            "            _dl_dest = _os.path.join(_dl_dir, _dl.suggested_filename)",
+            "            await _dl.save_as(_dl_dest)",
+            "            return {\"filename\": _dl.suggested_filename, \"path\": _dl_dest}",
+            "        except Exception as exc:",
+            "            last_error = exc",
+            "            await page.wait_for_timeout(1000)",
+            "    detail = f': {last_error}' if last_error else ''",
+            "    raise RuntimeError(f'Export task download did not produce a file within {timeout_ms}ms{detail}')",
             "",
             "def _trace_page_url(page):",
             "    try:",
@@ -510,11 +565,27 @@ class TraceSkillCompiler:
         )
         code = _rewrite_random_like_locator_in_code(code, trace)
         download_signal = _trace_signal(trace, "download")
+        if download_signal:
+            self._classify_download_signal(trace, download_signal)
         code_handles_download = "expect_download" in code or ".save_as(" in code
         lines = ["", f"    # trace {index}: {trace.description or 'AI operation'}"]
         for code_line in code.splitlines():
             lines.append(f"    {code_line}" if code_line.strip() else "")
-        if download_signal and not code_handles_download:
+        if download_signal and self._download_trigger_mode(download_signal) == "export_task":
+            download_name = str(download_signal.get("filename") or "file")
+            safe_name = re.sub(r"[^a-zA-Z0-9_]", "_", download_name.split(".")[0]) or "file"
+            download_key = "download_" + safe_name
+            heading, action_selector = self._export_task_download_hints(code)
+            lines.append(
+                "    _download_payload = await _download_from_export_task("
+                "current_page, kwargs, _results, "
+                f"{json.dumps(download_key, ensure_ascii=False)}, "
+                f"table_heading={heading!r}, "
+                f"action_selector={action_selector!r})"
+            )
+            lines.append(f"    _results[{json.dumps(download_key, ensure_ascii=False)}] = _download_payload")
+            lines.append("    _result = {'action_performed': True, 'downloaded': True}")
+        elif download_signal and not code_handles_download:
             download_name = str(download_signal.get("filename") or "file")
             safe_name = re.sub(r"[^a-zA-Z0-9_]", "_", download_name.split(".")[0]) or "file"
             download_key = "download_" + safe_name
@@ -536,6 +607,23 @@ class TraceSkillCompiler:
         if key and key != download_key:
             lines.append(f"    _results[{key!r}] = _result")
         return lines
+
+    @staticmethod
+    def _download_trigger_mode(download_signal: Dict[str, Any]) -> str:
+        return str(download_signal.get("trigger_mode") or "immediate").strip().lower()
+
+    @staticmethod
+    def _export_task_download_hints(code: str) -> tuple[str, str]:
+        heading = ""
+        heading_match = re.search(r"get_by_text\((['\"])(.*?)\1,\s*exact=True\)", code)
+        if heading_match:
+            heading = heading_match.group(2)
+
+        action_selector = "a"
+        selector_match = re.search(r"\.locator\((['\"])(td\[data-colid=.*?)\1\)\.click\(", code)
+        if selector_match:
+            action_selector = selector_match.group(2)
+        return heading, action_selector
 
     def _render_dataflow_fill_trace(self, index: int, trace: RPAAcceptedTrace) -> List[str]:
         ref = trace.dataflow.selected_source_ref if trace.dataflow else None

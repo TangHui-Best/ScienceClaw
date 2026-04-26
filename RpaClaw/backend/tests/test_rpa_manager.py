@@ -783,6 +783,32 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(step.action, "open_tab_click")
         self.assertNotEqual(step.action, "download_click")
 
+    async def test_paused_download_event_is_merged_into_next_ai_trace(self):
+        self.session.paused = True
+        self.session.pending_download_events.append(
+            {
+                "filename": "export.xlsx",
+                "tab_id": "tab-export",
+                "url": "https://example.com/exportQuery",
+            }
+        )
+        trace = TRACE_MODELS_MODULE.RPAAcceptedTrace(
+            trace_id="ai-export",
+            trace_type=TRACE_MODELS_MODULE.RPATraceType.AI_OPERATION,
+            source="ai",
+            description="Click table row column action",
+            ai_execution=TRACE_MODELS_MODULE.RPAAIExecution(
+                code="async def run(page, results):\n    return {'action_performed': True}"
+            ),
+        )
+
+        await self.manager.append_trace(self.session.id, trace)
+
+        self.assertEqual(trace.signals["download"]["filename"], "export.xlsx")
+        self.assertEqual(trace.signals["download"]["tab_id"], "tab-export")
+        self.assertEqual(trace.signals["download"]["count"], 1)
+        self.assertEqual(self.session.pending_download_events, [])
+
     async def test_select_step_locator_candidate_promotes_target_and_selection(self):
         await self.manager.add_step(
             self.session.id,
