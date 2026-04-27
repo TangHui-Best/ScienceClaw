@@ -556,6 +556,7 @@ def test_recording_runtime_prompt_defines_result_return_contract():
 
 
 def test_recording_runtime_prompt_prefers_structured_snapshot_views():
+    assert "extract_snapshot" in RECORDING_RUNTIME_SYSTEM_PROMPT
     assert "table_views" in RECORDING_RUNTIME_SYSTEM_PROMPT
     assert "detail_views" in RECORDING_RUNTIME_SYSTEM_PROMPT
     assert "row-relative" in RECORDING_RUNTIME_SYSTEM_PROMPT
@@ -601,6 +602,61 @@ async def test_recording_runtime_agent_accepts_successful_python_plan():
     assert result.trace.output_key == "page_title"
     assert result.trace.output == {"title": "Example"}
     assert result.trace.ai_execution.repair_attempted is False
+
+
+@pytest.mark.asyncio
+async def test_recording_runtime_agent_accepts_extract_snapshot_plan(monkeypatch):
+    async def fake_build_page_snapshot(_page, _build_frame_path):
+        return {
+            "url": "https://example.test/detail",
+            "title": "Detail",
+            "frames": [],
+            "actionable_nodes": [],
+            "content_nodes": [],
+            "containers": [],
+            "detail_views": [],
+        }
+
+    async def planner(_payload):
+        return {
+            "description": "Extract procurement info",
+            "action_type": "extract_snapshot",
+            "expected_effect": "extract",
+            "output_key": "procurement_info",
+            "source": "detail_views",
+            "section_title": "采购信息",
+            "fields": [
+                {
+                    "label": "预计总金额 (含税）",
+                    "value": "100.00",
+                    "data_prop": "2652409177955720363",
+                    "visible": True,
+                    "value_kind": "number",
+                },
+                {
+                    "label": "预计到货时间 (UTC+08:00)",
+                    "value": "",
+                    "data_prop": "7757927649859165361",
+                    "visible": False,
+                    "value_kind": "empty",
+                },
+            ],
+        }
+
+    monkeypatch.setattr("backend.rpa.recording_runtime_agent.build_page_snapshot", fake_build_page_snapshot)
+
+    result = await RecordingRuntimeAgent(planner=planner).run(
+        page=_FakePage(),
+        instruction="提取采购信息中的内容",
+        runtime_results={},
+    )
+
+    assert result.success is True
+    assert result.output == {"预计总金额 (含税）": "100.00"}
+    assert result.trace.ai_execution.language == "snapshot"
+    assert result.trace.ai_execution.code == ""
+    assert result.trace.signals["extract_snapshot"]["source"] == "detail_views"
+    assert result.trace.signals["extract_snapshot"]["fields"][0]["data_prop"] == "2652409177955720363"
 
 
 @pytest.mark.asyncio

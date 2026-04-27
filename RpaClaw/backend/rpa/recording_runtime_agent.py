@@ -43,11 +43,14 @@ Return JSON only.
 Schema:
 {
   "description": "short user-facing action summary",
-  "action_type": "run_python",
+  "action_type": "run_python|extract_snapshot",
   "expected_effect": "extract|navigate|click|fill|mixed",
   "allow_empty_output": false,
   "output_key": "optional_ascii_snake_case_result_key",
-  "code": "async def run(page, results): ..."
+  "code": "async def run(page, results): ...",
+  "source": "detail_views|table_views",
+  "section_title": "optional snapshot section title",
+  "fields": "optional structured fields for extract_snapshot"
 }
 Rules:
 - Complete only the current user command, not the full SOP.
@@ -56,6 +59,9 @@ Rules:
 - Use expected_effect="navigate" when the user asks to open, go to, enter, visit, or navigate to a target.
 - Use expected_effect="extract" when the user only asks to find, collect, summarize, or return data without opening it.
 - If code is returned, it must define async def run(page, results).
+- Use action_type="extract_snapshot" when the requested extract-only data is already present in snapshot.detail_views or snapshot.table_views.
+- For extract_snapshot, return the relevant observed fields/rows in the plan itself; do not generate Python code and do not reference `snapshot` inside `run()`.
+- `snapshot` is planner-only evidence. Generated Python can access only `page` and `results`.
 - 结果返回规则：
   - `results` 是普通 Python dict，只包含之前已成功步骤的输出结果。
   - 可以从 `results` 读取历史结果，用于跨步骤引用、整合、过滤、改写或汇总。
@@ -364,7 +370,7 @@ class RecordingRuntimeAgent:
             output_key=output_key,
             output=output,
             ai_execution=RPAAIExecution(
-                language="python",
+                language="snapshot" if str(plan.get("action_type") or "").strip() == "extract_snapshot" else "python",
                 code=str(plan.get("code") or ""),
                 output=output,
                 error=result.get("error"),
@@ -419,6 +425,9 @@ class RecordingRuntimeAgent:
                     "output": value,
                     "effect": {"type": "fill", "action_performed": True},
                 }
+
+            if action_type == "extract_snapshot":
+                return _execute_extract_snapshot_plan(plan)
 
             code = str(plan.get("code") or "")
             if "async def run(page, results)" not in code:
@@ -515,6 +524,68 @@ class RecordingRuntimeAgent:
                 "traceback": _format_exception_for_repair(exc),
                 "output": "",
             }
+
+
+def _execute_extract_snapshot_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
+    fields = _snapshot_plan_fields(plan)
+    if not fields:
+        return {"success": False, "error": "extract_snapshot plan missing fields", "output": ""}
+
+    output: Dict[str, Any] = {}
+    selected_fields: List[Dict[str, Any]] = []
+    include_hidden = _normalize_bool(plan.get("include_hidden"))
+    include_empty = _normalize_bool(plan.get("include_empty"))
+    for field in fields:
+        label = str(field.get("label") or "").strip()
+        if not label:
+            continue
+        visible = bool(field.get("visible", True))
+        value = field.get("value")
+        if not visible and not include_hidden:
+            continue
+        if value == "" and not include_empty:
+            continue
+        output[label] = value
+        selected_fields.append(
+            {
+                "label": label,
+                "value": value,
+                "data_prop": str(field.get("data_prop") or "").strip(),
+                "visible": visible,
+                "value_kind": str(field.get("value_kind") or "").strip(),
+                "required": bool(field.get("required")),
+            }
+        )
+
+    if not output and not _normalize_bool(plan.get("allow_empty_output")):
+        return {
+            "success": False,
+            "error": "extract_snapshot plan produced no visible non-empty fields",
+            "output": "",
+        }
+
+    return {
+        "success": True,
+        "error": None,
+        "output": output,
+        "signals": {
+            "extract_snapshot": {
+                "source": str(plan.get("source") or "").strip(),
+                "section_title": str(plan.get("section_title") or "").strip(),
+                "fields": selected_fields,
+            }
+        },
+    }
+
+
+def _snapshot_plan_fields(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
+    fields = plan.get("fields")
+    if isinstance(fields, list):
+        return [dict(field) for field in fields if isinstance(field, dict)]
+    extraction = plan.get("extraction")
+    if isinstance(extraction, dict) and isinstance(extraction.get("fields"), list):
+        return [dict(field) for field in extraction["fields"] if isinstance(field, dict)]
+    return []
 
 
 def _extract_text(response: Any) -> str:
