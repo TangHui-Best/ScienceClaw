@@ -224,6 +224,34 @@ class TraceSkillCompiler:
             "        payload['url'] = page_url",
             "    return payload",
             "",
+            "async def _extract_display_field_value(field):",
+            "    value_selectors = [",
+            "        '.aui-input-display-only__content',",
+            "        '.aui-numeric-display-only__value',",
+            "        '.aui-range-editor-display-only',",
+            "        '.aui-input-display-only',",
+            "        '.no-value',",
+            "        'input',",
+            "        'textarea',",
+            "        'select',",
+            "    ]",
+            "    for selector in value_selectors:",
+            "        candidate = field.locator(selector).first",
+            "        try:",
+            "            if not await candidate.count():",
+            "                continue",
+            "            tag_name = await candidate.evaluate('el => el.tagName.toLowerCase()')",
+            "            if tag_name in ('input', 'textarea', 'select'):",
+            "                value = await candidate.input_value()",
+            "            else:",
+            "                value = await candidate.inner_text()",
+            "            value = str(value or '').strip()",
+            "            if value and value != '-':",
+            "                return value",
+            "        except Exception:",
+            "            continue",
+            "    return ''",
+            "",
             "async def _execute_runtime_ai_instruction(page, results, instruction, output_key):",
             "    from backend.rpa.recording_runtime_agent import RecordingRuntimeAgent",
             "    agent = RecordingRuntimeAgent()",
@@ -504,6 +532,8 @@ class TraceSkillCompiler:
         previous_traces: List[RPAAcceptedTrace],
         used_output_keys: Dict[str, int],
     ) -> List[str]:
+        if _trace_signal(trace, "extract_snapshot"):
+            return self._render_snapshot_extract_trace(index, trace, used_output_keys)
         if _should_preserve_runtime_ai_instruction(trace):
             return self._render_runtime_ai_instruction_trace(index, trace, used_output_keys)
         if trace.ai_execution and trace.ai_execution.code:
@@ -525,6 +555,51 @@ class TraceSkillCompiler:
             f"    # trace {index}: runtime semantic instruction",
             f"    _result = await _execute_runtime_ai_instruction(current_page, _results, {instruction!r}, {key!r})",
         ]
+
+    def _render_snapshot_extract_trace(
+        self,
+        index: int,
+        trace: RPAAcceptedTrace,
+        used_output_keys: Dict[str, int],
+    ) -> List[str]:
+        signal = _trace_signal(trace, "extract_snapshot")
+        fields = self._snapshot_extract_fields(trace, signal)
+        key = self._allocate_output_key(trace, trace.output_key or f"snapshot_extract_{index}", used_output_keys)
+        lines = ["", f"    # trace {index}: {trace.description or 'snapshot extract'}"]
+        frame_path = signal.get("frame_path") if isinstance(signal.get("frame_path"), list) else trace.frame_path
+        scope_lines, scope_var = self._frame_scope_lines(list(frame_path or []))
+        lines.extend(scope_lines)
+        lines.append("    _result = {}")
+        for field in fields:
+            label = str(field.get("label") or "").strip()
+            data_prop = str(field.get("data_prop") or "").strip()
+            if not label:
+                continue
+            if data_prop:
+                selector = f'[data-prop="{data_prop}"]'
+                lines.append(f"    _field = {scope_var}.locator({selector!r}).first")
+            else:
+                xpath = (
+                    "xpath=//*[normalize-space()="
+                    + _xpath_literal(label)
+                    + "]/ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' aui-form-item ')][1]"
+                )
+                lines.append(f"    _field = {scope_var}.locator({xpath!r}).first")
+            lines.append("    if await _field.count():")
+            lines.append("        _value = await _extract_display_field_value(_field)")
+            lines.append(f"        _result[{label!r}] = _value")
+        lines.append(f"    _results[{key!r}] = _result")
+        return lines
+
+    @staticmethod
+    def _snapshot_extract_fields(trace: RPAAcceptedTrace, signal: Dict[str, Any]) -> List[Dict[str, Any]]:
+        fields = [dict(field) for field in list(signal.get("fields") or []) if isinstance(field, dict)]
+        usable_fields = [field for field in fields if str(field.get("label") or "").strip()]
+        if usable_fields:
+            return usable_fields
+        if isinstance(trace.output, dict):
+            return [{"label": str(label), "data_prop": ""} for label in trace.output.keys() if str(label).strip()]
+        return []
 
     @staticmethod
     def _build_param_lookup(params: Dict[str, Any]) -> Dict[str, List[tuple[str, Dict[str, Any]]]]:
@@ -831,6 +906,15 @@ def _trace_signal(trace: RPAAcceptedTrace, name: str) -> Dict[str, Any]:
     signals = trace.signals if isinstance(trace.signals, dict) else {}
     signal = signals.get(name)
     return dict(signal) if isinstance(signal, dict) else {}
+
+
+def _xpath_literal(value: str) -> str:
+    text = str(value)
+    if "'" not in text:
+        return f"'{text}'"
+    if '"' not in text:
+        return f'"{text}"'
+    return "concat(" + ", \"'\", ".join(f"'{part}'" for part in text.split("'")) + ")"
 
 
 def _trace_has_random_like_primary_locator(trace: RPAAcceptedTrace) -> bool:

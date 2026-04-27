@@ -48,6 +48,109 @@ def test_compiler_does_not_emit_github_helpers_for_generic_web_trace():
     assert "_github_repo_base" not in script
 
 
+def test_compiler_renders_snapshot_detail_extract_as_playwright_code():
+    script = TraceSkillCompiler().generate_script(
+        [
+            RPAAcceptedTrace(
+                trace_type=RPATraceType.AI_OPERATION,
+                source="ai",
+                description="Extract procurement info",
+                user_instruction="提取采购信息中的内容",
+                output_key="procurement_info",
+                output={"预计总金额 (含税）": "100.00"},
+                ai_execution=RPAAIExecution(language="snapshot", code="", output={"预计总金额 (含税）": "100.00"}),
+                signals={
+                    "extract_snapshot": {
+                        "source": "detail_views",
+                        "section_title": "采购信息",
+                        "fields": [
+                            {
+                                "label": "预计总金额 (含税）",
+                                "value": "100.00",
+                                "data_prop": "2652409177955720363",
+                                "visible": True,
+                                "value_kind": "number",
+                            }
+                        ],
+                    }
+                },
+            )
+        ],
+        is_local=True,
+    )
+
+    body = _execute_body(script)
+
+    assert "_execute_runtime_ai_instruction" not in body
+    assert "current_page.locator('[data-prop=\"2652409177955720363\"]')" in body
+    assert "_results['procurement_info'] = _result" in body
+    assert "'预计总金额 (含税）'" in body
+    assert "100.00" not in body
+
+
+def test_compiler_renders_snapshot_detail_extract_in_frame_scope():
+    script = TraceSkillCompiler().generate_script(
+        [
+            RPAAcceptedTrace(
+                trace_type=RPATraceType.AI_OPERATION,
+                source="ai",
+                description="Extract iframe detail",
+                output_key="iframe_detail",
+                output={"Amount": "100.00"},
+                ai_execution=RPAAIExecution(language="snapshot", code="", output={"Amount": "100.00"}),
+                signals={
+                    "extract_snapshot": {
+                        "source": "detail_views",
+                        "section_title": "Detail",
+                        "frame_path": ["iframe[title='detail']"],
+                        "fields": [
+                            {
+                                "label": "Amount",
+                                "value": "100.00",
+                                "data_prop": "amount",
+                                "visible": True,
+                                "value_kind": "number",
+                            }
+                        ],
+                    }
+                },
+            )
+        ],
+        is_local=True,
+    )
+
+    body = _execute_body(script)
+
+    assert "frame_scope = current_page.frame_locator(\"iframe[title='detail']\")" in body
+    assert "frame_scope.locator('[data-prop=\"amount\"]')" in body
+    assert "current_page.locator('[data-prop=\"amount\"]')" not in body
+
+
+def test_compiler_renders_snapshot_extract_from_output_labels_when_field_evidence_missing():
+    script = TraceSkillCompiler().generate_script(
+        [
+            RPAAcceptedTrace(
+                trace_type=RPATraceType.AI_OPERATION,
+                source="ai",
+                description="Extract procurement info",
+                output_key="purchase_info",
+                output={"预计总金额 (含税）": "100.00", "币种": "USD"},
+                ai_execution=RPAAIExecution(language="snapshot", code="", output={"预计总金额 (含税）": "100.00", "币种": "USD"}),
+                signals={"extract_snapshot": {"source": "detail_views", "section_title": "采购信息", "fields": []}},
+            )
+        ],
+        is_local=True,
+    )
+
+    body = _execute_body(script)
+
+    assert "_result = {}" in body
+    assert "ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' aui-form-item ')]" in body
+    assert "_results['purchase_info'] = _result" in body
+    assert "100.00" not in body
+    assert "USD" not in body
+
+
 def test_compiler_wraps_each_trace_with_trace_level_logging():
     script = TraceSkillCompiler().generate_script(
         [
