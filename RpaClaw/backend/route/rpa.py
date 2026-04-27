@@ -27,6 +27,7 @@ from backend.rpa.cdp_connector import get_cdp_connector
 from backend.rpa.screencast import SessionScreencastController
 from backend.user.dependencies import get_current_user, User
 from backend.config import settings
+from backend.models import get_model_config
 from backend.storage import get_repository
 from backend.credential.vault import inject_credentials
 
@@ -66,6 +67,7 @@ class SaveSkillRequest(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     mode: str = "chat"
+    model_config_id: str | None = None
 
 
 class ConfirmRequest(BaseModel):
@@ -479,11 +481,19 @@ def _rewrite_vnc_html(html: str, session_id: str) -> str:
     return rewritten
 
 
-async def _resolve_user_model_config(user_id: str) -> dict | None:
+async def _resolve_user_model_config(user_id: str, model_config_id: str | None = None) -> dict | None:
     """Resolve the user's model config for the RPA assistant.
 
     Priority: user's own models → system models → env defaults (None).
     """
+    if model_config_id:
+        model_config = await get_model_config(model_config_id)
+        if not model_config:
+            raise HTTPException(status_code=404, detail="Model not found")
+        if not model_config.is_system and model_config.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Cannot use this model")
+        return model_config.model_dump()
+
     # Try user's own active model first, then system models
     docs = await get_repository("models").find_many(
         {"$or": [{"user_id": user_id}, {"is_system": True}], "is_active": True, "api_key": {"$nin": ["", None]}},
@@ -844,7 +854,7 @@ async def chat_with_assistant(
         raise HTTPException(status_code=403, detail="Not authorized")
 
     # Resolve user's model config
-    model_config = await _resolve_user_model_config(str(current_user.id))
+    model_config = await _resolve_user_model_config(str(current_user.id), request.model_config_id)
 
     # Get the page object for this session
     page = rpa_manager.get_page(session_id)

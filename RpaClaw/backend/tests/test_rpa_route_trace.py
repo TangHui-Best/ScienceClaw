@@ -12,6 +12,78 @@ from backend.rpa.trace_models import RPAAcceptedTrace, RPAAIExecution, RPATraceT
 ROUTE_MODULE = importlib.import_module("backend.route.rpa")
 
 
+@pytest.mark.anyio
+async def test_resolve_user_model_config_prefers_requested_model(monkeypatch):
+    class FakeModel:
+        is_system = False
+        user_id = "user-1"
+
+        def model_dump(self):
+            return {
+                "id": "model-selected",
+                "provider": "openai",
+                "base_url": "https://llm.example/v1",
+                "api_key": "sk-selected",
+                "model_name": "selected-model",
+                "context_window": 65536,
+                "is_system": False,
+                "user_id": "user-1",
+            }
+
+    async def fake_get_model_config(model_id):
+        assert model_id == "model-selected"
+        return FakeModel()
+
+    monkeypatch.setattr(ROUTE_MODULE, "get_model_config", fake_get_model_config)
+
+    config = await ROUTE_MODULE._resolve_user_model_config("user-1", "model-selected")
+
+    assert config["api_key"] == "sk-selected"
+    assert config["model_name"] == "selected-model"
+    assert config["context_window"] == 65536
+
+
+@pytest.mark.anyio
+async def test_resolve_user_model_config_rejects_requested_model_from_another_user(monkeypatch):
+    class FakeModel:
+        is_system = False
+        user_id = "other-user"
+
+        def model_dump(self):
+            return {
+                "id": "model-other",
+                "provider": "openai",
+                "base_url": "https://llm.example/v1",
+                "api_key": "sk-other",
+                "model_name": "other-model",
+            }
+
+    async def fake_get_model_config(model_id):
+        assert model_id == "model-other"
+        return FakeModel()
+
+    monkeypatch.setattr(ROUTE_MODULE, "get_model_config", fake_get_model_config)
+
+    with pytest.raises(ROUTE_MODULE.HTTPException) as exc_info:
+        await ROUTE_MODULE._resolve_user_model_config("user-1", "model-other")
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_resolve_user_model_config_rejects_missing_requested_model(monkeypatch):
+    async def fake_get_model_config(model_id):
+        assert model_id == "missing-model"
+        return None
+
+    monkeypatch.setattr(ROUTE_MODULE, "get_model_config", fake_get_model_config)
+
+    with pytest.raises(ROUTE_MODULE.HTTPException) as exc_info:
+        await ROUTE_MODULE._resolve_user_model_config("user-1", "missing-model")
+
+    assert exc_info.value.status_code == 404
+
+
 def test_generate_session_script_prefers_traces_over_legacy_steps():
     session = RPASession(id="s1", user_id="u1", sandbox_session_id="sandbox")
     session.traces.append(

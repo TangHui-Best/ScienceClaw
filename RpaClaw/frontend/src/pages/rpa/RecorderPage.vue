@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue';
+import { computed, ref, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { Camera, Terminal, CheckCircle, Radio, Send, Wand2, Bot, Code, Globe, AlertCircle, ChevronDown, ChevronUp, ClipboardCheck, Loader2 } from 'lucide-vue-next';
 import { apiClient } from '@/api/client';
+import { listModels, type ModelConfig } from '@/api/models';
+import ProviderIcon from '@/components/icons/ProviderIcon.vue';
 import RpaFlowGuide from '@/components/rpa/RpaFlowGuide.vue';
 import RpaStepTimeline from '@/components/rpa/RpaStepTimeline.vue';
 import { getBackendWsUrl } from '@/utils/sandbox';
@@ -38,6 +40,11 @@ import {
   isRpaTimelineStepDeletable,
   mapRpaConfigureDisplaySteps,
 } from '@/utils/rpaConfigureTimeline';
+import {
+  buildRpaAssistantChatPayload,
+  getDefaultRpaAssistantModelId,
+  shouldSubmitRpaAssistantComposer,
+} from '@/utils/rpaAssistantModel';
 
 const router = useRouter();
 const route = useRoute();
@@ -222,6 +229,38 @@ const newMessage = ref('');
 const sending = ref(false);
 const agentRunning = ref(false);
 const chatScrollRef = ref<HTMLElement | null>(null);
+const models = ref<ModelConfig[]>([]);
+const selectedModelId = ref<string | null>(null);
+const modelDropdownOpen = ref(false);
+
+const selectedModel = computed(() => (
+  models.value.find((model) => model.id === selectedModelId.value) ?? null
+));
+
+const modelDisplayName = (model: ModelConfig) => (
+  model.name.toLowerCase() === 'system' ? model.model_name : model.name
+);
+
+const selectedModelName = computed(() => (
+  selectedModel.value ? modelDisplayName(selectedModel.value) : 'Select Model'
+));
+
+const loadAssistantModels = async () => {
+  try {
+    const modelList = await listModels();
+    models.value = modelList;
+    selectedModelId.value = getDefaultRpaAssistantModelId(modelList, selectedModelId.value);
+  } catch (err) {
+    console.error('Failed to load RPA assistant models:', err);
+    models.value = [];
+    selectedModelId.value = null;
+  }
+};
+
+const selectAssistantModel = (modelId: string) => {
+  selectedModelId.value = modelId;
+  modelDropdownOpen.value = false;
+};
 
 const scrollAssistantToBottom = () => {
   void nextTick(() => {
@@ -366,6 +405,7 @@ const startTimer = () => {
 };
 
 onMounted(() => {
+  loadAssistantModels();
   initSession();
 });
 
@@ -730,6 +770,12 @@ const sendConfirm = async (approved: boolean) => {
   await apiClient.post(`/rpa/session/${sessionId.value}/agent/confirm`, { approved });
 };
 
+const handleComposerKeydown = (event: KeyboardEvent) => {
+  if (!shouldSubmitRpaAssistantComposer(event)) return;
+  event.preventDefault();
+  sendMessage();
+};
+
 const sendMessage = async () => {
   if (!newMessage.value.trim() || !sessionId.value || sending.value) return;
   const userText = newMessage.value.trim();
@@ -760,7 +806,7 @@ const sendMessage = async () => {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${localStorage.getItem('token') || ''}`,
       },
-      body: JSON.stringify({ message: userText, mode: 'trace_first' }),
+      body: JSON.stringify(buildRpaAssistantChatPayload(userText, selectedModelId.value)),
     });
 
     if (!resp.ok || !resp.body) {
@@ -1188,23 +1234,56 @@ const sendMessage = async () => {
           </div>
         </div>
 
-        <div class="p-4 bg-[#eff1f2] dark:bg-[#212122] border-t border-gray-100 dark:border-gray-800">
-          <div class="relative">
-            <input
+        <div class="bg-[#eff1f2] p-4 dark:bg-[#212122]">
+          <div class="relative rounded-2xl bg-white p-2 shadow-[0_16px_36px_rgba(25,28,30,0.08)] ring-1 ring-black/[0.04] dark:bg-[#272728] dark:ring-white/10">
+            <textarea
               v-model="newMessage"
-              @keyup.enter="sendMessage"
+              @keydown="handleComposerKeydown"
               :disabled="sending || agentRunning"
-              class="w-full bg-white dark:bg-[#272728] border border-gray-200 dark:border-gray-700 rounded-2xl py-3 pl-4 pr-12 text-xs focus:ring-2 focus:ring-[#831bd7] focus:border-transparent shadow-sm placeholder:text-gray-400 outline-none disabled:opacity-50"
+              class="h-[56px] min-h-[56px] max-h-[56px] w-full resize-none overflow-y-auto whitespace-pre-wrap break-words bg-transparent px-2 pb-2 pt-1 text-xs leading-relaxed text-gray-800 outline-none placeholder:text-gray-400 disabled:opacity-50 dark:text-gray-100"
               :placeholder="agentRunning ? 'Agent 运行中...' : (sending ? 'AI 正在处理...' : '描述录制目标或操作...')"
-              type="text"
-            />
-            <button
-              @click="sendMessage"
-              :disabled="sending || agentRunning"
-              class="absolute right-2 top-1/2 -translate-y-1/2 text-[#831bd7] hover:scale-110 transition-transform p-1.5 disabled:opacity-50"
-            >
-              <Send :size="16" />
-            </button>
+              rows="2"
+            ></textarea>
+            <div class="flex items-center justify-between gap-2">
+              <div class="relative min-w-0 flex-1">
+                <button
+                  type="button"
+                  class="flex h-7 max-w-full items-center gap-1.5 rounded-lg bg-[#f2f4f6] px-2 text-left text-[10px] font-semibold text-gray-700 transition-colors hover:bg-[#edeef0] disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white/10 dark:text-gray-200 dark:hover:bg-white/[0.14]"
+                  :disabled="models.length === 0 || sending || agentRunning"
+                  @click="modelDropdownOpen = !modelDropdownOpen"
+                >
+                  <ProviderIcon v-if="selectedModel" :provider="selectedModel.provider" class="size-3.5 flex-shrink-0" />
+                  <span class="min-w-0 truncate">{{ selectedModelName }}</span>
+                  <span v-if="selectedModel" class="hidden max-w-12 truncate text-[9px] text-gray-400 sm:inline">{{ selectedModel.provider }}</span>
+                  <ChevronDown :size="12" class="flex-shrink-0 text-gray-400 transition-transform" :class="modelDropdownOpen && 'rotate-180'" />
+                </button>
+                <div
+                  v-if="modelDropdownOpen"
+                  class="absolute bottom-full left-0 z-30 mb-2 w-64 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl bg-white/95 p-1 shadow-[0_24px_48px_rgba(25,28,30,0.14)] ring-1 ring-black/[0.06] backdrop-blur dark:bg-[#272728]/95 dark:ring-white/10"
+                >
+                  <button
+                    v-for="model in models"
+                    :key="model.id"
+                    type="button"
+                    class="flex w-full min-w-0 items-center gap-2 rounded-lg px-2 py-2 text-left text-xs transition-colors hover:bg-gray-50 dark:hover:bg-white/10"
+                    :class="selectedModelId === model.id ? 'bg-purple-50 text-[#831bd7] dark:bg-[#831bd7]/20 dark:text-purple-200' : 'text-gray-700 dark:text-gray-200'"
+                    @click="selectAssistantModel(model.id)"
+                  >
+                    <ProviderIcon :provider="model.provider" class="size-4 flex-shrink-0" />
+                    <span class="min-w-0 flex-1 truncate">{{ modelDisplayName(model) }}</span>
+                    <span class="max-w-16 truncate text-[10px] text-gray-400">{{ model.provider }}</span>
+                    <CheckCircle v-if="selectedModelId === model.id" :size="13" class="flex-shrink-0" />
+                  </button>
+                </div>
+              </div>
+              <button
+                @click="sendMessage"
+                :disabled="sending || agentRunning"
+                class="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#831bd7] to-[#ac0089] text-white shadow-[0_10px_22px_rgba(131,27,215,0.24)] transition-transform hover:scale-105 disabled:scale-100 disabled:opacity-50"
+              >
+                <Send :size="15" />
+              </button>
+            </div>
           </div>
         </div>
       </aside>
