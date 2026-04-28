@@ -4,7 +4,7 @@ import json
 from typing import Any, Dict, List
 
 from .manual_recording_models import ManualRecordedAction
-from .trace_locator_utils import normalize_locator, normalize_locator_candidates
+from .trace_locator_utils import has_valid_locator, normalize_locator, normalize_locator_candidates
 from .trace_models import (
     RPAAcceptedTrace,
     RPADataflowMapping,
@@ -168,6 +168,8 @@ def infer_dataflow_for_ai_fill(trace: RPAAcceptedTrace, runtime_results: RPARunt
     if trace.locator_candidates:
         selected = next((item for item in trace.locator_candidates if item.get("selected")), trace.locator_candidates[0])
         selected_locator = normalize_locator(selected.get("locator") or selected)
+    if not has_valid_locator(selected_locator):
+        return trace
 
     trace.action = "fill"
     trace.value = filled_value
