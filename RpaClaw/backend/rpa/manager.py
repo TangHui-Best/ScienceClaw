@@ -688,6 +688,57 @@ class RPASessionManager:
             self._rebuild_runtime_results(session)
         return deleted
 
+    async def delete_trace_diagnostic(self, session_id: str, diagnostic_id: str) -> bool:
+        session = self.sessions.get(session_id)
+        if not session or not diagnostic_id:
+            return False
+        original_count = len(session.trace_diagnostics)
+        session.trace_diagnostics = [
+            diagnostic
+            for diagnostic in session.trace_diagnostics
+            if diagnostic.diagnostic_id != diagnostic_id
+        ]
+        return len(session.trace_diagnostics) != original_count
+
+    async def select_trace_locator_candidate(
+        self,
+        session_id: str,
+        trace_id: str,
+        candidate_index: int,
+    ) -> RPAAcceptedTrace:
+        session = self.sessions.get(session_id)
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+        if not trace_id:
+            raise ValueError("Invalid trace id")
+
+        trace = next((item for item in session.traces if item.trace_id == trace_id), None)
+        if trace is None:
+            raise ValueError("Invalid trace id")
+        if not isinstance(candidate_index, int) or isinstance(candidate_index, bool):
+            raise ValueError("Invalid locator candidate index")
+        if candidate_index < 0 or candidate_index >= len(trace.locator_candidates):
+            raise ValueError("Invalid locator candidate index")
+
+        selected_candidate = trace.locator_candidates[candidate_index]
+        for index, candidate in enumerate(trace.locator_candidates):
+            candidate["selected"] = index == candidate_index
+
+        validation = dict(trace.validation or {})
+        validation["selected_candidate_index"] = candidate_index
+        validation["selected_candidate_kind"] = selected_candidate.get("kind", "")
+        strict_match_count = selected_candidate.get("strict_match_count")
+        if isinstance(strict_match_count, int):
+            validation["status"] = "ok" if strict_match_count == 1 else "fallback"
+        elif "status" not in validation:
+            validation["status"] = "ok"
+        if selected_candidate.get("reason"):
+            validation["details"] = selected_candidate["reason"]
+        trace.validation = validation
+
+        await self._broadcast_trace_update(session_id, trace)
+        return trace
+
     @staticmethod
     def _rebuild_runtime_results(session: RPASession) -> None:
         rebuilt = RPARuntimeResults()
@@ -1638,6 +1689,15 @@ class RPASessionManager:
     async def _broadcast_trace(self, session_id: str, trace: RPAAcceptedTrace) -> None:
         if session_id in self.ws_connections:
             message = {"type": "trace_added", "data": trace.model_dump(mode="json")}
+            for ws in self.ws_connections[session_id]:
+                try:
+                    await ws.send_json(message)
+                except Exception:
+                    pass
+
+    async def _broadcast_trace_update(self, session_id: str, trace: RPAAcceptedTrace) -> None:
+        if session_id in self.ws_connections:
+            message = {"type": "trace_updated", "data": trace.model_dump(mode="json")}
             for ws in self.ws_connections[session_id]:
                 try:
                     await ws.send_json(message)

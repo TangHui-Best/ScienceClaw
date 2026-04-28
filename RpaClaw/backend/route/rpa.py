@@ -21,6 +21,7 @@ from backend.rpa.assistant import RPAAssistant, RPAReActAgent, _active_agents
 from backend.rpa.recording_runtime_agent import RecordingRuntimeAgent, RecordingAgentResult
 from backend.rpa.trace_recorder import manual_step_to_trace, recorded_action_to_trace
 from backend.rpa.trace_models import RPAAcceptedTrace
+from backend.rpa.trace_timeline import build_trace_timeline_items
 from backend.rpa.trace_skill_compiler import TraceSkillCompiler
 from backend.rpa.mcp_step_projection import session_to_mcp_steps
 from backend.rpa.cdp_connector import get_cdp_connector
@@ -55,6 +56,7 @@ class DeleteTimelineItemRequest(BaseModel):
     kind: str
     step_id: str | None = None
     trace_id: str | None = None
+    diagnostic_id: str | None = None
 
 
 class SaveSkillRequest(BaseModel):
@@ -273,6 +275,24 @@ def _build_session_recording_meta(session) -> Dict[str, Any]:
         "trace_diagnostics": trace_diagnostics,
         "recording_diagnostics": recording_diagnostics,
     }
+
+
+def _build_session_timeline(session) -> list[dict[str, Any]]:
+    return [
+        item.model_dump(mode="json")
+        for item in build_trace_timeline_items(
+            traces=list(getattr(session, "traces", None) or []),
+            diagnostics=list(getattr(session, "trace_diagnostics", None) or []),
+        )
+    ]
+
+
+def _session_response_payload(session) -> Dict[str, Any]:
+    payload = _model_dump_json(session)
+    if not isinstance(payload, dict):
+        payload = dict(getattr(session, "__dict__", {}) or {})
+    payload["timeline"] = _build_session_timeline(session)
+    return payload
 
 
 def _merge_recorded_action_trace_metadata(session, derived_manual_traces: Dict[str, RPAAcceptedTrace]) -> None:
@@ -531,7 +551,23 @@ async def get_rpa_session(
         raise HTTPException(status_code=404, detail="Session not found")
     if session.user_id != str(current_user.id):
         raise HTTPException(status_code=403, detail="Not authorized")
-    return {"status": "success", "session": session}
+    timeline = _build_session_timeline(session)
+    session_payload = _session_response_payload(session)
+    session_payload["timeline"] = timeline
+    return {"status": "success", "session": session_payload, "timeline": timeline}
+
+
+@router.get("/session/{session_id}/timeline")
+async def get_session_timeline(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    session = await rpa_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.user_id != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    return {"timeline": _build_session_timeline(session)}
 
 
 @router.get("/session/{session_id}/tabs")
@@ -628,6 +664,7 @@ async def delete_step(
     return {"status": "success"}
 
 
+# Deprecated compatibility endpoint while the UI migrates to trace-native actions.
 @router.delete("/session/{session_id}/timeline-item")
 async def delete_timeline_item(
     session_id: str,
@@ -644,6 +681,8 @@ async def delete_timeline_item(
         success = await rpa_manager.delete_step_by_id(session_id, request.step_id or "")
     elif request.kind == "trace":
         success = await rpa_manager.delete_trace(session_id, request.trace_id or "")
+    elif request.kind == "diagnostic":
+        success = await rpa_manager.delete_trace_diagnostic(session_id, request.diagnostic_id or "")
     else:
         raise HTTPException(status_code=400, detail="Invalid timeline item kind")
 
@@ -652,6 +691,40 @@ async def delete_timeline_item(
     return {"status": "success"}
 
 
+@router.delete("/session/{session_id}/trace/{trace_id}")
+async def delete_trace(
+    session_id: str,
+    trace_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    session = await rpa_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    _ensure_session_owner(session, current_user)
+    success = await rpa_manager.delete_trace(session_id, trace_id)
+    if not success:
+        raise HTTPException(status_code=400, detail="Invalid trace")
+    return {"status": "success"}
+
+
+@router.delete("/session/{session_id}/diagnostic/{diagnostic_id}")
+async def delete_trace_diagnostic(
+    session_id: str,
+    diagnostic_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    session = await rpa_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.user_id != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    success = await rpa_manager.delete_trace_diagnostic(session_id, diagnostic_id)
+    if not success:
+        raise HTTPException(status_code=400, detail="Invalid diagnostic")
+    return {"status": "success"}
+
+
+# Deprecated compatibility endpoint while the UI migrates to trace-native actions.
 @router.post("/session/{session_id}/step/{step_index}/locator")
 async def promote_step_locator(
     session_id: str,
@@ -675,6 +748,30 @@ async def promote_step_locator(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return {"status": "success", "step": step}
+
+
+@router.post("/session/{session_id}/trace/{trace_id}/locator")
+async def promote_trace_locator(
+    session_id: str,
+    trace_id: str,
+    request: PromoteLocatorRequest,
+    current_user: User = Depends(get_current_user),
+):
+    session = await rpa_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    _ensure_session_owner(session, current_user)
+
+    try:
+        trace = await rpa_manager.select_trace_locator_candidate(
+            session_id,
+            trace_id,
+            request.candidate_index,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"status": "success", "trace": trace.model_dump(mode="json")}
 
 
 @router.post("/session/{session_id}/generate")

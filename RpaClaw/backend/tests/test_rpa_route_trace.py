@@ -552,6 +552,60 @@ async def test_delete_timeline_trace_removes_ai_trace_without_touching_steps():
 
 
 @pytest.mark.asyncio
+async def test_delete_trace_endpoint_removes_trace_without_step_index():
+    manager = ROUTE_MODULE.rpa_manager
+    session = RPASession(id="route-delete-direct-trace", user_id="u1", sandbox_session_id="sandbox")
+    session.traces.append(
+        RPAAcceptedTrace(
+            trace_id="trace-delete",
+            trace_type=RPATraceType.AI_OPERATION,
+            source="ai",
+            user_instruction="collect title",
+            output_key="page_title",
+            output="Example",
+            ai_execution=RPAAIExecution(code="async def run(page, results):\n    return 'Example'"),
+        )
+    )
+    session.runtime_results.write("page_title", "Example")
+    manager.sessions[session.id] = session
+
+    try:
+        user = type("User", (), {"id": "u1"})()
+        response = await ROUTE_MODULE.delete_trace(session.id, "trace-delete", user)
+
+        assert response == {"status": "success"}
+        assert session.traces == []
+        assert session.runtime_results.values == {}
+    finally:
+        manager.sessions.pop(session.id, None)
+
+
+@pytest.mark.asyncio
+async def test_delete_trace_endpoint_rejects_non_owner():
+    manager = ROUTE_MODULE.rpa_manager
+    session = RPASession(id="route-delete-trace-owner", user_id="owner", sandbox_session_id="sandbox")
+    session.traces.append(
+        RPAAcceptedTrace(
+            trace_id="trace-keep",
+            trace_type=RPATraceType.AI_OPERATION,
+            source="ai",
+            user_instruction="collect title",
+        )
+    )
+    manager.sessions[session.id] = session
+
+    try:
+        user = type("User", (), {"id": "intruder"})()
+        with pytest.raises(ROUTE_MODULE.HTTPException) as exc_info:
+            await ROUTE_MODULE.delete_trace(session.id, "trace-keep", user)
+
+        assert exc_info.value.status_code == 403
+        assert [trace.trace_id for trace in session.traces] == ["trace-keep"]
+    finally:
+        manager.sessions.pop(session.id, None)
+
+
+@pytest.mark.asyncio
 async def test_delete_timeline_manual_trace_removes_legacy_step_fallback():
     manager = ROUTE_MODULE.rpa_manager
     session = RPASession(id="route-delete-manual-trace", user_id="u1", sandbox_session_id="sandbox")
@@ -587,6 +641,88 @@ async def test_delete_timeline_manual_trace_removes_legacy_step_fallback():
         assert session.traces == []
         assert session.steps == []
         assert "Search" not in script
+    finally:
+        manager.sessions.pop(session.id, None)
+
+
+@pytest.mark.asyncio
+async def test_promote_trace_locator_candidate_updates_selected_candidate():
+    manager = ROUTE_MODULE.rpa_manager
+    session = RPASession(id="route-promote-trace-locator", user_id="u1", sandbox_session_id="sandbox")
+    session.traces.append(
+        RPAAcceptedTrace(
+            trace_id="trace-1",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            source="manual",
+            action="click",
+            description="Click Save",
+            locator_candidates=[
+                {"kind": "css", "locator": {"method": "css", "value": ".old"}, "selected": True},
+                {
+                    "kind": "role",
+                    "locator": {"method": "role", "role": "button", "name": "Save"},
+                    "selected": False,
+                    "strict_match_count": 1,
+                },
+            ],
+            validation={"status": "fallback"},
+        )
+    )
+    manager.sessions[session.id] = session
+
+    try:
+        user = type("User", (), {"id": "u1"})()
+        response = await ROUTE_MODULE.promote_trace_locator(
+            session.id,
+            "trace-1",
+            ROUTE_MODULE.PromoteLocatorRequest(candidate_index=1),
+            user,
+        )
+
+        assert response["status"] == "success"
+        candidates = response["trace"]["locator_candidates"]
+        assert candidates[0]["selected"] is False
+        assert candidates[0]["locator"]["value"] == ".old"
+        assert candidates[1]["selected"] is True
+        assert candidates[1]["kind"] == "role"
+        assert session.traces[0].locator_candidates[1]["selected"] is True
+        assert session.traces[0].validation["selected_candidate_index"] == 1
+        assert session.traces[0].validation["status"] == "ok"
+    finally:
+        manager.sessions.pop(session.id, None)
+
+
+@pytest.mark.asyncio
+async def test_promote_trace_locator_candidate_rejects_invalid_candidate():
+    manager = ROUTE_MODULE.rpa_manager
+    session = RPASession(id="route-promote-trace-locator-invalid", user_id="u1", sandbox_session_id="sandbox")
+    session.traces.append(
+        RPAAcceptedTrace(
+            trace_id="trace-1",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            source="manual",
+            action="click",
+            locator_candidates=[
+                {"locator": {"method": "css", "value": ".old"}, "selected": True},
+            ],
+        )
+    )
+    manager.sessions[session.id] = session
+
+    try:
+        user = type("User", (), {"id": "u1"})()
+        with pytest.raises(ROUTE_MODULE.HTTPException) as exc_info:
+            await ROUTE_MODULE.promote_trace_locator(
+                session.id,
+                "trace-1",
+                ROUTE_MODULE.PromoteLocatorRequest(candidate_index=2),
+                user,
+            )
+
+        assert exc_info.value.status_code == 400
+        assert session.traces[0].locator_candidates == [
+            {"locator": {"method": "css", "value": ".old"}, "selected": True},
+        ]
     finally:
         manager.sessions.pop(session.id, None)
 
