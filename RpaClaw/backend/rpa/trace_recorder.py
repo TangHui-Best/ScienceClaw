@@ -148,3 +148,41 @@ def infer_dataflow_for_fill(trace: RPAAcceptedTrace, runtime_results: RPARuntime
     trace.trace_type = RPATraceType.DATAFLOW_FILL
     return trace
 
+
+def infer_dataflow_for_ai_fill(trace: RPAAcceptedTrace, runtime_results: RPARuntimeResults) -> RPAAcceptedTrace:
+    if trace.trace_type != RPATraceType.AI_OPERATION:
+        return trace
+    output = trace.output if isinstance(trace.output, dict) else {}
+    if not output.get("action_performed"):
+        return trace
+    action_type = str(output.get("action_type") or output.get("type") or "").strip().lower()
+    if action_type != "fill":
+        return trace
+
+    filled_value = output.get("filled_value", output.get("value"))
+    refs = runtime_results.find_value_refs(filled_value)
+    if not refs:
+        return trace
+
+    selected_locator = {}
+    if trace.locator_candidates:
+        selected = next((item for item in trace.locator_candidates if item.get("selected")), trace.locator_candidates[0])
+        selected_locator = normalize_locator(selected.get("locator") or selected)
+
+    trace.action = "fill"
+    trace.value = filled_value
+    trace.dataflow = RPADataflowMapping(
+        target_field=RPATargetField(
+            label=str(output.get("target") or ""),
+            locator_candidates=list(trace.locator_candidates or []),
+        ),
+        value=filled_value,
+        source_ref_candidates=refs,
+        selected_source_ref=refs[0],
+        confidence="exact_value_match",
+    )
+    if selected_locator:
+        trace.dataflow.target_field.locator_candidates = [{"locator": selected_locator, "selected": True}]
+    trace.trace_type = RPATraceType.DATAFLOW_FILL
+    return trace
+

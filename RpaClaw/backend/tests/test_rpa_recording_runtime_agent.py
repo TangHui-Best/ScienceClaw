@@ -251,6 +251,29 @@ def _ordinal_frame_collection_snapshot():
     }
 
 
+@pytest.mark.asyncio
+async def test_run_python_fill_accepts_action_evidence_from_output():
+    page = _FakePage()
+    result = await _ensure_expected_effect(
+        page=page,
+        instruction="fill the previous title into the PR summary field",
+        plan={"action_type": "run_python", "expected_effect": "fill"},
+        result={
+            "success": True,
+            "output": {
+                "action_performed": True,
+                "action_type": "fill",
+                "filled_value": "Example",
+            },
+        },
+        before=RPAPageState(url=page.url, title="Example"),
+    )
+
+    assert result["success"] is True
+    assert result["effect"]["action_performed"] is True
+    assert result["effect"]["type"] == "fill"
+
+
 def test_ordinal_overlay_builds_relative_first_item_name_plan():
     build_plan = getattr(recording_runtime_agent, "_build_ordinal_overlay_plan")
 
@@ -553,6 +576,8 @@ def test_recording_runtime_prompt_defines_result_return_contract():
     assert "internal_ref" in RECORDING_RUNTIME_SYSTEM_PROMPT
     assert "不是 DOM id、CSS selector 或 Playwright locator" in RECORDING_RUNTIME_SYSTEM_PROMPT
     assert "locator_hints" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "action_performed" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "filled_value" in RECORDING_RUNTIME_SYSTEM_PROMPT
 
 
 def test_recording_runtime_prompt_prefers_structured_snapshot_views():

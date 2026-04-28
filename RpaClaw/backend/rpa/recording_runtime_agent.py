@@ -101,6 +101,7 @@ Rules:
   - 不要把内部引用改写成 `#...`、`[id=...]` 或其他 selector。
   - 对表格提取任务，优先使用 `locator_hints`、可见表头、标题文本或角色语义来定位表格，不要使用内部引用作为 selector。
 - Do not include a separate done-check.
+- For run_python click/fill commands, return action evidence such as `{"action_performed": True, "action_type": "fill", "filled_value": value}` after the Playwright action completes.
 - If extracting data, return structured JSON-serializable Python values.
 - For extract-only commands, do not return null/empty output unless the user explicitly allows empty results.
 - Set allow_empty_output=true only when the user explicitly says no result, empty list, or empty output is acceptable.
@@ -1473,6 +1474,20 @@ async def _ensure_expected_effect(
         effect = result.get("effect")
         if isinstance(effect, dict) and effect.get("action_performed"):
             return result
+        output = result.get("output")
+        if isinstance(output, dict) and output.get("action_performed"):
+            output_action_type = str(output.get("action_type") or output.get("type") or "").strip().lower()
+            has_fill_value = expected_effect != "fill" or "filled_value" in output or "value" in output
+            if has_fill_value and (not output_action_type or output_action_type == expected_effect):
+                effect = dict(effect or {})
+                effect.update(
+                    {
+                        "type": expected_effect,
+                        "action_performed": True,
+                        "source": "output_evidence",
+                    }
+                )
+                return {**result, "effect": effect}
         action_type = str(plan.get("action_type") or "").strip().lower()
         if action_type == expected_effect:
             return {**result, "effect": {"type": expected_effect, "action_performed": True}}
