@@ -94,6 +94,9 @@ Rules:
   - For detail extraction, inspect `snapshot.detail_views` before scanning generic text or tables.
   - `detail_views[].fields` preserves label, value, data_prop, required, visible, and value_kind.
   - Treat hidden fields as diagnostic unless the user explicitly asks for hidden/default/internal values.
+  - For form fill/edit tasks, inspect `snapshot.form_views` before generic text, tables, or summary regions.
+  - `form_views[].fields[].control.locator` is executable locator evidence for fillable controls.
+  - Do not turn summary text into placeholder, label, name, or CSS selectors unless a form/detail/actionable locator explicitly exposes that attribute.
 - Snapshot 结构契约：
   - `evidence` 是页面事实，用于理解当前区域的文本、字段、表头、样例行或可操作项。
   - `locator_hints`、`locator`、`label_locator`、`value_locator`、`actions[].locator` 是可执行定位线索，生成 Playwright 代码时应优先使用这些字段。

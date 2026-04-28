@@ -584,8 +584,10 @@ def test_recording_runtime_prompt_prefers_structured_snapshot_views():
     assert "extract_snapshot" in RECORDING_RUNTIME_SYSTEM_PROMPT
     assert "table_views" in RECORDING_RUNTIME_SYSTEM_PROMPT
     assert "detail_views" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "form_views" in RECORDING_RUNTIME_SYSTEM_PROMPT
     assert "row-relative" in RECORDING_RUNTIME_SYSTEM_PROMPT
     assert "column-relative" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "Do not turn summary text into placeholder" in RECORDING_RUNTIME_SYSTEM_PROMPT
     assert "Do not use observed row text as the primary selector when the instruction is ordinal" in RECORDING_RUNTIME_SYSTEM_PROMPT
 
 

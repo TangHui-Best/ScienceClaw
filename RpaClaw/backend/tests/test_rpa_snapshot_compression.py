@@ -258,6 +258,115 @@ def test_compact_snapshot_hides_internal_ids_from_llm_regions():
             assert "table-section" not in str(region)
 
 
+def test_compact_snapshot_projects_form_label_to_fillable_control_without_replacing_tables():
+    snapshot = {
+        "url": "https://example.test/form",
+        "title": "Purchase Request",
+        "content_nodes": [
+            {
+                "node_id": "summary-label",
+                "container_id": "basic-info",
+                "frame_path": ["iframe:nth-of-type(2)"],
+                "semantic_kind": "text",
+                "role": "",
+                "text": "*PR Summary:",
+                "bbox": {"x": 0, "y": 134, "width": 86, "height": 16},
+                "locator": {"method": "text", "value": "*PR Summary:"},
+                "element_snapshot": {"tag": "span", "text": "*PR Summary:", "class": "title"},
+            },
+            {
+                "node_id": "summary-hint",
+                "container_id": "basic-info",
+                "frame_path": ["iframe:nth-of-type(2)"],
+                "semantic_kind": "text",
+                "role": "",
+                "text": "Enter PR summary",
+                "bbox": {"x": 90, "y": 134, "width": 120, "height": 16},
+                "locator": {"method": "text", "value": "Enter PR summary"},
+                "element_snapshot": {"tag": "span", "text": "Enter PR summary"},
+            },
+        ],
+        "actionable_nodes": [
+            {
+                "node_id": "summary-input",
+                "container_id": "basic-info",
+                "frame_path": ["iframe:nth-of-type(2)"],
+                "tag": "input",
+                "role": "textbox",
+                "name": "Briefly describe this purchase request",
+                "text": "",
+                "type": "text",
+                "placeholder": "Briefly describe this purchase request",
+                "bbox": {"x": 89, "y": 132, "width": 980, "height": 24},
+                "locator": {
+                    "method": "role",
+                    "role": "textbox",
+                    "name": "Briefly describe this purchase request",
+                },
+                "element_snapshot": {"tag": "input", "text": "", "title": ""},
+                "is_visible": True,
+                "is_enabled": True,
+                "hit_test_ok": True,
+                "action_kinds": ["fill", "press"],
+            }
+        ],
+        "containers": [
+            {
+                "container_id": "basic-info",
+                "frame_path": ["iframe:nth-of-type(2)"],
+                "container_kind": "form_section",
+                "name": "Basic Information",
+                "summary": "Basic Information *PR Summary: Enter PR summary",
+                "child_actionable_ids": ["summary-input"],
+                "child_content_ids": ["summary-label", "summary-hint"],
+            }
+        ],
+        "table_views": [
+            {
+                "kind": "table_view",
+                "title": "Basic Information",
+                "title_source": "ancestor_heading",
+                "nearby_headings": ["Basic Information"],
+                "row_count_observed": 1,
+                "columns": [{"index": 0, "column_id": "", "header": "", "role": "selection"}],
+                "rows": [
+                    {
+                        "index": 0,
+                        "cells": [
+                            {
+                                "column_id": "",
+                                "column_index": 0,
+                                "column_header": "",
+                                "text": "Basic Information *PR Summary: Enter PR summary",
+                                "value_kind": "text",
+                                "actions": [],
+                            }
+                        ],
+                        "locator_hints": [{"kind": "playwright", "expression": "page.locator('tbody tr').nth(0)"}],
+                    }
+                ],
+                "frame_path": ["iframe:nth-of-type(2)"],
+            }
+        ],
+        "detail_views": [],
+        "frames": [],
+    }
+
+    compact = compact_recording_snapshot(snapshot, "Fill the PR Summary field", char_budget=100000)
+
+    assert compact["table_views"][0]["title"] == "Basic Information"
+    form_view = compact["form_views"][0]
+    assert form_view["title"] == "Basic Information"
+    assert form_view["frame_path"] == ["iframe:nth-of-type(2)"]
+    field = form_view["fields"][0]
+    assert field["label"] == "PR Summary"
+    assert field["hint_text"] == "Enter PR summary"
+    assert field["control"]["role"] == "textbox"
+    assert field["control"]["placeholder"] == "Briefly describe this purchase request"
+    assert field["control"]["locator"]["name"] == "Briefly describe this purchase request"
+    assert field["confidence"] == "high"
+
+
 def test_default_char_budget_keeps_medium_detail_snapshot_clean():
     snapshot = _build_snapshot()
     for index in range(50):

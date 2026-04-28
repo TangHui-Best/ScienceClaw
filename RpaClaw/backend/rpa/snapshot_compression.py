@@ -129,6 +129,7 @@ def compact_recording_snapshot(snapshot: Dict[str, Any], instruction: str, *, ch
         "title": snapshot.get("title", ""),
         "table_views": _compact_table_views(snapshot),
         "detail_views": _compact_detail_views(snapshot),
+        "form_views": _compact_form_views(snapshot),
         "expanded_regions": expanded_regions,
         "sampled_regions": sampled_regions,
         "region_catalogue": tiers["region_catalogue"],
@@ -145,6 +146,7 @@ def _build_clean_payload(
         "title": snapshot.get("title", ""),
         "table_views": _compact_table_views(snapshot),
         "detail_views": _compact_detail_views(snapshot),
+        "form_views": _compact_form_views(snapshot),
         "expanded_regions": [_expanded_region(region) for region in regions],
         "sampled_regions": [],
         "region_catalogue": list(region_catalogue),
@@ -219,6 +221,146 @@ def _compact_detail_views(snapshot: Dict[str, Any], *, field_limit: int = 40) ->
             }
         )
     return views
+
+
+def _compact_form_views(snapshot: Dict[str, Any], *, field_limit: int = 30) -> List[Dict[str, Any]]:
+    containers = _index_containers(snapshot.get("containers") or [])
+    content_by_container: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    action_by_container: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for node in snapshot.get("content_nodes") or []:
+        content_by_container[str(node.get("container_id") or "")].append(node)
+    for node in snapshot.get("actionable_nodes") or []:
+        action_by_container[str(node.get("container_id") or "")].append(node)
+
+    views: List[Dict[str, Any]] = []
+    for container_id, container in containers.items():
+        if _normalize_kind(container.get("container_kind")) != "form_section":
+            continue
+        controls = [node for node in action_by_container.get(container_id, []) if _is_fillable_control(node)]
+        if not controls:
+            continue
+        content_nodes = content_by_container.get(container_id, [])
+        fields = []
+        for control in _sort_nodes(controls)[:field_limit]:
+            field = _project_form_field(control, content_nodes)
+            if field:
+                fields.append(field)
+        if not fields:
+            continue
+        views.append(
+            {
+                "kind": "form_view",
+                "title": _clean_text(container.get("name") or "form"),
+                "frame_path": list(container.get("frame_path") or _first_frame_path([*content_nodes, *controls])),
+                "fields": fields,
+            }
+        )
+    return views[:12]
+
+
+def _project_form_field(control: Dict[str, Any], content_nodes: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    label_node = _nearest_form_label(control, content_nodes)
+    if not label_node:
+        return {}
+    hint_text = _form_hint_text(label_node, control, content_nodes)
+    locator = control.get("locator") or _best_locator(control)
+    control_payload = {
+        "role": control.get("role", ""),
+        "name": control.get("name", ""),
+        "tag": control.get("tag") or control.get("element_snapshot", {}).get("tag", ""),
+        "type": control.get("type", ""),
+        "placeholder": control.get("placeholder", ""),
+        "locator": locator,
+        "action_kinds": list(control.get("action_kinds") or [])[:4],
+        "visible": bool(control.get("is_visible", True)),
+        "enabled": bool(control.get("is_enabled", True)),
+    }
+    return {
+        "label": _clean_label_text(label_node.get("text") or "").rstrip(":："),
+        "required": str(label_node.get("text") or "").strip().startswith("*"),
+        "hint_text": hint_text,
+        "label_locator": label_node.get("locator") or _best_locator(label_node),
+        "control": control_payload,
+        "confidence": _form_field_confidence(label_node, control),
+    }
+
+
+def _nearest_form_label(control: Dict[str, Any], content_nodes: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    candidates = [node for node in content_nodes if _is_form_label_text(node)]
+    if not candidates:
+        return None
+    control_x = _node_x(control)
+    control_y = _node_y(control)
+    best: Optional[Dict[str, Any]] = None
+    best_score: Optional[Tuple[int, int, int]] = None
+    for node in candidates:
+        y_gap = abs(_node_y(node) - control_y)
+        if y_gap > 32:
+            continue
+        node_right = _node_x(node) + int((node.get("bbox") or {}).get("width", 0) or 0)
+        if node_right > control_x + 16:
+            continue
+        x_gap = max(control_x - node_right, 0)
+        score = (y_gap, x_gap, _node_x(node))
+        if best_score is None or score < best_score:
+            best_score = score
+            best = node
+    return best
+
+
+def _form_hint_text(label_node: Dict[str, Any], control: Dict[str, Any], content_nodes: Sequence[Dict[str, Any]]) -> str:
+    label_y = _node_y(label_node)
+    control_x = _node_x(control)
+    control_right = control_x + int((control.get("bbox") or {}).get("width", 0) or 0)
+    hints: List[str] = []
+    for node in _sort_nodes(content_nodes):
+        if node is label_node or _is_form_label_text(node):
+            continue
+        if abs(_node_y(node) - label_y) > 24:
+            continue
+        node_x = _node_x(node)
+        if node_x < _node_x(label_node):
+            continue
+        if node_x > control_right + 24:
+            continue
+        text = _clean_text(node.get("text") or "")
+        if text:
+            hints.append(text)
+    return " ".join(hints[:2])
+
+
+def _is_form_label_text(node: Dict[str, Any]) -> bool:
+    text = _clean_text(node.get("text") or "")
+    if not text:
+        return False
+    tag = _normalize_kind(node.get("element_snapshot", {}).get("tag"))
+    classes = str(node.get("element_snapshot", {}).get("class") or "").lower()
+    if _is_label_node(node) or tag == "label":
+        return True
+    if "label" in classes or "title" in classes:
+        return True
+    return text.endswith((":", "："))
+
+
+def _is_fillable_control(node: Dict[str, Any]) -> bool:
+    action_kinds = {str(item).lower() for item in (node.get("action_kinds") or [])}
+    if "fill" in action_kinds or "press" in action_kinds:
+        return True
+    role = _normalize_kind(node.get("role"))
+    tag = _normalize_kind(node.get("tag") or node.get("element_snapshot", {}).get("tag"))
+    return role in {"textbox", "combobox", "searchbox"} or tag in {"input", "textarea", "select"}
+
+
+def _form_field_confidence(label_node: Dict[str, Any], control: Dict[str, Any]) -> str:
+    if (
+        list(label_node.get("frame_path") or []) == list(control.get("frame_path") or [])
+        and abs(_node_y(label_node) - _node_y(control)) <= 8
+        and bool(control.get("is_visible", True))
+        and bool(control.get("is_enabled", True))
+        and bool(control.get("hit_test_ok", True))
+    ):
+        return "high"
+    return "medium"
 
 
 def _build_region(
