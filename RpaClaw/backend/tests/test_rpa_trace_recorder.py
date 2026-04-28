@@ -1,5 +1,7 @@
-from backend.rpa.trace_models import RPARuntimeResults
+from backend.rpa.trace_models import RPAAcceptedTrace, RPAAIExecution, RPATraceType, RPARuntimeResults
+import backend.rpa.trace_recorder as trace_recorder
 from backend.rpa.trace_recorder import infer_dataflow_for_fill, manual_step_to_trace
+from backend.rpa.trace_skill_compiler import TraceSkillCompiler
 
 
 def test_manual_navigation_step_becomes_navigation_trace():
@@ -87,6 +89,77 @@ def test_fill_trace_links_literal_value_to_runtime_result_ref():
 
     assert updated.trace_type == "dataflow_fill"
     assert updated.dataflow.selected_source_ref == "customer_info.name"
+
+
+def test_ai_fill_trace_links_verified_filled_value_to_runtime_result_ref():
+    runtime_results = RPARuntimeResults(values={"page_title": "Quarterly Report"})
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        source="ai",
+        user_instruction="将提到的标题填入到当前页面的PR 概要输入框",
+        description="Fill PR summary",
+        output={
+            "action_performed": True,
+            "action_type": "fill",
+            "filled_value": "Quarterly Report",
+            "target": "PR概要",
+        },
+        ai_execution=RPAAIExecution(
+            code=(
+                "async def run(page, results):\n"
+                "    value = results['page_title']\n"
+                "    await page.get_by_placeholder('请输入PR概要').fill(value)\n"
+                "    return {'action_performed': True, 'action_type': 'fill', 'filled_value': value}"
+            )
+        ),
+        locator_candidates=[
+            {
+                "locator": {"method": "placeholder", "value": "请输入PR概要"},
+                "selected": True,
+            }
+        ],
+    )
+
+    updated = trace_recorder.infer_dataflow_for_ai_fill(trace, runtime_results)
+
+    assert updated.trace_type == "dataflow_fill"
+    assert updated.dataflow.selected_source_ref == "page_title"
+    assert updated.dataflow.value == "Quarterly Report"
+    assert updated.action == "fill"
+
+
+def test_ai_fill_trace_without_locator_stays_ai_operation():
+    runtime_results = RPARuntimeResults(values={"page_title": "Quarterly Report"})
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        source="ai",
+        user_instruction="Fill the PR summary with the extracted title",
+        description="Fill PR summary",
+        output={
+            "action_performed": True,
+            "action_type": "fill",
+            "filled_value": "Quarterly Report",
+            "target": "PR Summary",
+        },
+        ai_execution=RPAAIExecution(
+            code=(
+                "async def run(page, results):\n"
+                "    value = results['page_title']\n"
+                "    await page.get_by_placeholder('PR Summary').fill(value)\n"
+                "    return {'action_performed': True, 'action_type': 'fill', 'filled_value': value}"
+            )
+        ),
+    )
+
+    updated = trace_recorder.infer_dataflow_for_ai_fill(trace, runtime_results)
+
+    assert updated.trace_type == RPATraceType.AI_OPERATION
+    assert updated.action is None
+    assert updated.dataflow is None
+
+    script = TraceSkillCompiler().generate_script([updated], is_local=True)
+    assert "Unresolved dataflow fill skipped" not in script
+    assert "get_by_placeholder('PR Summary').fill(value)" in script
 
 
 def test_manual_step_to_trace_preserves_signals_and_filters_invalid_locators():

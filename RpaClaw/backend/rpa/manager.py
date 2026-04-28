@@ -17,7 +17,7 @@ from .manual_recording_models import ManualRecordedAction, ManualRecordingDiagno
 from .manual_recording_normalizer import build_manual_recording_outcome
 from .playwright_security import get_context_kwargs
 from .trace_models import RPAAcceptedTrace, RPATraceDiagnostic, RPARuntimeResults
-from .trace_recorder import infer_dataflow_for_fill, manual_step_to_trace
+from .trace_recorder import infer_dataflow_for_ai_fill, infer_dataflow_for_fill, manual_step_to_trace
 
 logger = logging.getLogger(__name__)
 
@@ -1578,6 +1578,7 @@ class RPASessionManager:
         if not session:
             raise ValueError(f"Session {session_id} not found")
         self._merge_pending_downloads_into_trace(session, trace)
+        trace = infer_dataflow_for_ai_fill(trace, session.runtime_results)
         session.traces.append(trace)
         await self._broadcast_trace(session_id, trace)
         return session.traces

@@ -51,7 +51,9 @@ Schema:
   "source": "detail_views",
   "section_title": "optional snapshot section title",
   "frame_path": "optional iframe selector chain for extract_snapshot",
-  "fields": "optional structured fields for extract_snapshot"
+  "fields": "optional structured fields for extract_snapshot",
+  "preserve_runtime_ai": false,
+  "semantic_intent": "optional reason when runtime AI must re-evaluate current page candidates"
 }
 Rules:
 - Complete only the current user command, not the full SOP.
@@ -59,6 +61,8 @@ Rules:
 - expected_effect describes the browser-visible outcome required by the user's current command.
 - Use expected_effect="navigate" when the user asks to open, go to, enter, visit, or navigate to a target.
 - Use expected_effect="extract" when the user only asks to find, collect, summarize, or return data without opening it.
+- Set preserve_runtime_ai=true when the command requires semantic judgment over current page candidates at replay time, such as selecting the most relevant, best matching, recommended, highest risk, or most suitable item.
+- Do not set preserve_runtime_ai for a simple deterministic click/fill/goto where the recorded locator or value is the intended reusable behavior.
 - If code is returned, it must define async def run(page, results).
 - Use action_type="extract_snapshot" only when the requested extract-only data is already present in snapshot.detail_views fields.
 - For extract_snapshot, return the relevant observed detail fields in the plan itself, including the detail view frame_path when present; do not generate Python code and do not reference `snapshot` inside `run()`.
@@ -94,6 +98,9 @@ Rules:
   - For detail extraction, inspect `snapshot.detail_views` before scanning generic text or tables.
   - `detail_views[].fields` preserves label, value, data_prop, required, visible, and value_kind.
   - Treat hidden fields as diagnostic unless the user explicitly asks for hidden/default/internal values.
+  - For form fill/edit tasks, inspect `snapshot.form_views` before generic text, tables, or summary regions.
+  - `form_views[].fields[].control.locator` is executable locator evidence for fillable controls.
+  - Do not turn summary text into placeholder, label, name, or CSS selectors unless a form/detail/actionable locator explicitly exposes that attribute.
 - Snapshot 结构契约：
   - `evidence` 是页面事实，用于理解当前区域的文本、字段、表头、样例行或可操作项。
   - `locator_hints`、`locator`、`label_locator`、`value_locator`、`actions[].locator` 是可执行定位线索，生成 Playwright 代码时应优先使用这些字段。
@@ -101,6 +108,7 @@ Rules:
   - 不要把内部引用改写成 `#...`、`[id=...]` 或其他 selector。
   - 对表格提取任务，优先使用 `locator_hints`、可见表头、标题文本或角色语义来定位表格，不要使用内部引用作为 selector。
 - Do not include a separate done-check.
+- For run_python click/fill commands, return action evidence such as `{"action_performed": True, "action_type": "fill", "filled_value": value}` after the Playwright action completes.
 - If extracting data, return structured JSON-serializable Python values.
 - For extract-only commands, do not return null/empty output unless the user explicitly allows empty results.
 - Set allow_empty_output=true only when the user explicitly says no result, empty list, or empty output is acceptable.
@@ -360,6 +368,7 @@ class RecordingRuntimeAgent:
         output = result.get("output")
         output_key = _normalize_result_key(plan.get("output_key"))
         locator_stability = _build_locator_stability_metadata(plan, snapshot or {})
+        signals = _merge_runtime_ai_signal(dict(result.get("signals") or {}), plan)
         return RPAAcceptedTrace(
             trace_type=RPATraceType.AI_OPERATION,
             source="ai",
@@ -367,7 +376,7 @@ class RecordingRuntimeAgent:
             description=str(plan.get("description") or instruction),
             before_page=before,
             after_page=after,
-            signals=dict(result.get("signals") or {}),
+            signals=signals,
             output_key=output_key,
             output=output,
             ai_execution=RPAAIExecution(
@@ -1473,6 +1482,20 @@ async def _ensure_expected_effect(
         effect = result.get("effect")
         if isinstance(effect, dict) and effect.get("action_performed"):
             return result
+        output = result.get("output")
+        if isinstance(output, dict) and output.get("action_performed"):
+            output_action_type = str(output.get("action_type") or output.get("type") or "").strip().lower()
+            has_fill_value = expected_effect != "fill" or "filled_value" in output or "value" in output
+            if has_fill_value and (not output_action_type or output_action_type == expected_effect):
+                effect = dict(effect or {})
+                effect.update(
+                    {
+                        "type": expected_effect,
+                        "action_performed": True,
+                        "source": "output_evidence",
+                    }
+                )
+                return {**result, "effect": effect}
         action_type = str(plan.get("action_type") or "").strip().lower()
         if action_type == expected_effect:
             return {**result, "effect": {"type": expected_effect, "action_performed": True}}
@@ -1541,6 +1564,19 @@ def _should_drain_download_events(plan: Dict[str, Any], code: str) -> bool:
             ".set_input_files(",
         )
     )
+
+
+def _merge_runtime_ai_signal(signals: Dict[str, Any], plan: Dict[str, Any]) -> Dict[str, Any]:
+    if not _normalize_bool(plan.get("preserve_runtime_ai")):
+        return signals
+    runtime_ai = signals.get("runtime_ai") if isinstance(signals.get("runtime_ai"), dict) else {}
+    reason = str(plan.get("semantic_intent") or runtime_ai.get("reason") or "semantic_candidate_selection").strip()
+    signals["runtime_ai"] = {
+        **runtime_ai,
+        "preserve": True,
+        "reason": reason or "semantic_candidate_selection",
+    }
+    return signals
 
 
 def _normalize_bool(value: Any) -> bool:

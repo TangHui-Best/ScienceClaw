@@ -251,6 +251,29 @@ def _ordinal_frame_collection_snapshot():
     }
 
 
+@pytest.mark.asyncio
+async def test_run_python_fill_accepts_action_evidence_from_output():
+    page = _FakePage()
+    result = await _ensure_expected_effect(
+        page=page,
+        instruction="fill the previous title into the PR summary field",
+        plan={"action_type": "run_python", "expected_effect": "fill"},
+        result={
+            "success": True,
+            "output": {
+                "action_performed": True,
+                "action_type": "fill",
+                "filled_value": "Example",
+            },
+        },
+        before=RPAPageState(url=page.url, title="Example"),
+    )
+
+    assert result["success"] is True
+    assert result["effect"]["action_performed"] is True
+    assert result["effect"]["type"] == "fill"
+
+
 def test_ordinal_overlay_builds_relative_first_item_name_plan():
     build_plan = getattr(recording_runtime_agent, "_build_ordinal_overlay_plan")
 
@@ -553,14 +576,18 @@ def test_recording_runtime_prompt_defines_result_return_contract():
     assert "internal_ref" in RECORDING_RUNTIME_SYSTEM_PROMPT
     assert "不是 DOM id、CSS selector 或 Playwright locator" in RECORDING_RUNTIME_SYSTEM_PROMPT
     assert "locator_hints" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "action_performed" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "filled_value" in RECORDING_RUNTIME_SYSTEM_PROMPT
 
 
 def test_recording_runtime_prompt_prefers_structured_snapshot_views():
     assert "extract_snapshot" in RECORDING_RUNTIME_SYSTEM_PROMPT
     assert "table_views" in RECORDING_RUNTIME_SYSTEM_PROMPT
     assert "detail_views" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "form_views" in RECORDING_RUNTIME_SYSTEM_PROMPT
     assert "row-relative" in RECORDING_RUNTIME_SYSTEM_PROMPT
     assert "column-relative" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "Do not turn summary text into placeholder" in RECORDING_RUNTIME_SYSTEM_PROMPT
     assert "Do not use observed row text as the primary selector when the instruction is ordinal" in RECORDING_RUNTIME_SYSTEM_PROMPT
 
 
@@ -607,6 +634,34 @@ async def test_recording_runtime_agent_accepts_successful_python_plan():
     assert result.trace.output_key == "page_title"
     assert result.trace.output == {"title": "Example"}
     assert result.trace.ai_execution.repair_attempted is False
+
+
+@pytest.mark.asyncio
+async def test_recording_runtime_agent_persists_runtime_ai_preserve_signal():
+    async def planner(_payload):
+        return {
+            "description": "Select the closest matching project",
+            "action_type": "run_python",
+            "expected_effect": "click",
+            "output_key": "selected_project",
+            "preserve_runtime_ai": True,
+            "semantic_intent": "select_best_matching_candidate",
+            "code": (
+                "async def run(page, results):\n"
+                "    await page.locator('a.project').nth(0).click()\n"
+                "    return {'action_performed': True, 'action_type': 'click', 'target': 'alpha'}"
+            ),
+        }
+
+    result = await RecordingRuntimeAgent(planner=planner).run(
+        page=_FakePage(),
+        instruction="open the closest matching project",
+        runtime_results={},
+    )
+
+    assert result.success is True
+    assert result.trace.signals["runtime_ai"]["preserve"] is True
+    assert result.trace.signals["runtime_ai"]["reason"] == "select_best_matching_candidate"
 
 
 @pytest.mark.asyncio

@@ -1013,6 +1013,84 @@ def test_semantic_project_selection_compiles_to_runtime_ai_not_recorded_click():
     assert "page.locator('a[href=\"/openai/openai-agents-python\"]')" not in body
 
 
+def test_chinese_semantic_project_click_without_url_stays_runtime_ai():
+    traces = [
+        RPAAcceptedTrace(
+            trace_type=RPATraceType.NAVIGATION,
+            after_page=RPAPageState(url="https://github.com/trending"),
+        ),
+        RPAAcceptedTrace(
+            trace_type=RPATraceType.AI_OPERATION,
+            source="ai",
+            user_instruction="\u6253\u5f00\u548c skill \u6700\u76f8\u5173\u7684\u9879\u76ee",
+            description="Click the link for 'mattpocock / skills' repository",
+            output_key="opened_skill_repo",
+            output={"action_performed": True, "action_type": "click", "target": "mattpocock / skills"},
+            ai_execution=RPAAIExecution(
+                code=(
+                    "async def run(page, results):\n"
+                    "    await page.get_by_role(\"link\", name=\"mattpocock / skills\").click()\n"
+                    "    return {\"action_performed\": True, \"action_type\": \"click\", \"target\": \"mattpocock / skills\"}"
+                ),
+            ),
+        ),
+    ]
+
+    script = TraceSkillCompiler().generate_script(traces, is_local=True)
+    body = _execute_body(script)
+
+    assert "_execute_runtime_ai_instruction(" in body
+    assert "get_by_role(\"link\", name=\"mattpocock / skills\")" not in body
+
+
+def test_runtime_ai_preserve_signal_overrides_embedded_code():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        source="ai",
+        user_instruction="open the closest matching project",
+        description="Click the selected project",
+        output_key="selected_project",
+        output={"action_performed": True, "action_type": "click", "target": "alpha"},
+        signals={"runtime_ai": {"preserve": True, "reason": "select_best_matching_candidate"}},
+        ai_execution=RPAAIExecution(
+            code=(
+                "async def run(page, results):\n"
+                "    await page.locator('a.project').nth(0).click()\n"
+                "    return {'action_performed': True, 'action_type': 'click', 'target': 'alpha'}"
+            ),
+        ),
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    body = _execute_body(script)
+
+    assert "_execute_runtime_ai_instruction(" in body
+    assert "page.locator('a.project').nth(0).click()" not in body
+
+
+def test_generic_chinese_related_extraction_keeps_embedded_code():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        source="ai",
+        user_instruction="\u63d0\u53d6\u91c7\u8d2d\u76f8\u5173\u4fe1\u606f",
+        description="Extract procurement related information",
+        output_key="procurement_info",
+        output={"name": "paper"},
+        ai_execution=RPAAIExecution(
+            code=(
+                "async def run(page, results):\n"
+                "    return {'name': 'paper'}"
+            ),
+        ),
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    body = _execute_body(script)
+
+    assert "_execute_runtime_ai_instruction(" not in body
+    assert "return {'name': 'paper'}" in body
+
+
 def test_manual_pull_request_click_keeps_recorded_locator_without_github_subpage_template():
     traces = [
         RPAAcceptedTrace(
