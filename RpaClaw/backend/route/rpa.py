@@ -223,6 +223,13 @@ def _order_traces_by_recording_time(traces: list[RPAAcceptedTrace]) -> list[RPAA
 
 
 def _session_traces_for_compile(session) -> list[RPAAcceptedTrace]:
+    session_traces = list(getattr(session, "traces", None) or [])
+    if session_traces:
+        return _order_traces_by_recording_time(session_traces)
+    return _legacy_session_traces_for_compile(session)
+
+
+def _legacy_session_traces_for_compile(session) -> list[RPAAcceptedTrace]:
     traces_by_id = {
         trace.trace_id: trace
         for trace in getattr(session, "traces", None) or []
@@ -251,8 +258,23 @@ def _session_traces_for_compile(session) -> list[RPAAcceptedTrace]:
 
 
 def _build_session_recording_meta(session) -> Dict[str, Any]:
-    traces = _session_traces_for_compile(session)
-    source = "trace" if traces else "legacy_step"
+    session_traces = list(getattr(session, "traces", None) or [])
+    trace_diagnostics = [_model_dump_json(item) for item in getattr(session, "trace_diagnostics", None) or []]
+    recording_diagnostics = [_model_dump_json(item) for item in getattr(session, "recording_diagnostics", None) or []]
+    runtime_results = _model_dump_json(getattr(session, "runtime_results", {})) or {}
+
+    if session_traces:
+        traces = _order_traces_by_recording_time(session_traces)
+        return {
+            "recording_source": "trace",
+            "traces": [trace.model_dump(mode="json") for trace in traces],
+            "runtime_results": runtime_results,
+            "trace_diagnostics": trace_diagnostics,
+            "recording_diagnostics": recording_diagnostics,
+        }
+
+    traces = _legacy_session_traces_for_compile(session)
+    source = "legacy_step" if getattr(session, "steps", None) else "trace"
     if not traces and getattr(session, "steps", None):
         traces = []
         for step in session.steps:
@@ -262,9 +284,6 @@ def _build_session_recording_meta(session) -> Dict[str, Any]:
 
     legacy_steps = [_model_dump_json(step) for step in getattr(session, "steps", None) or []]
     recorded_actions = [_model_dump_json(action) for action in getattr(session, "recorded_actions", None) or []]
-    trace_diagnostics = [_model_dump_json(item) for item in getattr(session, "trace_diagnostics", None) or []]
-    recording_diagnostics = [_model_dump_json(item) for item in getattr(session, "recording_diagnostics", None) or []]
-    runtime_results = _model_dump_json(getattr(session, "runtime_results", {})) or {}
 
     return {
         "recording_source": source,
@@ -275,6 +294,22 @@ def _build_session_recording_meta(session) -> Dict[str, Any]:
         "trace_diagnostics": trace_diagnostics,
         "recording_diagnostics": recording_diagnostics,
     }
+
+
+def _retry_candidates_from_locator_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    filtered = []
+    for orig_idx, candidate in enumerate(candidates):
+        if not candidate.get("selected"):
+            entry = dict(candidate)
+            entry["original_index"] = orig_idx
+            filtered.append(entry)
+    return sorted(
+        filtered,
+        key=lambda candidate: (
+            0 if candidate.get("strict_match_count") == 1 else 1,
+            candidate.get("score", 999),
+        ),
+    )
 
 
 def _build_session_timeline(session) -> list[dict[str, Any]]:
@@ -334,11 +369,13 @@ def _merge_recorded_action_trace_metadata(session, derived_manual_traces: Dict[s
 
 
 def _ensure_no_unresolved_manual_diagnostics(session) -> None:
-    diagnostics = getattr(session, "recording_diagnostics", None) or []
-    if diagnostics:
+    diagnostics = list(getattr(session, "recording_diagnostics", None) or [])
+    trace_diagnostics = list(getattr(session, "trace_diagnostics", None) or [])
+    unresolved_count = len(diagnostics) + len(trace_diagnostics)
+    if unresolved_count:
         raise HTTPException(
             status_code=400,
-            detail=f"{len(diagnostics)} unresolved diagnostics must be resolved before generation",
+            detail=f"{unresolved_count} unresolved diagnostics must be resolved before generation",
         )
 
 
@@ -853,11 +890,27 @@ async def test_script(
             downloads_dir=downloads_dir,
         )
 
-    # Extract failed step candidates for locator retry
-    deduped_failed_index = result.get("failed_step_index")
+    # Extract failed trace/step candidates for locator retry.
+    traces_for_retry = _session_traces_for_compile(session)
+    reported_trace_index = result.get("failed_trace_index")
+    if reported_trace_index is None and traces_for_retry:
+        reported_trace_index = result.get("failed_step_index")
+    failed_trace_index = None
+    failed_trace_id = None
     failed_step_index = None
     failed_step_candidates = []
-    if deduped_failed_index is not None:
+    if reported_trace_index is not None and traces_for_retry:
+        if 0 <= reported_trace_index < len(traces_for_retry):
+            failed_trace_index = reported_trace_index
+            failed_step_index = reported_trace_index
+            failed_trace = traces_for_retry[failed_trace_index]
+            failed_trace_id = failed_trace.trace_id
+            failed_step_candidates = _retry_candidates_from_locator_candidates(
+                failed_trace.locator_candidates or []
+            )
+
+    deduped_failed_index = result.get("failed_step_index")
+    if failed_trace_index is None and deduped_failed_index is not None:
         deduped = generator._deduplicate_steps(steps)
         deduped = generator._infer_missing_tab_transitions(deduped)
         deduped = generator._normalize_step_signals(deduped)
@@ -873,25 +926,15 @@ async def test_script(
             if failed_step_index is None:
                 failed_step_index = min(deduped_failed_index, len(steps) - 1)
             candidates = failed_step.get("locator_candidates", [])
-            filtered = []
-            for orig_idx, c in enumerate(candidates):
-                if not c.get("selected"):
-                    entry = dict(c)
-                    entry["original_index"] = orig_idx
-                    filtered.append(entry)
-            failed_step_candidates = sorted(
-                filtered,
-                key=lambda c: (
-                    0 if c.get("strict_match_count") == 1 else 1,
-                    c.get("score", 999),
-                ),
-            )
+            failed_step_candidates = _retry_candidates_from_locator_candidates(candidates)
 
     return {
         "status": "success" if result.get("success") else "failed",
         "result": result,
         "logs": logs,
         "script": script,
+        "failed_trace_id": failed_trace_id,
+        "failed_trace_index": failed_trace_index,
         "failed_step_index": failed_step_index,
         "failed_step_candidates": failed_step_candidates,
     }

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   getLegacyRpaSteps,
   getManualRecordingDiagnostics,
+  getRpaSessionWithTimeline,
+  hasRpaTimelineProjection,
   hasManualRecordingDiagnostics,
   isRpaTimelineStepDeletable,
   mapRpaConfigureDisplaySteps,
@@ -207,6 +209,88 @@ describe('rpaConfigureTimeline', () => {
     expect(displaySteps[0].frame_path).toEqual([
       'iframe[title="result"]',
       'iframe[src="https://www.runoob.com"]',
+    ]);
+  });
+
+  it('prefers trace timeline projection over legacy session fields', () => {
+    const session = getRpaSessionWithTimeline({
+      session: {
+        steps: [{ id: 'legacy-step', action: 'click', description: 'Legacy should not display' }],
+        recorded_actions: [{ step_id: 'legacy-action', action_kind: 'click' }],
+        timeline: [
+          {
+            id: 'trace-trace-submit',
+            kind: 'trace',
+            trace_id: 'trace-submit',
+            source: 'manual',
+            trace_type: 'manual_action',
+            action: 'click',
+            title: 'Click submit',
+            summary: 'button Submit',
+            locator: { method: 'role', role: 'button', name: 'Submit' },
+            locator_candidates: [
+              {
+                kind: 'role',
+                locator: { method: 'role', role: 'button', name: 'Submit' },
+                selected: true,
+              },
+            ],
+            validation: { status: 'ok', details: 'Strict match' },
+            editable: true,
+          },
+          {
+            id: 'diagnostic-diag-bad-fill',
+            kind: 'diagnostic',
+            diagnostic_id: 'diag-bad-fill',
+            trace_id: 'trace-bad-fill',
+            action: 'fill',
+            title: 'Repair fill',
+            summary: 'canonical_target_missing',
+            locator_candidates: [
+              {
+                kind: 'css',
+                locator: { method: 'css', value: '#email' },
+                selected: false,
+              },
+            ],
+            validation: { status: 'broken', details: 'canonical_target_missing' },
+            editable: true,
+          },
+        ],
+      },
+    });
+
+    expect(hasRpaTimelineProjection(session)).toBe(true);
+    expect(mapRpaConfigureDisplaySteps(session)).toEqual([
+      expect.objectContaining({
+        id: 'trace-trace-submit',
+        traceId: 'trace-submit',
+        diagnosticId: undefined,
+        action: 'click',
+        description: 'Click submit',
+        target: { method: 'role', role: 'button', name: 'Submit' },
+        configurable: true,
+      }),
+      expect.objectContaining({
+        id: 'diagnostic-diag-bad-fill',
+        traceId: 'trace-bad-fill',
+        diagnosticId: 'diag-bad-fill',
+        action: 'fill',
+        description: 'Repair fill',
+        configurable: true,
+      }),
+    ]);
+
+    expect(getManualRecordingDiagnostics(session)).toEqual([
+      expect.objectContaining({
+        id: 'diag-bad-fill',
+        stepIndex: null,
+        traceId: 'trace-bad-fill',
+        diagnosticId: 'diag-bad-fill',
+        action: 'fill',
+        validation: { status: 'broken', details: 'canonical target missing' },
+        configurable: true,
+      }),
     ]);
   });
 });

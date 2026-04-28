@@ -1,4 +1,6 @@
 import importlib
+import sys
+import types
 from datetime import datetime
 
 import pytest
@@ -6,7 +8,44 @@ import pytest
 from backend.rpa.manager import RPASession, RPAStep
 from backend.rpa.manual_recording_models import ManualActionKind, ManualRecordedAction, ManualRecordingDiagnostic
 from backend.rpa.recording_runtime_agent import RecordingAgentResult
-from backend.rpa.trace_models import RPAAcceptedTrace, RPAAIExecution, RPATraceType
+from backend.rpa.trace_models import RPAAcceptedTrace, RPAAIExecution, RPATraceDiagnostic, RPATraceType
+
+
+if "sse_starlette.sse" not in sys.modules:
+    sse_starlette_module = types.ModuleType("sse_starlette")
+    sse_module = types.ModuleType("sse_starlette.sse")
+
+    class EventSourceResponse:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
+    sse_module.EventSourceResponse = EventSourceResponse
+    sys.modules.setdefault("sse_starlette", sse_starlette_module)
+    sys.modules["sse_starlette.sse"] = sse_module
+
+if "backend.rpa.assistant" not in sys.modules:
+    assistant_module = types.ModuleType("backend.rpa.assistant")
+
+    class RPAAssistant:
+        pass
+
+    class RPAReActAgent:
+        pass
+
+    assistant_module.RPAAssistant = RPAAssistant
+    assistant_module.RPAReActAgent = RPAReActAgent
+    assistant_module._active_agents = {}
+    sys.modules["backend.rpa.assistant"] = assistant_module
+
+if "backend.credential.vault" not in sys.modules:
+    vault_module = types.ModuleType("backend.credential.vault")
+
+    async def inject_credentials(_user_id, params, extra):
+        return dict(params or {}, **(extra or {}))
+
+    vault_module.inject_credentials = inject_credentials
+    sys.modules["backend.credential.vault"] = vault_module
 
 
 ROUTE_MODULE = importlib.import_module("backend.route.rpa")
@@ -102,7 +141,7 @@ def test_generate_session_script_preserves_step_signals_on_recorded_actions():
     assert "current_page = new_page" in script
 
 
-def test_generate_session_script_merges_step_tab_fields_into_existing_trace():
+def test_generate_session_script_uses_trace_tab_fields_without_step_merge():
     session = RPASession(id="s-switch", user_id="u-switch", sandbox_session_id="sandbox")
     session.steps.append(
         RPAStep(
@@ -118,6 +157,7 @@ def test_generate_session_script_merges_step_tab_fields_into_existing_trace():
     session.traces.append(
         RPAAcceptedTrace(
             trace_id="trace-step-switch",
+            signals={"tab": {"source_tab_id": "tab-trace-root", "target_tab_id": "tab-trace-sales"}},
             trace_type=RPATraceType.MANUAL_ACTION,
             source="manual",
             action="switch_tab",
@@ -128,8 +168,10 @@ def test_generate_session_script_merges_step_tab_fields_into_existing_trace():
     script = ROUTE_MODULE._generate_session_script(session, {}, test_mode=True)
 
     assert "No stable locator was recorded" not in script
-    assert 'tabs.setdefault("tab-root", current_page)' in script
-    assert 'current_page = tabs["tab-sales"]' in script
+    assert 'tabs.setdefault("tab-trace-root", current_page)' in script
+    assert 'current_page = tabs["tab-trace-sales"]' in script
+    assert 'tabs.setdefault("tab-root", current_page)' not in script
+    assert 'current_page = tabs["tab-sales"]' not in script
 
 
 def test_generate_session_script_preserves_frame_path_on_recorded_actions():
@@ -166,7 +208,7 @@ def test_generate_session_script_preserves_frame_path_on_recorded_actions():
     assert "expect_popup() as popup_info" in script
 
 
-def test_generate_session_script_keeps_ai_traces_when_recorded_actions_replace_manual_traces():
+def test_generate_session_script_keeps_ai_and_manual_traces_without_recorded_action_replacement():
     session = RPASession(id="s3", user_id="u3", sandbox_session_id="sandbox")
     session.recorded_actions.append(
         ManualRecordedAction(
@@ -195,7 +237,10 @@ def test_generate_session_script_keeps_ai_traces_when_recorded_actions_replace_m
                 trace_type=RPATraceType.MANUAL_ACTION,
                 source="manual",
                 action="click",
-                description="legacy manual click",
+                description="trace manual click",
+                locator_candidates=[
+                    {"locator": {"method": "role", "role": "button", "name": "Trace Search"}, "selected": True}
+                ],
             ),
         ]
     )
@@ -203,10 +248,12 @@ def test_generate_session_script_keeps_ai_traces_when_recorded_actions_replace_m
     script = ROUTE_MODULE._generate_session_script(session, {}, test_mode=True)
 
     assert "selected_repo" in script
-    assert "get_by_role('button'" in script or 'get_by_role(\"button\"' in script
+    assert "Trace Search" in script
+    assert "name='Search'" not in script
+    assert 'name="Search"' not in script
 
 
-def test_session_traces_for_compile_preserves_manual_ai_manual_order():
+def test_session_traces_for_compile_uses_ordered_traces_without_legacy_merge():
     session = RPASession(id="s-order", user_id="u-order", sandbox_session_id="sandbox")
     session.steps.extend(
         [
@@ -257,22 +304,31 @@ def test_session_traces_for_compile_preserves_manual_ai_manual_order():
             ai_execution=RPAAIExecution(code="async def run(page, results):\n    return {}"),
         )
     )
+    session.traces.append(
+        RPAAcceptedTrace(
+            trace_id="trace-manual-first",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            source="manual",
+            description="Trace manual action",
+            started_at=datetime.fromtimestamp(1),
+            action="click",
+            locator_candidates=[
+                {"locator": {"method": "role", "role": "button", "name": "Trace"}, "selected": True}
+            ],
+        )
+    )
 
     traces = ROUTE_MODULE._session_traces_for_compile(session)
 
     assert [trace.description for trace in traces] == [
-        "First manual action",
+        "Trace manual action",
         "AI middle action",
-        "Second manual action",
     ]
-    assert [step["description"] for step in ROUTE_MODULE.session_to_mcp_steps(session)] == [
-        "First manual action",
-        "AI middle action",
-        "Second manual action",
-    ]
+    assert traces[0].trace_id == "trace-manual-first"
+    assert traces[0].locator_candidates[0]["locator"]["name"] == "Trace"
 
 
-def test_build_session_recording_meta_preserves_step_fields_in_trace_and_legacy_steps():
+def test_build_session_recording_meta_for_trace_session_uses_trace_metadata_only():
     session = RPASession(id="route-meta-trace", user_id="u1", sandbox_session_id="sandbox")
     session.steps.append(
         RPAStep(
@@ -296,26 +352,35 @@ def test_build_session_recording_meta_preserves_step_fields_in_trace_and_legacy_
             event_timestamp_ms=12345,
         )
     )
-    session.recorded_actions.append(
-        ManualRecordedAction(
-            step_id="step-export",
-            action_kind=ManualActionKind.CLICK,
-            description='click text("Export all")',
-            target={"method": "text", "value": "Export all"},
-            validation={"status": "ok"},
+    session.traces.append(
+        RPAAcceptedTrace(
+            trace_id="trace-native-export",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            source="manual",
+            action="click",
+            description='click role("Export")',
+            locator_candidates=[
+                {
+                    "kind": "role",
+                    "locator": {"method": "role", "role": "button", "name": "Export"},
+                    "selected": True,
+                }
+            ],
+            validation={"status": "trace-ok"},
+            signals={"recording": {"event_timestamp_ms": 98765}},
         )
     )
 
     meta = ROUTE_MODULE._build_session_recording_meta(session)
 
     assert meta["recording_source"] == "trace"
-    assert meta["legacy_steps"][0]["sequence"] == 7
+    assert "legacy_steps" not in meta
+    assert "recorded_actions" not in meta
     trace = meta["traces"][0]
-    assert trace["trace_id"] == "trace-step-export"
-    assert trace["locator_candidates"][0]["locator"]["value"] == "Export all"
-    assert trace["signals"]["popup"]["target_tab_id"] == "tab-export"
-    assert trace["signals"]["tab"]["tab_id"] == "tab-main"
-    assert trace["validation"]["status"] == "ok"
+    assert trace["trace_id"] == "trace-native-export"
+    assert trace["locator_candidates"][0]["locator"]["name"] == "Export"
+    assert trace["signals"]["recording"]["event_timestamp_ms"] == 98765
+    assert trace["validation"]["status"] == "trace-ok"
 
 
 def test_build_session_recording_meta_derives_traces_for_legacy_step_only_session():
@@ -382,7 +447,7 @@ async def test_save_skill_exports_trace_first_recording_meta(monkeypatch):
         assert response == {"status": "success", "skill_name": "saved_trace"}
         assert captured["recording_meta"]["recording_source"] == "trace"
         assert captured["recording_meta"]["traces"][0]["trace_id"] == "trace-ai-1"
-        assert captured["recording_meta"]["legacy_steps"][0]["id"] == "legacy-step"
+        assert "legacy_steps" not in captured["recording_meta"]
         assert captured["steps"][0]["id"] == "trace-ai-1"
         assert captured["steps"][0]["result_key"] == "result"
     finally:
@@ -397,6 +462,30 @@ async def test_generate_script_blocks_when_recording_diagnostics_exist():
         ManualRecordingDiagnostic(
             related_action_kind=ManualActionKind.FILL,
             failure_reason="canonical_target_missing",
+        )
+    )
+    manager.sessions[session.id] = session
+
+    try:
+        user = type("User", (), {"id": "u1"})()
+        with pytest.raises(ROUTE_MODULE.HTTPException) as exc_info:
+            await ROUTE_MODULE.generate_script(session.id, ROUTE_MODULE.GenerateRequest(), user)
+        assert exc_info.value.status_code == 400
+        assert "diagnostic" in exc_info.value.detail
+    finally:
+        manager.sessions.pop(session.id, None)
+
+
+@pytest.mark.asyncio
+async def test_generate_script_blocks_when_trace_diagnostics_exist():
+    manager = ROUTE_MODULE.rpa_manager
+    session = RPASession(id="route-trace-diagnostic-generate", user_id="u1", sandbox_session_id="sandbox")
+    session.trace_diagnostics.append(
+        RPATraceDiagnostic(
+            diagnostic_id="diag-trace-missing-target",
+            trace_id="trace-failed",
+            source="ai",
+            message="operation failed",
         )
     )
     manager.sessions[session.id] = session
@@ -883,6 +972,97 @@ async def test_apply_recording_agent_result_persists_trace_and_runtime_output():
 
         assert session.traces[0].output_key == "selected_project"
         assert session.runtime_results.resolve_ref("selected_project.url") == "https://github.com/owner/repo"
+    finally:
+        manager.sessions.pop(session.id, None)
+
+
+@pytest.mark.asyncio
+async def test_test_script_maps_failed_trace_id_and_candidates(monkeypatch):
+    manager = ROUTE_MODULE.rpa_manager
+    session = RPASession(id="route-trace-failure", user_id="u1", sandbox_session_id="sandbox")
+    session.traces.extend(
+        [
+            RPAAcceptedTrace(
+                trace_id="trace-first",
+                trace_type=RPATraceType.MANUAL_ACTION,
+                source="manual",
+                action="click",
+                description="Click first",
+                locator_candidates=[
+                    {"locator": {"method": "css", "value": ".first"}, "selected": True},
+                ],
+            ),
+            RPAAcceptedTrace(
+                trace_id="trace-second",
+                trace_type=RPATraceType.MANUAL_ACTION,
+                source="manual",
+                action="click",
+                description="Click second",
+                locator_candidates=[
+                    {"locator": {"method": "css", "value": ".legacy-wrong"}, "selected": True},
+                    {
+                        "locator": {"method": "role", "role": "button", "name": "Second"},
+                        "selected": False,
+                        "strict_match_count": 1,
+                        "score": 1,
+                    },
+                    {
+                        "locator": {"method": "text", "value": "Second"},
+                        "selected": False,
+                        "strict_match_count": 3,
+                        "score": 2,
+                    },
+                ],
+            ),
+        ]
+    )
+    session.steps.append(
+        RPAStep(
+            id="legacy-step",
+            action="click",
+            target='{"method": "text", "value": "Legacy"}',
+            locator_candidates=[
+                {"locator": {"method": "text", "value": "Legacy"}, "selected": False, "score": 0},
+            ],
+        )
+    )
+    manager.sessions[session.id] = session
+
+    class FakeConnector:
+        async def get_browser(self, **_kwargs):
+            return object()
+
+        def run_in_pw_loop(self, coro):
+            return coro
+
+    async def fake_execute(*_args, **_kwargs):
+        return {
+            "success": False,
+            "error": "failed on trace",
+            "failed_trace_index": 1,
+        }
+
+    monkeypatch.setattr(
+        ROUTE_MODULE,
+        "_generate_session_script",
+        lambda *args, **kwargs: "async def execute_skill(page, **kwargs):\n    return {}",
+    )
+    monkeypatch.setattr(ROUTE_MODULE, "get_cdp_connector", lambda: FakeConnector())
+    monkeypatch.setattr(ROUTE_MODULE.executor, "execute", fake_execute)
+    monkeypatch.setattr(ROUTE_MODULE.settings, "storage_backend", "local")
+    monkeypatch.setattr(ROUTE_MODULE.settings, "workspace_dir", "E:/Work-Project/OtherWork/ScienceClaw")
+
+    try:
+        user = type("User", (), {"id": "u1"})()
+        response = await ROUTE_MODULE.test_script(session.id, ROUTE_MODULE.GenerateRequest(), user)
+
+        assert response["status"] == "failed"
+        assert response["failed_trace_id"] == "trace-second"
+        assert response["failed_trace_index"] == 1
+        assert response["failed_step_index"] == 1
+        assert [candidate["original_index"] for candidate in response["failed_step_candidates"]] == [1, 2]
+        assert response["failed_step_candidates"][0]["locator"]["name"] == "Second"
+        assert all(candidate["locator"].get("value") != "Legacy" for candidate in response["failed_step_candidates"])
     finally:
         manager.sessions.pop(session.id, None)
 

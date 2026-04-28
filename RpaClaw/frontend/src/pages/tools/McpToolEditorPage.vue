@@ -26,7 +26,7 @@ import {
   getPreviewTestStatus,
   hasMatchingPreviewTest,
 } from '@/utils/rpaMcpConvert';
-import { mapRpaConfigureDisplaySteps } from '@/utils/rpaConfigureTimeline';
+import { getRpaSessionWithTimeline, mapRpaConfigureDisplaySteps } from '@/utils/rpaConfigureTimeline';
 import { buildRecordedStepSummary, buildSchemaSummary, shouldShowCookieSection } from '@/utils/rpaMcpEditorView';
 import { convertCookieInputToPlaywrightCookies, type CookieInputMode } from '@/utils/rpaMcpTest';
 import { showErrorToast, showSuccessToast } from '@/utils/toast';
@@ -83,6 +83,9 @@ interface StepValidation {
 
 interface RecordedStepItem {
   id: string;
+  stepId?: string;
+  traceId?: string;
+  diagnosticId?: string;
   action: string;
   target?: ParsedLocator | string | null;
   frame_path?: string[];
@@ -627,7 +630,7 @@ const loadRecordedSession = async (sourceSessionId?: string, options: { silent?:
   stepsLoading.value = true;
   try {
     const resp = await apiClient.get(`/rpa/session/${targetSessionId}`);
-    const session = resp.data.session;
+    const session = getRpaSessionWithTimeline(resp.data);
     recordedSteps.value = mapRpaConfigureDisplaySteps(session) as RecordedStepItem[];
     recordedStepsMode.value = 'source-session';
   } catch (error: any) {
@@ -862,9 +865,14 @@ const saveTool = async () => {
 
 const promoteLocator = async (stepIndex: number, candidateIndex: number) => {
   if (!canTuneRecordedSteps.value || promotingStepIndex.value !== null) return;
+  const step = recordedSteps.value[stepIndex];
+  if (!step?.traceId && stepIndex < 0) return;
   promotingStepIndex.value = stepIndex;
   try {
-    await apiClient.post(`/rpa/session/${sessionId.value}/step/${stepIndex}/locator`, {
+    const endpoint = step?.traceId
+      ? `/rpa/session/${sessionId.value}/trace/${step.traceId}/locator`
+      : `/rpa/session/${sessionId.value}/step/${stepIndex}/locator`;
+    await apiClient.post(endpoint, {
       candidate_index: candidateIndex,
     });
     await Promise.all([loadRecordedSession(), loadPreview()]);

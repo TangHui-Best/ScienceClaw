@@ -30,6 +30,7 @@ import {
 } from '@/utils/screencastReconnect';
 import {
   getManualRecordingDiagnostics,
+  getRpaSessionWithTimeline,
   mapRpaConfigureDisplaySteps,
   type RpaRecordingDiagnosticItem,
 } from '@/utils/rpaConfigureTimeline';
@@ -107,6 +108,7 @@ interface LocatorCandidate {
 }
 
 const failedStepIndex = ref<number | null>(null);
+const failedTraceId = ref<string | null>(null);
 const failedStepCandidates = ref<LocatorCandidate[]>([]);
 const failedStepError = ref('');
 const triedCandidateIndices = ref<Set<number>>(new Set());
@@ -116,7 +118,7 @@ const loadSessionDiagnostics = async () => {
   if (!sessionId.value) return;
   try {
     const resp = await apiClient.get(`/rpa/session/${sessionId.value}`);
-    const session = resp.data.session || {};
+    const session = getRpaSessionWithTimeline(resp.data);
     recordedSteps.value = mapRpaConfigureDisplaySteps(session);
     recordingDiagnostics.value = getManualRecordingDiagnostics(session);
   } catch (err) {
@@ -313,7 +315,9 @@ const runTest = async () => {
   error.value = null;
   testLogs.value = ['正在生成并执行 Playwright 脚本...'];
   const previousFailedIndex = failedStepIndex.value;
+  const previousFailedTraceId = failedTraceId.value;
   failedStepIndex.value = null;
+  failedTraceId.value = null;
   failedStepCandidates.value = [];
   failedStepError.value = '';
 
@@ -331,11 +335,17 @@ const runTest = async () => {
     testLogs.value = resp.data.logs || [];
     generatedScript.value = resp.data.script || '';
     testSuccess.value = result.success !== false;
-    const newFailedIndex = resp.data.failed_step_index ?? null;
-    if (newFailedIndex !== previousFailedIndex) {
+    const newFailedTraceId = resp.data.failed_trace_id ?? null;
+    const reportedFailedIndex = resp.data.failed_trace_index ?? resp.data.failed_step_index ?? null;
+    const traceDisplayIndex = newFailedTraceId
+      ? recordedSteps.value.findIndex((step) => step.traceId === newFailedTraceId)
+      : -1;
+    const newFailedIndex = traceDisplayIndex >= 0 ? traceDisplayIndex : reportedFailedIndex;
+    if (newFailedIndex !== previousFailedIndex || newFailedTraceId !== previousFailedTraceId) {
       triedCandidateIndices.value = new Set();
     }
     failedStepIndex.value = newFailedIndex;
+    failedTraceId.value = newFailedTraceId;
     failedStepCandidates.value = resp.data.failed_step_candidates || [];
     failedStepError.value = result.error || '';
     testDone.value = true;
@@ -349,14 +359,17 @@ const runTest = async () => {
 };
 
 const retryWithCandidate = async (candidateIndex: number) => {
-  if (retryingWithCandidate.value || failedStepIndex.value === null) return;
+  if (retryingWithCandidate.value || (failedStepIndex.value === null && !failedTraceId.value)) return;
   retryingWithCandidate.value = true;
 
   try {
     const candidate = failedStepCandidates.value[candidateIndex];
     const originalIndex = candidate.original_index ?? candidateIndex;
+    const endpoint = failedTraceId.value
+      ? `/rpa/session/${sessionId.value}/trace/${failedTraceId.value}/locator`
+      : `/rpa/session/${sessionId.value}/step/${failedStepIndex.value}/locator`;
     await apiClient.post(
-      `/rpa/session/${sessionId.value}/step/${failedStepIndex.value}/locator`,
+      endpoint,
       { candidate_index: originalIndex },
     );
 
@@ -364,6 +377,7 @@ const retryWithCandidate = async (candidateIndex: number) => {
     await loadSessionDiagnostics();
 
     failedStepIndex.value = null;
+    failedTraceId.value = null;
     failedStepCandidates.value = [];
     failedStepError.value = '';
     await runTest();
