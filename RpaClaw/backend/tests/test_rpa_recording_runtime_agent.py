@@ -637,6 +637,34 @@ async def test_recording_runtime_agent_accepts_successful_python_plan():
 
 
 @pytest.mark.asyncio
+async def test_recording_runtime_agent_persists_runtime_ai_preserve_signal():
+    async def planner(_payload):
+        return {
+            "description": "Select the closest matching project",
+            "action_type": "run_python",
+            "expected_effect": "click",
+            "output_key": "selected_project",
+            "preserve_runtime_ai": True,
+            "semantic_intent": "select_best_matching_candidate",
+            "code": (
+                "async def run(page, results):\n"
+                "    await page.locator('a.project').nth(0).click()\n"
+                "    return {'action_performed': True, 'action_type': 'click', 'target': 'alpha'}"
+            ),
+        }
+
+    result = await RecordingRuntimeAgent(planner=planner).run(
+        page=_FakePage(),
+        instruction="open the closest matching project",
+        runtime_results={},
+    )
+
+    assert result.success is True
+    assert result.trace.signals["runtime_ai"]["preserve"] is True
+    assert result.trace.signals["runtime_ai"]["reason"] == "select_best_matching_candidate"
+
+
+@pytest.mark.asyncio
 async def test_recording_runtime_agent_accepts_extract_snapshot_plan(monkeypatch):
     async def fake_build_page_snapshot(_page, _build_frame_path):
         return {

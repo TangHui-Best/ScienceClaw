@@ -51,7 +51,9 @@ Schema:
   "source": "detail_views",
   "section_title": "optional snapshot section title",
   "frame_path": "optional iframe selector chain for extract_snapshot",
-  "fields": "optional structured fields for extract_snapshot"
+  "fields": "optional structured fields for extract_snapshot",
+  "preserve_runtime_ai": false,
+  "semantic_intent": "optional reason when runtime AI must re-evaluate current page candidates"
 }
 Rules:
 - Complete only the current user command, not the full SOP.
@@ -59,6 +61,8 @@ Rules:
 - expected_effect describes the browser-visible outcome required by the user's current command.
 - Use expected_effect="navigate" when the user asks to open, go to, enter, visit, or navigate to a target.
 - Use expected_effect="extract" when the user only asks to find, collect, summarize, or return data without opening it.
+- Set preserve_runtime_ai=true when the command requires semantic judgment over current page candidates at replay time, such as selecting the most relevant, best matching, recommended, highest risk, or most suitable item.
+- Do not set preserve_runtime_ai for a simple deterministic click/fill/goto where the recorded locator or value is the intended reusable behavior.
 - If code is returned, it must define async def run(page, results).
 - Use action_type="extract_snapshot" only when the requested extract-only data is already present in snapshot.detail_views fields.
 - For extract_snapshot, return the relevant observed detail fields in the plan itself, including the detail view frame_path when present; do not generate Python code and do not reference `snapshot` inside `run()`.
@@ -364,6 +368,7 @@ class RecordingRuntimeAgent:
         output = result.get("output")
         output_key = _normalize_result_key(plan.get("output_key"))
         locator_stability = _build_locator_stability_metadata(plan, snapshot or {})
+        signals = _merge_runtime_ai_signal(dict(result.get("signals") or {}), plan)
         return RPAAcceptedTrace(
             trace_type=RPATraceType.AI_OPERATION,
             source="ai",
@@ -371,7 +376,7 @@ class RecordingRuntimeAgent:
             description=str(plan.get("description") or instruction),
             before_page=before,
             after_page=after,
-            signals=dict(result.get("signals") or {}),
+            signals=signals,
             output_key=output_key,
             output=output,
             ai_execution=RPAAIExecution(
@@ -1559,6 +1564,19 @@ def _should_drain_download_events(plan: Dict[str, Any], code: str) -> bool:
             ".set_input_files(",
         )
     )
+
+
+def _merge_runtime_ai_signal(signals: Dict[str, Any], plan: Dict[str, Any]) -> Dict[str, Any]:
+    if not _normalize_bool(plan.get("preserve_runtime_ai")):
+        return signals
+    runtime_ai = signals.get("runtime_ai") if isinstance(signals.get("runtime_ai"), dict) else {}
+    reason = str(plan.get("semantic_intent") or runtime_ai.get("reason") or "semantic_candidate_selection").strip()
+    signals["runtime_ai"] = {
+        **runtime_ai,
+        "preserve": True,
+        "reason": reason or "semantic_candidate_selection",
+    }
+    return signals
 
 
 def _normalize_bool(value: Any) -> bool:

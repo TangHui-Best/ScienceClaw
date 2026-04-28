@@ -974,9 +974,12 @@ def _code_uses_positional_collection_locator(code: str, selector: str) -> bool:
 
 def _should_preserve_runtime_ai_instruction(trace: RPAAcceptedTrace) -> bool:
     text = f"{trace.user_instruction or ''} {trace.description or ''}".lower()
+    runtime_ai_signal = _trace_signal(trace, "runtime_ai")
+    if runtime_ai_signal.get("preserve") is True or runtime_ai_signal.get("preserve_runtime_ai") is True:
+        return True
     if not text.strip():
         return False
-    semantic_markers = (
+    strong_semantic_markers = (
         "best",
         "most relevant",
         "most related",
@@ -987,8 +990,33 @@ def _should_preserve_runtime_ai_instruction(trace: RPAAcceptedTrace) -> bool:
         "highest risk",
         "highest priority",
         "recommend",
+        "最相关",
+        "最匹配",
+        "推荐",
+        "最佳",
+        "最适合",
     )
-    if any(marker in text for marker in semantic_markers):
+    if any(marker in text for marker in strong_semantic_markers):
+        return True
+    contextual_semantic_markers = ("相关", "匹配", "类似")
+    candidate_context_markers = (
+        "repo",
+        "repository",
+        "project",
+        "candidate",
+        "result",
+        "item",
+        "link",
+        "项目",
+        "仓库",
+        "候选",
+        "结果",
+        "条目",
+        "链接",
+    )
+    if any(marker in text for marker in contextual_semantic_markers) and any(
+        marker in text for marker in candidate_context_markers
+    ):
         return True
     if not trace.ai_execution or not trace.ai_execution.code:
         return False
