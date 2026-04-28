@@ -1091,6 +1091,54 @@ def test_generic_chinese_related_extraction_keeps_embedded_code():
     assert "return {'name': 'paper'}" in body
 
 
+def test_domain_related_project_text_without_signal_keeps_embedded_code():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        source="ai",
+        user_instruction="\u6253\u5f00\u76f8\u5173\u9879\u76ee",
+        description="Open related project",
+        output_key="selected_item",
+        output={"action_performed": True, "action_type": "click", "target": "alpha"},
+        ai_execution=RPAAIExecution(
+            code=(
+                "async def run(page, results):\n"
+                "    await page.locator('a.project').nth(0).click()\n"
+                "    return {'action_performed': True, 'action_type': 'click', 'target': 'alpha'}"
+            ),
+        ),
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    body = _execute_body(script)
+
+    assert "_execute_runtime_ai_instruction(" not in body
+    assert "page.locator('a.project').nth(0).click()" in body
+
+
+def test_related_result_text_without_signal_keeps_embedded_code():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        source="ai",
+        user_instruction="\u6253\u5f00\u76f8\u5173\u7ed3\u679c",
+        description="Open related result",
+        output_key="selected_item",
+        output={"action_performed": True, "action_type": "click", "target": "alpha"},
+        ai_execution=RPAAIExecution(
+            code=(
+                "async def run(page, results):\n"
+                "    await page.locator('a.result').nth(0).click()\n"
+                "    return {'action_performed': True, 'action_type': 'click', 'target': 'alpha'}"
+            ),
+        ),
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    body = _execute_body(script)
+
+    assert "_execute_runtime_ai_instruction(" not in body
+    assert "page.locator('a.result').nth(0).click()" in body
+
+
 def test_manual_pull_request_click_keeps_recorded_locator_without_github_subpage_template():
     traces = [
         RPAAcceptedTrace(

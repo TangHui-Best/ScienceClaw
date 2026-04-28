@@ -998,26 +998,6 @@ def _should_preserve_runtime_ai_instruction(trace: RPAAcceptedTrace) -> bool:
     )
     if any(marker in text for marker in strong_semantic_markers):
         return True
-    contextual_semantic_markers = ("相关", "匹配", "类似")
-    candidate_context_markers = (
-        "repo",
-        "repository",
-        "project",
-        "candidate",
-        "result",
-        "item",
-        "link",
-        "项目",
-        "仓库",
-        "候选",
-        "结果",
-        "条目",
-        "链接",
-    )
-    if any(marker in text for marker in contextual_semantic_markers) and any(
-        marker in text for marker in candidate_context_markers
-    ):
-        return True
     if not trace.ai_execution or not trace.ai_execution.code:
         return False
     output = trace.output
