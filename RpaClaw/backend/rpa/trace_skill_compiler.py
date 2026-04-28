@@ -1000,15 +1000,10 @@ def _should_preserve_runtime_ai_instruction(trace: RPAAcceptedTrace) -> bool:
         return True
     contextual_semantic_markers = ("相关", "匹配", "类似")
     candidate_context_markers = (
-        "repo",
-        "repository",
-        "project",
         "candidate",
         "result",
         "item",
         "link",
-        "项目",
-        "仓库",
         "候选",
         "结果",
         "条目",
