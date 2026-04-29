@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any, Dict, List
 
 from .manual_recording_models import ManualRecordedAction
@@ -79,6 +80,19 @@ def manual_step_to_trace(step: Dict[str, Any]) -> RPAAcceptedTrace:
         existing_tab_signal = signals.get("tab") if isinstance(signals.get("tab"), dict) else {}
         signals["tab"] = {**existing_tab_signal, **tab_signal}
 
+    recording_signal: Dict[str, Any] = {}
+    for key in ("sequence", "event_timestamp_ms"):
+        value = _step_get(step, key)
+        if value is not None:
+            recording_signal[key] = value
+    if recording_signal:
+        existing_recording_signal = signals.get("recording") if isinstance(signals.get("recording"), dict) else {}
+        signals["recording"] = {**existing_recording_signal, **recording_signal}
+
+    timestamp = _step_get(step, "timestamp")
+    if not isinstance(timestamp, datetime):
+        timestamp = datetime.now()
+
     return RPAAcceptedTrace(
         trace_id=trace_id,
         trace_type=trace_type,
@@ -94,6 +108,8 @@ def manual_step_to_trace(step: Dict[str, Any]) -> RPAAcceptedTrace:
         value=_step_get(step, "value"),
         output_key=_step_get(step, "result_key"),
         output=_step_get(step, "output"),
+        started_at=timestamp,
+        ended_at=timestamp,
     )
 
 

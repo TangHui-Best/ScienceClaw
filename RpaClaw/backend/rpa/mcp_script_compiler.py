@@ -9,13 +9,19 @@ from .trace_skill_compiler import TraceSkillCompiler
 
 
 def has_trace_backed_steps(steps: list[dict[str, Any]]) -> bool:
-    return any(isinstance(step.get("rpa_trace"), dict) for step in steps)
+    return any(
+        isinstance(step.get("rpa_trace"), dict)
+        or (isinstance(step.get("trace_id"), str) and isinstance(step.get("trace_type"), str))
+        for step in steps
+    )
 
 
 def _step_to_trace(step: dict[str, Any]) -> RPAAcceptedTrace:
     trace_payload = step.get("rpa_trace")
     if isinstance(trace_payload, dict):
         return RPAAcceptedTrace.model_validate(trace_payload)
+    if isinstance(step.get("trace_id"), str) and isinstance(step.get("trace_type"), str):
+        return RPAAcceptedTrace.model_validate(step)
     return manual_step_to_trace(step)
 
 

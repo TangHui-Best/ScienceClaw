@@ -106,7 +106,7 @@ def _fake_steps(session_id: str, user_id: str):
     }
 
 
-def test_get_rpa_session_steps_preserves_ai_traces_with_recorded_actions(monkeypatch):
+def test_get_rpa_session_steps_uses_traces_without_recorded_action_replacement(monkeypatch):
     session = RPASession(id="session-1", user_id="user-1", sandbox_session_id="sandbox-1")
     session.recorded_actions.append(
         ManualRecordedAction(
@@ -125,7 +125,10 @@ def test_get_rpa_session_steps_preserves_ai_traces_with_recorded_actions(monkeyp
                 trace_type=RPATraceType.MANUAL_ACTION,
                 source="manual",
                 action="click",
-                description="legacy manual trace",
+                description="trace manual click",
+                locator_candidates=[
+                    {"locator": {"method": "role", "role": "button", "name": "Trace Search"}, "selected": True}
+                ],
             ),
             RPAAcceptedTrace(
                 trace_id="trace-ai-select",
@@ -149,10 +152,11 @@ def test_get_rpa_session_steps_preserves_ai_traces_with_recorded_actions(monkeyp
     payload = anyio.run(rpa_mcp_route.get_rpa_session_steps, "session-1", "user-1")
 
     assert [step["description"] for step in payload["steps"]] == [
-        'click button("Search")',
+        "trace manual click",
         "Click first project",
     ]
     assert payload["steps"][0]["rpa_trace"]["trace_id"] == "trace-step-search"
+    assert payload["steps"][0]["target"]["name"] == "Trace Search"
     assert payload["steps"][1]["source"] == "ai"
     assert payload["steps"][1]["action"] == "ai_script"
     assert payload["steps"][1]["rpa_trace"]["trace_type"] == "ai_operation"

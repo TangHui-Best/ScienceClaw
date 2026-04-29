@@ -91,16 +91,9 @@ class TestSkillExporter(unittest.IsolatedAsyncioTestCase):
             meta = json.loads((skill_dir / "skill.meta.json").read_text(encoding="utf-8"))
             self.assertEqual(meta["steps"][0]["timestamp"], "2026-04-24T12:00:00")
 
-    async def test_export_skill_writes_mcp_projection_without_replacing_legacy_steps(self):
+    async def test_export_skill_writes_trace_projection_without_legacy_steps(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             exporter = SkillExporter()
-            legacy_steps = [
-                {
-                    "id": "legacy-step",
-                    "action": "goto",
-                    "description": "Legacy open dashboard",
-                }
-            ]
             projected_steps = [
                 {
                     "id": "trace-ai-select",
@@ -115,11 +108,8 @@ class TestSkillExporter(unittest.IsolatedAsyncioTestCase):
             recording_meta = {
                 "recording_source": "trace",
                 "traces": [projected_steps[0]["rpa_trace"]],
-                "recorded_actions": [],
-                "legacy_steps": legacy_steps,
                 "runtime_results": {},
                 "trace_diagnostics": [],
-                "recording_diagnostics": [],
             }
 
             original_backend = settings.storage_backend
@@ -142,9 +132,9 @@ class TestSkillExporter(unittest.IsolatedAsyncioTestCase):
 
             skill_dir = Path(temp_dir) / "trace_projector"
             meta = json.loads((skill_dir / "skill.meta.json").read_text(encoding="utf-8"))
-            self.assertEqual(meta["steps"], legacy_steps)
+            self.assertEqual(meta["steps"], projected_steps)
             self.assertEqual(meta["mcp_steps"], projected_steps)
-            self.assertEqual(meta["recording"]["legacy_steps"], legacy_steps)
+            self.assertNotIn("legacy_steps", meta["recording"])
 
 
 if __name__ == "__main__":

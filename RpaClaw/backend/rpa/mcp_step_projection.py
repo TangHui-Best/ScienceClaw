@@ -159,35 +159,18 @@ def session_to_mcp_steps(session: Any) -> list[dict[str, Any]]:
     traces = list(getattr(session, "traces", None) or [])
     legacy_steps = list(getattr(session, "steps", None) or [])
 
-    if not recorded_actions and not traces:
-        return [step.model_dump(mode="json") for step in legacy_steps]
+    if traces:
+        projected = [
+            (_trace_order_ms(trace), index, trace_to_mcp_step(trace))
+            for index, trace in enumerate(traces)
+        ]
+        return _order_projected_steps(projected)
     if not recorded_actions:
-        return [trace_to_mcp_step(trace) for trace in traces]
+        return [step.model_dump(mode="json") for step in legacy_steps]
 
     steps_by_id = _step_by_id(session)
-    actions_by_trace_id = {
-        f"trace-{action.step_id}": action
-        for action in recorded_actions
-        if action.step_id
-    }
-    emitted_action_ids: set[str] = set()
     projected: list[tuple[float | None, int, dict[str, Any]]] = []
-
-    for index, trace in enumerate(traces):
-        replacement = actions_by_trace_id.get(trace.trace_id)
-        if replacement is not None:
-            step = steps_by_id.get(replacement.step_id)
-            order_ms = _step_order_ms(step)
-            if order_ms is None:
-                order_ms = _trace_order_ms(trace)
-            projected.append((order_ms, index, recorded_action_to_mcp_step(replacement, step=step)))
-            emitted_action_ids.add(replacement.step_id)
-            continue
-        projected.append((_trace_order_ms(trace), index, trace_to_mcp_step(trace)))
-
-    for offset, action in enumerate(recorded_actions, start=len(projected)):
-        if action.step_id in emitted_action_ids:
-            continue
+    for offset, action in enumerate(recorded_actions):
         step = steps_by_id.get(action.step_id)
         projected.append((_step_order_ms(step), offset, recorded_action_to_mcp_step(action, step=step)))
 

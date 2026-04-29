@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from backend.rpa.trace_models import RPAAcceptedTrace, RPAAIExecution, RPATraceType, RPARuntimeResults
 import backend.rpa.trace_recorder as trace_recorder
 from backend.rpa.trace_recorder import infer_dataflow_for_fill, manual_step_to_trace
@@ -70,6 +72,30 @@ def test_manual_step_to_trace_preserves_tab_transition_signal():
         "tab_id": "tab-root",
         "source_tab_id": "tab-root",
         "target_tab_id": "tab-sales",
+    }
+
+
+def test_manual_step_to_trace_preserves_recording_order_metadata():
+    timestamp = datetime(2026, 4, 29, 8, 30, 0)
+
+    trace = manual_step_to_trace(
+        {
+            "id": "ordered-click",
+            "action": "click",
+            "source": "record",
+            "description": "Click Save",
+            "target": '{"method":"role","role":"button","name":"Save"}',
+            "timestamp": timestamp,
+            "sequence": 42,
+            "event_timestamp_ms": 177000,
+        }
+    )
+
+    assert trace.started_at == timestamp
+    assert trace.ended_at == timestamp
+    assert trace.signals["recording"] == {
+        "sequence": 42,
+        "event_timestamp_ms": 177000,
     }
 
 

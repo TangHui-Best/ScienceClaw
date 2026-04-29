@@ -300,6 +300,10 @@ class RPASessionManager:
             },
         )
         self._append_step_description(step, " 并在新标签页打开")
+        session = self.sessions.get(session_id)
+        if session:
+            self._rebuild_manual_recording_state(session)
+        await self._record_manual_trace_for_step(session_id, step)
         await self._broadcast_step(session_id, step)
         logger.debug(f"[RPA] Attached popup signal: source={source_tab_id} target={target_tab_id}")
 
@@ -590,6 +594,10 @@ class RPASessionManager:
                     },
                 )
                 self._append_step_description(step, f" 并下载文件 {suggested}")
+                session = self.sessions.get(session_id)
+                if session:
+                    self._rebuild_manual_recording_state(session)
+                await self._record_manual_trace_for_step(session_id, step)
                 await self._broadcast_step(session_id, step)
                 return
             session = self.sessions.get(session_id)
@@ -1405,6 +1413,7 @@ class RPASessionManager:
                             last_step.action = "navigate_click"
                             last_step.url = evt.get("url", last_step.url)
                             last_step.description = f"{last_step.description} 并跳转页面"
+                            self._rebuild_manual_recording_state(session)
                             await self._record_manual_trace_for_step(session_id, last_step)
                             await self._broadcast_step(session_id, last_step)
                             logger.debug(f"[RPA] Upgraded click to navigate_click: {evt.get('url', '')[:60]}")
@@ -1412,6 +1421,7 @@ class RPASessionManager:
                         if last_step.action == "press":
                             last_step.action = "navigate_press"
                             last_step.url = evt.get("url", last_step.url)
+                            self._rebuild_manual_recording_state(session)
                             await self._record_manual_trace_for_step(session_id, last_step)
                             await self._broadcast_step(session_id, last_step)
                             logger.debug(f"[RPA] Upgraded press to navigate_press: {evt.get('url', '')[:60]}")

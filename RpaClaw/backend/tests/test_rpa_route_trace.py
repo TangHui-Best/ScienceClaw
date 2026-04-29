@@ -20,6 +20,7 @@ if "sse_starlette.sse" not in sys.modules:
             self.args = args
             self.kwargs = kwargs
 
+    sse_starlette_module.EventSourceResponse = EventSourceResponse
     sse_module.EventSourceResponse = EventSourceResponse
     sys.modules.setdefault("sse_starlette", sse_starlette_module)
     sys.modules["sse_starlette.sse"] = sse_module

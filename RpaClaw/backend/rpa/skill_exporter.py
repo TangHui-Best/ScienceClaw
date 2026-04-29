@@ -36,8 +36,11 @@ class SkillExporter:
         recording_meta: Dict[str, Any],
         projected_steps: list[Dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        legacy_steps = recording_meta.get("legacy_steps", [])
-        mcp_steps = projected_steps if projected_steps is not None else recording_meta.get("mcp_steps", legacy_steps)
+        is_trace_recording = recording_meta.get("recording_source") == "trace"
+        legacy_steps = [] if is_trace_recording else recording_meta.get("legacy_steps", [])
+        trace_steps = recording_meta.get("traces", []) if is_trace_recording else legacy_steps
+        mcp_steps = projected_steps if projected_steps is not None else recording_meta.get("mcp_steps", trace_steps)
+        display_steps = projected_steps if is_trace_recording and projected_steps is not None else trace_steps
         return {
             "version": 2,
             "kind": "rpa-recording",
@@ -48,7 +51,7 @@ class SkillExporter:
             "params": params,
             "recording_source": recording_meta.get("recording_source", "trace"),
             "recording": recording_meta,
-            "steps": legacy_steps,
+            "steps": display_steps,
             "mcp_steps": mcp_steps,
             "artifacts": ["SKILL.md", "params.json", "skill.py"],
         }
