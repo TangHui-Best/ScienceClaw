@@ -735,7 +735,18 @@ def _model_config_summary(model_config: Optional[Dict[str, Any]]) -> Dict[str, A
     if not isinstance(model_config, dict) or not model_config:
         return {}
     summary: Dict[str, Any] = {}
-    for key in ("provider", "model_name", "base_url", "context_window", "id", "name"):
+    for key in (
+        "provider",
+        "model_name",
+        "base_url",
+        "context_window",
+        "id",
+        "name",
+        "requested_user_id",
+        "selected_owner",
+        "resolution_reason",
+        "user_id",
+    ):
         value = model_config.get(key)
         if value not in (None, ""):
             summary[key] = value

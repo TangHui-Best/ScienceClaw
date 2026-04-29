@@ -25,7 +25,12 @@ from backend.rpa.trace_skill_compiler import TraceSkillCompiler
 from backend.rpa.mcp_step_projection import session_to_mcp_steps
 from backend.rpa.cdp_connector import get_cdp_connector
 from backend.rpa.screencast import SessionScreencastController
-from backend.user.dependencies import get_current_user, User
+from backend.user.dependencies import (
+    get_current_user,
+    get_user_from_session_id,
+    local_admin_identity_enabled,
+    User,
+)
 from backend.config import settings
 from backend.models import get_model_config, resolve_default_model_config
 from backend.storage import get_repository
@@ -352,9 +357,9 @@ async def _get_ws_user(websocket: WebSocket) -> User | None:
 
     Browser WebSocket APIs cannot attach custom Authorization headers in the
     same way axios does, so we accept a bearer token via query param as a
-    fallback and keep the existing local-mode shortcut.
+    fallback and keep the explicit no-auth local shortcut.
     """
-    if settings.storage_backend == "local":
+    if local_admin_identity_enabled():
         return User(id="local_admin", username="admin", role="admin")
 
     if getattr(settings, "auth_provider", "local") == "none":
@@ -364,24 +369,7 @@ async def _get_ws_user(websocket: WebSocket) -> User | None:
         websocket.query_params.get("token")
         or websocket.cookies.get(settings.session_cookie)
     )
-    if not session_id:
-        return None
-
-    repo = get_repository("user_sessions")
-    session_doc = await repo.find_one({"_id": session_id})
-    if not session_doc:
-        return None
-
-    import time
-    if session_doc.get("expires_at", 0) < time.time():
-        await repo.delete_one({"_id": session_id})
-        return None
-
-    return User(
-        id=str(session_doc["user_id"]),
-        username=session_doc["username"],
-        role=session_doc.get("role", "user"),
-    )
+    return await get_user_from_session_id(session_id)
 
 
 async def _get_http_user(request: Request) -> User | None:
@@ -390,7 +378,7 @@ async def _get_http_user(request: Request) -> User | None:
     This mirrors websocket auth so iframe-based noVNC pages can use either
     the session cookie or a `token` query param.
     """
-    if settings.storage_backend == "local":
+    if local_admin_identity_enabled():
         return User(id="local_admin", username="admin", role="admin")
 
     if getattr(settings, "auth_provider", "local") == "none":
@@ -400,24 +388,7 @@ async def _get_http_user(request: Request) -> User | None:
         request.query_params.get("token")
         or request.cookies.get(settings.session_cookie)
     )
-    if not session_id:
-        return None
-
-    repo = get_repository("user_sessions")
-    session_doc = await repo.find_one({"_id": session_id})
-    if not session_doc:
-        return None
-
-    import time
-    if session_doc.get("expires_at", 0) < time.time():
-        await repo.delete_one({"_id": session_id})
-        return None
-
-    return User(
-        id=str(session_doc["user_id"]),
-        username=session_doc["username"],
-        role=session_doc.get("role", "user"),
-    )
+    return await get_user_from_session_id(session_id)
 
 
 def _get_sandbox_vnc_ws_url() -> str:

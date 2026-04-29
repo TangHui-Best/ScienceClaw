@@ -45,6 +45,7 @@ import {
   getDefaultRpaAssistantModelId,
   shouldSubmitRpaAssistantComposer,
 } from '@/utils/rpaAssistantModel';
+import { buildRpaAssistantRequestHeaders } from '@/utils/rpaAssistantRequest';
 
 const router = useRouter();
 const route = useRoute();
@@ -809,10 +810,7 @@ const sendMessage = async () => {
   try {
     const resp = await fetch(`/api/v1/rpa/session/${sessionId.value}/chat`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${localStorage.getItem('token') || ''}`,
-      },
+      headers: buildRpaAssistantRequestHeaders(),
       body: JSON.stringify(buildRpaAssistantChatPayload(userText, selectedModelId.value)),
     });
 

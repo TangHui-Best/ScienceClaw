@@ -129,6 +129,9 @@ async def resolve_default_model_config(user_id: Optional[str] = None) -> Optiona
         "context_window": doc.get("context_window"),
         "is_system": bool(doc.get("is_system", False)),
         "user_id": doc.get("user_id"),
+        "requested_user_id": user_id,
+        "selected_owner": "system" if bool(doc.get("is_system", False)) else "user",
+        "resolution_reason": "system_fallback" if bool(doc.get("is_system", False)) else "user_active_model",
     }
 
 
