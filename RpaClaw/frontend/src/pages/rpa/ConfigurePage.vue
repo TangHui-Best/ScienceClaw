@@ -560,35 +560,6 @@ onMounted(async () => {
 
         <aside class="space-y-4 xl:sticky xl:top-24 xl:self-start">
           <section class="rounded-3xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#272728] p-5 shadow-sm">
-            <div class="flex items-center justify-between gap-3">
-              <div class="min-w-0">
-                <h2 class="text-base font-extrabold">脚本预览</h2>
-                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  {{ scriptGenerating ? '正在生成最终 Skill 脚本...' : (generatedScript ? '已根据录制 trace 生成最终脚本' : '脚本尚未生成') }}
-                </p>
-              </div>
-              <button
-                type="button"
-                class="shrink-0 rounded-full border border-[#831bd7]/25 px-3 py-1.5 text-xs font-semibold text-[#831bd7] transition-colors hover:bg-[#831bd7]/5 disabled:cursor-not-allowed disabled:opacity-50"
-                :disabled="!generatedScript || scriptGenerating || hasDiagnostics"
-                @click="isScriptDrawerOpen = true"
-              >
-                查看完整脚本
-              </button>
-            </div>
-            <div
-              v-if="hasDiagnostics"
-              class="mt-4 rounded-2xl border border-rose-200 dark:border-rose-900/60 bg-rose-50/80 dark:bg-rose-950/20 px-4 py-3 text-xs text-rose-700 dark:text-rose-300"
-            >
-              还有 {{ diagnostics.length }} 个待修复步骤，脚本预览与测试已暂时阻止。
-            </div>
-            <pre
-              v-if="generatedScript"
-              class="mt-4 max-h-56 overflow-auto rounded-2xl bg-[#0f1115] p-3 text-[11px] leading-5 text-emerald-300"
-            ><code>{{ generatedScript.slice(0, 1600) }}{{ generatedScript.length > 1600 ? '\n...' : '' }}</code></pre>
-          </section>
-
-          <section class="rounded-3xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#272728] p-5 shadow-sm">
             <div class="flex items-center gap-3">
               <div class="flex h-10 w-10 items-center justify-center rounded-2xl bg-[#f4eaff] text-[#831bd7]">
                 <Settings :size="18" />
