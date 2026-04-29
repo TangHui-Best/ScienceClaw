@@ -12,11 +12,17 @@ from backend.rpa.recording_runtime_agent import (
     RecordingRuntimeAgent,
     RECORDING_RUNTIME_SYSTEM_PROMPT,
     _classify_recording_failure,
+    _build_detail_extract_plan,
     _ensure_expected_effect,
+    _expected_effect,
+    _instruction_is_detail_extract_only,
+    _normalize_generated_playwright_code,
     _parse_json_object,
     _resolve_recording_snapshot_debug_dir,
     _resolve_recording_snapshot_debug_path,
+    _snapshot_plan_fields,
 )
+from backend.rpa.trace_skill_compiler import TraceSkillCompiler
 from backend.rpa.trace_models import RPAPageState
 
 
@@ -65,6 +71,9 @@ class _FakeLocator:
         return self
 
     async def click(self):
+        return None
+
+    async def fill(self, _value):
         return None
 
 
@@ -348,7 +357,7 @@ def _table_view_snapshot():
         "table_views": [
             {
                 "kind": "table_view",
-                "framework_hint": "aui-grid",
+                "framework_hint": "structured-grid",
                 "columns": [
                     {"index": 0, "column_id": "col_23", "header": "", "role": "row_index"},
                     {"index": 1, "column_id": "col_24", "header": "", "role": "selection"},
@@ -378,7 +387,7 @@ def _table_view_snapshot():
                             },
                             {"column_id": "col_28", "column_index": 3, "column_header": "导出状态", "text": "FINISH", "actions": []},
                         ],
-                        "locator_hints": [{"kind": "playwright", "expression": "page.locator('table.aui-grid__body tbody tr').nth(0)"}],
+                        "locator_hints": [{"kind": "playwright", "expression": "page.locator('table[data-role=\"grid-body\"] tbody tr').nth(0)"}],
                     },
                     {
                         "index": 1,
@@ -402,7 +411,7 @@ def _table_view_snapshot():
                             },
                             {"column_id": "col_28", "column_index": 3, "column_header": "导出状态", "text": "FINISH", "actions": []},
                         ],
-                        "locator_hints": [{"kind": "playwright", "expression": "page.locator('table.aui-grid__body tbody tr').nth(1)"}],
+                        "locator_hints": [{"kind": "playwright", "expression": "page.locator('table[data-role=\"grid-body\"] tbody tr').nth(1)"}],
                     },
                 ],
             }
@@ -418,7 +427,7 @@ def test_table_ordinal_lane_clicks_first_row_named_column_link():
 
     assert plan is not None
     assert plan["table_ordinal_overlay"] is True
-    assert "table.aui-grid__body tbody tr" in plan["code"]
+    assert "table[data-role=\"grid-body\"] tbody tr" in plan["code"]
     assert "td[data-colid='col_25'] a" in plan["code"]
     assert "File_189.xlsx" not in plan["code"]
 
@@ -596,6 +605,29 @@ def test_recording_runtime_prompt_does_not_advertise_table_snapshot_extracts():
     assert "fields/rows" not in RECORDING_RUNTIME_SYSTEM_PROMPT
 
 
+def test_recording_runtime_prompt_requires_terminal_business_evidence():
+    assert "business-visible terminal condition" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "do not unconditionally add a new row" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "scope field locators to the dialog/form container" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "structured snapshot.detail_views fields as the source of truth" in RECORDING_RUNTIME_SYSTEM_PROMPT
+
+
+def test_recording_runtime_prompt_uses_bounded_waits_and_avoids_callable_locator_names():
+    assert "short bounded waits" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "Do not pass Python lambda" in RECORDING_RUNTIME_SYSTEM_PROMPT
+
+
+def test_recording_runtime_prompt_includes_replay_metadata_contract():
+    assert "input_bindings" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "output_bindings" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "postcondition" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "in-page filter/search forms" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "intercepts pointer events" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "Do not click unnamed increment/decrement controls repeatedly" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "open a specific record" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "Do not return `downloaded: false`" in RECORDING_RUNTIME_SYSTEM_PROMPT
+
+
 def test_recording_snapshot_debug_dir_falls_back_to_backend_settings(monkeypatch):
     monkeypatch.delenv("RPA_RECORDING_DEBUG_SNAPSHOT_DIR", raising=False)
     monkeypatch.setitem(
@@ -635,7 +667,6 @@ async def test_recording_runtime_agent_accepts_successful_python_plan():
     assert result.trace.output == {"title": "Example"}
     assert result.trace.ai_execution.repair_attempted is False
 
-
 @pytest.mark.asyncio
 async def test_recording_runtime_agent_persists_runtime_ai_preserve_signal():
     async def planner(_payload):
@@ -664,8 +695,148 @@ async def test_recording_runtime_agent_persists_runtime_ai_preserve_signal():
     assert result.trace.signals["runtime_ai"]["reason"] == "select_best_matching_candidate"
 
 
-@pytest.mark.asyncio
-async def test_recording_runtime_agent_accepts_extract_snapshot_plan(monkeypatch):
+def test_recording_runtime_agent_persists_replay_metadata_into_compilable_trace(monkeypatch):
+    async def fake_build_page_snapshot(*_args, **_kwargs):
+        return {
+            "table_views": [
+                {
+                    "columns": [{"header": "Invoice"}, {"header": "Status"}],
+                    "rows": [
+                        {
+                            "cells": [
+                                {"column_header": "Invoice", "text": "INV-001"},
+                                {"column_header": "Status", "text": "Submitted"},
+                            ]
+                        }
+                    ],
+                }
+            ]
+        }
+
+    monkeypatch.setattr("backend.rpa.recording_runtime_agent.build_page_snapshot", fake_build_page_snapshot)
+
+    async def planner(_payload):
+        return {
+            "description": "Search invoice and verify row",
+            "action_type": "run_python",
+            "expected_effect": "fill",
+            "output_key": "invoice_search",
+            "input_bindings": {
+                "invoice_number": {
+                    "source": "user_param",
+                    "default": "INV-001",
+                    "classification": "user_param",
+                }
+            },
+            "output_bindings": {
+                "invoice_number": {"path": "invoice_number"},
+            },
+            "postcondition": {
+                "kind": "table_row_exists",
+                "source": "observed",
+                "table_headers": ["Invoice", "Status"],
+                "key": {"Invoice": "{{invoice_number}}"},
+                "expect": {"Status": "Submitted"},
+            },
+            "code": (
+                "async def run(page, results):\n"
+                "    await page.locator('input[name=invoice]').fill('INV-001')\n"
+                "    return {'action_performed': True, 'action_type': 'fill', 'invoice_number': 'INV-001'}"
+            ),
+        }
+
+    result = asyncio.run(
+        RecordingRuntimeAgent(planner=planner).run(
+            page=_FakePage(),
+            instruction="search invoice INV-001 and verify submitted row",
+            runtime_results={},
+        )
+    )
+
+    assert result.success is True
+    assert result.trace.input_bindings["invoice_number"]["default"] == "INV-001"
+    assert result.trace.output_bindings["invoice_number"]["path"] == "invoice_number"
+    assert result.trace.postcondition["kind"] == "table_row_exists"
+
+    script = TraceSkillCompiler().generate_script([result.trace], is_local=True)
+    assert "kwargs.get('invoice_number', 'INV-001')" in script
+    assert "await _find_table_row_by_headers" in script
+    assert ".fill('INV-001')" not in script
+
+
+def test_recording_runtime_agent_ignores_untrusted_planner_postcondition():
+    async def planner(_payload):
+        return {
+            "description": "Search invoice",
+            "action_type": "run_python",
+            "expected_effect": "fill",
+            "output_key": "invoice_search",
+            "postcondition": {
+                "kind": "table_row_exists",
+                "table_headers": ["Invoice", "Status"],
+                "key": {"Invoice": "INV-001"},
+                "expect": {"Status": "Done"},
+            },
+            "code": (
+                "async def run(page, results):\n"
+                "    await page.locator('input[name=invoice]').fill('INV-001')\n"
+                "    return {'action_performed': True, 'action_type': 'fill', 'invoice_number': 'INV-001'}"
+            ),
+        }
+
+    result = asyncio.run(
+        RecordingRuntimeAgent(planner=planner).run(
+            page=_FakePage(),
+            instruction="search invoice INV-001",
+            runtime_results={},
+        )
+    )
+
+    assert result.success is True
+    assert result.trace.postcondition == {}
+
+
+def test_recording_runtime_agent_ignores_postcondition_without_snapshot_evidence():
+    async def planner(_payload):
+        return {
+            "description": "Search invoice",
+            "action_type": "run_python",
+            "expected_effect": "fill",
+            "output_key": "invoice_search",
+            "input_bindings": {
+                "invoice_number": {
+                    "source": "user_param",
+                    "default": "INV-001",
+                    "classification": "user_param",
+                }
+            },
+            "postcondition": {
+                "kind": "table_row_exists",
+                "source": "observed",
+                "table_headers": ["Header"],
+                "key": {"Header": "{{invoice_number}}"},
+                "expect": {"Status": "Done"},
+            },
+            "code": (
+                "async def run(page, results):\n"
+                "    await page.locator('input[name=invoice]').fill('INV-001')\n"
+                "    return {'action_performed': True, 'action_type': 'fill', 'invoice_number': 'INV-001'}"
+            ),
+        }
+
+    result = asyncio.run(
+        RecordingRuntimeAgent(planner=planner).run(
+            page=_FakePage(),
+            instruction="search invoice INV-001",
+            runtime_results={},
+        )
+    )
+
+    assert result.success is True
+    assert result.trace.postcondition == {}
+
+
+def test_recording_runtime_agent_accepts_extract_snapshot_plan(monkeypatch):
     async def fake_build_page_snapshot(_page, _build_frame_path):
         return {
             "url": "https://example.test/detail",
@@ -705,10 +876,12 @@ async def test_recording_runtime_agent_accepts_extract_snapshot_plan(monkeypatch
 
     monkeypatch.setattr("backend.rpa.recording_runtime_agent.build_page_snapshot", fake_build_page_snapshot)
 
-    result = await RecordingRuntimeAgent(planner=planner).run(
-        page=_FakePage(),
+    result = asyncio.run(
+        RecordingRuntimeAgent(planner=planner).run(
+            page=_FakePage(),
         instruction="提取采购信息中的内容",
-        runtime_results={},
+            runtime_results={},
+        )
     )
 
     assert result.success is True
@@ -718,6 +891,77 @@ async def test_recording_runtime_agent_accepts_extract_snapshot_plan(monkeypatch
     assert "预计总金额 (含税）" in result.trace.ai_execution.code
     assert result.trace.signals["extract_snapshot"]["source"] == "detail_views"
     assert result.trace.signals["extract_snapshot"]["fields"][0]["data_prop"] == "2652409177955720363"
+
+
+def test_recording_runtime_agent_enriches_snapshot_extract_with_replay_evidence(monkeypatch):
+    async def fake_build_page_snapshot(_page, _build_frame_path):
+        return {
+            "url": "https://github.com/mattpocock/skills",
+            "title": "Repository",
+            "frames": [],
+            "actionable_nodes": [
+                {
+                    "role": "link",
+                    "tag": "a",
+                    "name": "Star 32.2k",
+                    "text": "Star 32.2k",
+                    "element_snapshot": {"tag": "a", "text": "Star 32.2k"},
+                }
+            ],
+            "content_nodes": [
+                {
+                    "semantic_kind": "text",
+                    "tag": "a",
+                    "text": "32.2k stars",
+                    "element_snapshot": {"tag": "a", "text": "32.2k stars"},
+                },
+                {
+                    "semantic_kind": "text",
+                    "tag": "a",
+                    "text": "2.5k forks",
+                    "element_snapshot": {"tag": "a", "text": "2.5k forks"},
+                },
+            ],
+            "containers": [],
+            "detail_views": [],
+        }
+
+    async def planner(_payload):
+        return {
+            "description": "Extract repository summary",
+            "action_type": "extract_snapshot",
+            "expected_effect": "extract",
+            "output_key": "repo_basic_info",
+            "source": "visible_page",
+            "fields": [
+                {"label": "project_name", "value": "mattpocock/skills", "visible": True},
+                {"label": "star_count", "value": "32.2k", "visible": True},
+                {"label": "fork_count", "value": "2.5k", "visible": True},
+            ],
+        }
+
+    monkeypatch.setattr("backend.rpa.recording_runtime_agent.build_page_snapshot", fake_build_page_snapshot)
+
+    result = asyncio.run(
+        RecordingRuntimeAgent(planner=planner).run(
+            page=_FakePage(),
+            instruction="Extract repository project name, stars, and forks",
+            runtime_results={},
+        )
+    )
+
+    fields = {field["label"]: field for field in result.trace.signals["extract_snapshot"]["fields"]}
+
+    assert fields["project_name"]["url_extraction"] == {
+        "kind": "url_path_join",
+        "start": 0,
+        "count": 2,
+        "separator": "/",
+    }
+    assert fields["star_count"]["text_pattern"]["suffix"] == "stars"
+    assert fields["fork_count"]["text_pattern"]["suffix"] == "forks"
+    assert fields["star_count"]["text_pattern"]["value"] == "32.2k"
+    assert fields["fork_count"]["text_pattern"]["value"] == "2.5k"
 
 
 @pytest.mark.asyncio
@@ -892,6 +1136,332 @@ async def test_ensure_expected_effect_accepts_run_python_click_when_url_changes(
 
 
 @pytest.mark.asyncio
+async def test_ensure_expected_effect_accepts_mixed_with_action_evidence_without_url_change():
+    page = _FakePage()
+    before = RPAPageState(url=page.url, title="Example")
+
+    result = await _ensure_expected_effect(
+        page=page,
+        instruction="fill the form and collect the confirmation",
+        plan={"action_type": "run_python", "expected_effect": "mixed"},
+        result={"success": True, "effect": {"type": "fill", "action_performed": True}},
+        before=before,
+    )
+
+    assert result["success"] is True
+    assert page.url == before.url
+    assert result["effect"]["action_performed"] is True
+
+
+@pytest.mark.asyncio
+async def test_ensure_expected_effect_accepts_mixed_with_structured_output_without_url_change():
+    page = _FakePage()
+    before = RPAPageState(url=page.url, title="Example")
+
+    result = await _ensure_expected_effect(
+        page=page,
+        instruction="submit the search and capture the selected row",
+        plan={"action_type": "run_python", "expected_effect": "mixed"},
+        result={"success": True, "output": {"selected_row": {"name": "alpha", "status": "ready"}}},
+        before=before,
+    )
+
+    assert result["success"] is True
+    assert page.url == before.url
+    assert result["output"]["selected_row"]["name"] == "alpha"
+
+
+@pytest.mark.asyncio
+async def test_ensure_expected_effect_rejects_mixed_error_shaped_output_without_url_change():
+    page = _FakePage()
+    before = RPAPageState(url=page.url, title="Example")
+
+    result = await _ensure_expected_effect(
+        page=page,
+        instruction="submit the form",
+        plan={"action_type": "run_python", "expected_effect": "mixed"},
+        result={"success": True, "output": {"error": "submit button was not found"}},
+        before=before,
+    )
+
+    assert result["success"] is False
+    assert "Expected navigation effect" in result["error"]
+
+
+def test_ensure_expected_effect_rejects_visible_error_output_even_when_url_changes():
+    page = _FakeNavigatedPage()
+
+    result = asyncio.run(
+        _ensure_expected_effect(
+            page=page,
+            instruction="submit the form and create the record",
+            plan={"action_type": "run_python", "expected_effect": "mixed"},
+            result={"success": True, "output": {"body_text_excerpt": "Record not found\nPlease complete required fields"}},
+            before=RPAPageState(url="https://example.test/form", title="Form"),
+        )
+    )
+
+    assert result["success"] is False
+    assert "visible error" in result["error"]
+
+
+def test_ensure_expected_effect_rejects_nonterminal_download_output():
+    page = _FakePage()
+    before = RPAPageState(url=page.url, title="Example")
+
+    result = asyncio.run(
+        _ensure_expected_effect(
+            page=page,
+            instruction="generate the report and download it",
+            plan={"action_type": "run_python", "expected_effect": "mixed"},
+            result={"success": True, "output": {"task_state": "not_confirmed_complete", "downloaded": False}},
+            before=before,
+        )
+    )
+
+    assert result["success"] is False
+    assert "terminal success evidence" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_ensure_expected_effect_accepts_mixed_with_download_signal_without_url_change():
+    page = _FakePage()
+    before = RPAPageState(url=page.url, title="Example")
+
+    result = await _ensure_expected_effect(
+        page=page,
+        instruction="generate and download the report",
+        plan={"action_type": "run_python", "expected_effect": "mixed"},
+        result={"success": True, "signals": {"download": {"filename": "report.xlsx", "count": 1}}},
+        before=before,
+    )
+
+    assert result["success"] is True
+    assert page.url == before.url
+    assert result["signals"]["download"]["filename"] == "report.xlsx"
+
+
+def test_expected_effect_treats_extract_snapshot_as_extract_even_when_plan_says_navigate():
+    assert (
+        _expected_effect(
+            {
+                "action_type": "extract_snapshot",
+                "expected_effect": "navigate",
+            },
+            "打开详情并提取字段",
+        )
+        == "extract"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ensure_expected_effect_accepts_extract_snapshot_signal_even_if_plan_says_navigate():
+    page = _FakePage()
+
+    result = await _ensure_expected_effect(
+        page=page,
+        instruction="打开详情并提取字段",
+        plan={"action_type": "extract_snapshot", "expected_effect": "navigate"},
+        result={
+            "success": True,
+            "output": {"合同编号": "CT-001"},
+            "signals": {"extract_snapshot": {"source": "detail_views"}},
+        },
+        before=RPAPageState(url=page.url, title="Example"),
+    )
+
+    assert result["success"] is True
+    assert result["output"] == {"合同编号": "CT-001"}
+
+
+def test_compact_snapshot_preserves_active_modal_dialogs():
+    compact = recording_runtime_agent._compact_snapshot(
+        {
+            "url": "https://example.test/orders",
+            "title": "Orders",
+            "frames": [],
+            "content_nodes": [],
+            "actionable_nodes": [],
+            "containers": [],
+            "table_views": [],
+            "detail_views": [],
+            "modal_dialogs": [
+                {
+                    "title": "Approve order",
+                    "role": "dialog",
+                    "modal": True,
+                    "fields": [{"label": "Comment", "value": ""}],
+                    "actions": [
+                        {
+                            "label": "Approve",
+                            "locator": {"method": "testid", "value": "approve"},
+                        }
+                    ],
+                }
+            ],
+        },
+        "approve the order in the dialog",
+    )
+
+    assert compact["modal_dialogs"][0]["title"] == "Approve order"
+    assert compact["modal_dialogs"][0]["fields"][0]["label"] == "Comment"
+    assert compact["modal_dialogs"][0]["actions"][0]["label"] == "Approve"
+
+
+def test_detail_extract_plan_uses_visible_detail_fields_for_extract_requests():
+    plan = _build_detail_extract_plan(
+        "提取当前合同详情字段",
+        {
+            "detail_views": [
+                {
+                    "section_title": "合同详情",
+                    "frame_path": [],
+                    "fields": [
+                        {"label": "合同编号", "value": "CT-001", "visible": True},
+                        {"label": "内部标识", "value": "hidden", "visible": False},
+                    ],
+                }
+            ]
+        },
+    )
+
+    assert plan is not None
+    assert plan["action_type"] == "extract_snapshot"
+    assert plan["expected_effect"] == "extract"
+    assert plan["fields"][0]["label"] == "合同编号"
+    assert plan["fields"][0]["value"] == "CT-001"
+    assert plan["fields"][0]["visible"] is True
+    assert len(plan["fields"]) == 1
+
+
+def test_empty_search_plan_extracts_query_token_and_returns_run_python():
+    pytest.skip("empty-result search is now planner-driven, not a deterministic shortcut")
+    plan = _build_empty_search_plan(
+        "搜索不存在的编号 NO-SUCH-RECORD-001，确认没有匹配结果",
+        {"table_views": [{"rows": [{"cells": []}]}]},
+    )
+
+    assert plan is not None
+    assert plan["action_type"] == "run_python"
+    assert plan["expected_effect"] == "mixed"
+    assert "NO-SUCH-RECORD-001" in plan["code"]
+    assert "没有匹配结果" in plan["code"]
+
+
+def test_normalize_generated_playwright_code_repairs_common_python_api_typo():
+    assert (
+        _normalize_generated_playwright_code("await page.get_by_testid('submit').click()")
+        == "await page.get_by_test_id('submit').click()"
+    )
+
+
+def test_recording_runtime_main_path_has_no_domain_specific_terms():
+    source = Path(recording_runtime_agent.__file__).read_text(encoding="utf-8")
+    domain_terms = [
+        "采购申请",
+        "采购订单",
+        "合同编号",
+        "供应商",
+        "报表中心",
+    ]
+
+    for term in domain_terms:
+        assert term not in source
+
+
+def test_recording_failure_classifies_active_overlay_interception():
+    analysis = _classify_recording_failure(
+        'Locator.click: Timeout 60000ms exceeded. <div role="dialog"> intercepts pointer events'
+    )
+
+    assert analysis["type"] == "active_overlay_intercepted_click"
+    assert "visible dialog" in analysis["hint"]
+
+
+def test_recording_failure_classifies_non_editable_fill_target():
+    analysis = _classify_recording_failure(
+        "Locator.fill: Error: Element is not an <input>, <textarea>, <select> or [contenteditable]"
+    )
+
+    assert analysis["type"] == "non_editable_fill_target"
+
+
+def test_recording_failure_classifies_number_input_text_fill():
+    analysis = _classify_recording_failure(
+        "Locator.fill: Error: Cannot type text into input[type=number]\n"
+        "  - locator resolved to <input type=\"number\" role=\"spinbutton\"/>"
+    )
+
+    assert analysis["type"] == "numeric_input_text_mismatch"
+    assert "number input" in analysis["hint"]
+
+
+def test_runtime_agent_uses_planner_for_search_empty_result_semantics(monkeypatch):
+    calls = []
+
+    async def fake_snapshot(_page):
+        return {
+            "url": "https://example.test/items",
+            "title": "Items",
+            "table_views": [
+                {
+                    "columns": [{"header": "Number"}],
+                    "rows": [],
+                }
+            ],
+        }
+
+    async def planner(payload):
+        calls.append(payload)
+        return {
+            "description": "LLM semantic plan",
+            "action_type": "run_python",
+            "expected_effect": "extract",
+            "allow_empty_output": False,
+            "output_key": "llm_result",
+            "code": "async def run(page, results):\n    return {'ok': True}",
+        }
+
+    async def executor(_page, plan, _runtime_results):
+        return {"success": True, "output": {"used": plan["output_key"]}}
+
+    monkeypatch.setattr(recording_runtime_agent, "_safe_page_snapshot", fake_snapshot)
+
+    result = asyncio.run(
+        RecordingRuntimeAgent(planner=planner, executor=executor).run(
+            page=_FakePage(),
+            instruction="Search for ABC-404 and confirm that there is no matching record.",
+        )
+    )
+
+    assert result.success is True
+    assert calls
+    assert result.output == {"used": "llm_result"}
+
+
+@pytest.mark.asyncio
+async def test_ensure_expected_effect_accepts_run_python_fill_with_structured_output():
+    page = _FakePage()
+    before = RPAPageState(url=page.url, title="Example")
+
+    result = await _ensure_expected_effect(
+        page=page,
+        instruction="fill and submit the dialog",
+        plan={
+            "action_type": "run_python",
+            "expected_effect": "fill",
+            "code": "async def run(page, results):\n    await page.locator('input').fill('ok')\n    return {'submitted': True}",
+        },
+        result={"success": True, "output": {"submitted": True}},
+        before=before,
+    )
+
+    assert result["success"] is True
+    assert result["effect"]["action_performed"] is True
+    assert result["effect"]["generic_evidence"] == "structured_output"
+
+
+@pytest.mark.asyncio
 async def test_recording_runtime_agent_repairs_once_after_failure():
     calls = []
 
@@ -1003,6 +1573,122 @@ async def test_recording_runtime_agent_sends_advisory_failure_hint_to_repair_pla
     assert "hint" in repair_payload["failure_analysis"]
     assert "confidence" not in repair_payload["failure_analysis"]
     assert result.diagnostics[0].raw["failure_analysis"]["type"] == "selector_timeout"
+
+
+def test_recording_runtime_agent_does_not_preserve_failed_browser_mutation_attempts():
+    plans = [
+        {
+            "description": "Submit form",
+            "action_type": "run_python",
+            "expected_effect": "mixed",
+            "code": "async def run(page, results):\n    await page.get_by_role('button', name='Submit').click()\n    raise RuntimeError('terminal state not observed')",
+        },
+        {
+            "description": "Verify result",
+            "action_type": "run_python",
+            "expected_effect": "none",
+            "output_key": "created_record",
+            "code": "async def run(page, results):\n    return {'id': 'ID-1'}",
+        },
+    ]
+    calls = []
+
+    async def planner(_payload):
+        return plans[len(calls)]
+
+    async def executor(_page, plan, _runtime_results):
+        calls.append(plan)
+        if len(calls) == 1:
+            return {"success": False, "error": "terminal state not observed", "output": {"submitted": True}}
+        return {"success": True, "output": {"id": "ID-1"}}
+
+    result = asyncio.run(
+        RecordingRuntimeAgent(planner=planner, executor=executor).run(
+            page=_FakePage(),
+            instruction="submit the form and verify the created record",
+            runtime_results={},
+        )
+    )
+
+    assert result.success is True
+    assert len(result.traces) == 1
+    assert "recovered_attempt" not in result.traces[0].signals
+    assert result.trace == result.traces[0]
+
+
+def test_recording_runtime_agent_repairs_invalid_planner_output():
+    calls = []
+
+    async def planner(payload):
+        calls.append(payload)
+        if "repair" not in payload:
+            raise ValueError("Recording planner must return Python code defining async def run(page, results)")
+        return {
+            "description": "Verify result after planner repair",
+            "action_type": "run_python",
+            "expected_effect": "none",
+            "output_key": "verified",
+            "code": "async def run(page, results):\n    return {'status': 'ok'}",
+        }
+
+    result = asyncio.run(
+        RecordingRuntimeAgent(planner=planner).run(
+            page=_FakePage(),
+            instruction="click submit and verify result",
+            runtime_results={},
+        )
+    )
+
+    assert result.success is True
+    assert len(calls) == 2
+    assert calls[1]["repair"]["error"].startswith("Recording planner must return Python code")
+    assert result.diagnostics[0].raw["error_type"] == "ValueError"
+
+
+def test_detail_extract_intent_excludes_open_filter_navigation_tasks():
+    assert _instruction_is_detail_extract_only("提取当前详情页中的供应商和金额")
+    assert not _instruction_is_detail_extract_only("筛选合同并打开详情页读取供应商和金额")
+    assert not _instruction_is_detail_extract_only("navigate to the contract page and read the amount")
+
+
+def test_detail_extract_intent_does_not_strip_context_or_negative_guardrails():
+    instruction = """
+    你正在执行 RPA 任务。系统已经完成登录，并已导航到起始页面。
+    请只执行下面的业务任务，不要重新登录，不要把打开当前页面当作完成。
+    当前已经在详情页。请从页面字段中提取供应商、金额和有效期，并在回答中列出。
+    """
+
+    assert not _instruction_is_detail_extract_only(instruction)
+    assert _instruction_is_detail_extract_only("当前已经在详情页。请从页面字段中提取供应商、金额和有效期，并在回答中列出。")
+
+
+def test_detail_extract_plan_combines_multiple_detail_views():
+    snapshot = {
+        "detail_views": [
+            {"section_title": "基本信息", "fields": [{"label": "编号", "value": "A-1", "visible": True}]},
+            {"section_title": "供应商", "fields": [{"label": "名称", "value": "Acme", "visible": True}]},
+        ]
+    }
+
+    plan = _build_detail_extract_plan("提取当前详情页中的字段", snapshot)
+
+    assert plan is not None
+    assert [field["label"] for field in plan["fields"]] == ["编号", "名称"]
+    assert plan["section_title"] == "基本信息 / 供应商"
+
+
+def test_normalize_generated_playwright_code_removes_unsupported_filter_kwargs():
+    code = (
+        "async def run(page, results):\n"
+        "    loc = page.locator('input').filter(has_attribute='placeholder', has_text='')\n"
+        "    other = page.locator('input').filter(has_attribute='disabled')\n"
+    )
+
+    normalized = _normalize_generated_playwright_code(code)
+
+    assert "has_attribute" not in normalized
+    assert ".filter(has_text='')" in normalized
+    assert "other = page.locator('input')" in normalized
 
 
 @pytest.mark.asyncio
@@ -1700,6 +2386,186 @@ def test_parse_json_object_accepts_fenced_json():
 
     assert parsed["description"] == "Run"
     assert "async def run(page, results)" in parsed["code"]
+
+
+def test_parse_json_object_accepts_fenced_json_with_trailing_prose():
+    payload = {
+        "description": "Run",
+        "action_type": "run_python",
+        "code": "async def run(page, results):\n    return {'ok': True}",
+    }
+
+    parsed = _parse_json_object("```json\n" + json.dumps(payload) + "\n```\nThis is the plan.")
+
+    assert parsed["description"] == "Run"
+    assert "async def run(page, results)" in parsed["code"]
+
+
+def test_parse_json_object_accepts_first_valid_object_before_trailing_text():
+    payload = {
+        "description": "Run",
+        "action_type": "run_python",
+        "code": "async def run(page, results):\n    return {'ok': True}",
+    }
+
+    parsed = _parse_json_object(json.dumps(payload) + "\nI will now execute this step with {notes}.")
+
+    assert parsed["description"] == "Run"
+    assert "async def run(page, results)" in parsed["code"]
+
+
+def test_parse_json_object_skips_prose_example_before_valid_plan():
+    payload = {
+        "description": "Run actual plan",
+        "action_type": "run_python",
+        "code": "async def run(page, results):\n    return {'ok': True}",
+    }
+
+    parsed = _parse_json_object('Example: {"foo": "bar"}\nPlan:\n' + json.dumps(payload))
+
+    assert parsed["description"] == "Run actual plan"
+    assert "async def run(page, results)" in parsed["code"]
+
+
+def test_parse_json_object_rejects_invalid_primary_plan_before_later_example():
+    invalid_primary = {
+        "description": "Invalid primary plan",
+        "action_type": "run_python",
+        "code": "print('missing async runner')",
+    }
+    later_example = {
+        "description": "Example only",
+        "action_type": "run_python",
+        "code": "async def run(page, results):\n    return {'example': True}",
+    }
+
+    with pytest.raises(ValueError, match="async def run"):
+        _parse_json_object(json.dumps(invalid_primary) + "\nExample fallback:\n" + json.dumps(later_example))
+
+
+def test_snapshot_plan_fields_accepts_mapping_values_and_preserves_list_fields():
+    list_fields = [{"label": "Owner", "value": "Ada", "visible": False}]
+
+    assert _snapshot_plan_fields({"fields": {"Project": "Apollo"}}) == [
+        {"label": "Project", "value": "Apollo"}
+    ]
+    assert _snapshot_plan_fields({"fields": list_fields}) == list_fields
+
+
+def test_snapshot_plan_fields_flattens_nested_label_value_objects():
+    assert _snapshot_plan_fields(
+        {
+            "fields": {
+                "contract_number": {
+                    "label": "合同编号",
+                    "value": "CT-001",
+                }
+            }
+        }
+    ) == [{"label": "contract_number", "value": "CT-001", "observed_label": "合同编号"}]
+
+
+def test_extract_snapshot_enrichment_backfills_observed_label_from_detail_value():
+    result = {
+        "signals": {
+            "extract_snapshot": {
+                "fields": [
+                    {
+                        "label": "compliance_summary",
+                        "value": "Must keep audit logs.",
+                        "replay_required": True,
+                    }
+                ]
+            }
+        }
+    }
+    snapshot = {
+        "detail_views": [
+            {
+                "fields": [
+                    {
+                        "label": "Compliance clause",
+                        "value": "Must keep audit logs.",
+                    }
+                ]
+            }
+        ]
+    }
+
+    enriched = recording_runtime_agent._enrich_extract_snapshot_result_with_replay_evidence(result, snapshot)
+
+    field = enriched["signals"]["extract_snapshot"]["fields"][0]
+    assert field["observed_label"] == "Compliance clause"
+
+
+def test_extract_snapshot_enrichment_overrides_unobserved_label_from_detail_value():
+    result = {
+        "signals": {
+            "extract_snapshot": {
+                "fields": [
+                    {
+                        "label": "compliance_summary",
+                        "value": "Must keep audit logs.",
+                        "observed_label": "Compliance summary",
+                        "replay_required": True,
+                    }
+                ]
+            }
+        }
+    }
+    snapshot = {
+        "detail_views": [
+            {
+                "fields": [
+                    {
+                        "label": "Compliance clause",
+                        "value": "Must keep audit logs.",
+                    }
+                ]
+            }
+        ]
+    }
+
+    enriched = recording_runtime_agent._enrich_extract_snapshot_result_with_replay_evidence(result, snapshot)
+
+    field = enriched["signals"]["extract_snapshot"]["fields"][0]
+    assert field["observed_label"] == "Compliance clause"
+
+
+def test_extract_snapshot_enrichment_resolves_label_value_mistake_from_detail_view():
+    result = {
+        "output": {"contract_number": "Contract number"},
+        "signals": {
+            "extract_snapshot": {
+                "fields": [
+                    {
+                        "label": "contract_number",
+                        "value": "Contract number",
+                        "replay_required": True,
+                    }
+                ]
+            }
+        },
+    }
+    snapshot = {
+        "detail_views": [
+            {
+                "fields": [
+                    {
+                        "label": "Contract number",
+                        "value": "CT-001",
+                    }
+                ]
+            }
+        ]
+    }
+
+    enriched = recording_runtime_agent._enrich_extract_snapshot_result_with_replay_evidence(result, snapshot)
+
+    field = enriched["signals"]["extract_snapshot"]["fields"][0]
+    assert field["observed_label"] == "Contract number"
+    assert field["value"] == "CT-001"
+    assert enriched["output"]["contract_number"] == "CT-001"
 
 
 def test_parse_json_object_rejects_run_python_without_runner():

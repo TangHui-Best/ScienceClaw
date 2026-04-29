@@ -85,11 +85,25 @@ class RpaClawClient:
     def navigate(self, session_id: str, url: str) -> None:
         self._json_request("POST", f"/api/v1/rpa/session/{session_id}/navigate", {"url": url})
 
-    def chat(self, session_id: str, instruction: str) -> list[dict[str, Any]]:
-        return list(self.iter_chat_events(session_id, instruction))
+    def chat(
+        self,
+        session_id: str,
+        instruction: str,
+        *,
+        business_instruction: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return list(self.iter_chat_events(session_id, instruction, business_instruction=business_instruction))
 
-    def iter_chat_events(self, session_id: str, instruction: str) -> Iterable[dict[str, Any]]:
+    def iter_chat_events(
+        self,
+        session_id: str,
+        instruction: str,
+        *,
+        business_instruction: str | None = None,
+    ) -> Iterable[dict[str, Any]]:
         payload = {"message": instruction, "mode": "chat"}
+        if business_instruction:
+            payload["business_instruction"] = business_instruction
         if self.model_config_id:
             payload["model_config_id"] = self.model_config_id
         req = self._request(
@@ -117,16 +131,17 @@ class RpaClawClient:
         instruction: str,
         *,
         timeout_s: float | None,
+        business_instruction: str | None = None,
     ) -> list[dict[str, Any]]:
         if timeout_s is None:
-            return self.chat(session_id, instruction)
+            return self.chat(session_id, instruction, business_instruction=business_instruction)
 
         events: list[dict[str, Any]] = []
         errors: list[BaseException] = []
 
         def consume_events() -> None:
             try:
-                for event in self.iter_chat_events(session_id, instruction):
+                for event in self.iter_chat_events(session_id, instruction, business_instruction=business_instruction):
                     events.append(event)
             except BaseException as exc:
                 errors.append(exc)
@@ -134,7 +149,17 @@ class RpaClawClient:
         worker = threading.Thread(target=consume_events, name=f"rpa-eval-chat-{session_id}", daemon=True)
         started = time.perf_counter()
         worker.start()
-        worker.join(timeout_s)
+        deadline = started + timeout_s
+        while worker.is_alive() and time.perf_counter() < deadline:
+            worker.join(min(1.0, max(0.0, deadline - time.perf_counter())))
+            if any(str(event.get("event") or "") in TERMINAL_EVENTS for event in events):
+                self.stop_session(session_id, ignore_errors=True)
+                worker.join(5)
+                return events
+        if any(str(event.get("event") or "") in TERMINAL_EVENTS for event in events):
+            self.stop_session(session_id, ignore_errors=True)
+            worker.join(5)
+            return events
         if worker.is_alive():
             elapsed = round(time.perf_counter() - started, 1)
             self.stop_session(session_id, ignore_errors=True)
@@ -151,6 +176,23 @@ class RpaClawClient:
     def get_session(self, session_id: str) -> dict[str, Any]:
         response = self._json_request("GET", f"/api/v1/rpa/session/{session_id}")
         return response.get("session", response)
+
+    def generate_script(self, session_id: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._json_request("POST", f"/api/v1/rpa/session/{session_id}/generate", {"params": params or {}})
+
+    def test_script(
+        self,
+        session_id: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout_s: float | None = None,
+    ) -> dict[str, Any]:
+        return self._json_request(
+            "POST",
+            f"/api/v1/rpa/session/{session_id}/test",
+            {"params": params or {}},
+            timeout_s=timeout_s,
+        )
 
     def stop_session(self, session_id: str, *, ignore_errors: bool = False) -> None:
         try:
@@ -184,10 +226,17 @@ class RpaClawClient:
         )
         raise RpaClawError(f"Model '{model_name}' was not found. Available models: {available}")
 
-    def _json_request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _json_request(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        timeout_s: float | None = None,
+    ) -> dict[str, Any]:
         req = self._request(method, path, payload)
         try:
-            with request.urlopen(req, timeout=self.timeout_s) as response:
+            with request.urlopen(req, timeout=timeout_s or self.timeout_s) as response:
                 raw = response.read().decode("utf-8")
         except error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
@@ -195,7 +244,7 @@ class RpaClawClient:
         except error.URLError as exc:
             raise RpaClawError(f"{method} {path} failed: {exc.reason}") from exc
         except TimeoutError as exc:
-            raise RpaClawError(f"{method} {path} timed out after {self.timeout_s}s") from exc
+            raise RpaClawError(f"{method} {path} timed out after {timeout_s or self.timeout_s}s") from exc
         return json.loads(raw or "{}")
 
     def _request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> request.Request:

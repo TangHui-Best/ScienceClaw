@@ -68,6 +68,7 @@ class ChatRequest(BaseModel):
     message: str
     mode: str = "chat"
     model_config_id: str | None = None
+    business_instruction: str | None = None
 
 
 class ConfirmRequest(BaseModel):
@@ -332,8 +333,11 @@ def _ensure_session_owner(session, current_user: User) -> None:
 async def _apply_recording_agent_result(session_id: str, result: RecordingAgentResult) -> None:
     for diagnostic in result.diagnostics:
         await rpa_manager.append_trace_diagnostic(session_id, diagnostic)
-    if result.trace:
-        await rpa_manager.append_trace(session_id, result.trace)
+    traces = list(result.traces or [])
+    if result.trace and not traces:
+        traces = [result.trace]
+    for trace in traces:
+        await rpa_manager.append_trace(session_id, trace)
     if result.output_key:
         rpa_manager.write_runtime_result(session_id, result.output_key, result.output)
 
@@ -918,11 +922,12 @@ async def chat_with_assistant(
                     "data": json.dumps({"text": "Planning one trace-first recording command."}, ensure_ascii=False),
                 }
                 agent = RecordingRuntimeAgent(model_config=model_config)
+                recording_instruction = (request.business_instruction or "").strip() or request.message
                 result = await agent.run(
                     page=page,
-                    instruction=request.message,
+                    instruction=recording_instruction,
                     runtime_results=session.runtime_results.values,
-                    debug_context={"session_id": session_id},
+                    debug_context={"session_id": session_id, "original_message": request.message},
                 )
                 await _apply_recording_agent_result(session_id, result)
 
