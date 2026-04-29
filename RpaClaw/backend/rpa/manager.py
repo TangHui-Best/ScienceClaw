@@ -66,10 +66,30 @@ class RPATab(BaseModel):
     status: str = "open"
 
 
+class RPASkillConfigParam(BaseModel):
+    original_value: str = ""
+    default_value: Optional[str] = None
+    enabled: bool = True
+    sensitive: bool = False
+    credential_id: str = ""
+    type: str = "string"
+    description: str = ""
+    required: bool = False
+
+
+class RPASkillConfigDraft(BaseModel):
+    skill_name: str = ""
+    description: str = ""
+    params: Dict[str, RPASkillConfigParam] = Field(default_factory=dict)
+    updated_at: datetime = Field(default_factory=datetime.now)
+
+
 class RPASession(BaseModel):
     id: str
     user_id: str
     start_time: datetime = Field(default_factory=datetime.now)
+    last_activity_at: datetime = Field(default_factory=datetime.now)
+    stopped_at: Optional[datetime] = None
     status: str = "recording"  # recording, stopped, testing, saved
     steps: List[RPAStep] = Field(default_factory=list)
     recorded_actions: List[ManualRecordedAction] = Field(default_factory=list)
@@ -77,6 +97,7 @@ class RPASession(BaseModel):
     traces: List[RPAAcceptedTrace] = Field(default_factory=list)
     trace_diagnostics: List[RPATraceDiagnostic] = Field(default_factory=list)
     runtime_results: RPARuntimeResults = Field(default_factory=RPARuntimeResults)
+    skill_config_draft: Optional[RPASkillConfigDraft] = None
     llm_model_config: Optional[Dict[str, Any]] = None
     pending_download_events: List[Dict[str, Any]] = Field(default_factory=list)
     sandbox_session_id: str
@@ -111,6 +132,39 @@ class RPASessionManager:
         self._pending_hover_candidates: Dict[str, List[Dict[str, Any]]] = {}
         self._pending_event_counts: Dict[str, int] = {}
         self._pending_event_idle: Dict[str, asyncio.Event] = {}
+
+    def touch_session(self, session_id: str) -> None:
+        session = self.sessions.get(session_id)
+        if session:
+            session.last_activity_at = datetime.now()
+
+    def update_skill_config_draft(
+        self,
+        session_id: str,
+        draft: RPASkillConfigDraft,
+    ) -> RPASkillConfigDraft:
+        session = self.sessions.get(session_id)
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+        draft.updated_at = datetime.now()
+        session.skill_config_draft = draft
+        self.touch_session(session_id)
+        return draft
+
+    def cleanup_expired_sessions(self, max_idle_seconds: int) -> List[str]:
+        now = datetime.now()
+        removed: List[str] = []
+        for session_id, session in list(self.sessions.items()):
+            if session.status == "saved":
+                continue
+            idle_seconds = (now - session.last_activity_at).total_seconds()
+            if idle_seconds <= max_idle_seconds:
+                continue
+            self.detach_context(session_id)
+            self.sessions.pop(session_id, None)
+            self.ws_connections.pop(session_id, None)
+            removed.append(session_id)
+        return removed
 
     def attach_context(self, session_id: str, context: BrowserContext):
         self._contexts[session_id] = context
@@ -633,6 +687,8 @@ class RPASessionManager:
         await self.wait_for_pending_events(session_id)
         if session_id in self.sessions:
             self.sessions[session_id].status = "stopped"
+            self.sessions[session_id].stopped_at = datetime.now()
+            self.touch_session(session_id)
 
         context = self._contexts.pop(session_id, None)
         self.detach_context(session_id)

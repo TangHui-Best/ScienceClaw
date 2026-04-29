@@ -13,7 +13,7 @@ from websockets.exceptions import ConnectionClosed
 import httpx
 from fastapi.responses import Response as FastAPIResponse
 
-from backend.rpa.manager import rpa_manager
+from backend.rpa.manager import rpa_manager, RPASkillConfigDraft
 from backend.rpa.generator import PlaywrightGenerator
 from backend.rpa.executor import ScriptExecutor
 from backend.rpa.skill_exporter import SkillExporter
@@ -80,6 +80,10 @@ class NavigateRequest(BaseModel):
 
 class PromoteLocatorRequest(BaseModel):
     candidate_index: int
+
+
+class SkillConfigDraftRequest(RPASkillConfigDraft):
+    pass
 
 
 def _generate_session_script(session, params: Dict[str, Any], *, test_mode: bool = False) -> str:
@@ -524,6 +528,17 @@ async def start_rpa_session(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/sessions/cleanup")
+async def cleanup_rpa_sessions(
+    max_idle_seconds: int = 7200,
+    current_user: User = Depends(get_current_user),
+):
+    if getattr(current_user, "role", "") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    removed = rpa_manager.cleanup_expired_sessions(max_idle_seconds=max_idle_seconds)
+    return {"status": "success", "removed": removed}
+
+
 @router.get("/session/{session_id}")
 async def get_rpa_session(
     session_id: str,
@@ -534,7 +549,43 @@ async def get_rpa_session(
         raise HTTPException(status_code=404, detail="Session not found")
     if session.user_id != str(current_user.id):
         raise HTTPException(status_code=403, detail="Not authorized")
+    rpa_manager.touch_session(session_id)
     return {"status": "success", "session": session}
+
+
+@router.get("/session/{session_id}/skill-config-draft")
+async def get_skill_config_draft(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    session = await rpa_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    _ensure_session_owner(session, current_user)
+    rpa_manager.touch_session(session_id)
+    return {
+        "status": "success",
+        "draft": session.skill_config_draft.model_dump(mode="json")
+        if session.skill_config_draft
+        else None,
+    }
+
+
+@router.put("/session/{session_id}/skill-config-draft")
+async def update_skill_config_draft(
+    session_id: str,
+    request: SkillConfigDraftRequest,
+    current_user: User = Depends(get_current_user),
+):
+    session = await rpa_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    _ensure_session_owner(session, current_user)
+    draft = rpa_manager.update_skill_config_draft(session_id, request)
+    return {
+        "status": "success",
+        "draft": draft.model_dump(mode="json"),
+    }
 
 
 @router.get("/session/{session_id}/tabs")
@@ -547,6 +598,7 @@ async def list_rpa_tabs(
         raise HTTPException(status_code=404, detail="Session not found")
     if session.user_id != str(current_user.id):
         raise HTTPException(status_code=403, detail="Not authorized")
+    rpa_manager.touch_session(session_id)
     return {
         "status": "success",
         "tabs": rpa_manager.list_tabs(session_id),
@@ -565,6 +617,7 @@ async def activate_rpa_tab(
         raise HTTPException(status_code=404, detail="Session not found")
     if session.user_id != str(current_user.id):
         raise HTTPException(status_code=403, detail="Not authorized")
+    rpa_manager.touch_session(session_id)
     try:
         result = await rpa_manager.activate_tab(session_id, tab_id, source="user")
     except ValueError as exc:
@@ -588,6 +641,7 @@ async def navigate_rpa_session(
         raise HTTPException(status_code=404, detail="Session not found")
     if session.user_id != str(current_user.id):
         raise HTTPException(status_code=403, detail="Not authorized")
+    rpa_manager.touch_session(session_id)
     try:
         result = await rpa_manager.navigate_active_tab(session_id, request.url)
     except ValueError as exc:
@@ -610,6 +664,7 @@ async def stop_rpa_session(
         raise HTTPException(status_code=404, detail="Session not found")
     if session.user_id != str(current_user.id):
         raise HTTPException(status_code=403, detail="Not authorized")
+    rpa_manager.touch_session(session_id)
     await rpa_manager.stop_session(session_id)
     return {"status": "success", "session": session}
 
@@ -625,6 +680,7 @@ async def delete_step(
         raise HTTPException(status_code=404, detail="Session not found")
     if session.user_id != str(current_user.id):
         raise HTTPException(status_code=403, detail="Not authorized")
+    rpa_manager.touch_session(session_id)
     success = await rpa_manager.delete_step(session_id, step_index)
     if not success:
         raise HTTPException(status_code=400, detail="Invalid step index")
@@ -642,6 +698,7 @@ async def delete_timeline_item(
         raise HTTPException(status_code=404, detail="Session not found")
     if session.user_id != str(current_user.id):
         raise HTTPException(status_code=403, detail="Not authorized")
+    rpa_manager.touch_session(session_id)
 
     if request.kind == "manual_step":
         success = await rpa_manager.delete_step_by_id(session_id, request.step_id or "")
@@ -667,6 +724,7 @@ async def promote_step_locator(
         raise HTTPException(status_code=404, detail="Session not found")
     if session.user_id != str(current_user.id):
         raise HTTPException(status_code=403, detail="Not authorized")
+    rpa_manager.touch_session(session_id)
 
     try:
         step = await rpa_manager.select_step_locator_candidate(
@@ -691,6 +749,7 @@ async def generate_script(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     _ensure_session_owner(session, current_user)
+    rpa_manager.touch_session(session_id)
 
     _ensure_no_unresolved_manual_diagnostics(session)
     script = _generate_session_script(session, request.params)
@@ -708,6 +767,7 @@ async def test_script(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     _ensure_session_owner(session, current_user)
+    rpa_manager.touch_session(session_id)
 
     _ensure_no_unresolved_manual_diagnostics(session)
     steps = [step.model_dump() for step in session.steps]
@@ -822,6 +882,7 @@ async def save_skill(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     _ensure_session_owner(session, current_user)
+    rpa_manager.touch_session(session_id)
 
     _ensure_no_unresolved_manual_diagnostics(session)
     script = _generate_session_script(session, request.params)

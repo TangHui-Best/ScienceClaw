@@ -627,7 +627,10 @@ class TraceSkillCompiler:
 
         if param_info.get("sensitive"):
             return f"kwargs[{param_name!r}]"
-        return f"kwargs.get({param_name!r}, {value!r})"
+        default_value = param_info.get("default_value")
+        if default_value in (None, ""):
+            default_value = value
+        return f"kwargs.get({param_name!r}, {default_value!r})"
 
     def _render_embedded_ai_code_trace(
         self,

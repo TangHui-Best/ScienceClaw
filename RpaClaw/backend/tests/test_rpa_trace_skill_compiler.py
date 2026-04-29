@@ -375,6 +375,35 @@ def test_manual_fill_uses_plain_param_default_when_configured():
     assert "fill('admi')" not in body
 
 
+def test_manual_fill_uses_configured_default_value_as_runtime_fallback():
+    trace = RPAAcceptedTrace(
+        trace_id="search-fill",
+        trace_type=RPATraceType.MANUAL_ACTION,
+        action="fill",
+        value="recorded query",
+        locator_candidates=[
+            {"locator": {"method": "role", "role": "textbox", "name": "Search"}, "selected": True},
+        ],
+    )
+
+    script = TraceSkillCompiler().generate_script(
+        [trace],
+        params={
+            "query": {
+                "original_value": "recorded query",
+                "default_value": "configured query",
+                "sensitive": False,
+                "credential_id": "",
+            }
+        },
+        is_local=True,
+    )
+    body = _execute_body(script)
+
+    assert "get_by_role('textbox', name='Search', exact=True).fill(kwargs.get('query', 'configured query'))" in body
+    assert "kwargs.get('query', 'recorded query')" not in body
+
+
 def test_manual_click_defaults_to_exact_match_for_role_locator():
     trace = RPAAcceptedTrace(
         trace_id="manual-click",

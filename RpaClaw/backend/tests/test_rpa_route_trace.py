@@ -435,6 +435,46 @@ def test_build_session_recording_meta_derives_traces_for_legacy_step_only_sessio
 
 
 @pytest.mark.asyncio
+async def test_skill_config_draft_round_trip():
+    manager = ROUTE_MODULE.rpa_manager
+    session = RPASession(id="route-draft", user_id="u1", sandbox_session_id="sandbox")
+    manager.sessions[session.id] = session
+
+    request = ROUTE_MODULE.SkillConfigDraftRequest(
+        skill_name="Search Skill",
+        description="Searches with a configured query",
+        params={
+            "query": {
+                "original_value": "recorded query",
+                "default_value": "configured query",
+                "sensitive": False,
+                "credential_id": "",
+            }
+        },
+    )
+
+    try:
+        user = type("User", (), {"id": "u1"})()
+        put_response = await ROUTE_MODULE.update_skill_config_draft(session.id, request, user)
+        get_response = await ROUTE_MODULE.get_skill_config_draft(session.id, user)
+
+        assert put_response["draft"]["skill_name"] == "Search Skill"
+        assert get_response["draft"]["params"]["query"]["default_value"] == "configured query"
+    finally:
+        manager.sessions.pop(session.id, None)
+
+
+@pytest.mark.asyncio
+async def test_skill_config_draft_missing_session_returns_404():
+    user = type("User", (), {"id": "u1"})()
+
+    with pytest.raises(ROUTE_MODULE.HTTPException) as exc_info:
+        await ROUTE_MODULE.get_skill_config_draft("missing-draft-session", user)
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_save_skill_exports_trace_first_recording_meta(monkeypatch):
     manager = ROUTE_MODULE.rpa_manager
     session = RPASession(id="route-save-trace", user_id="u1", sandbox_session_id="sandbox")
