@@ -130,6 +130,13 @@ class RecordingAgentResult(BaseModel):
     message: str = ""
 
 
+class RecordingPlannerContractError(ValueError):
+    def __init__(self, message: str, *, raw_output: str = "", cause: Optional[BaseException] = None):
+        super().__init__(message)
+        self.raw_output = raw_output
+        self.__cause__ = cause
+
+
 Planner = Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]
 Executor = Callable[[Any, Dict[str, Any], Dict[str, Any]], Awaitable[Dict[str, Any]]]
 
@@ -178,7 +185,20 @@ class RecordingRuntimeAgent:
         if not first_plan:
             first_plan = _build_ordinal_overlay_plan(instruction, snapshot)
         if not first_plan:
-            first_plan = await self.planner(payload)
+            try:
+                first_plan = await self.planner(payload)
+            except Exception as exc:
+                return RecordingAgentResult(
+                    success=False,
+                    diagnostics=[
+                        _planner_contract_diagnostic(
+                            exc,
+                            stage="initial",
+                            model_config=self.model_config,
+                        )
+                    ],
+                    message="Recording planner failed to return a valid plan.",
+                )
         first_result = await self.executor(page, first_plan, runtime_results)
         first_result = await _ensure_expected_effect(
             page=page,
@@ -283,7 +303,21 @@ class RecordingRuntimeAgent:
             **payload,
             "repair": repair_context,
         }
-        repair_plan = await self.planner(repair_payload)
+        try:
+            repair_plan = await self.planner(repair_payload)
+        except Exception as exc:
+            diagnostics.append(
+                _planner_contract_diagnostic(
+                    exc,
+                    stage="repair",
+                    model_config=self.model_config,
+                )
+            )
+            return RecordingAgentResult(
+                success=False,
+                diagnostics=diagnostics,
+                message="Recording planner failed to return a valid repair plan.",
+            )
         repair_result = await self.executor(page, repair_plan, runtime_results)
         repair_result = await _ensure_expected_effect(
             page=page,
@@ -647,15 +681,22 @@ def _extract_text(response: Any) -> str:
 
 def _parse_json_object(text: str) -> Dict[str, Any]:
     raw = str(text or "").strip()
+    original_raw = raw
     fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
     if fenced:
         raw = fenced.group(1)
     else:
         start = raw.find("{")
-        end = raw.rfind("}")
-        if start >= 0 and end > start:
-            raw = raw[start : end + 1]
-    parsed = json.loads(raw)
+        if start >= 0:
+            raw = raw[start:]
+    try:
+        parsed, end = json.JSONDecoder().raw_decode(raw)
+    except json.JSONDecodeError as exc:
+        raise RecordingPlannerContractError(
+            f"Recording planner returned invalid JSON: {exc.msg}",
+            raw_output=original_raw,
+            cause=exc,
+        ) from exc
     if not isinstance(parsed, dict):
         raise ValueError("Recording planner must return a JSON object")
     parsed.setdefault("action_type", "run_python")
@@ -664,6 +705,41 @@ def _parse_json_object(text: str) -> Dict[str, Any]:
     if parsed.get("action_type") == "run_python" and "async def run(page, results)" not in str(parsed.get("code") or ""):
         raise ValueError("Recording planner must return Python code defining async def run(page, results)")
     return parsed
+
+
+def _planner_contract_diagnostic(
+    exc: BaseException,
+    *,
+    stage: str,
+    model_config: Optional[Dict[str, Any]],
+) -> RPATraceDiagnostic:
+    raw_output = str(getattr(exc, "raw_output", "") or "")
+    raw: Dict[str, Any] = {
+        "error_type": "planner_contract",
+        "stage": stage,
+        "exception_type": type(exc).__name__,
+        "message": str(exc),
+        "model_config": _model_config_summary(model_config),
+    }
+    if raw_output:
+        raw["planner_raw_output"] = raw_output[:4000]
+        raw["planner_raw_output_truncated"] = len(raw_output) > 4000
+    return RPATraceDiagnostic(
+        source="ai",
+        message=f"Recording planner failed to return a valid JSON plan: {exc}",
+        raw=raw,
+    )
+
+
+def _model_config_summary(model_config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(model_config, dict) or not model_config:
+        return {}
+    summary: Dict[str, Any] = {}
+    for key in ("provider", "model_name", "base_url", "context_window", "id", "name"):
+        value = model_config.get(key)
+        if value not in (None, ""):
+            summary[key] = value
+    return summary
 
 
 def _build_table_ordinal_overlay_plan(instruction: str, snapshot: Dict[str, Any]) -> Optional[Dict[str, Any]]:
