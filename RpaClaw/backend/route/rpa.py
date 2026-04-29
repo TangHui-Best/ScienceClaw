@@ -27,7 +27,7 @@ from backend.rpa.cdp_connector import get_cdp_connector
 from backend.rpa.screencast import SessionScreencastController
 from backend.user.dependencies import get_current_user, User
 from backend.config import settings
-from backend.models import get_model_config
+from backend.models import get_model_config, resolve_default_model_config
 from backend.storage import get_repository
 from backend.credential.vault import inject_credentials
 
@@ -98,6 +98,11 @@ def _generate_session_script(session, params: Dict[str, Any], *, test_mode: bool
         is_local=(settings.storage_backend == "local"),
         test_mode=test_mode,
     )
+
+
+def _session_model_config(session) -> dict | None:
+    model_config = getattr(session, "llm_model_config", None)
+    return model_config if isinstance(model_config, dict) and model_config else None
 
 
 def _model_dump_json(value: Any) -> Any:
@@ -494,21 +499,9 @@ async def _resolve_user_model_config(user_id: str, model_config_id: str | None =
             raise HTTPException(status_code=403, detail="Cannot use this model")
         return model_config.model_dump()
 
-    # Try user's own active model first, then system models
-    docs = await get_repository("models").find_many(
-        {"$or": [{"user_id": user_id}, {"is_system": True}], "is_active": True, "api_key": {"$nin": ["", None]}},
-        sort=[("is_system", 1), ("updated_at", -1)],  # user models first
-        limit=1,
-    )
-    doc = docs[0] if docs else None
-    if doc:
-        return {
-            "model_name": doc.get("model_name"),
-            "base_url": doc.get("base_url"),
-            "api_key": doc.get("api_key"),
-            "context_window": doc.get("context_window"),
-            "provider": doc.get("provider", ""),
-        }
+    model_config = await resolve_default_model_config(user_id)
+    if model_config:
+        return model_config
     # Fall back to env defaults
     if (getattr(settings, "model_ds_api_key", None) or "").strip():
         return None  # get_llm_model(config=None) uses env defaults
@@ -733,6 +726,9 @@ async def test_script(
     # 本地模式：通过 pw_loop_runner 确保 Playwright 操作在正确的事件循环里执行
     if settings.storage_backend == "local":
         test_kwargs: Dict[str, Any] = {"_downloads_dir": downloads_dir}
+        model_config = _session_model_config(session)
+        if model_config:
+            test_kwargs["_model_config"] = model_config
         if request.params:
             test_kwargs.update(await inject_credentials(str(current_user.id), request.params, {}))
         result = await executor.execute(
@@ -750,10 +746,15 @@ async def test_script(
     else:
         # Docker 模式：使用原有逻辑
         docker_kwargs: Dict[str, Any] = {}
+        model_config = _session_model_config(session)
+        if model_config:
+            docker_kwargs["_model_config"] = model_config
         if request.params:
             docker_kwargs = await inject_credentials(
                 str(current_user.id), request.params, {}
             )
+            if model_config:
+                docker_kwargs["_model_config"] = model_config
         result = await executor.execute(
             browser,
             script,
@@ -855,6 +856,8 @@ async def chat_with_assistant(
 
     # Resolve user's model config
     model_config = await _resolve_user_model_config(str(current_user.id), request.model_config_id)
+    if model_config:
+        session.llm_model_config = model_config
 
     # Get the page object for this session
     page = rpa_manager.get_page(session_id)

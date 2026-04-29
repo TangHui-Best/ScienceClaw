@@ -20,7 +20,7 @@ from backend.config import settings
 from backend.deepagent.engine import get_llm_model
 from backend.deepagent.runner import arun_science_task_stream
 from backend.deepagent.sessions import async_create_science_session
-from backend.storage import get_repository
+from backend.models import resolve_default_model_config
 
 router = APIRouter(tags=["chat"])
 
@@ -215,21 +215,11 @@ async def _resolve_any_model_config() -> Optional[dict]:
     其次使用数据库中任意 active 且有 api_key 的模型。
     无可用模型时返回 None。
     """
+    model_config = await resolve_default_model_config()
+    if model_config:
+        return model_config
     if (getattr(settings, "model_ds_api_key", None) or "").strip():
         return {"_use_default": True}
-    docs = await get_repository("models").find_many(
-        {"is_active": True, "api_key": {"$nin": ["", None]}},
-        sort=[("created_at", -1)],
-        limit=1,
-    )
-    doc = docs[0] if docs else None
-    if doc:
-        return {
-            "model_name": doc.get("model_name"),
-            "base_url": doc.get("base_url"),
-            "api_key": doc.get("api_key"),
-            "context_window": doc.get("context_window"),
-        }
     return None
 
 

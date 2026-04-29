@@ -3,6 +3,7 @@ from datetime import datetime
 
 import pytest
 
+CHAT_MODULE = importlib.import_module("backend.route.chat")
 from backend.rpa.manager import RPASession, RPAStep
 from backend.rpa.manual_recording_models import ManualActionKind, ManualRecordedAction, ManualRecordingDiagnostic
 from backend.rpa.recording_runtime_agent import RecordingAgentResult
@@ -82,6 +83,26 @@ async def test_resolve_user_model_config_rejects_missing_requested_model(monkeyp
         await ROUTE_MODULE._resolve_user_model_config("user-1", "missing-model")
 
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_parse_schedule_default_model_prefers_configured_model_over_env(monkeypatch):
+    async def fake_resolve_default_model_config():
+        return {
+            "provider": "openai",
+            "base_url": "https://llm.example/v1",
+            "api_key": "sk-page",
+            "model_name": "page-model",
+            "context_window": 65536,
+        }
+
+    monkeypatch.setattr(CHAT_MODULE, "resolve_default_model_config", fake_resolve_default_model_config)
+    monkeypatch.setattr(CHAT_MODULE.settings, "model_ds_api_key", "sk-env")
+
+    config = await CHAT_MODULE._resolve_any_model_config()
+
+    assert config["api_key"] == "sk-page"
+    assert config["model_name"] == "page-model"
 
 
 def test_generate_session_script_prefers_traces_over_legacy_steps():
@@ -856,6 +877,48 @@ async def test_test_script_passes_route_timeout_to_executor(monkeypatch):
         user = type("User", (), {"id": "u1"})()
         await ROUTE_MODULE.test_script(session.id, ROUTE_MODULE.GenerateRequest(), user)
         assert captured["timeout"] == ROUTE_MODULE.RPA_TEST_TIMEOUT_S
+    finally:
+        manager.sessions.pop(session.id, None)
+
+
+@pytest.mark.asyncio
+async def test_test_script_passes_session_model_config_to_executor(monkeypatch):
+    manager = ROUTE_MODULE.rpa_manager
+    session = RPASession(id="session-model-test", user_id="u-model", sandbox_session_id="sandbox")
+    session.llm_model_config = {
+        "id": "model-selected",
+        "provider": "openai",
+        "base_url": "https://llm.example/v1",
+        "api_key": "sk-selected",
+        "model_name": "selected-model",
+        "context_window": 65536,
+    }
+    manager.sessions[session.id] = session
+
+    captured: dict = {}
+
+    class FakeConnector:
+        async def get_browser(self, **kwargs):
+            return object()
+
+        def run_in_pw_loop(self, coro):
+            return coro
+
+    async def fake_execute(*args, **kwargs):
+        captured["kwargs"] = kwargs.get("kwargs")
+        return {"success": True, "output": "SKILL_SUCCESS", "data": {}}
+
+    monkeypatch.setattr(ROUTE_MODULE, "_generate_session_script", lambda *args, **kwargs: "async def execute_skill(page, **kwargs):\n    return {}")
+    monkeypatch.setattr(ROUTE_MODULE, "get_cdp_connector", lambda: FakeConnector())
+    monkeypatch.setattr(ROUTE_MODULE.executor, "execute", fake_execute)
+    monkeypatch.setattr(ROUTE_MODULE.settings, "storage_backend", "local")
+    monkeypatch.setattr(ROUTE_MODULE.settings, "workspace_dir", "E:/Work-Project/OtherWork/ScienceClaw")
+
+    try:
+        user = type("User", (), {"id": "u-model"})()
+        await ROUTE_MODULE.test_script(session.id, ROUTE_MODULE.GenerateRequest(), user)
+        assert captured["kwargs"]["_model_config"]["api_key"] == "sk-selected"
+        assert captured["kwargs"]["_model_config"]["model_name"] == "selected-model"
     finally:
         manager.sessions.pop(session.id, None)
 

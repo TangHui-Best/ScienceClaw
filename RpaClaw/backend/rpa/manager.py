@@ -77,6 +77,7 @@ class RPASession(BaseModel):
     traces: List[RPAAcceptedTrace] = Field(default_factory=list)
     trace_diagnostics: List[RPATraceDiagnostic] = Field(default_factory=list)
     runtime_results: RPARuntimeResults = Field(default_factory=RPARuntimeResults)
+    llm_model_config: Optional[Dict[str, Any]] = None
     pending_download_events: List[Dict[str, Any]] = Field(default_factory=list)
     sandbox_session_id: str
     paused: bool = False  # pause event recording during AI execution

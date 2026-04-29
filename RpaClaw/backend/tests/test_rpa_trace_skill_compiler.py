@@ -1043,6 +1043,31 @@ def test_chinese_semantic_project_click_without_url_stays_runtime_ai():
     assert "get_by_role(\"link\", name=\"mattpocock / skills\")" not in body
 
 
+def test_runtime_ai_instruction_uses_runtime_model_config_kwarg_without_embedding_secret():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        source="ai",
+        user_instruction="open the project most related to SKILL",
+        description="Click the semantically selected project",
+        output_key="selected_project",
+        output={"action_performed": True},
+        ai_execution=RPAAIExecution(
+            code=(
+                "async def run(page, results):\n"
+                "    await page.locator('a.project').nth(0).click()\n"
+                "    return {'action_performed': True}"
+            ),
+        ),
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    body = _execute_body(script)
+
+    assert "RecordingRuntimeAgent(model_config=kwargs.get('_model_config'))" in script
+    assert "sk-secret" not in script
+    assert "_execute_runtime_ai_instruction(current_page, _results, kwargs," in body
+
+
 def test_runtime_ai_preserve_signal_overrides_embedded_code():
     trace = RPAAcceptedTrace(
         trace_type=RPATraceType.AI_OPERATION,
