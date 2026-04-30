@@ -25,6 +25,13 @@ import {
   formatRpaActionLabel,
   formatRpaStepLocator,
 } from '@/utils/rpaStepTimeline';
+import {
+  buildRpaSkillConfigDraft,
+  draftParamsToParamItems,
+  paramItemsToDraftParams,
+  type RpaConfigParamItem,
+  type RpaSkillConfigDraft,
+} from '@/utils/rpaSkillConfigDraft';
 
 const router = useRouter();
 const route = useRoute();
@@ -77,17 +84,7 @@ interface StepItem extends RpaConfigureStep {
   configurable?: boolean;
 }
 
-interface ParamItem {
-  id: string;
-  name: string;
-  label: string;
-  original_value: string;
-  current_value: string;
-  enabled: boolean;
-  step_id: string;
-  sensitive: boolean;
-  credential_id: string;
-}
+interface ParamItem extends RpaConfigParamItem {}
 
 interface CredentialItem {
   id: string;
@@ -218,6 +215,21 @@ const loadCredentials = async () => {
   }
 };
 
+const loadSkillConfigDraft = async (generatedParams: ParamItem[]) => {
+  if (!sessionId.value) return false;
+  try {
+    const resp = await apiClient.get(`/rpa/session/${sessionId.value}/skill-config-draft`);
+    const draft = resp.data.draft as RpaSkillConfigDraft | null;
+    if (!draft) return false;
+    skillName.value = draft.skill_name || skillName.value;
+    skillDescription.value = draft.description || skillDescription.value;
+    params.value = draftParamsToParamItems(draft.params || {}, generatedParams) as ParamItem[];
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const KEYWORD_MAP: Record<string, string> = {
   邮箱: 'email', 邮件: 'email', email: 'email', 'e-mail': 'email',
   密码: 'password', password: 'password', pwd: 'password',
@@ -276,7 +288,7 @@ const loadSession = async () => {
 
     const usedNames = new Set<string>();
     const paramSourceSteps = hasTimeline ? steps.value : legacySteps.value;
-    params.value = paramSourceSteps
+    const generatedParams = paramSourceSteps
       .filter((step) => step.action === 'fill' || step.action === 'select')
       .map((step, index) => {
         let label = `参数${index + 1}`;
@@ -304,13 +316,14 @@ const loadSession = async () => {
           name,
           label,
           original_value: step.value || '',
-          current_value: step.value || '',
+          default_value: step.value || '',
           enabled: true,
           step_id: step.id,
           sensitive: !!step.sensitive,
           credential_id: '',
         };
       });
+    params.value = generatedParams;
 
     const navStep = steps.value.find((step) => !!step.url) || legacySteps.value.find((step) => !!step.url);
     if (navStep?.url) {
@@ -332,18 +345,18 @@ const loadSession = async () => {
   }
 };
 
-const buildParamMap = () => {
-  const paramMap: Record<string, any> = {};
-  params.value
-    .filter((param) => param.enabled)
-    .forEach((param) => {
-      paramMap[param.name] = {
-        original_value: param.original_value,
-        sensitive: param.sensitive || false,
-        credential_id: param.credential_id || '',
-      };
-    });
-  return paramMap;
+const buildParamMap = () => paramItemsToDraftParams(params.value);
+
+const saveSkillConfigDraft = async () => {
+  if (!sessionId.value) return;
+  await apiClient.put(
+    `/rpa/session/${sessionId.value}/skill-config-draft`,
+    buildRpaSkillConfigDraft({
+      skillName: skillName.value,
+      skillDescription: skillDescription.value,
+      params: params.value,
+    }),
+  );
 };
 
 const generateScript = async (options: { openDrawer?: boolean } | Event = { openDrawer: true }) => {
@@ -371,20 +384,22 @@ const generateScript = async (options: { openDrawer?: boolean } | Event = { open
   }
 };
 
-const goToTest = () => {
+const goToTest = async () => {
   if (hasDiagnostics.value) {
     error.value = `还有 ${diagnostics.value.length} 个待修复步骤，修复后才能开始测试`;
     return;
   }
-  router.push({
-    path: '/rpa/test',
-    query: {
-      sessionId: sessionId.value,
-      skillName: skillName.value,
-      skillDescription: skillDescription.value,
-      params: JSON.stringify(buildParamMap()),
-    },
-  });
+  try {
+    await saveSkillConfigDraft();
+    router.push({
+      path: '/rpa/test',
+      query: {
+        sessionId: sessionId.value,
+      },
+    });
+  } catch (err: any) {
+    error.value = `保存配置草稿失败: ${err.response?.data?.detail || err.message}`;
+  }
 };
 
 const confirmDiscardAndRecord = () => {
@@ -423,6 +438,9 @@ const handleSecondaryAction = (id: string) => {
 
 onMounted(async () => {
   await loadSession();
+  if (!loadFailed.value) {
+    await loadSkillConfigDraft(params.value);
+  }
   loadCredentials();
   if (!loadFailed.value && sessionId.value && !hasDiagnostics.value) {
     await generateScript({ openDrawer: false });
@@ -699,7 +717,7 @@ onMounted(async () => {
                   </select>
                   <input
                     v-else
-                    v-model="param.current_value"
+                    v-model="param.default_value"
                     class="w-full rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#272728] px-3 py-2 text-sm text-gray-700 dark:text-gray-300 outline-none transition-colors focus:border-[#831bd7]"
                     placeholder="默认值"
                   />

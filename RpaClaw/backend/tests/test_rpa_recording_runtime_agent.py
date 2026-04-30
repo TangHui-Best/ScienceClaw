@@ -538,6 +538,8 @@ async def test_recording_runtime_agent_uses_ordinal_overlay_without_planner(monk
 
 def test_backend_rpa_package_import_is_lazy():
     module = importlib.import_module("backend.rpa")
+    for imported_submodule_attr in ("rpa_manager", "RPASession", "RPAStep", "cdp_connector"):
+        module.__dict__.pop(imported_submodule_attr, None)
 
     assert "rpa_manager" not in module.__dict__
     assert "RPASession" not in module.__dict__
@@ -1707,4 +1709,48 @@ def test_parse_json_object_rejects_run_python_without_runner():
 
     with pytest.raises(ValueError):
         _parse_json_object(json.dumps(payload))
+
+
+def test_parse_json_object_accepts_plan_with_extra_planner_output():
+    payload = {
+        "description": "Run",
+        "action_type": "run_python",
+        "code": "async def run(page, results):\n    return {'ok': True}",
+    }
+
+    parsed = _parse_json_object(json.dumps(payload) + "\n" + json.dumps({"reason": "extra"}))
+
+    assert parsed["description"] == "Run"
+    assert "async def run(page, results)" in parsed["code"]
+
+
+@pytest.mark.asyncio
+async def test_planner_json_parse_failure_returns_agent_diagnostic(monkeypatch):
+    async def fake_snapshot(_page):
+        return {
+            "url": "https://github.com/trending",
+            "title": "Trending",
+            "frames": [],
+            "content_nodes": [],
+            "actionable_nodes": [],
+            "containers": [],
+        }
+
+    async def bad_planner(_payload):
+        _parse_json_object("I could not build a JSON plan")
+
+    monkeypatch.setattr(recording_runtime_agent, "_safe_page_snapshot", fake_snapshot)
+
+    result = await RecordingRuntimeAgent(planner=bad_planner).run(
+        page=_FakePage(),
+        instruction="打开和Skill最相关的项目",
+        runtime_results={},
+    )
+
+    assert result.success is False
+    assert result.trace is None
+    assert result.diagnostics
+    assert result.diagnostics[0].source == "ai"
+    assert "planner" in result.diagnostics[0].message.lower()
+    assert result.diagnostics[0].raw["error_type"] == "planner_contract"
 

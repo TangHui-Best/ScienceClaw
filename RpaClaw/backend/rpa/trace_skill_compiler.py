@@ -252,9 +252,9 @@ class TraceSkillCompiler:
             "            continue",
             "    return ''",
             "",
-            "async def _execute_runtime_ai_instruction(page, results, instruction, output_key):",
+            "async def _execute_runtime_ai_instruction(page, results, kwargs, instruction, output_key):",
             "    from backend.rpa.recording_runtime_agent import RecordingRuntimeAgent",
-            "    agent = RecordingRuntimeAgent()",
+            "    agent = RecordingRuntimeAgent(model_config=kwargs.get('_model_config'))",
             "    outcome = await agent.run(page=page, instruction=instruction, runtime_results=results)",
             "    if not outcome.success:",
             "        detail = '; '.join(str(item.message) for item in outcome.diagnostics) or outcome.message",
@@ -553,7 +553,7 @@ class TraceSkillCompiler:
         return [
             "",
             f"    # trace {index}: runtime semantic instruction",
-            f"    _result = await _execute_runtime_ai_instruction(current_page, _results, {instruction!r}, {key!r})",
+            f"    _result = await _execute_runtime_ai_instruction(current_page, _results, kwargs, {instruction!r}, {key!r})",
         ]
 
     def _render_snapshot_extract_trace(
@@ -627,7 +627,10 @@ class TraceSkillCompiler:
 
         if param_info.get("sensitive"):
             return f"kwargs[{param_name!r}]"
-        return f"kwargs.get({param_name!r}, {value!r})"
+        default_value = param_info.get("default_value")
+        if default_value in (None, ""):
+            default_value = value
+        return f"kwargs.get({param_name!r}, {default_value!r})"
 
     def _render_embedded_ai_code_trace(
         self,

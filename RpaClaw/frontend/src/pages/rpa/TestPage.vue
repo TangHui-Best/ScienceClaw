@@ -35,20 +35,18 @@ import {
   type RpaRecordingDiagnosticItem,
 } from '@/utils/rpaConfigureTimeline';
 import { type RpaTestState } from '@/utils/rpaFlowGuide';
+import { type RpaSkillConfigDraft } from '@/utils/rpaSkillConfigDraft';
 
 const router = useRouter();
 const route = useRoute();
 
 const sessionId = computed(() => route.query.sessionId as string);
-const skillName = computed(() => (route.query.skillName as string) || '录制技能');
-const skillDescription = computed(() => (route.query.skillDescription as string) || '');
-const params = computed(() => {
-  try {
-    return JSON.parse((route.query.params as string) || '{}');
-  } catch {
-    return {};
-  }
-});
+const testConfigSnapshot = ref<RpaSkillConfigDraft | null>(null);
+const skillName = computed(() => testConfigSnapshot.value?.skill_name || '录制技能');
+const skillDescription = computed(() => testConfigSnapshot.value?.description || '');
+const params = computed(() => Object.fromEntries(
+  Object.entries(testConfigSnapshot.value?.params || {}).filter(([, param]) => param.enabled !== false),
+));
 
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 let screencastWs: WebSocket | null = null;
@@ -113,6 +111,21 @@ const failedStepCandidates = ref<LocatorCandidate[]>([]);
 const failedStepError = ref('');
 const triedCandidateIndices = ref<Set<number>>(new Set());
 const retryingWithCandidate = ref(false);
+
+const loadSkillConfigDraft = async () => {
+  if (!sessionId.value) return;
+  try {
+    const resp = await apiClient.get(`/rpa/session/${sessionId.value}/skill-config-draft`);
+    const draft = resp.data.draft as RpaSkillConfigDraft | null;
+    if (!draft) {
+      error.value = '缺少技能配置草稿，请返回配置页确认后再测试';
+      return;
+    }
+    testConfigSnapshot.value = draft;
+  } catch (err: any) {
+    error.value = `加载技能配置草稿失败: ${err.response?.data?.detail || err.message}`;
+  }
+};
 
 const loadSessionDiagnostics = async () => {
   if (!sessionId.value) return;
@@ -301,6 +314,11 @@ const runTest = async () => {
     return;
   }
 
+  if (!testConfigSnapshot.value) {
+    error.value = '缺少技能配置草稿，请返回配置页确认后再测试';
+    return;
+  }
+
   if (recordingDiagnostics.value.length > 0) {
     error.value = `还有 ${recordingDiagnostics.value.length} 个待修复步骤，修复后才能开始测试`;
     testLogs.value = [`错误: 还有 ${recordingDiagnostics.value.length} 个待修复步骤，修复后才能开始测试`];
@@ -410,6 +428,10 @@ const goToSkills = () => {
 
 const saveSkill = async () => {
   if (!sessionId.value) return;
+  if (!testConfigSnapshot.value) {
+    error.value = '缺少技能配置草稿，无法保存技能';
+    return;
+  }
   saving.value = true;
   error.value = null;
 
@@ -442,8 +464,8 @@ const handleTestPrimaryAction = () => {
 };
 
 onMounted(() => {
-  loadSessionDiagnostics().then(() => {
-    if (!recordingDiagnostics.value.length) {
+  Promise.all([loadSkillConfigDraft(), loadSessionDiagnostics()]).then(() => {
+    if (testConfigSnapshot.value && !recordingDiagnostics.value.length) {
       runTest();
     }
   });

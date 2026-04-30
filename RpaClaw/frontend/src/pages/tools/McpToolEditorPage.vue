@@ -49,6 +49,7 @@ type EditableParam = {
   enabled: boolean;
   defaultValue: string;
   originalValue?: unknown;
+  sourceTraceId?: string;
   sourceStepIndex?: number;
 };
 
@@ -418,6 +419,7 @@ const hydrateEditableParams = (toolPreview: RpaMcpPreview | null, options: { pre
       const info = getSourceParamInfo(toolPreview, key);
       const schemaProp = (prop || {}) as Record<string, any>;
       const originalValue = info.original_value ?? schemaProp.default;
+      const sourceTraceId = typeof info.source_trace_id === 'string' ? info.source_trace_id : undefined;
       const sourceStepIndex = typeof info.source_step_index === 'number' ? info.source_step_index : undefined;
       return {
         id: `param-${index}-${key}`,
@@ -429,6 +431,7 @@ const hydrateEditableParams = (toolPreview: RpaMcpPreview | null, options: { pre
         enabled: true,
         defaultValue: stringifyEditorValue(originalValue),
         originalValue,
+        sourceTraceId,
         sourceStepIndex,
       };
     });
@@ -455,7 +458,9 @@ const buildConfirmedParams = () => {
       sensitive: false,
       source_param: param.sourceKey,
     };
-    if (param.sourceStepIndex !== undefined) {
+    if (param.sourceTraceId) {
+      confirmed[name].source_trace_id = param.sourceTraceId;
+    } else if (param.sourceStepIndex !== undefined) {
       confirmed[name].source_step_index = param.sourceStepIndex;
     }
   }
@@ -1052,7 +1057,7 @@ watch(viewActiveTab, async (tab) => {
                       {{ t('MCP Editor Parameter enabled') }}
                     </label>
                     <span class="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-500 dark:bg-white/10 dark:text-slate-400">
-                      {{ t('MCP Editor Source parameter') }} {{ param.sourceKey }}<template v-if="param.sourceStepIndex !== undefined"> · {{ t('MCP Editor Step number', { number: param.sourceStepIndex + 1 }) }}</template>
+                      {{ t('MCP Editor Source parameter') }} {{ param.sourceKey }}<template v-if="param.sourceTraceId"> · {{ param.sourceTraceId }}</template><template v-else-if="param.sourceStepIndex !== undefined"> · {{ t('MCP Editor Step number', { number: param.sourceStepIndex + 1 }) }}</template>
                     </span>
                   </div>
 

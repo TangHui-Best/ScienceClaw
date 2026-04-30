@@ -49,7 +49,7 @@ from backend.deepagent.sessions import (
 )
 from backend.runtime.session_runtime_manager import get_session_runtime_manager
 from backend.user.dependencies import get_current_user, require_user, User
-from backend.models import get_model_config
+from backend.models import get_model_config, resolve_default_model_config
 from backend.config import settings
 from backend.browser_preview import browser_preview_registry
 from backend.rpa.screencast import SessionScreencastController
@@ -220,7 +220,7 @@ def _count_user_messages(events: List[Dict[str, Any]]) -> int:
     )
 
 
-async def _generate_session_title(first_message: str) -> str:
+async def _generate_session_title(first_message: str, model_config: Optional[Dict[str, Any]] = None) -> str:
     """
     Use LLM to generate a short, descriptive chat title from the first user message.
     Returns a fallback if generation fails.
@@ -237,7 +237,7 @@ async def _generate_session_title(first_message: str) -> str:
         "Output only the title, no quotes, no explanation, no prefix."
     )
     try:
-        llm = get_llm_model(config=None, max_tokens_override=60, streaming=False)
+        llm = get_llm_model(config=model_config, max_tokens_override=60, streaming=False)
         response = await llm.ainvoke([
             SystemMessage(content=system),
             HumanMessage(content=prompt),
@@ -707,6 +707,8 @@ async def create_session(
                 if not mc.is_system and mc.user_id != current_user.id:
                     raise HTTPException(status_code=403, detail="Cannot use this model")
                 model_config_dict = mc.model_dump()
+        if model_config_dict is None:
+            model_config_dict = await resolve_default_model_config(current_user.id)
 
         session = await async_create_science_session(
             mode=body.mode,
@@ -1753,7 +1755,7 @@ async def _agent_background_worker(
         events = getattr(session, "events", []) or []
         if _count_user_messages(events) <= 1:
             try:
-                gen_title = await _generate_session_title(message)
+                gen_title = await _generate_session_title(message, getattr(session, "model_config", None))
                 if gen_title:
                     setattr(session, "title", gen_title)
                     await session.save()

@@ -13,7 +13,7 @@ from websockets.exceptions import ConnectionClosed
 import httpx
 from fastapi.responses import Response as FastAPIResponse
 
-from backend.rpa.manager import rpa_manager
+from backend.rpa.manager import rpa_manager, RPASkillConfigDraft
 from backend.rpa.generator import PlaywrightGenerator
 from backend.rpa.executor import ScriptExecutor
 from backend.rpa.skill_exporter import SkillExporter
@@ -26,9 +26,14 @@ from backend.rpa.trace_skill_compiler import TraceSkillCompiler
 from backend.rpa.mcp_step_projection import session_to_mcp_steps
 from backend.rpa.cdp_connector import get_cdp_connector
 from backend.rpa.screencast import SessionScreencastController
-from backend.user.dependencies import get_current_user, User
+from backend.user.dependencies import (
+    get_current_user,
+    get_user_from_session_id,
+    local_admin_identity_enabled,
+    User,
+)
 from backend.config import settings
-from backend.storage import get_repository
+from backend.models import get_model_config, resolve_default_model_config
 from backend.credential.vault import inject_credentials
 
 logger = logging.getLogger(__name__)
@@ -68,6 +73,7 @@ class SaveSkillRequest(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     mode: str = "chat"
+    model_config_id: str | None = None
 
 
 class ConfirmRequest(BaseModel):
@@ -80,6 +86,10 @@ class NavigateRequest(BaseModel):
 
 class PromoteLocatorRequest(BaseModel):
     candidate_index: int
+
+
+class SkillConfigDraftRequest(RPASkillConfigDraft):
+    pass
 
 
 def _generate_session_script(session, params: Dict[str, Any], *, test_mode: bool = False) -> str:
@@ -98,6 +108,11 @@ def _generate_session_script(session, params: Dict[str, Any], *, test_mode: bool
         is_local=(settings.storage_backend == "local"),
         test_mode=test_mode,
     )
+
+
+def _session_model_config(session) -> dict | None:
+    model_config = getattr(session, "llm_model_config", None)
+    return model_config if isinstance(model_config, dict) and model_config else None
 
 
 def _model_dump_json(value: Any) -> Any:
@@ -398,9 +413,9 @@ async def _get_ws_user(websocket: WebSocket) -> User | None:
 
     Browser WebSocket APIs cannot attach custom Authorization headers in the
     same way axios does, so we accept a bearer token via query param as a
-    fallback and keep the existing local-mode shortcut.
+    fallback and keep the explicit no-auth local shortcut.
     """
-    if settings.storage_backend == "local":
+    if local_admin_identity_enabled():
         return User(id="local_admin", username="admin", role="admin")
 
     if getattr(settings, "auth_provider", "local") == "none":
@@ -410,24 +425,7 @@ async def _get_ws_user(websocket: WebSocket) -> User | None:
         websocket.query_params.get("token")
         or websocket.cookies.get(settings.session_cookie)
     )
-    if not session_id:
-        return None
-
-    repo = get_repository("user_sessions")
-    session_doc = await repo.find_one({"_id": session_id})
-    if not session_doc:
-        return None
-
-    import time
-    if session_doc.get("expires_at", 0) < time.time():
-        await repo.delete_one({"_id": session_id})
-        return None
-
-    return User(
-        id=str(session_doc["user_id"]),
-        username=session_doc["username"],
-        role=session_doc.get("role", "user"),
-    )
+    return await get_user_from_session_id(session_id)
 
 
 async def _get_http_user(request: Request) -> User | None:
@@ -436,7 +434,7 @@ async def _get_http_user(request: Request) -> User | None:
     This mirrors websocket auth so iframe-based noVNC pages can use either
     the session cookie or a `token` query param.
     """
-    if settings.storage_backend == "local":
+    if local_admin_identity_enabled():
         return User(id="local_admin", username="admin", role="admin")
 
     if getattr(settings, "auth_provider", "local") == "none":
@@ -446,24 +444,7 @@ async def _get_http_user(request: Request) -> User | None:
         request.query_params.get("token")
         or request.cookies.get(settings.session_cookie)
     )
-    if not session_id:
-        return None
-
-    repo = get_repository("user_sessions")
-    session_doc = await repo.find_one({"_id": session_id})
-    if not session_doc:
-        return None
-
-    import time
-    if session_doc.get("expires_at", 0) < time.time():
-        await repo.delete_one({"_id": session_id})
-        return None
-
-    return User(
-        id=str(session_doc["user_id"]),
-        username=session_doc["username"],
-        role=session_doc.get("role", "user"),
-    )
+    return await get_user_from_session_id(session_id)
 
 
 def _get_sandbox_vnc_ws_url() -> str:
@@ -536,26 +517,22 @@ def _rewrite_vnc_html(html: str, session_id: str) -> str:
     return rewritten
 
 
-async def _resolve_user_model_config(user_id: str) -> dict | None:
+async def _resolve_user_model_config(user_id: str, model_config_id: str | None = None) -> dict | None:
     """Resolve the user's model config for the RPA assistant.
 
     Priority: user's own models → system models → env defaults (None).
     """
-    # Try user's own active model first, then system models
-    docs = await get_repository("models").find_many(
-        {"$or": [{"user_id": user_id}, {"is_system": True}], "is_active": True, "api_key": {"$nin": ["", None]}},
-        sort=[("is_system", 1), ("updated_at", -1)],  # user models first
-        limit=1,
-    )
-    doc = docs[0] if docs else None
-    if doc:
-        return {
-            "model_name": doc.get("model_name"),
-            "base_url": doc.get("base_url"),
-            "api_key": doc.get("api_key"),
-            "context_window": doc.get("context_window"),
-            "provider": doc.get("provider", ""),
-        }
+    if model_config_id:
+        model_config = await get_model_config(model_config_id)
+        if not model_config:
+            raise HTTPException(status_code=404, detail="Model not found")
+        if not model_config.is_system and model_config.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Cannot use this model")
+        return model_config.model_dump()
+
+    model_config = await resolve_default_model_config(user_id)
+    if model_config:
+        return model_config
     # Fall back to env defaults
     if (getattr(settings, "model_ds_api_key", None) or "").strip():
         return None  # get_llm_model(config=None) uses env defaults
@@ -578,6 +555,17 @@ async def start_rpa_session(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/sessions/cleanup")
+async def cleanup_rpa_sessions(
+    max_idle_seconds: int = 7200,
+    current_user: User = Depends(get_current_user),
+):
+    if getattr(current_user, "role", "") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    removed = rpa_manager.cleanup_expired_sessions(max_idle_seconds=max_idle_seconds)
+    return {"status": "success", "removed": removed}
+
+
 @router.get("/session/{session_id}")
 async def get_rpa_session(
     session_id: str,
@@ -588,10 +576,46 @@ async def get_rpa_session(
         raise HTTPException(status_code=404, detail="Session not found")
     if session.user_id != str(current_user.id):
         raise HTTPException(status_code=403, detail="Not authorized")
+    rpa_manager.touch_session(session_id)
     timeline = _build_session_timeline(session)
     session_payload = _session_response_payload(session)
     session_payload["timeline"] = timeline
     return {"status": "success", "session": session_payload, "timeline": timeline}
+
+
+@router.get("/session/{session_id}/skill-config-draft")
+async def get_skill_config_draft(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    session = await rpa_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    _ensure_session_owner(session, current_user)
+    rpa_manager.touch_session(session_id)
+    return {
+        "status": "success",
+        "draft": session.skill_config_draft.model_dump(mode="json")
+        if session.skill_config_draft
+        else None,
+    }
+
+
+@router.put("/session/{session_id}/skill-config-draft")
+async def update_skill_config_draft(
+    session_id: str,
+    request: SkillConfigDraftRequest,
+    current_user: User = Depends(get_current_user),
+):
+    session = await rpa_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    _ensure_session_owner(session, current_user)
+    draft = rpa_manager.update_skill_config_draft(session_id, request)
+    return {
+        "status": "success",
+        "draft": draft.model_dump(mode="json"),
+    }
 
 
 @router.get("/session/{session_id}/timeline")
@@ -857,6 +881,9 @@ async def test_script(
     # 本地模式：通过 pw_loop_runner 确保 Playwright 操作在正确的事件循环里执行
     if settings.storage_backend == "local":
         test_kwargs: Dict[str, Any] = {"_downloads_dir": downloads_dir}
+        model_config = _session_model_config(session)
+        if model_config:
+            test_kwargs["_model_config"] = model_config
         if request.params:
             test_kwargs.update(await inject_credentials(str(current_user.id), request.params, {}))
         result = await executor.execute(
@@ -874,10 +901,15 @@ async def test_script(
     else:
         # Docker 模式：使用原有逻辑
         docker_kwargs: Dict[str, Any] = {}
+        model_config = _session_model_config(session)
+        if model_config:
+            docker_kwargs["_model_config"] = model_config
         if request.params:
             docker_kwargs = await inject_credentials(
                 str(current_user.id), request.params, {}
             )
+            if model_config:
+                docker_kwargs["_model_config"] = model_config
         result = await executor.execute(
             browser,
             script,
@@ -984,7 +1016,9 @@ async def chat_with_assistant(
         raise HTTPException(status_code=403, detail="Not authorized")
 
     # Resolve user's model config
-    model_config = await _resolve_user_model_config(str(current_user.id))
+    model_config = await _resolve_user_model_config(str(current_user.id), request.model_config_id)
+    if model_config:
+        session.llm_model_config = model_config
 
     # Get the page object for this session
     page = rpa_manager.get_page(session_id)
