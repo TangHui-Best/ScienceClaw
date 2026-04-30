@@ -13,6 +13,12 @@ from backend.rpa.trace_models import RPAAcceptedTrace, RPAAIExecution, RPATraceT
 ROUTE_MODULE = importlib.import_module("backend.route.rpa")
 
 
+class FakeWebSocketRequest:
+    def __init__(self, query_params=None, cookies=None):
+        self.query_params = query_params or {}
+        self.cookies = cookies or {}
+
+
 @pytest.mark.anyio
 async def test_resolve_user_model_config_prefers_requested_model(monkeypatch):
     class FakeModel:
@@ -103,6 +109,21 @@ async def test_parse_schedule_default_model_prefers_configured_model_over_env(mo
 
     assert config["api_key"] == "sk-page"
     assert config["model_name"] == "page-model"
+
+
+@pytest.mark.anyio
+async def test_screencast_websocket_no_auth_resolves_bootstrap_admin(monkeypatch):
+    async def fake_get_current_user(_request):
+        return ROUTE_MODULE.User(id="admin-uuid", username="admin", role="admin")
+
+    monkeypatch.setattr(ROUTE_MODULE.settings, "storage_backend", "local")
+    monkeypatch.setattr(ROUTE_MODULE.settings, "auth_provider", "none")
+    monkeypatch.setattr(ROUTE_MODULE, "get_current_user", fake_get_current_user)
+
+    user = await ROUTE_MODULE._get_ws_user(FakeWebSocketRequest())
+
+    assert user is not None
+    assert user.id == "admin-uuid"
 
 
 def test_generate_session_script_prefers_traces_over_legacy_steps():

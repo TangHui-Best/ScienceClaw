@@ -12,8 +12,8 @@ from backend.runtime.session_runtime_manager import get_session_runtime_manager
 from backend.config import settings
 from backend.user.dependencies import (
     User,
+    get_current_user,
     get_user_from_session_id,
-    local_admin_identity_enabled,
     require_user,
 )
 
@@ -57,11 +57,8 @@ def _build_runtime_ws_url(rest_base_url: str, path: str, query_string: str = "")
 
 
 async def _get_websocket_user(websocket: WebSocket) -> User | None:
-    if local_admin_identity_enabled():
-        return User(id="local_admin", username="admin", role="admin")
-
     if getattr(settings, "auth_provider", "local") == "none":
-        return User(id="anonymous", username="Anonymous", role="user")
+        return await get_current_user(websocket)  # type: ignore[arg-type]
 
     auth = websocket.headers.get("authorization") or websocket.headers.get("Authorization")
     if auth and auth.lower().startswith("bearer "):

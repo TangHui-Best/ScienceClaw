@@ -41,10 +41,27 @@ async def get_user_from_session_id(session_id: Optional[str]) -> Optional[User]:
     )
 
 
+async def get_bootstrap_admin_user() -> Optional[User]:
+    username = str(getattr(settings, "bootstrap_admin_username", "admin") or "admin").strip()
+    if not username:
+        return None
+
+    admin_doc = await get_repository("users").find_one({"username": username})
+    if not admin_doc or not admin_doc.get("_id"):
+        return None
+
+    return User(
+        id=str(admin_doc["_id"]),
+        username=str(admin_doc.get("username") or username),
+        role=str(admin_doc.get("role") or "admin"),
+    )
+
+
 async def get_current_user(request: Request) -> Optional[User]:
     """Dependency to get current authenticated user from session cookie."""
     if local_admin_identity_enabled():
-        return User(id="local_admin", username="admin", role="admin")
+        admin_user = await get_bootstrap_admin_user()
+        return admin_user or User(id="local_admin", username="admin", role="admin")
 
     if getattr(settings, "auth_provider", "local") == "none":
         return User(id="anonymous", username="Anonymous", role="user")

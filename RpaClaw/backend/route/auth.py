@@ -241,10 +241,10 @@ async def register(body: RegisterRequest):
 async def get_auth_status(current_user: Optional[User] = Depends(get_current_user)) -> ApiResponse:
     auth_provider = getattr(settings, "auth_provider", "local")
     if auth_provider == "none":
-        user_id = "local_admin" if local_admin_identity_enabled() else "anonymous"
-        fullname = "Administrator" if local_admin_identity_enabled() else "Anonymous User"
+        user_id = current_user.id if current_user else ("local_admin" if local_admin_identity_enabled() else "anonymous")
+        fullname = current_user.username if current_user else ("Administrator" if local_admin_identity_enabled() else "Anonymous User")
         email = "admin@localhost" if local_admin_identity_enabled() else "anonymous@localhost"
-        role = "admin" if local_admin_identity_enabled() else "user"
+        role = current_user.role if current_user else ("admin" if local_admin_identity_enabled() else "user")
         return ApiResponse(
             data=AuthStatusData(
                 authenticated=True,

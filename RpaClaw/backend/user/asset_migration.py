@@ -32,21 +32,6 @@ async def migrate_local_admin_assets_to_bootstrap_admin() -> Dict[str, Any]:
     once the app runs with real login sessions.
     """
 
-    if (
-        getattr(settings, "auth_provider", "local") == "none"
-        and getattr(settings, "storage_backend", "mongo") == "local"
-    ):
-        logger.info(
-            "Skipping legacy local_admin asset migration because desktop local no-auth mode is enabled "
-            "(AUTH_PROVIDER=none, STORAGE_BACKEND=local). Assets remain owned by local_admin."
-        )
-        return {
-            "skipped": True,
-            "reason": "no_auth_local_mode_uses_local_admin_identity",
-            "target_user_id": LEGACY_LOCAL_ADMIN_ID,
-            "migrated_collections": {},
-        }
-
     admin_username = str(getattr(settings, "bootstrap_admin_username", "admin") or "admin").strip()
     users = get_repository("users")
     admin = await users.find_one({"username": admin_username})

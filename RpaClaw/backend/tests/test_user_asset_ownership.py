@@ -111,10 +111,18 @@ async def test_migrates_legacy_local_admin_assets_to_bootstrap_admin(monkeypatch
 
 
 @pytest.mark.anyio
-async def test_skips_legacy_asset_migration_in_no_auth_local_mode(monkeypatch):
+async def test_migrates_legacy_asset_migration_in_no_auth_local_mode(monkeypatch):
     repos = {
         "users": MemoryRepo([{"_id": "admin-uuid", "username": "admin"}]),
         "models": MemoryRepo([{"_id": "model-1", "user_id": "local_admin"}]),
+        "credentials": MemoryRepo([]),
+        "skills": MemoryRepo([]),
+        "task_settings": MemoryRepo([]),
+        "user_mcp_servers": MemoryRepo([]),
+        "session_mcp_bindings": MemoryRepo([]),
+        "rpa_mcp_tools": MemoryRepo([]),
+        "rpa_mcp_preview_drafts": MemoryRepo([]),
+        "blocked_tools": MemoryRepo([]),
     }
 
     monkeypatch.setattr(MIGRATION, "get_repository", lambda name: repos[name])
@@ -123,9 +131,10 @@ async def test_skips_legacy_asset_migration_in_no_auth_local_mode(monkeypatch):
 
     report = await MIGRATION.migrate_local_admin_assets_to_bootstrap_admin()
 
-    assert report["skipped"] is True
-    assert report["reason"] == "no_auth_local_mode_uses_local_admin_identity"
-    assert repos["models"].docs["model-1"]["user_id"] == "local_admin"
+    assert report["skipped"] is False
+    assert report["target_user_id"] == "admin-uuid"
+    assert report["migrated_collections"]["models"] == 1
+    assert repos["models"].docs["model-1"]["user_id"] == "admin-uuid"
 
 
 @pytest.mark.anyio
@@ -192,14 +201,42 @@ async def test_local_storage_with_local_auth_uses_session_user(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_local_storage_with_auth_disabled_keeps_local_admin_shortcut(monkeypatch):
+async def test_local_storage_with_auth_disabled_uses_bootstrap_admin_identity(monkeypatch):
+    repo = MemoryRepo(
+        [
+            {
+                "_id": "admin-uuid",
+                "username": "admin",
+                "role": "admin",
+                "is_active": True,
+            }
+        ]
+    )
+
     monkeypatch.setattr(DEPENDENCIES.settings, "storage_backend", "local")
     monkeypatch.setattr(DEPENDENCIES.settings, "auth_provider", "none")
+    monkeypatch.setattr(DEPENDENCIES.settings, "bootstrap_admin_username", "admin")
+    monkeypatch.setattr(DEPENDENCIES, "get_repository", lambda name: repo)
 
     user = await DEPENDENCIES.get_current_user(FakeRequest())
 
     assert user is not None
-    assert user.id == "local_admin"
+    assert user.id == "admin-uuid"
+    assert user.username == "admin"
+
+
+@pytest.mark.anyio
+async def test_auth_status_no_auth_reports_bootstrap_admin_identity(monkeypatch):
+    current_user = DEPENDENCIES.User(id="admin-uuid", username="admin", role="admin")
+
+    monkeypatch.setattr(AUTH_ROUTE.settings, "storage_backend", "local")
+    monkeypatch.setattr(AUTH_ROUTE.settings, "auth_provider", "none")
+
+    response = await AUTH_ROUTE.get_auth_status(current_user=current_user)
+
+    assert response.data["authenticated"] is True
+    assert response.data["auth_provider"] == "none"
+    assert response.data["user"]["id"] == "admin-uuid"
 
 
 @pytest.mark.anyio

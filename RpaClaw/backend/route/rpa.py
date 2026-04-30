@@ -28,7 +28,6 @@ from backend.rpa.screencast import SessionScreencastController
 from backend.user.dependencies import (
     get_current_user,
     get_user_from_session_id,
-    local_admin_identity_enabled,
     User,
 )
 from backend.config import settings
@@ -359,11 +358,8 @@ async def _get_ws_user(websocket: WebSocket) -> User | None:
     same way axios does, so we accept a bearer token via query param as a
     fallback and keep the explicit no-auth local shortcut.
     """
-    if local_admin_identity_enabled():
-        return User(id="local_admin", username="admin", role="admin")
-
     if getattr(settings, "auth_provider", "local") == "none":
-        return User(id="anonymous", username="Anonymous", role="user")
+        return await get_current_user(websocket)  # type: ignore[arg-type]
 
     session_id = (
         websocket.query_params.get("token")
@@ -378,11 +374,8 @@ async def _get_http_user(request: Request) -> User | None:
     This mirrors websocket auth so iframe-based noVNC pages can use either
     the session cookie or a `token` query param.
     """
-    if local_admin_identity_enabled():
-        return User(id="local_admin", username="admin", role="admin")
-
     if getattr(settings, "auth_provider", "local") == "none":
-        return User(id="anonymous", username="Anonymous", role="user")
+        return await get_current_user(request)
 
     session_id = (
         request.query_params.get("token")
