@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 _GENERATED_CODE_FILENAME = "<recording_runtime_agent>"
 _RANDOM_LIKE_ATTR_RE = re.compile(r"(?i)(?:[a-z]+[-_])?[a-z0-9]{6,}[a-z][a-z0-9]*")
 _DOWNLOAD_EVENT_DRAIN_TIMEOUT_S = 0.5
+_RECORDING_PLANNER_MIN_OUTPUT_TOKENS = 8192
 
 
 RECORDING_RUNTIME_SYSTEM_PROMPT = """You operate exactly one RPA recording command.
@@ -134,6 +135,7 @@ class RecordingPlannerContractError(ValueError):
     def __init__(self, message: str, *, raw_output: str = "", cause: Optional[BaseException] = None):
         super().__init__(message)
         self.raw_output = raw_output
+        self.llm_call: Dict[str, Any] = {}
         self.__cause__ = cause
 
 
@@ -151,6 +153,7 @@ class RecordingRuntimeAgent:
         self.planner = planner or self._default_planner
         self.executor = executor or self._default_executor
         self.model_config = model_config
+        self._planner_llm_calls: List[Dict[str, Any]] = []
 
     async def run(
         self,
@@ -184,6 +187,7 @@ class RecordingRuntimeAgent:
         first_plan = _build_table_ordinal_overlay_plan(instruction, snapshot)
         if not first_plan:
             first_plan = _build_ordinal_overlay_plan(instruction, snapshot)
+        first_planner_call_index = len(self._planner_llm_calls)
         if not first_plan:
             try:
                 first_plan = await self.planner(payload)
@@ -199,6 +203,7 @@ class RecordingRuntimeAgent:
                     ],
                     message="Recording planner failed to return a valid plan.",
                 )
+        first_llm_call = self._planner_llm_call_since(first_planner_call_index)
         first_result = await self.executor(page, first_plan, runtime_results)
         first_result = await _ensure_expected_effect(
             page=page,
@@ -273,6 +278,8 @@ class RecordingRuntimeAgent:
             "page_after_failure": failed_page.model_dump(mode="json"),
             "snapshot_after_failure": _safe_jsonable(compact_failed_snapshot),
         }
+        if first_llm_call:
+            diagnostic_raw["llm_call"] = _safe_jsonable(first_llm_call)
         if first_error_type:
             diagnostic_raw["error_type"] = first_error_type
         if first_traceback:
@@ -303,6 +310,7 @@ class RecordingRuntimeAgent:
             **payload,
             "repair": repair_context,
         }
+        repair_planner_call_index = len(self._planner_llm_calls)
         try:
             repair_plan = await self.planner(repair_payload)
         except Exception as exc:
@@ -318,6 +326,7 @@ class RecordingRuntimeAgent:
                 diagnostics=diagnostics,
                 message="Recording planner failed to return a valid repair plan.",
             )
+        repair_llm_call = self._planner_llm_call_since(repair_planner_call_index)
         repair_result = await self.executor(page, repair_plan, runtime_results)
         repair_result = await _ensure_expected_effect(
             page=page,
@@ -368,6 +377,8 @@ class RecordingRuntimeAgent:
             "plan": _safe_jsonable(repair_plan),
             "result": _safe_jsonable(repair_result),
         }
+        if repair_llm_call:
+            repair_diagnostic_raw["llm_call"] = _safe_jsonable(repair_llm_call)
         if repair_error_type:
             repair_diagnostic_raw["error_type"] = repair_error_type
         if repair_traceback:
@@ -424,17 +435,46 @@ class RecordingRuntimeAgent:
         )
 
     async def _default_planner(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        from backend.config import settings
         from backend.deepagent.engine import get_llm_model
         from langchain_core.messages import HumanMessage, SystemMessage
 
-        model = get_llm_model(config=self.model_config, streaming=False)
-        response = await model.ainvoke(
-            [
-                SystemMessage(content=RECORDING_RUNTIME_SYSTEM_PROMPT),
-                HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str)),
-            ]
+        planner_max_tokens = max(int(getattr(settings, "max_tokens", 0) or 0), _RECORDING_PLANNER_MIN_OUTPUT_TOKENS)
+        model = get_llm_model(
+            config=self.model_config,
+            max_tokens_override=planner_max_tokens,
+            streaming=False,
         )
-        return _parse_json_object(_extract_text(response))
+        messages = [
+            SystemMessage(content=RECORDING_RUNTIME_SYSTEM_PROMPT),
+            HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str)),
+        ]
+        llm_request = _build_planner_llm_request_summary(
+            model=model,
+            messages=messages,
+            model_config=self.model_config,
+        )
+        response = await model.ainvoke(messages)
+        response_text = _extract_text(response)
+        llm_call = {
+            "request": llm_request,
+            "response": _text_diagnostic(response_text, limit=8000),
+        }
+        self._planner_llm_calls.append(llm_call)
+        _log_planner_llm_call(llm_call)
+        try:
+            return _parse_json_object(response_text)
+        except Exception as exc:
+            try:
+                setattr(exc, "llm_call", llm_call)
+            except Exception:
+                pass
+            raise
+
+    def _planner_llm_call_since(self, start_index: int) -> Dict[str, Any]:
+        if len(self._planner_llm_calls) <= start_index:
+            return {}
+        return self._planner_llm_calls[-1]
 
     async def _default_executor(self, page: Any, plan: Dict[str, Any], runtime_results: Dict[str, Any]) -> Dict[str, Any]:
         action_type = str(plan.get("action_type") or "run_python").strip()
@@ -682,21 +722,48 @@ def _extract_text(response: Any) -> str:
 def _parse_json_object(text: str) -> Dict[str, Any]:
     raw = str(text or "").strip()
     original_raw = raw
-    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
-    if fenced:
-        raw = fenced.group(1)
-    else:
-        start = raw.find("{")
-        if start >= 0:
-            raw = raw[start:]
-    try:
-        parsed, end = json.JSONDecoder().raw_decode(raw)
-    except json.JSONDecodeError as exc:
+    decoder = json.JSONDecoder()
+    candidates: List[str] = [
+        match.group(1)
+        for match in re.finditer(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
+    ]
+    candidates.extend(raw[index:] for index, char in enumerate(raw) if char == "{")
+    if not candidates and raw:
+        candidates.append(raw)
+
+    last_json_error: Optional[json.JSONDecodeError] = None
+    last_contract_error: Optional[ValueError] = None
+    for candidate in candidates:
+        try:
+            parsed, _end = decoder.raw_decode(candidate)
+        except json.JSONDecodeError as exc:
+            last_json_error = exc
+            continue
+        try:
+            return _coerce_recording_plan(parsed)
+        except ValueError as exc:
+            last_contract_error = exc
+            continue
+
+    if last_contract_error is not None:
         raise RecordingPlannerContractError(
-            f"Recording planner returned invalid JSON: {exc.msg}",
+            str(last_contract_error),
             raw_output=original_raw,
-            cause=exc,
-        ) from exc
+            cause=last_contract_error,
+        ) from last_contract_error
+    if last_json_error is not None:
+        raise RecordingPlannerContractError(
+            f"Recording planner returned invalid JSON: {last_json_error.msg}",
+            raw_output=original_raw,
+            cause=last_json_error,
+        ) from last_json_error
+    raise RecordingPlannerContractError(
+        "Recording planner did not return a JSON object",
+        raw_output=original_raw,
+    )
+
+
+def _coerce_recording_plan(parsed: Any) -> Dict[str, Any]:
     if not isinstance(parsed, dict):
         raise ValueError("Recording planner must return a JSON object")
     parsed.setdefault("action_type", "run_python")
@@ -724,6 +791,9 @@ def _planner_contract_diagnostic(
     if raw_output:
         raw["planner_raw_output"] = raw_output[:4000]
         raw["planner_raw_output_truncated"] = len(raw_output) > 4000
+    llm_call = getattr(exc, "llm_call", None)
+    if isinstance(llm_call, dict) and llm_call:
+        raw["llm_call"] = _safe_jsonable(llm_call)
     return RPATraceDiagnostic(
         source="ai",
         message=f"Recording planner failed to return a valid JSON plan: {exc}",
@@ -751,6 +821,98 @@ def _model_config_summary(model_config: Optional[Dict[str, Any]]) -> Dict[str, A
         if value not in (None, ""):
             summary[key] = value
     return summary
+
+
+def _build_planner_llm_request_summary(
+    *,
+    model: Any,
+    messages: List[Any],
+    model_config: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    message_summaries = []
+    total_chars = 0
+    include_prompt_preview = _planner_prompt_preview_enabled()
+    for message in messages:
+        content = str(getattr(message, "content", "") or "")
+        total_chars += len(content)
+        summary = {
+            "type": type(message).__name__,
+            "chars": len(content),
+            "truncated": len(content) > 20000,
+        }
+        if include_prompt_preview:
+            summary["preview"] = _truncate_text(content, 20000)
+        message_summaries.append(summary)
+    return {
+        "configured_model": _model_config_summary(model_config),
+        "effective_model": _effective_llm_model_summary(model),
+        "message_count": len(messages),
+        "total_message_chars": total_chars,
+        "messages": message_summaries,
+    }
+
+
+def _planner_prompt_preview_enabled() -> bool:
+    return str(os.getenv("RPA_LLM_DIAGNOSTIC_PROMPT_PREVIEW", "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _effective_llm_model_summary(model: Any) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {}
+    attr_map = {
+        "model_name": ("model_name", "model"),
+        "base_url": ("openai_api_base", "base_url"),
+        "max_tokens": ("max_tokens",),
+        "temperature": ("temperature",),
+        "streaming": ("streaming",),
+        "request_timeout": ("request_timeout", "timeout"),
+        "max_retries": ("max_retries",),
+        "model_kwargs": ("model_kwargs",),
+        "disabled_params": ("disabled_params",),
+        "profile": ("profile",),
+    }
+    for key, candidates in attr_map.items():
+        for attr in candidates:
+            value = getattr(model, attr, None)
+            if value not in (None, ""):
+                summary[key] = _safe_jsonable(value)
+                break
+    return summary
+
+
+def _text_diagnostic(text: Any, *, limit: int) -> Dict[str, Any]:
+    value = str(text or "")
+    return {
+        "chars": len(value),
+        "preview": _truncate_text(value, limit),
+        "truncated": len(value) > limit,
+    }
+
+
+def _truncate_text(text: str, limit: int) -> str:
+    value = str(text or "")
+    if len(value) <= limit:
+        return value
+    return value[:limit]
+
+
+def _log_planner_llm_call(llm_call: Dict[str, Any]) -> None:
+    request = llm_call.get("request") if isinstance(llm_call, dict) else {}
+    response = llm_call.get("response") if isinstance(llm_call, dict) else {}
+    effective_model = request.get("effective_model") if isinstance(request, dict) else {}
+    logger.info(
+        "[RPA-LLM] planner call model=%s base_url=%s max_tokens=%s profile=%s input_chars=%s output_chars=%s",
+        effective_model.get("model_name"),
+        effective_model.get("base_url"),
+        effective_model.get("max_tokens"),
+        effective_model.get("profile"),
+        request.get("total_message_chars") if isinstance(request, dict) else None,
+        response.get("chars") if isinstance(response, dict) else None,
+    )
 
 
 def _build_table_ordinal_overlay_plan(instruction: str, snapshot: Dict[str, Any]) -> Optional[Dict[str, Any]]:
