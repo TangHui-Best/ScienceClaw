@@ -12,10 +12,13 @@ from runner import (
     assert_expected_telemetry,
     build_browser_instruction,
     build_eval_auth_url,
+    configure_console_output,
     extract_final_url,
+    generated_script_uses_runtime_ai,
     render_console_summary,
     resolve_case_timeout_s,
     read_artifact_text,
+    replay_generated_skill,
     run_case,
 )
 
@@ -29,6 +32,29 @@ class RunnerAssertionTests(unittest.TestCase):
         for path in self.tmp_dir.glob("*"):
             if path.is_file():
                 path.unlink()
+
+    def test_console_output_uses_utf8_with_replacement_fallback(self):
+        class FakeStream:
+            def __init__(self):
+                self.calls = []
+
+            def reconfigure(self, **kwargs):
+                self.calls.append(kwargs)
+
+        original_stdout = sys.stdout
+        original_stderr = sys.stderr
+        fake_stdout = FakeStream()
+        fake_stderr = FakeStream()
+        try:
+            sys.stdout = fake_stdout
+            sys.stderr = fake_stderr
+            configure_console_output()
+        finally:
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
+
+        self.assertEqual(fake_stdout.calls, [{"encoding": "utf-8", "errors": "backslashreplace"}])
+        self.assertEqual(fake_stderr.calls, [{"encoding": "utf-8", "errors": "backslashreplace"}])
 
     def test_final_url_prefers_last_accepted_trace_after_page(self):
         events = [
@@ -124,11 +150,145 @@ class RunnerAssertionTests(unittest.TestCase):
         self.assertEqual(1, len(rpa_client.instructions))
         self.assertIn("只执行下面的业务任务", rpa_client.instructions[0])
         self.assertNotIn("buyer123", rpa_client.instructions[0])
+        self.assertEqual("当前在工作台页面。请进入合同管理页面。", rpa_client.business_instruction)
 
     def test_case_timeout_uses_yaml_override(self):
         args = type("Args", (), {"case_timeout_s": 180})()
 
         self.assertEqual(resolve_case_timeout_s({"id": "simple", "timeout_s": 90}, args), 90)
+
+    def test_run_case_can_verify_generate_and_replay_after_recording(self):
+        args = type(
+            "Args",
+            (),
+            {
+                "reset_token": "rpa-eval-reset",
+                "eval_frontend_url": "http://localhost:5175",
+                "case_timeout_s": 180,
+                "verify_replay": True,
+                "replay_timeout_s": 90,
+            },
+        )()
+        case = {
+            "id": "case_replay",
+            "name": "replay",
+            "tags": [],
+            "user": {"username": "buyer"},
+            "start_path": "/contracts",
+            "instruction": "Open contracts.",
+            "expected": {},
+            "assertions": {},
+        }
+        eval_client = FakeRunnerEvalClient()
+        rpa_client = FakeRunnerRpaClient()
+
+        result = run_case(case, args, eval_client, rpa_client)
+
+        self.assertTrue(result["passed"], result.get("failure_message"))
+        self.assertEqual("passed", result["phase_results"]["record"]["status"])
+        self.assertEqual("passed", result["phase_results"]["compile"]["status"])
+        self.assertEqual("passed", result["phase_results"]["replay"]["status"])
+        self.assertEqual([("session-1", {})], rpa_client.generates)
+        self.assertEqual([("session-1", {})], rpa_client.tests)
+
+    def test_recording_aborted_is_record_phase_failure(self):
+        args = type(
+            "Args",
+            (),
+            {
+                "reset_token": "rpa-eval-reset",
+                "eval_frontend_url": "http://localhost:5175",
+                "case_timeout_s": 180,
+                "verify_replay": True,
+                "replay_timeout_s": 90,
+            },
+        )()
+        case = {
+            "id": "case_record_fail",
+            "name": "record fail",
+            "tags": [],
+            "user": {"username": "buyer"},
+            "start_path": "/contracts",
+            "instruction": "Open contracts.",
+            "expected": {},
+            "assertions": {},
+        }
+        eval_client = FakeRunnerEvalClient()
+        rpa_client = FakeRunnerRpaClient()
+        rpa_client.chat_events = [{"event": "agent_aborted", "data": {"reason": "no terminal evidence"}}]
+
+        result = run_case(case, args, eval_client, rpa_client)
+
+        self.assertFalse(result["passed"])
+        self.assertEqual("record", result["failure_stage"])
+        self.assertEqual("failed", result["phase_results"]["record"]["status"])
+        self.assertEqual([], rpa_client.generates)
+
+    def test_replay_generated_skill_fails_when_generated_script_uses_runtime_ai(self):
+        rpa_client = FakeRunnerRpaClient()
+        rpa_client.generated_script = (
+            "async def execute_skill(page):\n"
+            "    await _execute_runtime_ai_instruction(page, {}, 'x', 'y')\n"
+        )
+
+        with self.assertRaises(CaseAssertionError) as raised:
+            replay_generated_skill(
+                rpa_client=rpa_client,
+                session_id="session-1",
+                params={},
+                timeout_s=90,
+                allow_runtime_ai=False,
+            )
+
+        self.assertEqual("compile", raised.exception.stage)
+        self.assertIn("runtime AI", str(raised.exception))
+        self.assertEqual([], rpa_client.tests)
+
+    def test_generated_script_runtime_ai_check_ignores_unused_helper_definition(self):
+        script = (
+            "async def _execute_runtime_ai_instruction(page, results, instruction, output_key):\n"
+            "    return {}\n\n"
+            "async def execute_skill(page):\n"
+            "    return {'ok': True}\n"
+        )
+
+        self.assertFalse(generated_script_uses_runtime_ai(script))
+
+    def test_run_case_marks_compile_phase_failed_when_replay_static_check_fails(self):
+        args = type(
+            "Args",
+            (),
+            {
+                "reset_token": "rpa-eval-reset",
+                "eval_frontend_url": "http://localhost:5175",
+                "case_timeout_s": 180,
+                "verify_replay": True,
+                "replay_timeout_s": 90,
+            },
+        )()
+        case = {
+            "id": "case_compile_fail",
+            "name": "compile fail",
+            "tags": [],
+            "user": {"username": "buyer"},
+            "start_path": "/contracts",
+            "instruction": "Open contracts.",
+            "expected": {},
+            "assertions": {},
+        }
+        eval_client = FakeRunnerEvalClient()
+        rpa_client = FakeRunnerRpaClient()
+        rpa_client.generated_script = (
+            "async def execute_skill(page):\n"
+            "    await _execute_runtime_ai_instruction(page, {}, 'x', 'y')\n"
+        )
+
+        result = run_case(case, args, eval_client, rpa_client)
+
+        self.assertFalse(result["passed"])
+        self.assertEqual("compile", result["failure_stage"])
+        self.assertEqual("failed", result["phase_results"]["compile"]["status"])
+        self.assertEqual("passed", result["phase_results"]["record"]["status"])
 
     def test_case_timeout_falls_back_to_cli_default(self):
         args = type("Args", (), {"case_timeout_s": 180})()
@@ -197,6 +357,12 @@ class RunnerAssertionTests(unittest.TestCase):
             {"output_text": "searched_contract_number CT-2026-RPA-NOT-FOUND no_match True conclusion 没有匹配结果"},
         )
 
+    def test_output_text_accepts_alternative_phrasings(self):
+        assert_expected_telemetry(
+            {"output_text": [["没有匹配结果", "未找到匹配结果"]]},
+            {"output_text": "searched_contract_number CT-2026-RPA-NOT-FOUND no_match True conclusion 未找到匹配结果"},
+        )
+
     def test_visible_text_does_not_pass_from_agent_output_only(self):
         with self.assertRaises(CaseAssertionError):
             assert_expected_telemetry(
@@ -218,6 +384,36 @@ class RunnerAssertionTests(unittest.TestCase):
         self.assertIn("PASS", text)
         self.assertIn("case_b", text)
         self.assertIn("FAIL", text)
+
+    def test_summary_includes_phase_pass_rates(self):
+        from report import summarize_cases
+
+        summary = summarize_cases(
+            [
+                {
+                    "passed": True,
+                    "latency_ms": 100,
+                    "phase_results": {
+                        "record": {"status": "passed"},
+                        "compile": {"status": "passed"},
+                        "replay": {"status": "passed"},
+                    },
+                },
+                {
+                    "passed": False,
+                    "latency_ms": 200,
+                    "phase_results": {
+                        "record": {"status": "passed"},
+                        "compile": {"status": "failed"},
+                        "replay": {"status": "skipped"},
+                    },
+                },
+            ]
+        )
+
+        self.assertEqual(1.0, summary["record_pass_rate"])
+        self.assertEqual(0.5, summary["compile_pass_rate"])
+        self.assertEqual(0.5, summary["replay_pass_rate"])
 
     def test_api_assertion_supports_absent_records(self):
         client = FakeEvalClient({"/api/purchase-orders": [{"number": "PO-2026-RPA-001"}]})
@@ -309,6 +505,11 @@ class FakeRunnerRpaClient:
         self.instructions = []
         self.navigations = []
         self.stopped = []
+        self.generates = []
+        self.tests = []
+        self.chat_events = [{"event": "agent_done", "data": {"message": "ok"}}]
+        self.generated_script = "async def execute_skill(page):\n    return {}\n"
+        self.test_response = {"status": "success", "result": {"success": True, "data": {}}, "logs": []}
 
     def start_session(self, case_id):
         self.case_id = case_id
@@ -317,12 +518,21 @@ class FakeRunnerRpaClient:
     def navigate(self, session_id, url):
         self.navigations.append((session_id, url))
 
-    def chat_with_wall_timeout(self, session_id, instruction, *, timeout_s):
+    def chat_with_wall_timeout(self, session_id, instruction, *, timeout_s, business_instruction=None):
         self.instructions.append(instruction)
-        return [{"event": "agent_done", "data": {"message": "ok"}}]
+        self.business_instruction = business_instruction
+        return list(self.chat_events)
 
     def get_session(self, session_id):
         return {}
+
+    def generate_script(self, session_id, params=None):
+        self.generates.append((session_id, params or {}))
+        return {"status": "success", "script": self.generated_script}
+
+    def test_script(self, session_id, params=None, timeout_s=None):
+        self.tests.append((session_id, params or {}))
+        return self.test_response
 
     def stop_session(self, session_id, *, ignore_errors=False):
         self.stopped.append((session_id, ignore_errors))

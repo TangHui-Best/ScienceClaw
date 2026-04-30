@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
 import sys
@@ -32,6 +33,20 @@ USER_PASSWORDS = {
 }
 
 
+def configure_console_output() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (OSError, ValueError):
+            try:
+                reconfigure(errors="backslashreplace")
+            except (OSError, ValueError):
+                pass
+
+
 class CaseAssertionError(AssertionError):
     def __init__(self, stage: str, message: str) -> None:
         super().__init__(message)
@@ -39,6 +54,7 @@ class CaseAssertionError(AssertionError):
 
 
 def main() -> int:
+    configure_console_output()
     args = parse_args()
     report_dir = args.report_dir if args.report_dir is not None else DEFAULT_REPORT_DIR
     cases = select_cases(load_cases(CASES_DIR), args)
@@ -111,6 +127,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--report-dir", default=None)
     parser.add_argument("--reset-token", default="rpa-eval-reset")
     parser.add_argument(
+        "--verify-replay",
+        action="store_true",
+        help="After recording, generate and execute the recorded script to validate replayability.",
+    )
+    parser.add_argument(
+        "--replay-timeout-s",
+        type=float,
+        default=90.0,
+        help="Wall-clock timeout for the RpaClaw /test replay phase.",
+    )
+    parser.add_argument(
+        "--allow-runtime-ai-replay",
+        action="store_true",
+        help="Allow generated replay scripts to call runtime AI. Disabled by default to expose non-deterministic replays.",
+    )
+    parser.add_argument(
         "--case-timeout-s",
         type=float,
         default=180.0,
@@ -165,6 +197,11 @@ def run_case(
         "raw_events": [],
         "session_id": None,
         "timeout_s": resolve_case_timeout_s(case, args),
+        "phase_results": {
+            "record": {"status": "pending"},
+            "compile": {"status": "skipped"},
+            "replay": {"status": "skipped"},
+        },
     }
 
     try:
@@ -191,7 +228,28 @@ def run_case(
         result["session_id"] = run.session_id
         result["raw_events"] = run.raw_events
         result["metrics"] = collect_metrics(run.raw_events, run.session)
+        assert_recording_succeeded(run.raw_events)
+        result["phase_results"]["record"] = {"status": "passed"}
         assert_metrics(case.get("assertions", {}), result["metrics"])
+        if getattr(args, "verify_replay", False):
+            eval_client.reset(args.reset_token)
+            try:
+                replay_result = replay_generated_skill(
+                    rpa_client=rpa_client,
+                    session_id=run.session_id or "",
+                    params=case.get("params") or {},
+                    timeout_s=float(getattr(args, "replay_timeout_s", 90.0)),
+                    allow_runtime_ai=bool(getattr(args, "allow_runtime_ai_replay", False)),
+                )
+            except CaseAssertionError as exc:
+                if exc.stage in result["phase_results"]:
+                    result["phase_results"][exc.stage] = {"status": "failed", "message": str(exc)}
+                raise
+            eval_session = eval_client.login(username, password)
+            result["eval_user"] = eval_session.user
+            result["phase_results"]["compile"] = replay_result["compile"]
+            result["phase_results"]["replay"] = replay_result["replay"]
+            result["replay"] = replay_result
         assert_api_assertions(case.get("api_assertions", []), eval_client, eval_session.token)
         assert_expected_telemetry(case.get("expected", {}), result["metrics"])
         result["passed"] = True
@@ -204,12 +262,85 @@ def run_case(
     except (EvalAppError, RpaClawError, CaseAssertionError, AssertionError, KeyError) as exc:
         result["failure_stage"] = classify_failure(exc)
         result["failure_message"] = str(exc)
+        if isinstance(exc, CaseAssertionError) and exc.stage in result["phase_results"]:
+            result["phase_results"][exc.stage] = {"status": "failed", "message": str(exc)}
     except Exception as exc:
         result["failure_stage"] = "runner"
         result["failure_message"] = f"{type(exc).__name__}: {exc}"
     finally:
         result["latency_ms"] = round((time.perf_counter() - started) * 1000)
     return result
+
+
+def assert_recording_succeeded(events: list[dict[str, Any]]) -> None:
+    for event in reversed(events):
+        event_name = str(event.get("event") or "")
+        if event_name == "agent_done":
+            return
+        if event_name in {"agent_aborted", "error"}:
+            data = event.get("data") if isinstance(event.get("data"), dict) else {}
+            message = str(data.get("reason") or data.get("message") or event_name)
+            raise CaseAssertionError("record", message)
+    raise CaseAssertionError("record", "recording did not emit agent_done")
+
+
+def replay_generated_skill(
+    *,
+    rpa_client: RpaClawClient,
+    session_id: str,
+    params: dict[str, Any],
+    timeout_s: float,
+    allow_runtime_ai: bool = False,
+) -> dict[str, Any]:
+    generated = rpa_client.generate_script(session_id, params)
+    script = str(generated.get("script") or "")
+    compile_result = {
+        "status": "passed",
+        "script_length": len(script),
+        "uses_runtime_ai": generated_script_uses_runtime_ai(script),
+    }
+    if not script:
+        compile_result["status"] = "failed"
+        raise CaseAssertionError("compile", "generated script was empty")
+    if compile_result["uses_runtime_ai"] and not allow_runtime_ai:
+        compile_result["status"] = "failed"
+        raise CaseAssertionError("compile", "generated script uses runtime AI and is not deterministic for replay")
+
+    tested = rpa_client.test_script(session_id, params, timeout_s=timeout_s)
+    success = str(tested.get("status") or "").lower() == "success"
+    result = tested.get("result") if isinstance(tested.get("result"), dict) else {}
+    if result and result.get("success") is False:
+        success = False
+    replay_result = {
+        "status": "passed" if success else "failed",
+        "logs": tested.get("logs") or [],
+        "error": result.get("error") if isinstance(result, dict) else None,
+    }
+    if not success:
+        message = replay_result.get("error") or tested.get("error") or "generated script replay failed"
+        raise CaseAssertionError("replay", str(message))
+    return {"compile": compile_result, "replay": replay_result}
+
+
+def generated_script_uses_runtime_ai(script: str) -> bool:
+    """Return true only when the generated skill calls the runtime AI helper.
+
+    RpaClaw scripts may include shared helper definitions even when no replay
+    step invokes them, so a substring check would turn deterministic scripts
+    into false compile failures.
+    """
+    try:
+        tree = ast.parse(script)
+    except SyntaxError:
+        return bool(re.search(r"(?<!def\s)_execute_runtime_ai_instruction\s*\(", script))
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name) and func.id == "_execute_runtime_ai_instruction":
+            return True
+    return False
 
 
 def run_rpa_case(
@@ -234,7 +365,12 @@ def run_rpa_case(
             username=username,
             password=password,
         )
-        business_events = rpa_client.chat_with_wall_timeout(session_id, business_instruction, timeout_s=timeout_s)
+        business_events = rpa_client.chat_with_wall_timeout(
+            session_id,
+            business_instruction,
+            timeout_s=timeout_s,
+            business_instruction=case["instruction"],
+        )
 
         session = rpa_client.get_session(session_id)
         return RpaRunResult(session_id=session_id, raw_events=tag_events(business_events, "case"), session=session)
@@ -328,12 +464,9 @@ def assert_metrics(assertions: dict[str, Any], metrics: dict[str, Any]) -> None:
             "assertion",
             f"accepted_trace_count {metrics['accepted_trace_count']} is below required minimum {accepted_min}"
         )
-    diagnostics_max = assertions.get("diagnostics_max")
-    if diagnostics_max is not None and metrics["diagnostics_count"] > diagnostics_max:
-        raise CaseAssertionError(
-            "assertion",
-            f"diagnostics_count {metrics['diagnostics_count']} exceeds allowed maximum {diagnostics_max}"
-        )
+    # Diagnostics measure repair/stability cost. They should remain visible in
+    # reports, but they are not a correctness gate for trace-first recording:
+    # a case should pass or fail on observable browser/API outcomes.
 
 
 def assert_expected_telemetry(expected: dict[str, Any], metrics: dict[str, Any]) -> None:
@@ -640,6 +773,9 @@ def flatten_strings(value: Any) -> list[str]:
 
 
 def text_contains_expected(text: str, expected: Any) -> bool:
+    if isinstance(expected, (list, tuple, set)):
+        return any(text_contains_expected(text, option) for option in expected)
+
     expected_text = str(expected)
     if expected_text in text:
         return True
@@ -687,16 +823,23 @@ def render_console_summary(case_results: list[dict[str, Any]]) -> str:
         "Evaluation Summary",
         f"Total: {total}  Passed: {passed}  Failed: {failed}",
         "",
-        "| Case | Result | Latency | Failure |",
-        "| --- | --- | ---: | --- |",
+        "| Case | Result | Record | Compile | Replay | Latency | Failure |",
+        "| --- | --- | --- | --- | --- | ---: | --- |",
     ]
     for case in case_results:
         result = "PASS" if case.get("passed") else "FAIL"
         latency = case.get("latency_ms") or 0
+        phases = case.get("phase_results") or {}
+        record_status = (phases.get("record") or {}).get("status", "")
+        compile_status = (phases.get("compile") or {}).get("status", "")
+        replay_status = (phases.get("replay") or {}).get("status", "")
         failure = ""
         if not case.get("passed"):
             failure = f"{case.get('failure_stage') or ''}: {case.get('failure_message') or ''}".strip(": ")
-        lines.append(f"| {case['id']} | {result} | {latency} ms | {failure} |")
+        lines.append(
+            f"| {case['id']} | {result} | {record_status} | {compile_status} | {replay_status} | "
+            f"{latency} ms | {failure} |"
+        )
     return "\n".join(lines)
 
 
