@@ -21,6 +21,11 @@ $PythonUrl = "https://www.python.org/ftp/python/3.13.0/python-3.13.0-embed-amd64
 $PythonZip = Join-Path $BuildDir "python-embed.zip"
 $GetPipUrl = "https://bootstrap.pypa.io/get-pip.py"
 $GetPipPath = Join-Path $BuildDir "get-pip.py"
+$NodeVersion = "20.18.0"
+$NodeZip = Join-Path $BuildDir "node-v$NodeVersion-win-x64.zip"
+$NodeUrl = "https://nodejs.org/dist/v$NodeVersion/node-v$NodeVersion-win-x64.zip"
+$NodeDir = Join-Path $BuildDir "node"
+$NodeExtractDir = Join-Path $BuildDir "node-extract"
 
 # Create build directory
 if (-not (Test-Path $BuildDir)) {
@@ -46,9 +51,9 @@ if (-not $SkipFrontend) {
     Write-Host ""
 }
 
-# Step 2: Prepare Python Environment
+# Step 2: Prepare Python + Node Runtime Environment
 if (-not $SkipPython) {
-    Write-Host "[2/3] Preparing Python Environment..." -ForegroundColor Green
+    Write-Host "[2/3] Preparing Python + Node Runtime Environment..." -ForegroundColor Green
 
     # Download Python embeddable package
     if (-not (Test-Path $PythonZip)) {
@@ -99,10 +104,45 @@ if (-not $SkipPython) {
     & $PythonExe -m playwright install chromium
     Remove-Item Env:\PLAYWRIGHT_BROWSERS_PATH
 
-    Write-Host "  Python environment ready!" -ForegroundColor Green
+    # Download Node runtime for bundled document skills
+    if (-not (Test-Path $NodeZip)) {
+        Write-Host "  Downloading Node.js $NodeVersion runtime..." -ForegroundColor Yellow
+        Invoke-WebRequest -Uri $NodeUrl -OutFile $NodeZip
+    }
+
+    if (Test-Path $NodeDir) {
+        Write-Host "  Removing old bundled Node runtime..." -ForegroundColor Yellow
+        Remove-Item -Recurse -Force $NodeDir
+    }
+    if (Test-Path $NodeExtractDir) {
+        Remove-Item -Recurse -Force $NodeExtractDir
+    }
+
+    Write-Host "  Extracting Node.js runtime..." -ForegroundColor Yellow
+    Expand-Archive -Path $NodeZip -DestinationPath $NodeExtractDir -Force
+    $expandedNodeRoot = Get-ChildItem -Path $NodeExtractDir -Directory | Select-Object -First 1
+    if ($null -eq $expandedNodeRoot) {
+        throw "Unable to locate extracted Node.js runtime directory"
+    }
+    Copy-Item -Recurse -Force -Path $expandedNodeRoot.FullName -Destination $NodeDir
+    Remove-Item -Recurse -Force $NodeExtractDir
+
+    Write-Host "  Installing bundled Node document modules..." -ForegroundColor Yellow
+    Set-Content -Path (Join-Path $NodeDir "package.json") -Encoding UTF8 -Value (@"
+{
+  "name": "rpaclaw-desktop-runtime-node",
+  "private": true
+}
+"@)
+    & (Join-Path $NodeDir "npm.cmd") install --prefix $NodeDir --no-save --fund=false --audit=false --update-notifier=false --loglevel=error adm-zip docx pptxgenjs
+    if ($LASTEXITCODE -ne 0) {
+        throw "npm install failed while preparing bundled Node modules"
+    }
+
+    Write-Host "  Python and Node runtime environment ready!" -ForegroundColor Green
     Write-Host ""
 } else {
-    Write-Host "[2/3] Skipping Python environment preparation" -ForegroundColor Gray
+    Write-Host "[2/3] Skipping Python + Node runtime preparation" -ForegroundColor Gray
     Write-Host ""
 }
 
@@ -135,12 +175,11 @@ Write-Host "  Compiling backend to .pyc..." -ForegroundColor Yellow
 & $PythonExe -m compileall -b -q (Join-Path $StagingDir "backend")
 Write-Host "  Compiling task-service to .pyc..." -ForegroundColor Yellow
 & $PythonExe -m compileall -b -q (Join-Path $StagingDir "task-service")
-Write-Host "  Compiling builtin_skills to .pyc..." -ForegroundColor Yellow
-& $PythonExe -m compileall -b -q (Join-Path $StagingDir "builtin_skills")
 
 # Remove .py source files and __pycache__ directories
 Write-Host "  Removing .py source files..." -ForegroundColor Yellow
-Get-ChildItem -Recurse -Filter "*.py" $StagingDir | Remove-Item -Force
+Get-ChildItem -Recurse -Filter "*.py" (Join-Path $StagingDir "backend") | Remove-Item -Force
+Get-ChildItem -Recurse -Filter "*.py" (Join-Path $StagingDir "task-service") | Remove-Item -Force
 Get-ChildItem -Recurse -Directory -Filter "__pycache__" $StagingDir | Remove-Item -Recurse -Force
 
 Write-Host "  Bytecode compilation complete!" -ForegroundColor Green

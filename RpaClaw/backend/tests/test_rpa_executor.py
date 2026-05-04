@@ -68,8 +68,10 @@ class _FakeContext:
 class _FakeBrowser:
     def __init__(self):
         self.contexts = []
+        self.new_context_calls = []
 
-    async def new_context(self, **_kwargs):
+    async def new_context(self, **kwargs):
+        self.new_context_calls.append(kwargs)
         context = _FakeContext()
         self.contexts.append(context)
         return context
@@ -98,6 +100,25 @@ class _FakeSessionManager:
 
 
 class ScriptExecutorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_execute_reports_active_trace_index_when_script_times_out(self):
+        executor = EXECUTOR_MODULE.ScriptExecutor()
+        script = '''
+import asyncio
+
+async def execute_skill(page, **kwargs):
+    kwargs["_on_log"]("TRACE_START 1: runtime semantic repository selection | url=https://github.com/trending")
+    await asyncio.sleep(1)
+    return {"ok": True}
+'''
+        logs = []
+        browser = _FakeBrowser()
+
+        result = await executor.execute(browser, script, on_log=logs.append, timeout=0.01)
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["failed_step_index"], 1)
+        self.assertTrue(any(log.startswith("TRACE_START 1: runtime semantic repository selection") for log in logs))
+
     async def test_execute_registers_popup_pages_with_session_manager(self):
         browser = _FakeBrowser()
         session_manager = _FakeSessionManager()
@@ -121,6 +142,16 @@ async def execute_skill(page, **kwargs):
 
         self.assertTrue(result["success"])
         self.assertEqual(len(browser.contexts), 1)
+        self.assertEqual(
+            browser.new_context_calls,
+            [
+                {
+                    "no_viewport": True,
+                    "accept_downloads": True,
+                    "ignore_https_errors": True,
+                }
+            ],
+        )
         self.assertEqual(len(session_manager.attached), 1)
         self.assertEqual(len(session_manager.registered), 1)
         self.assertEqual(len(session_manager.context_pages), 1)

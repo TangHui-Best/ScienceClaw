@@ -19,6 +19,7 @@ import json
 import os
 import re
 import time
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set
 
@@ -48,10 +49,10 @@ from backend.deepagent.sessions import (
 )
 from backend.runtime.session_runtime_manager import get_session_runtime_manager
 from backend.user.dependencies import get_current_user, require_user, User
-from backend.models import get_model_config
+from backend.models import get_model_config, resolve_default_model_config
 from backend.config import settings
 from backend.browser_preview import browser_preview_registry
-from backend.rpa.screencast import ScreencastService
+from backend.rpa.screencast import SessionScreencastController
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -109,7 +110,7 @@ class GetSessionData(BaseModel):
 class ChatRequest(BaseModel):
     message: str = Field(default="", description="User message content")
     timestamp: Optional[int] = Field(default=None, description="Message timestamp")
-    event_id: Optional[str] = Field(default=None, description="Event ID")
+    event_id: Optional[str] = Field(default=None, description="SSE reconnection cursor event ID")
     attachments: Optional[List[str]] = Field(default=None, description="Attachment path list")
     language: Optional[str] = Field(default=None, description="User interface language (e.g. 'zh', 'en')")
     model_config_id: Optional[str] = Field(default=None, description="Model config ID to use (overrides session default)")
@@ -195,6 +196,20 @@ def _append_session_event(session: Any, event: Dict[str, Any]) -> None:
             setattr(session, "latest_message_at", int(data.get("timestamp") or _now_ts()))
 
 
+def _create_user_message_event(
+    message: str,
+    attachments: List[str],
+    timestamp: Optional[int] = None,
+) -> Dict[str, Any]:
+    return _wrap_event("message", {
+        "event_id": _new_event_id(),
+        "timestamp": timestamp or _now_ts(),
+        "content": message,
+        "role": "user",
+        "attachments": attachments,
+    })
+
+
 def _count_user_messages(events: List[Dict[str, Any]]) -> int:
     """Count message events with role=user."""
     if not events:
@@ -205,7 +220,7 @@ def _count_user_messages(events: List[Dict[str, Any]]) -> int:
     )
 
 
-async def _generate_session_title(first_message: str) -> str:
+async def _generate_session_title(first_message: str, model_config: Optional[Dict[str, Any]] = None) -> str:
     """
     Use LLM to generate a short, descriptive chat title from the first user message.
     Returns a fallback if generation fails.
@@ -222,7 +237,7 @@ async def _generate_session_title(first_message: str) -> str:
         "Output only the title, no quotes, no explanation, no prefix."
     )
     try:
-        llm = get_llm_model(config=None, max_tokens_override=60, streaming=False)
+        llm = get_llm_model(config=model_config, max_tokens_override=60, streaming=False)
         response = await llm.ainvoke([
             SystemMessage(content=system),
             HumanMessage(content=prompt),
@@ -373,6 +388,9 @@ def _extract_tool_meta(data: Dict[str, Any]) -> Dict[str, Any]:
     }
     if meta.get("sandbox"):
         result["sandbox"] = True
+    mcp_meta = meta.get("mcp")
+    if isinstance(mcp_meta, dict):
+        result["mcp"] = deepcopy(mcp_meta)
     return result
 
 
@@ -689,6 +707,8 @@ async def create_session(
                 if not mc.is_system and mc.user_id != current_user.id:
                     raise HTTPException(status_code=403, detail="Cannot use this model")
                 model_config_dict = mc.model_dump()
+        if model_config_dict is None:
+            model_config_dict = await resolve_default_model_config(current_user.id)
 
         session = await async_create_science_session(
             mode=body.mode,
@@ -756,6 +776,54 @@ def _list_skill_dirs(base_dir: str, builtin: bool = False) -> List[Dict[str, Any
         files = [str(f.relative_to(child)) for f in child.rglob("*") if f.is_file() and not should_skip_file(f)]
         skills.append({**meta, "files": files, "builtin": builtin})
     return skills
+
+
+def _read_recorded_skill_meta(skill_dir: _Path) -> Dict[str, Any] | None:
+    meta_path = skill_dir / "skill.meta.json"
+    if not meta_path.is_file():
+        return None
+    try:
+        payload = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if payload.get("kind") != "rpa-recording":
+        return None
+    return payload
+
+
+async def _get_skill_files_payload(skill_name: str, current_user: User) -> List[Dict[str, str]]:
+    if settings.storage_backend == "local":
+        skill_dir = _Path(settings.external_skills_dir) / skill_name
+        if not skill_dir.is_dir():
+            raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+        items = []
+        for file_path in sorted(skill_dir.rglob("*")):
+            if should_skip_file(file_path):
+                continue
+            if file_path.is_file():
+                rel_path = str(file_path.relative_to(skill_dir))
+                items.append({
+                    "name": file_path.name,
+                    "path": rel_path,
+                    "type": "file",
+                })
+        return items
+
+    col = _get_repo("skills")
+    doc = await col.find_one(
+        {"user_id": current_user.id, "name": skill_name},
+        projection={"files": 1}
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+    return [
+        {
+            "name": fname,
+            "path": fname,
+            "type": "file",
+        }
+        for fname in sorted(doc.get("files", {}).keys())
+    ]
 
 
 class SkillBlockRequest(BaseModel):
@@ -986,45 +1054,49 @@ async def list_skill_files(
 ) -> ApiResponse:
     """列出某个外置 skill 内部的文件结构。"""
     try:
-        if settings.storage_backend == "local":
-            # List from filesystem
-            skill_dir = _Path(settings.external_skills_dir) / skill_name
-            if not skill_dir.is_dir():
-                raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
-            items = []
-            for file_path in sorted(skill_dir.rglob("*")):
-                # 跳过不需要展示的文件
-                if should_skip_file(file_path):
-                    continue
-                if file_path.is_file():
-                    rel_path = str(file_path.relative_to(skill_dir))
-                    items.append({
-                        "name": file_path.name,
-                        "path": rel_path,
-                        "type": "file",
-                    })
-            return ApiResponse(data=items)
-        else:
-            # List from MongoDB
-            col = _get_repo("skills")
-            doc = await col.find_one(
-                {"user_id": current_user.id, "name": skill_name},
-                projection={"files": 1}
-            )
-            if not doc:
-                raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
-            items = []
-            for fname in sorted(doc.get("files", {}).keys()):
-                items.append({
-                    "name": fname,
-                    "path": fname,
-                    "type": "file",
-                })
-            return ApiResponse(data=items)
+        return ApiResponse(data=await _get_skill_files_payload(skill_name, current_user))
     except HTTPException:
         raise
     except Exception as exc:
         logger.exception("list_skill_files failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/skills/{skill_name}/detail", response_model=ApiResponse)
+async def get_skill_detail(
+    skill_name: str,
+    current_user: User = Depends(require_user),
+) -> ApiResponse:
+    """Return overview data for recorded RPA skills when metadata is available."""
+    try:
+        if settings.storage_backend != "local":
+            return ApiResponse(data={"can_use_overview": False, "mode": "files"})
+
+        skill_dir = _Path(settings.external_skills_dir) / skill_name
+        if not skill_dir.is_dir():
+            raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+
+        meta = _read_recorded_skill_meta(skill_dir)
+        if not meta:
+            return ApiResponse(data={"can_use_overview": False, "mode": "files"})
+
+        return ApiResponse(data={
+            "kind": "skill",
+            "mode": "recorded-overview",
+            "can_use_overview": True,
+            "name": meta.get("name") or skill_name,
+            "description": meta.get("description") or "",
+            "entry_script": meta.get("entry_script") or "skill.py",
+            "generated_at": meta.get("generated_at") or "",
+            "params": meta.get("params") or {},
+            "steps": meta.get("steps") or [],
+            "artifacts": meta.get("artifacts") or [],
+            "files": await _get_skill_files_payload(skill_name, current_user),
+        })
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("get_skill_detail failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
@@ -1130,7 +1202,12 @@ async def write_skill_file(
 # 外置 Tools 管理（必须放在 /{session_id} 路由之前）
 # ═══════════════════════════════════════════════════════════════════
 
-_TOOLS_DIR = os.environ.get("TOOLS_DIR", "/app/Tools")
+def _tools_dir_path() -> _Path:
+    return _Path(settings.tools_dir)
+
+
+def _tool_file_path(tool_name: str) -> _Path:
+    return _tools_dir_path() / f"{tool_name}.py"
 
 
 def _extract_tool_description(py_file: _Path) -> str:
@@ -1147,7 +1224,7 @@ def _extract_tool_description(py_file: _Path) -> str:
 
 def _list_external_tools() -> List[Dict[str, Any]]:
     """列出 Tools 目录中所有外置工具（排除 __init__.py）。"""
-    base = _Path(_TOOLS_DIR)
+    base = _tools_dir_path()
     if not base.is_dir():
         return []
     tools: List[Dict[str, Any]] = []
@@ -1213,11 +1290,11 @@ async def delete_tool(
 ) -> ApiResponse:
     """彻底删除一个外置 tool 文件。"""
     try:
-        tool_path = _Path(_TOOLS_DIR) / f"{tool_name}.py"
+        tool_path = _tool_file_path(tool_name)
         if not tool_path.is_file():
             raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found")
         resolved = tool_path.resolve()
-        base_resolved = _Path(_TOOLS_DIR).resolve()
+        base_resolved = _tools_dir_path().resolve()
         if not str(resolved).startswith(str(base_resolved)):
             raise HTTPException(status_code=403, detail="Invalid tool path")
         resolved.unlink()
@@ -1238,7 +1315,7 @@ async def read_tool_file(
 ) -> ApiResponse:
     """读取一个外置 tool 的源码内容。"""
     try:
-        tool_path = _Path(_TOOLS_DIR) / f"{tool_name}.py"
+        tool_path = _tool_file_path(tool_name)
         if not tool_path.is_file():
             raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found")
         content = tool_path.read_text(encoding="utf-8", errors="replace")
@@ -1285,12 +1362,13 @@ async def save_tool_from_session(
                 detail="File does not contain a @tool decorated function",
             )
 
-        dst = _Path(_TOOLS_DIR) / f"{tool_name}.py"
+        dst = _tool_file_path(tool_name)
+        dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
 
         replaces = (body.replaces or "").strip()
         if replaces and replaces != tool_name:
-            old_file = _Path(_TOOLS_DIR) / f"{replaces}.py"
+            old_file = _tool_file_path(replaces)
             if old_file.is_file():
                 old_file.unlink()
                 logger.info(f"[Tools] Removed old tool '{replaces}.py' (replaced by '{tool_name}')")
@@ -1647,7 +1725,6 @@ async def _agent_background_worker(
     session_id: str,
     message: str,
     attachments: List[str],
-    event_id: Optional[str] = None,
     timestamp: Optional[int] = None,
     language: Optional[str] = None,
 ) -> None:
@@ -1656,13 +1733,7 @@ async def _agent_background_worker(
     user_attachments = attachments or []
 
     if message.strip():
-        user_event = _wrap_event("message", {
-            "event_id": event_id or _new_event_id(),
-            "timestamp": timestamp or _now_ts(),
-            "content": message,
-            "role": "user",
-            "attachments": user_attachments,
-        })
+        user_event = _create_user_message_event(message, user_attachments, timestamp)
         _append_session_event(session, user_event)
         await session.save()
 
@@ -1684,7 +1755,7 @@ async def _agent_background_worker(
         events = getattr(session, "events", []) or []
         if _count_user_messages(events) <= 1:
             try:
-                gen_title = await _generate_session_title(message)
+                gen_title = await _generate_session_title(message, getattr(session, "model_config", None))
                 if gen_title:
                     setattr(session, "title", gen_title)
                     await session.save()
@@ -1794,9 +1865,9 @@ async def _agent_background_worker(
             staging_dir = _Path(_WORKSPACE_DIR) / session_id / "tools_staging"
             if staging_dir.is_dir():
                 saved_tools = {
-                    f.stem for f in _Path(_TOOLS_DIR).glob("*.py")
+                    f.stem for f in _tools_dir_path().glob("*.py")
                     if f.name != "__init__.py"
-                } if _Path(_TOOLS_DIR).is_dir() else set()
+                } if _tools_dir_path().is_dir() else set()
                 for child in sorted(staging_dir.glob("*.py")):
                     tool_name = child.stem
                     if tool_name not in saved_tools and "@tool" in child.read_text(encoding="utf-8", errors="replace"):
@@ -1909,7 +1980,7 @@ async def chat_with_session(
             _agent_background_worker(
                 session, session_id,
                 body.message or "", body.attachments or [],
-                event_id=body.event_id, timestamp=body.timestamp,
+                timestamp=body.timestamp,
                 language=body.language,
             )
         )
@@ -2108,9 +2179,56 @@ async def download_sandbox_file(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@router.post("/{session_id}/browser/tabs/{tab_id}/activate", response_model=ApiResponse)
+async def activate_session_browser_tab(
+    session_id: str,
+    tab_id: str,
+    current_user: User = Depends(require_user),
+) -> ApiResponse:
+    if settings.storage_backend != "local":
+        raise HTTPException(status_code=400, detail="Local mode only")
+
+    try:
+        session = await async_get_science_session(session_id)
+        if session.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied")
+    except ScienceSessionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    try:
+        result = await browser_preview_registry.activate_tab(session_id, tab_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return ApiResponse(data={
+        "result": result,
+        "tabs": browser_preview_registry.list_tabs(session_id),
+    })
+
+
+@router.get("/{session_id}/browser/tabs", response_model=ApiResponse)
+async def list_session_browser_tabs(
+    session_id: str,
+    current_user: User = Depends(require_user),
+) -> ApiResponse:
+    if settings.storage_backend != "local":
+        raise HTTPException(status_code=400, detail="Local mode only")
+
+    try:
+        session = await async_get_science_session(session_id)
+        if session.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied")
+    except ScienceSessionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return ApiResponse(data={
+        "tabs": browser_preview_registry.list_tabs(session_id),
+    })
+
+
 @router.websocket("/{session_id}/browser/screencast")
 async def session_browser_screencast(websocket: WebSocket, session_id: str):
-    """Stream a local-mode chat browser page via CDP screencast."""
+    """Stream a local-mode chat browser page via CDP screencast with tab switching."""
     await websocket.accept()
 
     if settings.storage_backend != "local":
@@ -2128,14 +2246,10 @@ async def session_browser_screencast(websocket: WebSocket, session_id: str):
         await websocket.close(code=1008, reason="No active browser page")
         return
 
-    try:
-        cdp_session = await page.context.new_cdp_session(page)
-    except Exception as exc:
-        logger.error(f"Failed to create chat preview CDP session: {exc}")
-        await websocket.close(code=1011, reason="CDP session failed")
-        return
-
-    screencast = ScreencastService(cdp_session)
+    screencast = SessionScreencastController(
+        page_provider=lambda: browser_preview_registry.get_active_page(session_id),
+        tabs_provider=lambda: browser_preview_registry.list_tabs(session_id),
+    )
     try:
         await screencast.start(websocket)
     except WebSocketDisconnect:
@@ -2144,7 +2258,3 @@ async def session_browser_screencast(websocket: WebSocket, session_id: str):
         logger.error(f"Chat browser screencast error: {exc}")
     finally:
         await screencast.stop()
-        try:
-            await cdp_session.detach()
-        except Exception:
-            pass

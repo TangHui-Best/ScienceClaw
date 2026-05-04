@@ -267,6 +267,32 @@ class RPAReActAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Frame: iframe title=results", content)
         self.assertIn("Collection: search_results (2 items)", content)
 
+    async def test_react_agent_build_observation_lists_snapshot_v2_containers(self):
+        snapshot = {
+            "url": "https://example.com",
+            "title": "Example",
+            "frames": [],
+            "actionable_nodes": [],
+            "content_nodes": [],
+            "containers": [
+                {
+                    "container_id": "table-1",
+                    "frame_path": [],
+                    "container_kind": "table",
+                    "name": "合同列表",
+                    "summary": "合同下载列表",
+                    "child_actionable_ids": ["a-1", "a-2"],
+                    "child_content_ids": ["c-1", "c-2"],
+                }
+            ],
+        }
+
+        content = ASSISTANT_MODULE.RPAReActAgent._build_observation(snapshot, 0)
+
+        self.assertIn("Container: table 合同列表", content)
+        self.assertIn("actionable=2", content)
+        self.assertIn("content=2", content)
+
     async def test_react_agent_executes_structured_collection_action_with_frame_context(self):
         agent = ASSISTANT_MODULE.RPAReActAgent()
         page = _FakeActionPage()
@@ -353,6 +379,88 @@ class RPAReActAgentTests(unittest.IsolatedAsyncioTestCase):
         )
 
 class RPAAssistantFrameAwareSnapshotTests(unittest.IsolatedAsyncioTestCase):
+    async def test_build_page_snapshot_v2_includes_actionable_content_and_containers(self):
+        main = _FakeSnapshotFrame(
+            name="main",
+            url="https://example.com",
+            frame_path=[],
+            elements=[{"index": 1, "tag": "button", "role": "button", "name": "Search"}],
+        )
+        page = _FakeSnapshotPage(main)
+
+        with patch.object(
+            ASSISTANT_RUNTIME_MODULE,
+            "_extract_frame_snapshot_v2",
+            new=AsyncMock(
+                return_value={
+                    "actionable_nodes": [
+                        {
+                            "node_id": "act-1",
+                            "frame_path": [],
+                            "container_id": "table-1",
+                            "role": "link",
+                            "name": "ContractList20260411124156",
+                            "action_kinds": ["click"],
+                            "locator": {"method": "role", "role": "link", "name": "ContractList20260411124156"},
+                            "locator_candidates": [
+                                {
+                                    "kind": "role",
+                                    "selected": True,
+                                    "locator": {
+                                        "method": "role",
+                                        "role": "link",
+                                        "name": "ContractList20260411124156",
+                                    },
+                                }
+                            ],
+                            "validation": {"status": "ok"},
+                            "bbox": {"x": 10, "y": 20, "width": 120, "height": 24},
+                            "center_point": {"x": 70, "y": 32},
+                            "is_visible": True,
+                            "is_enabled": True,
+                            "hit_test_ok": True,
+                            "element_snapshot": {"tag": "a", "text": "ContractList20260411124156"},
+                        }
+                    ],
+                    "content_nodes": [
+                        {
+                            "node_id": "content-1",
+                            "frame_path": [],
+                            "container_id": "table-1",
+                            "semantic_kind": "cell",
+                            "text": "已归档",
+                            "bbox": {"x": 300, "y": 20, "width": 80, "height": 24},
+                            "locator": {"method": "text", "value": "已归档"},
+                            "element_snapshot": {"tag": "td", "text": "已归档"},
+                        }
+                    ],
+                    "containers": [
+                        {
+                            "container_id": "table-1",
+                            "frame_path": [],
+                            "container_kind": "table",
+                            "name": "合同列表",
+                            "bbox": {"x": 0, "y": 0, "width": 800, "height": 600},
+                            "summary": "合同下载列表",
+                            "child_actionable_ids": ["act-1"],
+                            "child_content_ids": ["content-1"],
+                        }
+                    ],
+                }
+            ),
+        ):
+            snapshot = await ASSISTANT_MODULE.build_page_snapshot(
+                page,
+                frame_path_builder=lambda frame: frame._frame_path,
+            )
+
+        self.assertIn("actionable_nodes", snapshot)
+        self.assertIn("content_nodes", snapshot)
+        self.assertIn("containers", snapshot)
+        self.assertEqual(snapshot["actionable_nodes"][0]["locator"]["method"], "role")
+        self.assertEqual(snapshot["content_nodes"][0]["semantic_kind"], "cell")
+        self.assertEqual(snapshot["containers"][0]["container_kind"], "table")
+
     async def test_build_page_snapshot_includes_iframe_elements_and_collections(self):
         iframe = _FakeSnapshotFrame(
             name="editor",
@@ -478,8 +586,210 @@ class RPAAssistantFrameAwareSnapshotTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resolved["frame_path"], ["iframe[title='results']"])
         self.assertEqual(resolved["resolved_target"]["name"], "Result A")
 
+    async def test_sort_nodes_by_visual_position_orders_top_to_bottom_then_left_to_right(self):
+        nodes = [
+            {"node_id": "download-2", "name": "文件二", "bbox": {"x": 40, "y": 60, "width": 80, "height": 20}},
+            {"node_id": "download-1", "name": "文件一", "bbox": {"x": 20, "y": 20, "width": 80, "height": 20}},
+            {"node_id": "download-3", "name": "文件三", "bbox": {"x": 100, "y": 20, "width": 80, "height": 20}},
+        ]
+
+        ordered = ASSISTANT_RUNTIME_MODULE._sort_nodes_by_visual_position(nodes)
+
+        self.assertEqual([node["name"] for node in ordered], ["文件一", "文件三", "文件二"])
+
 
 class RPAAssistantStructuredExecutionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_resolve_structured_intent_uses_bbox_order_for_first_match_in_single_pass(self):
+        snapshot = {
+            "frames": [],
+            "actionable_nodes": [
+                {
+                    "node_id": "download-1",
+                    "frame_path": [],
+                    "container_id": "table-1",
+                    "role": "link",
+                    "name": "ContractList20260411124156",
+                    "action_kinds": ["click"],
+                    "locator": {"method": "text", "value": "ContractList20260411124156"},
+                    "locator_candidates": [{"kind": "text", "selected": True, "locator": {"method": "text", "value": "ContractList20260411124156"}}],
+                    "validation": {"status": "ok"},
+                    "hit_test_ok": True,
+                    "is_visible": True,
+                    "is_enabled": True,
+                    "bbox": {"x": 20, "y": 20, "width": 80, "height": 20},
+                },
+                {
+                    "node_id": "download-2",
+                    "frame_path": [],
+                    "container_id": "table-1",
+                    "role": "link",
+                    "name": "ContractList20260411124157",
+                    "action_kinds": ["click"],
+                    "locator": {"method": "text", "value": "ContractList20260411124157"},
+                    "locator_candidates": [{"kind": "text", "selected": True, "locator": {"method": "text", "value": "ContractList20260411124157"}}],
+                    "validation": {"status": "ok"},
+                    "hit_test_ok": True,
+                    "is_visible": True,
+                    "is_enabled": True,
+                    "bbox": {"x": 20, "y": 60, "width": 80, "height": 20},
+                },
+            ],
+            "content_nodes": [],
+            "containers": [
+                {
+                    "container_id": "table-1",
+                    "frame_path": [],
+                    "container_kind": "table",
+                    "name": "合同列表",
+                    "bbox": {"x": 0, "y": 0, "width": 800, "height": 600},
+                    "summary": "合同下载列表",
+                    "child_actionable_ids": ["download-1", "download-2"],
+                    "child_content_ids": [],
+                }
+            ],
+        }
+
+        resolved = ASSISTANT_MODULE.resolve_structured_intent(
+            snapshot,
+            {
+                "action": "click",
+                "description": "点击第一个文件下载",
+                "prompt": "点击第一个文件下载",
+                "target_hint": {"role": "link", "name": "contractlist"},
+                "ordinal": "first",
+            },
+        )
+
+        self.assertEqual(resolved["resolved"]["locator"]["value"], "ContractList20260411124156")
+        self.assertEqual(resolved["resolved"]["ordinal"], "first")
+        self.assertNotIn("assistant_diagnostics", resolved["resolved"])
+
+    async def test_resolve_structured_intent_prefers_snapshot_locator_bundle_for_actionable_node(self):
+        snapshot = {
+            "frames": [],
+            "actionable_nodes": [
+                {
+                    "node_id": "download-1",
+                    "frame_path": [],
+                    "container_id": "table-1",
+                    "role": "link",
+                    "name": "ContractList20260411124156",
+                    "action_kinds": ["click"],
+                    "locator": {"method": "text", "value": "ContractList20260411124156"},
+                    "locator_candidates": [
+                        {
+                            "kind": "role",
+                            "selected": False,
+                            "locator": {"method": "role", "role": "link", "name": "ContractList20260411124156"},
+                        },
+                        {
+                            "kind": "text",
+                            "selected": True,
+                            "locator": {"method": "text", "value": "ContractList20260411124156"},
+                        },
+                    ],
+                    "validation": {"status": "ok"},
+                    "hit_test_ok": True,
+                }
+            ],
+            "content_nodes": [],
+            "containers": [],
+        }
+
+        resolved = ASSISTANT_MODULE.resolve_structured_intent(
+            snapshot,
+            {
+                "action": "click",
+                "description": "点击第一个文件下载",
+                "target_hint": {"role": "link", "name": "contractlist"},
+            },
+        )
+
+        self.assertEqual(resolved["resolved"]["locator"]["method"], "text")
+        self.assertTrue(resolved["resolved"]["locator_candidates"][1]["selected"])
+
+    async def test_resolve_structured_intent_extract_text_prefers_content_nodes(self):
+        snapshot = {
+            "frames": [],
+            "actionable_nodes": [
+                {
+                    "node_id": "button-1",
+                    "frame_path": [],
+                    "container_id": "card-1",
+                    "role": "button",
+                    "name": "复制标题",
+                    "action_kinds": ["click"],
+                    "locator": {"method": "role", "role": "button", "name": "复制标题"},
+                    "locator_candidates": [
+                        {
+                            "kind": "role",
+                            "selected": True,
+                            "locator": {"method": "role", "role": "button", "name": "复制标题"},
+                        }
+                    ],
+                    "validation": {"status": "ok"},
+                    "hit_test_ok": True,
+                }
+            ],
+            "content_nodes": [
+                {
+                    "node_id": "title-1",
+                    "frame_path": [],
+                    "container_id": "card-1",
+                    "semantic_kind": "heading",
+                    "role": "heading",
+                    "text": "Quarterly Report",
+                    "bbox": {"x": 20, "y": 20, "width": 200, "height": 24},
+                    "locator": {"method": "text", "value": "Quarterly Report"},
+                    "element_snapshot": {"tag": "h2", "text": "Quarterly Report"},
+                }
+            ],
+            "containers": [],
+        }
+
+        resolved = ASSISTANT_MODULE.resolve_structured_intent(
+            snapshot,
+            {
+                "action": "extract_text",
+                "description": "提取报表标题",
+                "prompt": "提取报表标题",
+                "target_hint": {"name": "report title"},
+                "result_key": "report_title",
+            },
+        )
+
+        self.assertEqual(resolved["resolved"]["locator"]["method"], "text")
+        self.assertEqual(resolved["resolved"]["content_node"]["semantic_kind"], "heading")
+
+    async def test_execute_structured_click_does_not_mark_local_expansion_in_single_pass_mode(self):
+        page = _FakeActionPage()
+        intent = {
+            "action": "click",
+            "description": "点击第一个文件下载",
+            "prompt": "点击第一个文件下载",
+            "resolved": {
+                "frame_path": [],
+                "locator": {"method": "text", "value": "ContractList20260411124156"},
+                "locator_candidates": [
+                    {
+                        "kind": "text",
+                        "selected": True,
+                        "locator": {"method": "text", "value": "ContractList20260411124156"},
+                    }
+                ],
+                "collection_hint": {},
+                "item_hint": {},
+                "ordinal": "first",
+                "selected_locator_kind": "text",
+            },
+        }
+
+        result = await ASSISTANT_MODULE.execute_structured_intent(page, intent)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(page.scope.locator_calls[0], "text:ContractList20260411124156")
+        self.assertNotIn("used_local_expansion", result["step"]["assistant_diagnostics"])
+
     async def test_execute_structured_click_uses_frame_locator_chain(self):
         page = _FakeActionPage()
         intent = {

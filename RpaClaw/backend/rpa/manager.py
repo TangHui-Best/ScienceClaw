@@ -1,4 +1,4 @@
-﻿import json
+import json
 import logging
 import uuid
 import asyncio
@@ -13,10 +13,16 @@ from playwright.async_api import Page, BrowserContext
 
 from .cdp_connector import get_cdp_connector
 from .frame_selectors import build_frame_path
+from .manual_recording_models import ManualRecordedAction, ManualRecordingDiagnostic
+from .manual_recording_normalizer import build_manual_recording_outcome
+from .playwright_security import get_context_kwargs
+from .trace_models import RPAAcceptedTrace, RPATraceDiagnostic, RPARuntimeResults
+from .trace_recorder import infer_dataflow_for_ai_fill, infer_dataflow_for_fill, manual_step_to_trace
 
 logger = logging.getLogger(__name__)
 
 RPA_PAGE_TIMEOUT_MS = 60000
+HOVER_PROMOTION_WINDOW_MS = 2500
 
 
 class RPAStep(BaseModel):
@@ -60,12 +66,40 @@ class RPATab(BaseModel):
     status: str = "open"
 
 
+class RPASkillConfigParam(BaseModel):
+    original_value: str = ""
+    default_value: Optional[str] = None
+    enabled: bool = True
+    sensitive: bool = False
+    credential_id: str = ""
+    type: str = "string"
+    description: str = ""
+    required: bool = False
+
+
+class RPASkillConfigDraft(BaseModel):
+    skill_name: str = ""
+    description: str = ""
+    params: Dict[str, RPASkillConfigParam] = Field(default_factory=dict)
+    updated_at: datetime = Field(default_factory=datetime.now)
+
+
 class RPASession(BaseModel):
     id: str
     user_id: str
     start_time: datetime = Field(default_factory=datetime.now)
+    last_activity_at: datetime = Field(default_factory=datetime.now)
+    stopped_at: Optional[datetime] = None
     status: str = "recording"  # recording, stopped, testing, saved
-    steps: List[RPAStep] = []
+    steps: List[RPAStep] = Field(default_factory=list)
+    recorded_actions: List[ManualRecordedAction] = Field(default_factory=list)
+    recording_diagnostics: List[ManualRecordingDiagnostic] = Field(default_factory=list)
+    traces: List[RPAAcceptedTrace] = Field(default_factory=list)
+    trace_diagnostics: List[RPATraceDiagnostic] = Field(default_factory=list)
+    runtime_results: RPARuntimeResults = Field(default_factory=RPARuntimeResults)
+    skill_config_draft: Optional[RPASkillConfigDraft] = None
+    llm_model_config: Optional[Dict[str, Any]] = None
+    pending_download_events: List[Dict[str, Any]] = Field(default_factory=list)
     sandbox_session_id: str
     paused: bool = False  # pause event recording during AI execution
     active_tab_id: Optional[str] = None
@@ -81,6 +115,8 @@ RPA_VENDOR_DIR = Path(__file__).with_name("vendor")
 PLAYWRIGHT_RECORDER_RUNTIME_PATH = RPA_VENDOR_DIR / "playwright_recorder_runtime.js"
 PLAYWRIGHT_RECORDER_ACTIONS_PATH = RPA_VENDOR_DIR / "playwright_recorder_actions.js"
 CAPTURE_SCRIPT_PATH = RPA_VENDOR_DIR / "playwright_recorder_capture.js"
+PLAYWRIGHT_RECORDER_RUNTIME_JS = PLAYWRIGHT_RECORDER_RUNTIME_PATH.read_text(encoding="utf-8")
+PLAYWRIGHT_RECORDER_ACTIONS_JS = PLAYWRIGHT_RECORDER_ACTIONS_PATH.read_text(encoding="utf-8")
 CAPTURE_JS = CAPTURE_SCRIPT_PATH.read_text(encoding="utf-8")
 
 class RPASessionManager:
@@ -93,6 +129,68 @@ class RPASessionManager:
         self._tab_meta: Dict[str, Dict[str, RPATab]] = {}
         self._page_tab_ids: Dict[str, Dict[int, str]] = {}
         self._bridged_context_ids: Dict[str, set[int]] = {}
+        self._pending_hover_candidates: Dict[str, List[Dict[str, Any]]] = {}
+        self._pending_event_counts: Dict[str, int] = {}
+        self._pending_event_idle: Dict[str, asyncio.Event] = {}
+
+    def touch_session(self, session_id: str) -> None:
+        session = self.sessions.get(session_id)
+        if session:
+            session.last_activity_at = datetime.now()
+
+    def update_skill_config_draft(
+        self,
+        session_id: str,
+        draft: RPASkillConfigDraft,
+    ) -> RPASkillConfigDraft:
+        session = self.sessions.get(session_id)
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+        draft.updated_at = datetime.now()
+        session.skill_config_draft = draft
+        self.touch_session(session_id)
+        return draft
+
+    async def cleanup_expired_sessions(self, max_idle_seconds: int) -> List[str]:
+        now = datetime.now()
+        removed: List[str] = []
+        for session_id, session in list(self.sessions.items()):
+            if session.status == "saved":
+                continue
+            idle_seconds = (now - session.last_activity_at).total_seconds()
+            if idle_seconds <= max_idle_seconds:
+                continue
+            await self._dispose_session_resources(session_id)
+            self.sessions.pop(session_id, None)
+            self.ws_connections.pop(session_id, None)
+            removed.append(session_id)
+        return removed
+
+    async def _dispose_session_resources(self, session_id: str) -> None:
+        try:
+            await asyncio.wait_for(self.wait_for_pending_events(session_id), timeout=2.0)
+        except Exception as e:
+            logger.warning(f"[RPA] Error waiting for pending events during cleanup: {e}")
+
+        context = self._contexts.pop(session_id, None)
+        self.detach_context(session_id)
+        if context:
+            try:
+                await context.close()
+            except Exception as e:
+                logger.warning(f"[RPA] Error closing context during cleanup: {e}")
+
+        connections = list(self.ws_connections.get(session_id, []) or [])
+        for ws in connections:
+            close = getattr(ws, "close", None)
+            if not callable(close):
+                continue
+            try:
+                result = close()
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception as e:
+                logger.warning(f"[RPA] Error closing websocket during cleanup: {e}")
 
     def attach_context(self, session_id: str, context: BrowserContext):
         self._contexts[session_id] = context
@@ -101,10 +199,15 @@ class RPASessionManager:
         self._tab_meta[session_id] = {}
         self._page_tab_ids[session_id] = {}
         self._bridged_context_ids[session_id] = set()
+        self._pending_event_counts[session_id] = 0
+        idle_event = asyncio.Event()
+        idle_event.set()
+        self._pending_event_idle[session_id] = idle_event
 
         session = self.sessions.get(session_id)
         if session:
             session.active_tab_id = None
+        self._pending_hover_candidates.pop(session_id, None)
 
     def detach_context(self, session_id: str, context: Optional[BrowserContext] = None):
         current_context = self._contexts.get(session_id)
@@ -117,10 +220,13 @@ class RPASessionManager:
         self._tab_meta.pop(session_id, None)
         self._page_tab_ids.pop(session_id, None)
         self._bridged_context_ids.pop(session_id, None)
+        self._pending_event_counts.pop(session_id, None)
+        self._pending_event_idle.pop(session_id, None)
 
         session = self.sessions.get(session_id)
         if session:
             session.active_tab_id = None
+        self._pending_hover_candidates.pop(session_id, None)
 
     async def create_session(self, user_id: str, sandbox_session_id: str) -> RPASession:
         session_id = str(uuid.uuid4())
@@ -135,7 +241,7 @@ class RPASessionManager:
             session_id=sandbox_session_id,
             user_id=user_id,
         )
-        context = await browser.new_context(no_viewport=True, accept_downloads=True)
+        context = await browser.new_context(**get_context_kwargs())
         page = await context.new_page()
         page.set_default_timeout(RPA_PAGE_TIMEOUT_MS)
         page.set_default_navigation_timeout(RPA_PAGE_TIMEOUT_MS)
@@ -172,8 +278,15 @@ class RPASessionManager:
             opener_tab_id=opener_tab_id,
         )
 
+        tab_bootstrap_script = self._build_tab_bootstrap_script(tab_id)
+        await page.add_init_script(script=tab_bootstrap_script)
+        bridged_context_ids = self._bridged_context_ids.setdefault(session_id, set())
+        bootstrap_current_page = id(page.context) in bridged_context_ids
         await self._ensure_context_recorder(session_id, page.context)
         await self._bind_page(session_id, tab_id, page)
+        if bootstrap_current_page:
+            await page.evaluate(tab_bootstrap_script)
+            await self._bootstrap_page_recorder(page)
 
         if make_active or not self.sessions[session_id].active_tab_id:
             await self.activate_tab(session_id, tab_id, source="auto")
@@ -293,6 +406,10 @@ class RPASessionManager:
         if parsed.scheme in {"http", "https"} and not parsed.netloc:
             raise ValueError("Invalid URL")
         return normalized
+
+    @staticmethod
+    def _build_tab_bootstrap_script(tab_id: str) -> str:
+        return f"window.__rpa_tab_id = {json.dumps(tab_id)};"
 
     async def navigate_active_tab(self, session_id: str, url: str) -> Dict[str, str]:
         session = self.sessions.get(session_id)
@@ -467,15 +584,17 @@ class RPASessionManager:
                     resolved_tab_id = session.active_tab_id if session else None
                 if resolved_tab_id:
                     evt.setdefault("tab_id", resolved_tab_id)
+                reported_frame_path = evt.get("frame_path", []) or []
+                if reported_frame_path:
+                    signals = evt.get("signals")
+                    normalized_signals = dict(signals) if isinstance(signals, dict) else {}
+                    normalized_signals["reported_frame_path"] = list(reported_frame_path)
+                    evt["signals"] = normalized_signals
                 if source_frame:
-                    reported_frame_path = evt.get("frame_path", []) or []
-                    if reported_frame_path:
-                        signals = evt.get("signals")
-                        normalized_signals = dict(signals) if isinstance(signals, dict) else {}
-                        normalized_signals["reported_frame_path"] = list(reported_frame_path)
-                        evt["signals"] = normalized_signals
-                    evt["frame_path"] = await self._build_frame_path(source_frame)
-                await self._handle_event(session_id, evt)
+                    server_frame_path = await self._build_frame_path(source_frame)
+                    if server_frame_path or not reported_frame_path:
+                        evt["frame_path"] = server_frame_path
+                await self._run_tracked_event(session_id, evt)
             except Exception as e:
                 logger.error(f"[RPA] binding emit error: {e}")
 
@@ -490,6 +609,14 @@ class RPASessionManager:
 
     async def build_frame_path(self, frame) -> List[str]:
         return await self._build_frame_path(frame)
+
+    async def _bootstrap_page_recorder(self, page: Page):
+        try:
+            await page.evaluate(PLAYWRIGHT_RECORDER_RUNTIME_JS)
+            await page.evaluate(PLAYWRIGHT_RECORDER_ACTIONS_JS)
+            await page.evaluate(CAPTURE_JS)
+        except Exception as exc:
+            logger.debug("[RPA] Failed to bootstrap recorder runtime for current page: %s", exc)
 
     async def _bind_page(self, session_id: str, tab_id: str, page: Page):
         last_url = {"value": ""}
@@ -510,7 +637,7 @@ class RPASessionManager:
                     "timestamp": int(datetime.now().timestamp() * 1000),
                     "tab_id": tab_id,
                 }
-                asyncio.create_task(self._handle_event(session_id, evt))
+                asyncio.create_task(self._run_tracked_event(session_id, evt))
 
         page.on("framenavigated", on_navigated)
 
@@ -546,6 +673,18 @@ class RPASessionManager:
                 self._append_step_description(step, f" 并下载文件 {suggested}")
                 await self._broadcast_step(session_id, step)
                 return
+            session = self.sessions.get(session_id)
+            if session and session.paused:
+                session.pending_download_events.append(
+                    {
+                        "filename": suggested,
+                        "url": getattr(page, "url", ""),
+                        "tab_id": tab_id,
+                        "opener_tab_id": opener_tab_id,
+                        "event_timestamp_ms": int(datetime.now().timestamp() * 1000),
+                    }
+                )
+                return
             # Fallback: no preceding click found, record standalone
             evt = {
                 "action": "download",
@@ -554,7 +693,7 @@ class RPASessionManager:
                 "timestamp": int(datetime.now().timestamp() * 1000),
                 "tab_id": tab_id,
             }
-            await self._handle_event(session_id, evt)
+            await self._run_tracked_event(session_id, evt)
 
         page.on("download", on_download)
 
@@ -571,8 +710,11 @@ class RPASessionManager:
             return ""
 
     async def stop_session(self, session_id: str):
+        await self.wait_for_pending_events(session_id)
         if session_id in self.sessions:
             self.sessions[session_id].status = "stopped"
+            self.sessions[session_id].stopped_at = datetime.now()
+            self.touch_session(session_id)
 
         context = self._contexts.pop(session_id, None)
         self.detach_context(session_id)
@@ -592,8 +734,61 @@ class RPASessionManager:
         session = self.sessions.get(session_id)
         if not session or step_index < 0 or step_index >= len(session.steps):
             return False
-        session.steps.pop(step_index)
+        deleted_step = session.steps.pop(step_index)
+        self._rebuild_manual_recording_state(session)
+        deleted_trace_id = f"trace-{deleted_step.id}"
+        session.traces = [
+            trace
+            for trace in session.traces
+            if not (trace.source == "manual" and trace.trace_id == deleted_trace_id)
+        ]
         return True
+
+    async def delete_step_by_id(self, session_id: str, step_id: str) -> bool:
+        """Delete a recorded step by stable ID and remove its derived manual trace."""
+        session = self.sessions.get(session_id)
+        if not session or not step_id:
+            return False
+        for index, step in enumerate(session.steps):
+            if step.id == step_id:
+                return await self.delete_step(session_id, index)
+        return False
+
+    async def delete_trace(self, session_id: str, trace_id: str) -> bool:
+        """Delete an accepted trace by stable ID without relying on legacy step indexes."""
+        session = self.sessions.get(session_id)
+        if not session or not trace_id:
+            return False
+        target_trace = next((trace for trace in session.traces if trace.trace_id == trace_id), None)
+        if target_trace and target_trace.source == "manual" and trace_id.startswith("trace-"):
+            step_id = trace_id.removeprefix("trace-")
+            if any(step.id == step_id for step in session.steps):
+                return await self.delete_step_by_id(session_id, step_id)
+        original_count = len(session.traces)
+        session.traces = [trace for trace in session.traces if trace.trace_id != trace_id]
+        deleted = len(session.traces) != original_count
+        if deleted:
+            self._rebuild_runtime_results(session)
+        return deleted
+
+    async def delete_trace_diagnostic(self, session_id: str, diagnostic_id: str) -> bool:
+        session = self.sessions.get(session_id)
+        if not session or not diagnostic_id:
+            return False
+        original_count = len(session.trace_diagnostics)
+        session.trace_diagnostics = [
+            diagnostic
+            for diagnostic in session.trace_diagnostics
+            if diagnostic.diagnostic_id != diagnostic_id
+        ]
+        return len(session.trace_diagnostics) != original_count
+
+    @staticmethod
+    def _rebuild_runtime_results(session: RPASession) -> None:
+        rebuilt = RPARuntimeResults()
+        for trace in session.traces:
+            rebuilt.write(trace.output_key, trace.output)
+        session.runtime_results = rebuilt
 
     @staticmethod
     def _unescape_playwright_literal(value: str) -> str:
@@ -747,11 +942,49 @@ class RPASessionManager:
         return locator
 
     @staticmethod
-    def _candidate_score(candidate: Dict[str, Any]) -> float:
+    def _candidate_score(candidate: Dict[str, Any], locator: Optional[Dict[str, Any]] = None) -> float:
         score = candidate.get("score")
-        if isinstance(score, (int, float)):
-            return float(score)
-        return float("inf")
+        if not isinstance(score, (int, float)):
+            return float("inf")
+        return float(score) + RPASessionManager._locator_instability_penalty(candidate, locator=locator)
+
+    @staticmethod
+    def _locator_instability_penalty(
+        candidate: Dict[str, Any],
+        *,
+        locator: Optional[Dict[str, Any]] = None,
+    ) -> float:
+        resolved_locator = locator if isinstance(locator, dict) else candidate.get("locator")
+        if not isinstance(resolved_locator, dict):
+            return 0.0
+
+        method = str(resolved_locator.get("method") or candidate.get("kind") or "").lower()
+        if method == "nth":
+            return 10000.0
+        if method != "css":
+            return 0.0
+
+        selector = str(
+            resolved_locator.get("value")
+            or candidate.get("selector")
+            or candidate.get("playwright_locator")
+            or ""
+        )
+        if not selector:
+            return 0.0
+
+        penalty = 0.0
+        if re.search(r"\bdata-v-[0-9a-f]{6,}\b", selector, re.IGNORECASE):
+            penalty += 10000.0
+        if re.search(r"#[A-Za-z_][\w-]*-\d{2,}\b", selector):
+            penalty += 10000.0
+        if selector.count(">") >= 4:
+            penalty += 5000.0
+        if ">> nth=" in selector or ".nth(" in selector:
+            penalty += 5000.0
+        if len(selector) >= 160:
+            penalty += 1000.0
+        return penalty
 
     @classmethod
     def _candidate_is_nth(cls, candidate: Dict[str, Any], locator: Optional[Dict[str, Any]] = None) -> bool:
@@ -784,7 +1017,7 @@ class RPASessionManager:
             except ValueError:
                 continue
 
-            score = cls._candidate_score(candidate)
+            score = cls._candidate_score(candidate, locator=locator)
             is_nth = cls._candidate_is_nth(candidate, locator=locator)
             if best is None:
                 best = (index, candidate, locator)
@@ -858,8 +1091,9 @@ class RPASessionManager:
             status = validation.get("status") if isinstance(validation, dict) else None
             should_promote = selected_strict_count != 1 or status in {"fallback", "ambiguous", "warning", "broken"}
             if not should_promote and isinstance(selected_candidate, dict):
-                selected_score = cls._candidate_score(selected_candidate)
-                best_score = cls._candidate_score(best_candidate)
+                selected_locator = selected_candidate_info[2] if selected_candidate_info else None
+                selected_score = cls._candidate_score(selected_candidate, locator=selected_locator)
+                best_score = cls._candidate_score(best_candidate, locator=best_locator)
                 selected_is_nth = cls._candidate_is_nth(selected_candidate)
                 best_is_nth = cls._candidate_is_nth(best_candidate, locator=best_locator)
                 should_promote = best_score < selected_score or (
@@ -935,8 +1169,48 @@ class RPASessionManager:
                 step.validation["status"] = "ok" if strict_match_count == 1 else "fallback"
             if selected_candidate.get("reason"):
                 step.validation["details"] = selected_candidate["reason"]
+        self._rebuild_manual_recording_state(session)
+        await self._record_manual_trace_for_step(session_id, step)
         await self._broadcast_step(session_id, step)
         return step
+
+    async def select_trace_locator_candidate(
+        self,
+        session_id: str,
+        trace_id: str,
+        candidate_index: int,
+    ) -> RPAAcceptedTrace:
+        session = self.sessions.get(session_id)
+        if not session or not trace_id:
+            raise ValueError("Invalid trace id")
+
+        trace = next((item for item in session.traces if item.trace_id == trace_id), None)
+        if trace is None:
+            raise ValueError("Invalid trace id")
+        if candidate_index < 0 or candidate_index >= len(trace.locator_candidates):
+            raise ValueError("Invalid locator candidate index")
+
+        selected_candidate = trace.locator_candidates[candidate_index]
+        locator = self._resolve_candidate_locator(selected_candidate)
+
+        for index, candidate in enumerate(trace.locator_candidates):
+            candidate["selected"] = index == candidate_index
+
+        selected_candidate["locator"] = locator
+        trace.validation = dict(trace.validation or {})
+        trace.validation["selected_candidate_index"] = candidate_index
+        trace.validation["selected_candidate_kind"] = selected_candidate.get("kind", "")
+        strict_match_count = selected_candidate.get("strict_match_count")
+        if isinstance(strict_match_count, int):
+            trace.validation["status"] = "ok" if strict_match_count == 1 else "fallback"
+        if selected_candidate.get("reason"):
+            trace.validation["details"] = selected_candidate["reason"]
+
+        if trace.dataflow and trace.dataflow.target_field:
+            trace.dataflow.target_field.locator_candidates = [
+                dict(candidate) for candidate in trace.locator_candidates
+            ]
+        return trace
 
     def pause_recording(self, session_id: str):
         """Pause event recording (used during AI execution)."""
@@ -953,6 +1227,194 @@ class RPASessionManager:
         if active_page is not None:
             return active_page
         return self._pages.get(session_id)
+
+    def _ensure_pending_event_idle(self, session_id: str) -> asyncio.Event:
+        idle_event = self._pending_event_idle.get(session_id)
+        if idle_event is None:
+            idle_event = asyncio.Event()
+            idle_event.set()
+            self._pending_event_idle[session_id] = idle_event
+        self._pending_event_counts.setdefault(session_id, 0)
+        return idle_event
+
+    def _mark_pending_event_started(self, session_id: str) -> None:
+        idle_event = self._ensure_pending_event_idle(session_id)
+        self._pending_event_counts[session_id] = self._pending_event_counts.get(session_id, 0) + 1
+        idle_event.clear()
+
+    def _mark_pending_event_finished(self, session_id: str) -> None:
+        if session_id not in self._pending_event_counts:
+            return
+        remaining = max(0, self._pending_event_counts.get(session_id, 0) - 1)
+        self._pending_event_counts[session_id] = remaining
+        if remaining == 0:
+            self._ensure_pending_event_idle(session_id).set()
+
+    async def _run_tracked_event(self, session_id: str, evt: Dict[str, Any]) -> None:
+        self._mark_pending_event_started(session_id)
+        try:
+            await self._handle_event(session_id, evt)
+        except Exception:
+            logger.exception(
+                "[RPA] failed to handle recorded event: session_id=%s action=%s url=%s locator=%s",
+                session_id,
+                evt.get("action"),
+                evt.get("url"),
+                evt.get("locator"),
+            )
+        finally:
+            self._mark_pending_event_finished(session_id)
+
+    async def wait_for_pending_events(self, session_id: str, timeout_ms: int = 1500) -> bool:
+        idle_event = self._ensure_pending_event_idle(session_id)
+        if self._pending_event_counts.get(session_id, 0) <= 0:
+            return True
+        try:
+            await asyncio.wait_for(idle_event.wait(), timeout=timeout_ms / 1000)
+            return True
+        except asyncio.TimeoutError:
+            logger.debug("[RPA] Timed out waiting for pending events for session %s", session_id)
+            return False
+
+    def _clear_pending_hover_candidates(self, session_id: str) -> None:
+        self._pending_hover_candidates.pop(session_id, None)
+
+    def _trim_pending_hover_candidates(self, session_id: str, reference_ts: Optional[int] = None) -> None:
+        candidates = self._pending_hover_candidates.get(session_id)
+        if not candidates:
+            return
+        if reference_ts is None:
+            reference_ts = max(int(time.time() * 1000), 0)
+        trimmed = []
+        for candidate in candidates:
+            candidate_ts = int(candidate.get("timestamp") or 0)
+            if candidate_ts <= 0:
+                continue
+            if reference_ts >= candidate_ts and reference_ts - candidate_ts <= HOVER_PROMOTION_WINDOW_MS:
+                trimmed.append(candidate)
+        if trimmed:
+            self._pending_hover_candidates[session_id] = trimmed[-8:]
+        else:
+            self._pending_hover_candidates.pop(session_id, None)
+
+    def _queue_hover_candidate(self, session_id: str, evt: Dict[str, Any]) -> None:
+        if self._is_menu_item_event(evt):
+            return
+        locator_signature = self._event_locator_signature(evt)
+        if not locator_signature:
+            return
+        self._trim_pending_hover_candidates(session_id, int(evt.get("timestamp") or 0))
+        queue = list(self._pending_hover_candidates.get(session_id, []))
+        if queue:
+            last = queue[-1]
+            if (
+                self._event_locator_signature(last) == locator_signature
+                and (last.get("tab_id") or "") == (evt.get("tab_id") or "")
+                and list(last.get("frame_path") or []) == list(evt.get("frame_path") or [])
+            ):
+                queue[-1] = dict(evt)
+                self._pending_hover_candidates[session_id] = queue
+                return
+        queue.append(dict(evt))
+        self._pending_hover_candidates[session_id] = queue[-8:]
+
+    @staticmethod
+    def _event_locator_signature(evt: Dict[str, Any]) -> str:
+        locator = evt.get("locator")
+        if not isinstance(locator, dict) or not locator:
+            return ""
+        try:
+            return json.dumps(locator, sort_keys=True, ensure_ascii=False)
+        except TypeError:
+            return ""
+
+    @classmethod
+    def _is_menu_trigger_hover_candidate(cls, evt: Dict[str, Any]) -> bool:
+        if evt.get("action") != "hover":
+            return False
+        signals = evt.get("signals")
+        hover_signal = signals.get("hover") if isinstance(signals, dict) else None
+        return isinstance(hover_signal, dict) and hover_signal.get("is_menu_trigger_candidate") is True
+
+    @classmethod
+    def _is_menu_item_click(cls, evt: Dict[str, Any]) -> bool:
+        if evt.get("action") != "click":
+            return False
+        return cls._is_menu_item_event(evt)
+
+    @classmethod
+    def _is_menu_item_event(cls, evt: Dict[str, Any]) -> bool:
+        signals = evt.get("signals")
+        menu_context = signals.get("menu_context") if isinstance(signals, dict) else None
+        if isinstance(menu_context, dict) and menu_context.get("is_menu_item") is True:
+            return True
+        locator = evt.get("locator")
+        if isinstance(locator, dict) and locator.get("method") == "role":
+            role = str(locator.get("role") or "").lower()
+            if role in {"menuitem", "menuitemcheckbox", "menuitemradio", "option"}:
+                return True
+        return False
+
+    def _consume_promotable_hover_candidate(self, session_id: str, click_evt: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        candidates = list(self._pending_hover_candidates.get(session_id, []))
+        if not candidates:
+            return None
+        self._trim_pending_hover_candidates(session_id, int(click_evt.get("timestamp") or 0))
+        candidates = list(self._pending_hover_candidates.get(session_id, []))
+        if not candidates:
+            return None
+        if not self._is_menu_item_click(click_evt):
+            self._clear_pending_hover_candidates(session_id)
+            return None
+
+        click_ts = int(click_evt.get("timestamp") or 0)
+        eligible: List[Dict[str, Any]] = []
+        for candidate in candidates:
+            candidate_ts = int(candidate.get("timestamp") or 0)
+            if candidate_ts <= 0 or click_ts <= 0 or click_ts < candidate_ts:
+                continue
+            if click_ts - candidate_ts > HOVER_PROMOTION_WINDOW_MS:
+                continue
+            if (candidate.get("tab_id") or "") != (click_evt.get("tab_id") or ""):
+                continue
+            if list(candidate.get("frame_path") or []) != list(click_evt.get("frame_path") or []):
+                continue
+            if self._event_locator_signature(candidate) == self._event_locator_signature(click_evt):
+                continue
+            eligible.append(candidate)
+
+        self._clear_pending_hover_candidates(session_id)
+        if not eligible:
+            return None
+
+        strong_candidates = [candidate for candidate in eligible if self._is_menu_trigger_hover_candidate(candidate)]
+        pool = strong_candidates or eligible
+        return max(pool, key=lambda candidate: int(candidate.get("timestamp") or 0))
+
+    @staticmethod
+    def _step_data_from_event(evt: Dict[str, Any]) -> Dict[str, Any]:
+        locator_info = evt.get("locator", {})
+        is_sensitive = evt.get("sensitive", False)
+        return {
+            "action": evt.get("action", "unknown"),
+            "target": json.dumps(locator_info) if locator_info else "",
+            "frame_path": evt.get("frame_path", []) or [],
+            "locator_candidates": evt.get("locator_candidates", []) or [],
+            "validation": evt.get("validation", {}) or {},
+            "signals": evt.get("signals", {}) or {},
+            "element_snapshot": evt.get("element_snapshot", {}) or {},
+            "value": "{{credential}}" if is_sensitive else evt.get("value", ""),
+            "label": "",
+            "tag": evt.get("tag", ""),
+            "url": evt.get("url", ""),
+            "description": RPASessionManager._make_description(evt),
+            "sensitive": is_sensitive,
+            "tab_id": evt.get("tab_id"),
+            "source_tab_id": evt.get("source_tab_id"),
+            "target_tab_id": evt.get("target_tab_id"),
+            "sequence": evt.get("sequence"),
+            "event_timestamp_ms": evt.get("timestamp"),
+        }
 
     def owns_sandbox_session(self, user_id: str, sandbox_session_id: str) -> bool:
         return any(
@@ -973,6 +1435,7 @@ class RPASessionManager:
                 await self.activate_tab(session_id, event_tab_id, source="event")
 
         if evt.get("action") == "navigate":
+            self._clear_pending_hover_candidates(session_id)
             nav_ts = evt.get("timestamp", 0)
             nav_sequence = evt.get("sequence")
             nav_tab_id = evt.get("tab_id")
@@ -1032,12 +1495,14 @@ class RPASessionManager:
                             last_step.action = "navigate_click"
                             last_step.url = evt.get("url", last_step.url)
                             last_step.description = f"{last_step.description} 并跳转页面"
+                            await self._record_manual_trace_for_step(session_id, last_step)
                             await self._broadcast_step(session_id, last_step)
                             logger.debug(f"[RPA] Upgraded click to navigate_click: {evt.get('url', '')[:60]}")
                             return
                         if last_step.action == "press":
                             last_step.action = "navigate_press"
                             last_step.url = evt.get("url", last_step.url)
+                            await self._record_manual_trace_for_step(session_id, last_step)
                             await self._broadcast_step(session_id, last_step)
                             logger.debug(f"[RPA] Upgraded press to navigate_press: {evt.get('url', '')[:60]}")
                             return
@@ -1045,28 +1510,20 @@ class RPASessionManager:
 
         self._normalize_event_locator_payload(evt)
 
-        locator_info = evt.get("locator", {})
-        is_sensitive = evt.get("sensitive", False)
-        step_data = {
-            "action": evt.get("action", "unknown"),
-            "target": json.dumps(locator_info) if locator_info else "",
-            "frame_path": evt.get("frame_path", []) or [],
-            "locator_candidates": evt.get("locator_candidates", []) or [],
-            "validation": evt.get("validation", {}) or {},
-            "signals": evt.get("signals", {}) or {},
-            "element_snapshot": evt.get("element_snapshot", {}) or {},
-            "value": "{{credential}}" if is_sensitive else evt.get("value", ""),
-            "label": "",
-            "tag": evt.get("tag", ""),
-            "url": evt.get("url", ""),
-            "description": self._make_description(evt),
-            "sensitive": is_sensitive,
-            "tab_id": evt.get("tab_id"),
-            "source_tab_id": evt.get("source_tab_id"),
-            "target_tab_id": evt.get("target_tab_id"),
-            "sequence": evt.get("sequence"),
-            "event_timestamp_ms": evt.get("timestamp"),
-        }
+        if evt.get("action") == "hover":
+            self._queue_hover_candidate(session_id, evt)
+            return
+
+        if evt.get("action") == "click":
+            hover_evt = self._consume_promotable_hover_candidate(session_id, evt)
+            if hover_evt:
+                hover_step = self._step_data_from_event(hover_evt)
+                await self.add_step(session_id, hover_step)
+                logger.debug(f"[RPA] Step: {hover_step['description'][:60]}")
+        else:
+            self._clear_pending_hover_candidates(session_id)
+
+        step_data = self._step_data_from_event(evt)
         await self.add_step(session_id, step_data)
         logger.debug(f"[RPA] Step: {step_data['description'][:60]}")
 
@@ -1103,6 +1560,8 @@ class RPASessionManager:
         if action == "fill":
             display_value = '*****' if evt.get("sensitive") else f'"{value}"'
             return f'输入 {display_value} 到 {target}'
+        if action == "hover":
+            return f"悬停到 {target}"
         if action == "click":
             return f"点击 {target}"
         if action == "check":
@@ -1139,6 +1598,8 @@ class RPASessionManager:
             previous_step = session.steps[insert_at - 1] if insert_at > 0 else None
             if self._is_same_fill_target(previous_step, step):
                 self._merge_fill_step(previous_step, step)
+                self._rebuild_manual_recording_state(session)
+                await self._record_manual_trace_for_step(session_id, previous_step)
                 await self._broadcast_step(session_id, previous_step)
                 return previous_step
 
@@ -1147,9 +1608,37 @@ class RPASessionManager:
                 return next_step
 
         session.steps.insert(insert_at, step)
+        self._rebuild_manual_recording_state(session)
+        await self._record_manual_trace_for_step(session_id, step)
 
         await self._broadcast_step(session_id, step)
         return step
+
+    @staticmethod
+    def _rebuild_manual_recording_state(session: RPASession) -> None:
+        session.recorded_actions = []
+        session.recording_diagnostics = []
+
+        for step in session.steps:
+            if step.source != "record":
+                continue
+            outcome = build_manual_recording_outcome(
+                step_id=step.id,
+                action=step.action,
+                description=step.description or "",
+                target=step.target or "",
+                frame_path=step.frame_path,
+                locator_candidates=step.locator_candidates,
+                validation=step.validation,
+                value=step.value,
+                element_snapshot=step.element_snapshot,
+                page_state={"url": step.url or ""},
+                signals=step.signals,
+            )
+            if outcome.accepted_action is not None:
+                session.recorded_actions.append(outcome.accepted_action)
+            if outcome.diagnostic is not None:
+                session.recording_diagnostics.append(outcome.diagnostic)
 
     @staticmethod
     def _step_event_ts_ms(step: RPAStep) -> int:
@@ -1211,6 +1700,85 @@ class RPASessionManager:
     async def _broadcast_step(self, session_id: str, step: RPAStep):
         if session_id in self.ws_connections:
             message = {"type": "step", "data": step.model_dump()}
+            for ws in self.ws_connections[session_id]:
+                try:
+                    await ws.send_json(message)
+                except Exception:
+                    pass
+
+    async def append_trace(self, session_id: str, trace: RPAAcceptedTrace) -> List[RPAAcceptedTrace]:
+        session = self.sessions.get(session_id)
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+        self._merge_pending_downloads_into_trace(session, trace)
+        trace = infer_dataflow_for_ai_fill(trace, session.runtime_results)
+        session.traces.append(trace)
+        await self._broadcast_trace(session_id, trace)
+        return session.traces
+
+    @staticmethod
+    def _merge_pending_downloads_into_trace(session: RPASession, trace: RPAAcceptedTrace) -> None:
+        if not session.pending_download_events:
+            return
+        if trace.source != "ai":
+            return
+        signals = dict(trace.signals or {})
+        if isinstance(signals.get("download"), dict):
+            return
+        downloads = list(session.pending_download_events)
+        first = dict(downloads[0])
+        download_signal = {
+            "filename": first.get("filename", ""),
+            "url": first.get("url", ""),
+            "tab_id": first.get("tab_id"),
+            "opener_tab_id": first.get("opener_tab_id"),
+            "event_timestamp_ms": first.get("event_timestamp_ms"),
+            "count": len(downloads),
+        }
+        if len(downloads) > 1:
+            download_signal["files"] = downloads
+        signals["download"] = {key: value for key, value in download_signal.items() if value is not None}
+        trace.signals = signals
+        session.pending_download_events.clear()
+
+    async def append_trace_diagnostic(self, session_id: str, diagnostic: RPATraceDiagnostic) -> List[RPATraceDiagnostic]:
+        session = self.sessions.get(session_id)
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+        session.trace_diagnostics.append(diagnostic)
+        if session_id in self.ws_connections:
+            message = {"type": "trace_diagnostic", "data": diagnostic.model_dump(mode="json")}
+            for ws in self.ws_connections[session_id]:
+                try:
+                    await ws.send_json(message)
+                except Exception:
+                    pass
+        return session.trace_diagnostics
+
+    def write_runtime_result(self, session_id: str, key: Optional[str], value: Any) -> None:
+        session = self.sessions.get(session_id)
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+        session.runtime_results.write(key, value)
+
+    async def _record_manual_trace_for_step(self, session_id: str, step: RPAStep) -> None:
+        if step.source != "record":
+            return
+        session = self.sessions.get(session_id)
+        if not session:
+            return
+        try:
+            trace = manual_step_to_trace(step.model_dump())
+            trace = infer_dataflow_for_fill(trace, session.runtime_results)
+            session.traces = [existing for existing in session.traces if existing.trace_id != trace.trace_id]
+            session.traces.append(trace)
+            await self._broadcast_trace(session_id, trace)
+        except Exception as exc:
+            logger.debug("[RPA] Failed to record manual trace for step %s: %s", step.id, exc)
+
+    async def _broadcast_trace(self, session_id: str, trace: RPAAcceptedTrace) -> None:
+        if session_id in self.ws_connections:
+            message = {"type": "trace_added", "data": trace.model_dump(mode="json")}
             for ws in self.ws_connections[session_id]:
                 try:
                     await ws.send_json(message)

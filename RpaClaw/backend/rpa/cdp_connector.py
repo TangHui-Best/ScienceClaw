@@ -7,6 +7,7 @@ import httpx
 from playwright.async_api import async_playwright, Browser, Playwright
 
 from backend.config import settings
+from backend.rpa.playwright_security import get_chromium_launch_kwargs
 from backend.runtime.session_runtime_manager import get_session_runtime_manager
 
 logger = logging.getLogger(__name__)
@@ -187,7 +188,7 @@ class LocalCDPConnector:
     async def _launch():
         """Start Playwright and launch a local headful Chromium browser."""
         pw = await async_playwright().start()
-        browser = await pw.chromium.launch(headless=False)
+        browser = await pw.chromium.launch(**get_chromium_launch_kwargs(headless=False))
         return pw, browser
 
     async def close(self):

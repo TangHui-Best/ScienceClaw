@@ -1,6 +1,7 @@
 import { app } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
+import { ensureHomeLayout } from './home-layout';
 import { AppConfig } from './types';
 import { resolveRuntimePaths } from './runtime';
 
@@ -75,33 +76,7 @@ export class ConfigManager {
    * Initialize home directory structure
    */
   initializeHomeDir(homeDir: string): void {
-    const dirs = [
-      homeDir,
-      path.join(homeDir, 'workspace'),
-      path.join(homeDir, 'external_skills'),
-      path.join(homeDir, 'data'),
-      path.join(homeDir, 'data', 'sessions'),
-      path.join(homeDir, 'data', 'users'),
-      path.join(homeDir, 'data', 'tasks'),
-      path.join(homeDir, 'logs'),
-    ];
-
-    for (const dir of dirs) {
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-    }
-
-    // Create default config.json in home directory
-    const configPath = path.join(homeDir, 'config.json');
-    if (!fs.existsSync(configPath)) {
-      const defaultConfig = {
-        backend_port: 12001,
-        task_service_port: 12002,
-        log_level: 'INFO',
-      };
-      fs.writeFileSync(configPath, JSON.stringify(defaultConfig, null, 2), 'utf-8');
-    }
+    ensureHomeLayout(homeDir);
   }
 
   /**

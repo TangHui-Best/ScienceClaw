@@ -6,6 +6,7 @@ FastAPI 应用入口 — 精简版。
 """
 import asyncio
 import os
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,10 +24,13 @@ from backend.route.chat import router as chat_router
 from backend.route.statistics import router as statistics_router
 from backend.route.rpa import router as rpa_router
 from backend.route.credential import router as credential_router
+from backend.route.mcp import router as mcp_router
+from backend.route.rpa_mcp import router as rpa_mcp_router
 from backend.route.runtime_proxy import router as runtime_proxy_router
 from backend.runtime.session_runtime_manager import get_session_runtime_manager
 from backend.models import init_system_models
 from backend.user.bootstrap import ensure_admin_user
+from backend.user.asset_migration import migrate_local_admin_assets_to_bootstrap_admin
 
 
 async def _runtime_cleanup_loop(stop_event: asyncio.Event) -> None:
@@ -62,6 +66,10 @@ async def lifespan(app: FastAPI):
         await ensure_admin_user()
     except Exception as e:
         logger.error(f"Failed to bootstrap admin user: {e}")
+    try:
+        await migrate_local_admin_assets_to_bootstrap_admin()
+    except Exception as e:
+        logger.error(f"Failed to migrate local_admin assets: {e}")
     try:
         await cleanup_orphaned_sessions()
     except Exception as e:
@@ -154,9 +162,24 @@ def create_app() -> FastAPI:
     app.include_router(rpa_router, prefix="/api/v1/rpa")
     app.include_router(runtime_proxy_router, prefix="/api/v1")
     app.include_router(credential_router, prefix="/api/v1")
+    app.include_router(mcp_router, prefix="/api/v1")
+    app.include_router(rpa_mcp_router, prefix="/api/v1")
 
     logger.info("FastAPI initialized with /api/v1 endpoints")
     return app
+
+
+def resolve_frontend_dist_dir(module_file: str | None = None) -> str | None:
+    frontend_dist = os.environ.get("FRONTEND_DIST_DIR")
+    if frontend_dist and os.path.exists(frontend_dist):
+        return frontend_dist
+
+    current_file = Path(module_file or __file__).resolve()
+    fallback_dir = current_file.parent.parent / "frontend-dist"
+    if fallback_dir.exists():
+        return str(fallback_dir)
+
+    return None
 
 
 app = create_app()
@@ -164,8 +187,8 @@ app = create_app()
 # Serve frontend static files (for Electron packaged app)
 from fastapi.staticfiles import StaticFiles
 
-frontend_dist = os.environ.get("FRONTEND_DIST_DIR")
-if frontend_dist and os.path.exists(frontend_dist):
+frontend_dist = resolve_frontend_dist_dir()
+if frontend_dist:
     app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")
     logger.info(f"Serving frontend static files from: {frontend_dist}")
 

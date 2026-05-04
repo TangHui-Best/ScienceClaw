@@ -24,6 +24,7 @@ Skills 架构：
 from __future__ import annotations
 
 import os
+from copy import deepcopy
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -33,33 +34,152 @@ from deepagents.backends import CompositeBackend, FilesystemBackend
 from deepagents.middleware.subagents import GENERAL_PURPOSE_SUBAGENT, DEFAULT_SUBAGENT_PROMPT
 from backend.deepagent.engine import get_llm_model
 from backend.deepagent.local_preview_backend import LocalPreviewShellBackend
-from backend.deepagent.windows_local_path_backend import WindowsLocalPathBackend
+from backend.deepagent.local_path_backend import LocalPathBackend
+from backend.deepagent.mcp_registry import build_effective_mcp_servers
+from backend.deepagent.mcp_runtime import McpSdkRuntimeFactory
+from backend.deepagent.mcp_tools_loader import load_mcp_tools
 from backend.deepagent.tools import propose_skill_save, propose_tool_save, eval_skill, grade_eval
 from backend.deepagent.full_sandbox_backend import FullSandboxBackend
+from backend.deepagent.external_tools_loader import ExternalToolsLoader
 from backend.deepagent.mongo_skill_backend import MongoSkillBackend
 from backend.deepagent.sse_middleware import SSEMonitoringMiddleware
 from backend.deepagent.offload_middleware import ToolResultOffloadMiddleware
 from backend.deepagent.diagnostic import DIAGNOSTIC_ENABLED, DiagnosticLogger
+from backend.deepagent.tool_execution import LocalToolExecutor, SandboxToolExecutor
 from backend.config import settings
 from backend.runtime.session_runtime_manager import get_session_runtime_manager
 
 # ───────────────────────────────────────────────────────────────────
 # 外部扩展工具（Tools 目录自动扫描，支持热加载）
 # ───────────────────────────────────────────────────────────────────
-try:
-    from Tools import reload_external_tools
-    _initial = reload_external_tools(force=True)
-    logger.info(f"[Agent] 已加载 {len(_initial)} 个外部扩展工具: "
-                f"{[t.name for t in _initial]}")
-    # Register proxy tools in SSE protocol so tool_meta carries sandbox: true
-    from backend.deepagent.sse_protocol import get_protocol_manager as _get_proto
-    _proto = _get_proto()
-    for _t in _initial:
-        _proto.register_sandbox_tool(_t.name, _t.description[:80])
-    logger.info(f"[Agent] 已注册 {len(_initial)} 个沙箱代理工具到 SSE 协议")
-except ImportError:
-    reload_external_tools = None  # type: ignore[assignment]
-    logger.warning("[Agent] 未找到 Tools 包，跳过外部扩展工具加载")
+_EXTERNAL_TOOLS_LOADER: ExternalToolsLoader | None = None
+_EXTERNAL_TOOLS_LOADER_KEY: tuple[str, str, str] | None = None
+
+
+def _build_external_tool_executor(sandbox_base_url: str | None = None):
+    if settings.storage_backend == "local":
+        return LocalToolExecutor()
+    return SandboxToolExecutor(
+        sandbox_base_url=sandbox_base_url,
+        sandbox_tools_dir=settings.sandbox_tools_dir,
+    )
+
+
+def _get_external_tools_loader(
+    sandbox_base_url: str | None = None,
+    loader_cache_key: str | None = None,
+) -> ExternalToolsLoader:
+    global _EXTERNAL_TOOLS_LOADER, _EXTERNAL_TOOLS_LOADER_KEY
+
+    loader_key = (
+        settings.storage_backend,
+        str(settings.tools_dir),
+        str(settings.sandbox_tools_dir),
+        sandbox_base_url or "",
+        loader_cache_key or "",
+    )
+    if _EXTERNAL_TOOLS_LOADER is not None and _EXTERNAL_TOOLS_LOADER_KEY == loader_key:
+        return _EXTERNAL_TOOLS_LOADER
+
+    _EXTERNAL_TOOLS_LOADER = ExternalToolsLoader(
+        tools_dir=settings.tools_dir,
+        executor=_build_external_tool_executor(sandbox_base_url=sandbox_base_url),
+    )
+    _EXTERNAL_TOOLS_LOADER_KEY = loader_key
+    return _EXTERNAL_TOOLS_LOADER
+
+
+def _register_external_tools_in_sse(tools: list) -> None:
+    from backend.deepagent.sse_protocol import ToolCategory, get_protocol_manager
+
+    protocol = get_protocol_manager()
+    for tool in tools:
+        protocol.register_tool(tool.name, ToolCategory.EXECUTION, "🔧", tool.description[:80])
+
+        metadata = getattr(tool, "metadata", None)
+        mcp_meta = metadata.get("mcp") if isinstance(metadata, dict) else None
+
+        if settings.storage_backend == "local":
+            if isinstance(mcp_meta, dict):
+                _set_protocol_tool_extra_meta(protocol, tool.name, {"mcp": mcp_meta})
+            else:
+                _clear_protocol_tool_extra_meta(protocol, tool.name)
+            continue
+
+        if isinstance(mcp_meta, dict):
+            _set_protocol_tool_extra_meta(protocol, tool.name, {"mcp": mcp_meta})
+        else:
+            _set_protocol_tool_extra_meta(protocol, tool.name, {"sandbox": True})
+
+
+def _clear_protocol_tool_extra_meta(protocol: Any, tool_name: str) -> None:
+    clearer = getattr(protocol, "clear_tool_extra_meta", None)
+    if callable(clearer):
+        clearer(tool_name)
+        return
+
+    extra_meta = getattr(protocol, "extra_meta", None)
+    if isinstance(extra_meta, dict):
+        extra_meta[tool_name] = {}
+
+    tool_registry = getattr(protocol, "tool_registry", None)
+    registry_extra_meta = getattr(tool_registry, "_extra_meta", None)
+    if isinstance(registry_extra_meta, dict):
+        registry_extra_meta[tool_name] = {}
+
+
+def _set_protocol_tool_extra_meta(protocol: Any, tool_name: str, extra_meta: dict[str, Any]) -> None:
+    setter = getattr(protocol, "register_tool_extra_meta", None)
+    if callable(setter):
+        setter(tool_name, extra_meta)
+        return
+
+    copied_meta = deepcopy(extra_meta)
+    extra_meta_store = getattr(protocol, "extra_meta", None)
+    if isinstance(extra_meta_store, dict):
+        extra_meta_store[tool_name] = copied_meta
+
+    tool_registry = getattr(protocol, "tool_registry", None)
+    registry_extra_meta = getattr(tool_registry, "_extra_meta", None)
+    if isinstance(registry_extra_meta, dict):
+        registry_extra_meta[tool_name] = deepcopy(extra_meta)
+
+
+async def _load_mcp_tools_for_session(
+    session_id: str,
+    user_id: str | None,
+) -> list:
+    if not user_id:
+        return []
+
+    try:
+        servers = await build_effective_mcp_servers(session_id, user_id)
+    except Exception:
+        logger.warning(f"[MCP] Failed to resolve effective servers for session={session_id} user={user_id}", exc_info=True)
+        return []
+
+    if not servers:
+        return []
+
+    try:
+        runtime_factory = McpSdkRuntimeFactory()
+        return await load_mcp_tools(servers, runtime_factory=runtime_factory)
+    except Exception:
+        logger.warning(f"[MCP] Failed to discover MCP tools for session={session_id} user={user_id}", exc_info=True)
+        return []
+
+
+def reload_external_tools(
+    force: bool = False,
+    sandbox_base_url: str | None = None,
+    loader_cache_key: str | None = None,
+):
+    tools = _get_external_tools_loader(
+        sandbox_base_url=sandbox_base_url,
+        loader_cache_key=loader_cache_key,
+    ).reload(force=force)
+    _register_external_tools_in_sse(tools)
+    return tools
 
 # ───────────────────────────────────────────────────────────────────
 # 路径配置
@@ -289,10 +409,16 @@ _STATIC_TOOLS = [
 ]
 
 
-def _collect_tools(blocked_tools: Set[str] | None = None) -> List:
+def _collect_tools(
+    blocked_tools: Set[str] | None = None,
+    sandbox_base_url: str | None = None,
+    loader_cache_key: str | None = None,
+    mcp_tools: list | None = None,
+) -> List:
     """合并内置工具与外部扩展工具，去重并过滤屏蔽项。
 
-    通过 DirWatcher 检测 Tools/ 目录变更，仅在变更时才重新 import 模块。
+    外部工具通过 backend-owned loader 从配置的 tools_dir 目录扫描，
+    并借助 DirWatcher 仅在目录变化时重建代理工具。
     """
     blocked = blocked_tools or set()
     seen_names: set[str] = set()
@@ -301,11 +427,14 @@ def _collect_tools(blocked_tools: Set[str] | None = None) -> List:
     ext_tools: list = []
     if reload_external_tools is not None:
         try:
-            ext_tools = reload_external_tools()
+            ext_tools = reload_external_tools(
+                sandbox_base_url=sandbox_base_url,
+                loader_cache_key=loader_cache_key,
+            )
         except Exception:
             logger.warning("[Agent] 动态加载外部工具失败", exc_info=True)
 
-    for t in _STATIC_TOOLS + ext_tools:
+    for t in _STATIC_TOOLS + ext_tools + list(mcp_tools or []):
         if t.name in blocked:
             logger.info(f"[Agent] 工具已屏蔽，跳过: {t.name}")
             continue
@@ -385,24 +514,17 @@ async def deep_agent(
         blocked_skills = await get_blocked_skills(user_id)
         blocked_tools = await get_blocked_tools(user_id)
 
-    # ── 检测 Tools 目录变更并按需重新加载 ──
-
-    tools = _collect_tools(blocked_tools=blocked_tools)
-
-    sse_middleware = SSEMonitoringMiddleware(
-        agent_name="DeepAgent",
-        parent_agent=None,
-        verbose=False,
-    )
+    mcp_tools = await _load_mcp_tools_for_session(session_id, user_id)
 
     # 1. 实例化后端：local 模式用 LocalShellBackend，云端用 FullSandboxBackend
     is_local = settings.storage_backend == "local"
+    runtime_sandbox_base_url: str | None = None
 
     sandbox_info = None
     if is_local:
         local_workspace = os.path.join(_WORKSPACE_DIR, session_id)
         os.makedirs(local_workspace, exist_ok=True)
-        sandbox = WindowsLocalPathBackend(
+        sandbox = LocalPathBackend(
             LocalPreviewShellBackend(
                 session_id=session_id,
                 root_dir=local_workspace,
@@ -418,6 +540,7 @@ async def deep_agent(
             session_id,
             user_id or "default_user",
         )
+        runtime_sandbox_base_url = runtime.rest_base_url
         sandbox = FullSandboxBackend(
             session_id=session_id,
             user_id=user_id or "default_user",
@@ -434,6 +557,28 @@ async def deep_agent(
         ctx = await sandbox.get_context()
         if ctx.get("success"):
             sandbox_info = ctx.get("data")
+
+    # ── 检测 Tools 目录变更并按需重新加载 ──
+    tools = _collect_tools(
+        blocked_tools=blocked_tools,
+        sandbox_base_url=runtime_sandbox_base_url,
+        loader_cache_key=session_id,
+        mcp_tools=mcp_tools,
+    )
+
+    mcp_tools_for_sse = [
+        tool for tool in tools
+        if isinstance(getattr(tool, "metadata", None), dict)
+        and isinstance(tool.metadata.get("mcp"), dict)
+    ]
+    if mcp_tools_for_sse:
+        _register_external_tools_in_sse(mcp_tools_for_sse)
+
+    sse_middleware = SSEMonitoringMiddleware(
+        agent_name="DeepAgent",
+        parent_agent=None,
+        verbose=False,
+    )
 
     # 1.5 将用户技能文件注入沙箱（仅云端模式）
     if not is_local and user_id:
@@ -579,7 +724,7 @@ Always use `write_file` to workspace then `propose_skill_save` / `propose_tool_s
 """
     GENERAL_PURPOSE_SUBAGENT["system_prompt"] = DEFAULT_SUBAGENT_PROMPT + _subagent_policy
 
-    agent = create_rpaclaw_deep_agent(local_windows_paths=is_local, **agent_kwargs)
+    agent = create_rpaclaw_deep_agent(use_local_filesystem_paths=is_local, **agent_kwargs)
 
     GENERAL_PURPOSE_SUBAGENT["system_prompt"] = DEFAULT_SUBAGENT_PROMPT
 
@@ -627,7 +772,7 @@ async def deep_agent_eval(
     if is_local:
         local_workspace = os.path.join(_WORKSPACE_DIR, session_id)
         os.makedirs(local_workspace, exist_ok=True)
-        sandbox = WindowsLocalPathBackend(
+        sandbox = LocalPathBackend(
             LocalPreviewShellBackend(
                 session_id=session_id,
                 root_dir=local_workspace,
@@ -707,6 +852,6 @@ async def deep_agent_eval(
     if resolved_sources:
         agent_kwargs["skills"] = resolved_sources
 
-    agent = create_rpaclaw_deep_agent(local_windows_paths=is_local, **agent_kwargs)
+    agent = create_rpaclaw_deep_agent(use_local_filesystem_paths=is_local, **agent_kwargs)
     logger.info(f"[EvalAgent] session={session_id}, workspace={sandbox_workspace}, skills={resolved_sources}")
     return agent, middleware

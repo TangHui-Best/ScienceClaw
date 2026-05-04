@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Dict, Any
@@ -14,6 +13,46 @@ logger = logging.getLogger(__name__)
 class SkillExporter:
     """Export recorded RPA skills to MongoDB or local filesystem."""
 
+    @staticmethod
+    def _json_default(value: Any) -> Any:
+        if isinstance(value, datetime):
+            return value.isoformat()
+        raise TypeError(f"Object of type {value.__class__.__name__} is not JSON serializable")
+
+    @classmethod
+    def _json_dumps(cls, value: Any) -> str:
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            indent=2,
+            default=cls._json_default,
+        )
+
+    @staticmethod
+    def _build_skill_meta(
+        skill_name: str,
+        description: str,
+        params: Dict[str, Any],
+        recording_meta: Dict[str, Any],
+        projected_steps: list[Dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        legacy_steps = recording_meta.get("legacy_steps", [])
+        mcp_steps = projected_steps if projected_steps is not None else recording_meta.get("mcp_steps", legacy_steps)
+        return {
+            "version": 2,
+            "kind": "rpa-recording",
+            "name": skill_name,
+            "description": description,
+            "entry_script": "skill.py",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "params": params,
+            "recording_source": recording_meta.get("recording_source", "trace"),
+            "recording": recording_meta,
+            "steps": legacy_steps,
+            "mcp_steps": mcp_steps,
+            "artifacts": ["SKILL.md", "params.json", "skill.py"],
+        }
+
     async def export_skill(
         self,
         user_id: str,
@@ -21,6 +60,8 @@ class SkillExporter:
         description: str,
         script: str,
         params: Dict[str, Any],
+        recording_meta: Dict[str, Any] | None = None,
+        steps: list[Dict[str, Any]] | None = None,
     ) -> str:
         """Export skill to MongoDB or local filesystem based on storage_backend.
 
@@ -43,20 +84,32 @@ class SkillExporter:
                 "description": param_info.get("description", ""),
             }
             original = param_info.get("original_value", "")
-            if original and original != "{{credential}}":
-                prop["default"] = original
+            default = param_info.get("default_value", original)
+            if default and default != "{{credential}}":
+                prop["default"] = default
                 has_auto_injected = True
             input_schema["properties"][param_name] = prop
             # Only required if no default value available
-            if param_info.get("required", False) and not original:
+            if param_info.get("required", False) and not default:
                 input_schema["required"].append(param_name)
 
         auto_inject_note = ""
         if has_auto_injected:
+            # Build example from actual parameters with defaults
+            examples = []
+            for param_name, param_info in params.items():
+                original = param_info.get("original_value", "")
+                default = param_info.get("default_value", original)
+                if default and default != "{{credential}}":
+                    examples.append(f"`--{param_name}={default}`")
+            example_text = ""
+            if examples:
+                example_text = f" For example: {', '.join(examples[:3])}"
+            
             auto_inject_note = (
                 "\nNote: Some parameters (credentials and defaults) are automatically "
                 "injected at runtime. You can run this skill without providing them. "
-                "Pass `--param=value` only to override the pre-configured defaults.\n"
+                f"Pass `--param=value` only to override the pre-configured defaults.{example_text}\n"
             )
 
         skill_md = f"""---
@@ -88,6 +141,22 @@ The skill uses Playwright to automate browser interactions based on the recorded
 
 The skill is implemented in `skill.py` using Playwright for browser automation.
 """
+        skill_meta = self._build_skill_meta(
+            skill_name=skill_name,
+            description=description,
+            params=params,
+            recording_meta=recording_meta
+            or {
+                "recording_source": "legacy_step",
+                "traces": [],
+                "recorded_actions": [],
+                "legacy_steps": steps or [],
+                "runtime_results": {},
+                "trace_diagnostics": [],
+                "recording_diagnostics": [],
+            },
+            projected_steps=steps,
+        )
 
         if settings.storage_backend == "local":
             # Save to filesystem
@@ -98,7 +167,10 @@ The skill is implemented in `skill.py` using Playwright for browser automation.
             (skill_dir / "skill.py").write_text(script, encoding="utf-8")
             # Save params config (includes credential_id for sensitive params)
             (skill_dir / "params.json").write_text(
-                json.dumps(params, ensure_ascii=False, indent=2), encoding="utf-8"
+                self._json_dumps(params), encoding="utf-8"
+            )
+            (skill_dir / "skill.meta.json").write_text(
+                self._json_dumps(skill_meta), encoding="utf-8"
             )
 
             logger.info(f"Skill '{skill_name}' exported to {skill_dir}")
@@ -113,6 +185,7 @@ The skill is implemented in `skill.py` using Playwright for browser automation.
                         "files": {
                             "SKILL.md": skill_md,
                             "skill.py": script,
+                            "skill.meta.json": self._json_dumps(skill_meta),
                         },
                         "description": description,
                         "params": params,

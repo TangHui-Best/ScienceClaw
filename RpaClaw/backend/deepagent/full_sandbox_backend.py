@@ -14,6 +14,7 @@ import asyncio
 import concurrent.futures
 import json
 import logging
+import shlex
 import time
 from typing import Any, List, Optional, cast
 
@@ -32,6 +33,7 @@ from deepagents.backends.protocol import (
 logger = logging.getLogger(__name__)
 
 from backend.config import settings
+from backend.deepagent.skill_command import infer_skill_name, parse_skill_command
 _SANDBOX_URL = settings.sandbox_base_url.rstrip("/")
 _BASE_WORKSPACE = settings.workspace_dir
 _SANDBOX_WORKSPACE = settings.sandbox_workspace_dir
@@ -192,21 +194,8 @@ class FullSandboxBackend(SandboxBackendProtocol):
 
     async def _maybe_inject_credentials(self, command: str) -> str:
         """Detect `python skill.py` commands and inject decrypted credentials as CLI args."""
-        import shlex
-        try:
-            tokens = shlex.split(command, posix=True)
-        except ValueError:
-            return command
-
-        # Find the `python skill.py` part (may be preceded by `cd ... &&`)
-        run_tokens = tokens
-        if "&&" in tokens:
-            and_idx = tokens.index("&&")
-            run_tokens = tokens[and_idx + 1:]
-
-        if len(run_tokens) < 2 or run_tokens[0] not in {"python", "python3"}:
-            return command
-        if not run_tokens[1].endswith("skill.py"):
+        parsed = parse_skill_command(command)
+        if parsed is None:
             return command
 
         # Always inject _downloads_dir for skill.py commands
@@ -215,10 +204,8 @@ class FullSandboxBackend(SandboxBackendProtocol):
 
         # Also inject credentials if available
         try:
-            import posixpath
             from backend.storage import get_repository
-            parent_dir = posixpath.dirname(run_tokens[1])
-            skill_name = posixpath.basename(parent_dir) if parent_dir else ""
+            skill_name = infer_skill_name(parsed)
             if skill_name:
                 repo = get_repository("skills")
                 doc = await repo.find_one({"name": skill_name, "user_id": self._user_id})

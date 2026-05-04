@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { resolveHomeLayout } from './home-layout';
 
 const CONFIG_FILE = 'app-config.json';
 const ENV_FILE = '.env';
@@ -24,6 +25,37 @@ interface BuildBackendEnvOptions {
   extraEnv?: Record<string, string>;
 }
 
+function findEnvKey(
+  env: Record<string, string> | NodeJS.ProcessEnv | undefined,
+  targetKey: string
+): string | undefined {
+  if (!env) {
+    return undefined;
+  }
+
+  const loweredTarget = targetKey.toLowerCase();
+  return Object.keys(env).find((key) => key.toLowerCase() === loweredTarget);
+}
+
+function prependPathEntry(pathEntry: string, existingPath?: string): string {
+  const normalizedTarget = path.normalize(pathEntry);
+  const isWindows = process.platform === 'win32';
+  const matches = (candidate: string): boolean => {
+    const normalizedCandidate = path.normalize(candidate);
+    return isWindows
+      ? normalizedCandidate.toLowerCase() === normalizedTarget.toLowerCase()
+      : normalizedCandidate === normalizedTarget;
+  };
+
+  const segments = (existingPath ?? '')
+    .split(path.delimiter)
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .filter((segment) => !matches(segment));
+
+  return [pathEntry, ...segments].join(path.delimiter);
+}
+
 export function resolveRuntimePaths(options: ResolveRuntimePathsOptions): RuntimePaths {
   const devRootDir = path.resolve(options.currentDir, '..', '..');
   const resourceDir = options.isPackaged ? options.resourcesPath : devRootDir;
@@ -35,6 +67,10 @@ export function resolveRuntimePaths(options: ResolveRuntimePathsOptions): Runtim
     configFilePath: path.join(installRootDir, CONFIG_FILE),
     envFilePath: path.join(installRootDir, ENV_FILE),
   };
+}
+
+export function resolveHomeEnvFilePath(homeDir: string): string {
+  return path.join(homeDir, ENV_FILE);
 }
 
 export function parseEnvContent(content: string): Record<string, string> {
@@ -79,8 +115,11 @@ export function loadEnvFile(filePath: string): Record<string, string> {
 }
 
 export function buildBackendEnv(options: BuildBackendEnvOptions): Record<string, string> {
+  const homeLayout = resolveHomeLayout(options.homeDir);
   const pythonDir = path.join(options.resourceDir, 'python');
   const sitePackages = path.join(pythonDir, 'Lib', 'site-packages');
+  const nodeDir = path.join(options.resourceDir, 'node');
+  const nodeModules = path.join(nodeDir, 'node_modules');
   const playwrightBrowsers = path.join(
     sitePackages,
     'playwright',
@@ -89,22 +128,29 @@ export function buildBackendEnv(options: BuildBackendEnvOptions): Record<string,
     '.local-browsers'
   );
   const frontendDist = path.join(options.resourceDir, 'frontend-dist');
+  const pathKey = findEnvKey(options.extraEnv, 'PATH') ?? findEnvKey(process.env, 'PATH') ?? 'PATH';
+  const inheritedPath = options.extraEnv?.[pathKey] ?? process.env[pathKey] ?? '';
+  const runtimePath = prependPathEntry(pythonDir, prependPathEntry(nodeDir, inheritedPath));
 
   return {
     STORAGE_BACKEND: 'local',
+    AUTH_PROVIDER: 'none',
     RPA_CLAW_HOME: options.homeDir,
-    WORKSPACE_DIR: path.join(options.homeDir, 'workspace'),
-    EXTERNAL_SKILLS_DIR: path.join(options.homeDir, 'external_skills'),
-    LOCAL_DATA_DIR: path.join(options.homeDir, 'data'),
+    WORKSPACE_DIR: homeLayout.workspaceDir,
+    TOOLS_DIR: homeLayout.toolsDir,
+    EXTERNAL_SKILLS_DIR: homeLayout.externalSkillsDir,
+    LOCAL_DATA_DIR: homeLayout.dataDir,
     BUILTIN_SKILLS_DIR: path.join(options.resourceDir, 'builtin_skills'),
     BACKEND_PORT: '12001',
     TASK_SERVICE_PORT: '12002',
     PYTHONHOME: pythonDir,
     PYTHONPATH: sitePackages,
+    NODE_PATH: nodeModules,
     PLAYWRIGHT_BROWSERS_PATH: playwrightBrowsers,
     ENVIRONMENT: 'production',
     LOG_LEVEL: 'INFO',
     FRONTEND_DIST_DIR: frontendDist,
     ...options.extraEnv,
+    [pathKey]: runtimePath,
   };
 }

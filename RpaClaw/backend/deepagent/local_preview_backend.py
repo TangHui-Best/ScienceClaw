@@ -4,7 +4,6 @@ import asyncio
 import importlib.util
 import json
 import logging
-import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -16,6 +15,7 @@ from deepagents.backends.protocol import ExecuteResponse
 from backend.browser_preview import browser_preview_registry
 from backend.rpa.cdp_connector import get_cdp_connector
 from backend.config import settings
+from backend.deepagent.skill_command import parse_skill_command, resolve_local_skill_script
 
 logger = logging.getLogger(__name__)
 RPA_PAGE_TIMEOUT_MS = 60000
@@ -48,38 +48,15 @@ class LocalPreviewShellBackend(LocalShellBackend):
         return await self._run_skill_command(parsed, timeout=timeout)
 
     def _parse_skill_command(self, command: str) -> Optional[ParsedSkillCommand]:
-        try:
-            tokens = shlex.split(command, posix=True)
-        except ValueError:
+        parsed = parse_skill_command(command)
+        if parsed is None:
             return None
 
-        cwd = Path(self.cwd)
-        run_tokens = tokens
-        if len(tokens) >= 4 and tokens[0] == "cd" and "&&" in tokens:
-            and_idx = tokens.index("&&")
-            if and_idx >= 2:
-                cwd = Path(tokens[1]).expanduser()
-                run_tokens = tokens[and_idx + 1 :]
-
-        if len(run_tokens) < 2 or run_tokens[0] not in {"python", "python3"}:
-            return None
-
-        script_path = Path(run_tokens[1])
-        if script_path.name != "skill.py":
-            return None
-        if not script_path.is_absolute():
-            script_path = cwd / script_path
-        script_path = script_path.resolve()
+        script_path = resolve_local_skill_script(parsed, self.cwd)
         if not script_path.is_file():
             return None
 
-        kwargs: Dict[str, str] = {}
-        for arg in run_tokens[2:]:
-            if arg.startswith("--") and "=" in arg:
-                key, value = arg[2:].split("=", 1)
-                kwargs[key] = value
-
-        return ParsedSkillCommand(script_path=script_path, kwargs=kwargs)
+        return ParsedSkillCommand(script_path=script_path, kwargs=parsed.kwargs)
 
     async def _run_skill_command(
         self,

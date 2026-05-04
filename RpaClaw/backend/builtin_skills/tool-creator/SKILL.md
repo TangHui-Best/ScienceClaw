@@ -148,7 +148,7 @@ Once the user is satisfied:
 
 **CRITICAL — TESTED = SAVED**: The file in `tools_staging/` MUST be an exact copy of the tested file from `tools_dev/`. Do NOT rewrite or modify the code between testing and saving. The whole point is that the version the user saw working in tests is exactly what gets saved.
 
-**IMPORTANT**: Always call `propose_tool_save` — never try to write directly to the Tools directory.
+**IMPORTANT**: Always call `propose_tool_save` — never try to write directly to the tool library or assume a permanent save path.
 
 ---
 
@@ -158,7 +158,7 @@ When the user wants to modify, improve, or fix an existing tool:
 
 ### Step 1: Identify the Tool
 
-List or read the existing tools to find the one the user wants to upgrade. The existing tools are available at `/app/Tools/` (mounted as the Tools directory). You can:
+List or read the existing tools to find the one the user wants to upgrade. Approved tools are persisted by the backend into the configured host-side tool library (`TOOLS_DIR`). In sandboxed execution environments, that library is typically mounted into the sandbox at `/app/Tools/`, which is the path you should inspect from inside the sandbox. You can:
 
 - Read the tool's source code to understand its current implementation
 - Understand what the user wants to change
@@ -171,7 +171,7 @@ Copy the existing tool to the session workspace for safe modification:
 cp /app/Tools/{tool_name}.py {workspace_dir}/tools_dev/{tool_name}.py
 ```
 
-This ensures the original tool remains untouched while you iterate.
+This ensures the original tool remains untouched while you iterate. Treat `/app/Tools/` as the sandbox-visible mount path when it is present, not as the authoritative host-side storage path.
 
 ### Step 3: Modify and Test
 
@@ -207,7 +207,7 @@ Once the user confirms they're happy:
 
 **CRITICAL — TESTED = SAVED**: Do NOT rewrite the tool between testing and saving. The file in `tools_staging/` must be an exact copy of the tested and approved file from `tools_dev/`.
 
-The system will replace the existing tool in the Tools directory with the new version.
+The system will replace the existing tool in the configured host-side tool library and refresh the sandbox-visible copy used for execution.
 
 ---
 
@@ -327,9 +327,9 @@ def person_total_score(physical_score: int, social_score: int) -> int:
 
 - **Workspace**: Your workspace directory is provided in the system prompt (e.g., `/home/rpaclaw/{session_id}/`). Use `{workspace_dir}/tools_dev/` for development and `{workspace_dir}/tools_staging/` for final versions.
 - **Sandbox execution**: Both test scripts AND saved `@tool` functions run in the sandbox container. The testing environment IS the production environment. Use absolute paths.
-- **Tools directory**: The permanent Tools directory is at `/app/Tools/`. Never write directly to it — always use `propose_tool_save`.
+- **Tool library location**: Approved tools are persisted by the backend into the configured host-side tool library (`TOOLS_DIR`). In sandboxed deployments, those files are typically visible inside the sandbox at `/app/Tools/`. Never write directly to either location — always use `propose_tool_save`.
 - **Hot reload not available**: After a tool is saved to Tools/, it will be available in NEW sessions. The current session uses the tools that were loaded when it started.
-- **`propose_tool_save` tool**: This is the ONLY way to save a tool. It triggers a UI prompt for the user to confirm. The system copies the file from `{workspace_dir}/tools_staging/{tool_name}.py` to `/app/Tools/{tool_name}.py`.
+- **`propose_tool_save` tool**: This is the ONLY supported way to save a tool. It triggers a UI prompt for the user to confirm. After approval, the backend copies `{workspace_dir}/tools_staging/{tool_name}.py` into the configured host-side tool library (`TOOLS_DIR`). In sandboxed deployments, that saved file is typically exposed in the sandbox at `/app/Tools/{tool_name}.py`.
 
 ---
 
@@ -360,7 +360,7 @@ Sometimes the agent writes a one-off script during a task and realizes (or the u
 3. **Forgetting `@tool` decorator**: The function MUST be decorated with `@tool` from `langchain_core.tools`.
 4. **Non-serializable return types**: Don't return custom objects, generators, or other non-serializable types.
 5. **Importing unavailable packages**: Since tools run in the sandbox, test your tool there first — if it imports fine during testing, it will work in production too.
-6. **Writing to Tools/ directly**: Never do this. Always use the workspace → `propose_tool_save` flow.
+6. **Writing to the tool library directly**: Never do this. Always use the workspace → `propose_tool_save` flow.
 7. **Tested code ≠ saved code**: NEVER write a standalone script first and then rewrite it as an `@tool`. Always write the `@tool` function first, test that exact function, then copy (not rewrite) it to `tools_staging/`. The tested file must be identical to the saved file.
 8. **Using raw httpx for web scraping**: Do NOT use `httpx` to directly scrape websites — it cannot render JavaScript and is fragile against website changes. Use proper HTTP clients with appropriate error handling.
 9. **Blindly guessing URLs when an API fails**: When an external API returns errors (404, 403, etc.), do NOT try multiple URL variations hoping one works. After 1–2 failed attempts, investigate why the API is failing and what alternatives exist. Blind URL probing wastes tokens, time, and almost never succeeds.
