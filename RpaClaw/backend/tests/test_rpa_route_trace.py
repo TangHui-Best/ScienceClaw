@@ -7,7 +7,7 @@ CHAT_MODULE = importlib.import_module("backend.route.chat")
 from backend.rpa.manager import RPASession, RPAStep
 from backend.rpa.manual_recording_models import ManualActionKind, ManualRecordedAction, ManualRecordingDiagnostic
 from backend.rpa.recording_runtime_agent import RecordingAgentResult
-from backend.rpa.trace_models import RPAAcceptedTrace, RPAAIExecution, RPATraceType
+from backend.rpa.trace_models import RPAAcceptedTrace, RPAAIExecution, RPATraceDiagnostic, RPATraceType
 
 
 ROUTE_MODULE = importlib.import_module("backend.route.rpa")
@@ -92,14 +92,16 @@ async def test_resolve_user_model_config_rejects_missing_requested_model(monkeyp
 
 
 @pytest.mark.anyio
-async def test_parse_schedule_default_model_prefers_configured_model_over_env(monkeypatch):
-    async def fake_resolve_default_model_config():
+async def test_parse_schedule_default_model_uses_system_model_over_env(monkeypatch):
+    async def fake_resolve_default_model_config(user_id=None):
+        assert user_id is None
         return {
             "provider": "openai",
             "base_url": "https://llm.example/v1",
-            "api_key": "sk-page",
-            "model_name": "page-model",
+            "api_key": "sk-system",
+            "model_name": "system-model",
             "context_window": 65536,
+            "is_system": True,
         }
 
     monkeypatch.setattr(CHAT_MODULE, "resolve_default_model_config", fake_resolve_default_model_config)
@@ -107,8 +109,22 @@ async def test_parse_schedule_default_model_prefers_configured_model_over_env(mo
 
     config = await CHAT_MODULE._resolve_any_model_config()
 
-    assert config["api_key"] == "sk-page"
-    assert config["model_name"] == "page-model"
+    assert config["api_key"] == "sk-system"
+    assert config["model_name"] == "system-model"
+
+
+@pytest.mark.anyio
+async def test_parse_schedule_default_model_falls_back_to_env_without_system_model(monkeypatch):
+    async def fake_resolve_default_model_config(user_id=None):
+        assert user_id is None
+        return None
+
+    monkeypatch.setattr(CHAT_MODULE, "resolve_default_model_config", fake_resolve_default_model_config)
+    monkeypatch.setattr(CHAT_MODULE.settings, "model_ds_api_key", "sk-env")
+
+    config = await CHAT_MODULE._resolve_any_model_config()
+
+    assert config == {"_use_default": True}
 
 
 @pytest.mark.anyio
@@ -561,6 +577,104 @@ async def test_generate_script_blocks_when_recording_diagnostics_exist():
             await ROUTE_MODULE.generate_script(session.id, ROUTE_MODULE.GenerateRequest(), user)
         assert exc_info.value.status_code == 400
         assert "diagnostic" in exc_info.value.detail
+    finally:
+        manager.sessions.pop(session.id, None)
+
+
+@pytest.mark.asyncio
+async def test_delete_trace_route_removes_trace_by_stable_id():
+    manager = ROUTE_MODULE.rpa_manager
+    session = RPASession(id="route-delete-trace", user_id="u1", sandbox_session_id="sandbox")
+    session.traces.append(
+        RPAAcceptedTrace(
+            trace_id="trace-ai-delete",
+            trace_type=RPATraceType.AI_OPERATION,
+            source="ai",
+            output_key="result",
+            output={"old": True},
+        )
+    )
+    manager.sessions[session.id] = session
+
+    try:
+        user = type("User", (), {"id": "u1"})()
+        response = await ROUTE_MODULE.delete_trace_item(session.id, "trace-ai-delete", user)
+
+        assert response == {"status": "success"}
+        assert session.traces == []
+        assert session.runtime_results.values == {}
+    finally:
+        manager.sessions.pop(session.id, None)
+
+
+@pytest.mark.asyncio
+async def test_delete_diagnostic_route_removes_trace_diagnostic_by_stable_id():
+    manager = ROUTE_MODULE.rpa_manager
+    session = RPASession(id="route-delete-diagnostic", user_id="u1", sandbox_session_id="sandbox")
+    session.trace_diagnostics.append(
+        RPATraceDiagnostic(
+            diagnostic_id="diag-delete",
+            trace_id="trace-ai",
+            source="ai",
+            message="planner failed",
+        )
+    )
+    manager.sessions[session.id] = session
+
+    try:
+        user = type("User", (), {"id": "u1"})()
+        response = await ROUTE_MODULE.delete_diagnostic_item(session.id, "diag-delete", user)
+
+        assert response == {"status": "success"}
+        assert session.trace_diagnostics == []
+    finally:
+        manager.sessions.pop(session.id, None)
+
+
+@pytest.mark.asyncio
+async def test_promote_trace_locator_route_selects_candidate_by_trace_id():
+    manager = ROUTE_MODULE.rpa_manager
+    session = RPASession(id="route-promote-trace", user_id="u1", sandbox_session_id="sandbox")
+    session.traces.append(
+        RPAAcceptedTrace(
+            trace_id="trace-manual",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            source="manual",
+            locator_candidates=[
+                {
+                    "kind": "css",
+                    "locator": {"method": "css", "value": "#old"},
+                    "selected": True,
+                    "strict_match_count": 2,
+                },
+                {
+                    "kind": "role",
+                    "locator": {"method": "role", "role": "button", "name": "Save"},
+                    "selected": False,
+                    "strict_match_count": 1,
+                },
+            ],
+            validation={"status": "fallback"},
+        )
+    )
+    manager.sessions[session.id] = session
+
+    try:
+        user = type("User", (), {"id": "u1"})()
+        response = await ROUTE_MODULE.promote_trace_locator(
+            session.id,
+            "trace-manual",
+            ROUTE_MODULE.PromoteLocatorRequest(candidate_index=1),
+            user,
+        )
+
+        trace = response["trace"]
+        assert response["status"] == "success"
+        assert trace.locator_candidates[0]["selected"] is False
+        assert trace.locator_candidates[1]["selected"] is True
+        assert trace.validation["selected_candidate_index"] == 1
+        assert trace.validation["selected_candidate_kind"] == "role"
+        assert trace.validation["status"] == "ok"
     finally:
         manager.sessions.pop(session.id, None)
 

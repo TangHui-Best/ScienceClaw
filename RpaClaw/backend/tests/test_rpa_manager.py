@@ -225,11 +225,25 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.manager.sessions[expired.id] = expired
         self.manager.sessions[active.id] = active
 
-        removed = self.manager.cleanup_expired_sessions(max_idle_seconds=3600)
+        removed = await self.manager.cleanup_expired_sessions(max_idle_seconds=3600)
 
         self.assertEqual(removed, ["expired"])
         self.assertNotIn("expired", self.manager.sessions)
         self.assertIn("active", self.manager.sessions)
+
+    async def test_manager_cleanup_closes_expired_session_context(self):
+        expired = MANAGER_MODULE.RPASession(id="expired", user_id="u1", sandbox_session_id="box-1")
+        expired.last_activity_at = datetime.now() - timedelta(hours=3)
+        context = _FakeContext()
+        self.manager.sessions[expired.id] = expired
+        self.manager.attach_context(expired.id, context)
+
+        removed = await self.manager.cleanup_expired_sessions(max_idle_seconds=3600)
+
+        self.assertEqual(removed, ["expired"])
+        self.assertTrue(context.closed)
+        self.assertNotIn("expired", self.manager.sessions)
+        self.assertNotIn("expired", self.manager._contexts)
 
     async def test_delete_trace_rebuilds_runtime_results_from_remaining_traces(self):
         deleted_trace = TRACE_MODELS_MODULE.RPAAcceptedTrace(

@@ -499,7 +499,7 @@ async def cleanup_rpa_sessions(
 ):
     if getattr(current_user, "role", "") != "admin":
         raise HTTPException(status_code=403, detail="Admin only")
-    removed = rpa_manager.cleanup_expired_sessions(max_idle_seconds=max_idle_seconds)
+    removed = await rpa_manager.cleanup_expired_sessions(max_idle_seconds=max_idle_seconds)
     return {"status": "success", "removed": removed}
 
 
@@ -676,6 +676,44 @@ async def delete_timeline_item(
     return {"status": "success"}
 
 
+@router.delete("/session/{session_id}/trace/{trace_id}")
+async def delete_trace_item(
+    session_id: str,
+    trace_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    session = await rpa_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.user_id != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    rpa_manager.touch_session(session_id)
+
+    success = await rpa_manager.delete_trace(session_id, trace_id)
+    if not success:
+        raise HTTPException(status_code=400, detail="Invalid trace")
+    return {"status": "success"}
+
+
+@router.delete("/session/{session_id}/diagnostic/{diagnostic_id}")
+async def delete_diagnostic_item(
+    session_id: str,
+    diagnostic_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    session = await rpa_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.user_id != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    rpa_manager.touch_session(session_id)
+
+    success = await rpa_manager.delete_trace_diagnostic(session_id, diagnostic_id)
+    if not success:
+        raise HTTPException(status_code=400, detail="Invalid diagnostic")
+    return {"status": "success"}
+
+
 @router.post("/session/{session_id}/step/{step_index}/locator")
 async def promote_step_locator(
     session_id: str,
@@ -700,6 +738,32 @@ async def promote_step_locator(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return {"status": "success", "step": step}
+
+
+@router.post("/session/{session_id}/trace/{trace_id}/locator")
+async def promote_trace_locator(
+    session_id: str,
+    trace_id: str,
+    request: PromoteLocatorRequest,
+    current_user: User = Depends(get_current_user),
+):
+    session = await rpa_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.user_id != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    rpa_manager.touch_session(session_id)
+
+    try:
+        trace = await rpa_manager.select_trace_locator_candidate(
+            session_id,
+            trace_id,
+            request.candidate_index,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"status": "success", "trace": trace}
 
 
 @router.post("/session/{session_id}/generate")

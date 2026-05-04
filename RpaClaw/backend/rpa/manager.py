@@ -151,7 +151,7 @@ class RPASessionManager:
         self.touch_session(session_id)
         return draft
 
-    def cleanup_expired_sessions(self, max_idle_seconds: int) -> List[str]:
+    async def cleanup_expired_sessions(self, max_idle_seconds: int) -> List[str]:
         now = datetime.now()
         removed: List[str] = []
         for session_id, session in list(self.sessions.items()):
@@ -160,11 +160,37 @@ class RPASessionManager:
             idle_seconds = (now - session.last_activity_at).total_seconds()
             if idle_seconds <= max_idle_seconds:
                 continue
-            self.detach_context(session_id)
+            await self._dispose_session_resources(session_id)
             self.sessions.pop(session_id, None)
             self.ws_connections.pop(session_id, None)
             removed.append(session_id)
         return removed
+
+    async def _dispose_session_resources(self, session_id: str) -> None:
+        try:
+            await asyncio.wait_for(self.wait_for_pending_events(session_id), timeout=2.0)
+        except Exception as e:
+            logger.warning(f"[RPA] Error waiting for pending events during cleanup: {e}")
+
+        context = self._contexts.pop(session_id, None)
+        self.detach_context(session_id)
+        if context:
+            try:
+                await context.close()
+            except Exception as e:
+                logger.warning(f"[RPA] Error closing context during cleanup: {e}")
+
+        connections = list(self.ws_connections.get(session_id, []) or [])
+        for ws in connections:
+            close = getattr(ws, "close", None)
+            if not callable(close):
+                continue
+            try:
+                result = close()
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception as e:
+                logger.warning(f"[RPA] Error closing websocket during cleanup: {e}")
 
     def attach_context(self, session_id: str, context: BrowserContext):
         self._contexts[session_id] = context
@@ -745,6 +771,18 @@ class RPASessionManager:
             self._rebuild_runtime_results(session)
         return deleted
 
+    async def delete_trace_diagnostic(self, session_id: str, diagnostic_id: str) -> bool:
+        session = self.sessions.get(session_id)
+        if not session or not diagnostic_id:
+            return False
+        original_count = len(session.trace_diagnostics)
+        session.trace_diagnostics = [
+            diagnostic
+            for diagnostic in session.trace_diagnostics
+            if diagnostic.diagnostic_id != diagnostic_id
+        ]
+        return len(session.trace_diagnostics) != original_count
+
     @staticmethod
     def _rebuild_runtime_results(session: RPASession) -> None:
         rebuilt = RPARuntimeResults()
@@ -1135,6 +1173,44 @@ class RPASessionManager:
         await self._record_manual_trace_for_step(session_id, step)
         await self._broadcast_step(session_id, step)
         return step
+
+    async def select_trace_locator_candidate(
+        self,
+        session_id: str,
+        trace_id: str,
+        candidate_index: int,
+    ) -> RPAAcceptedTrace:
+        session = self.sessions.get(session_id)
+        if not session or not trace_id:
+            raise ValueError("Invalid trace id")
+
+        trace = next((item for item in session.traces if item.trace_id == trace_id), None)
+        if trace is None:
+            raise ValueError("Invalid trace id")
+        if candidate_index < 0 or candidate_index >= len(trace.locator_candidates):
+            raise ValueError("Invalid locator candidate index")
+
+        selected_candidate = trace.locator_candidates[candidate_index]
+        locator = self._resolve_candidate_locator(selected_candidate)
+
+        for index, candidate in enumerate(trace.locator_candidates):
+            candidate["selected"] = index == candidate_index
+
+        selected_candidate["locator"] = locator
+        trace.validation = dict(trace.validation or {})
+        trace.validation["selected_candidate_index"] = candidate_index
+        trace.validation["selected_candidate_kind"] = selected_candidate.get("kind", "")
+        strict_match_count = selected_candidate.get("strict_match_count")
+        if isinstance(strict_match_count, int):
+            trace.validation["status"] = "ok" if strict_match_count == 1 else "fallback"
+        if selected_candidate.get("reason"):
+            trace.validation["details"] = selected_candidate["reason"]
+
+        if trace.dataflow and trace.dataflow.target_field:
+            trace.dataflow.target_field.locator_candidates = [
+                dict(candidate) for candidate in trace.locator_candidates
+            ]
+        return trace
 
     def pause_recording(self, session_id: str):
         """Pause event recording (used during AI execution)."""

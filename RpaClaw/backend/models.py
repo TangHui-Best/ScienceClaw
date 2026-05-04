@@ -112,6 +112,8 @@ async def resolve_default_model_config(user_id: Optional[str] = None) -> Optiona
     }
     if user_id:
         filter_doc["$or"] = [{"user_id": user_id}, {"is_system": True}]
+    else:
+        filter_doc["is_system"] = True
     docs = await repo.find_many(
         filter_doc,
         sort=[("is_system", 1), ("updated_at", -1), ("created_at", -1)],

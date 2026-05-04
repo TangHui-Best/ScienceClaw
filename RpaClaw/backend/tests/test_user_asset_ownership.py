@@ -176,6 +176,67 @@ async def test_resolve_default_model_config_reports_user_model_resolution(monkey
 
 
 @pytest.mark.anyio
+async def test_resolve_default_model_config_without_user_ignores_user_models(monkeypatch):
+    repo = MemoryRepo(
+        [
+            {
+                "_id": "user-model",
+                "user_id": "user-1",
+                "is_system": False,
+                "is_active": True,
+                "api_key": "sk-user",
+                "model_name": "user-model",
+                "base_url": "https://user.example/v1",
+                "updated_at": 30,
+                "created_at": 30,
+            },
+            {
+                "_id": "system-default",
+                "is_system": True,
+                "is_active": True,
+                "api_key": "sk-system",
+                "model_name": "system-model",
+                "base_url": "https://system.example/v1",
+                "updated_at": 10,
+                "created_at": 10,
+            },
+        ]
+    )
+
+    monkeypatch.setattr(MODELS, "get_repository", lambda name: repo)
+
+    config = await MODELS.resolve_default_model_config()
+
+    assert config["id"] == "system-default"
+    assert config["resolution_reason"] == "system_fallback"
+    assert config["requested_user_id"] is None
+    assert config["selected_owner"] == "system"
+
+
+@pytest.mark.anyio
+async def test_resolve_default_model_config_without_user_returns_none_for_user_only_models(monkeypatch):
+    repo = MemoryRepo(
+        [
+            {
+                "_id": "user-model",
+                "user_id": "user-1",
+                "is_system": False,
+                "is_active": True,
+                "api_key": "sk-user",
+                "model_name": "user-model",
+                "base_url": "https://user.example/v1",
+                "updated_at": 30,
+                "created_at": 30,
+            },
+        ]
+    )
+
+    monkeypatch.setattr(MODELS, "get_repository", lambda name: repo)
+
+    assert await MODELS.resolve_default_model_config() is None
+
+
+@pytest.mark.anyio
 async def test_local_storage_with_local_auth_uses_session_user(monkeypatch):
     repo = MemoryRepo(
         [
