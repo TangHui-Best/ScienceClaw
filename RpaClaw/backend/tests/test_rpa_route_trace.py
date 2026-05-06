@@ -1067,6 +1067,8 @@ async def test_test_script_passes_session_model_config_to_executor(monkeypatch):
         "api_key": "sk-selected",
         "model_name": "selected-model",
         "context_window": 65536,
+        "is_system": False,
+        "user_id": "u-model",
     }
     manager.sessions[session.id] = session
 
@@ -1094,6 +1096,8 @@ async def test_test_script_passes_session_model_config_to_executor(monkeypatch):
         await ROUTE_MODULE.test_script(session.id, ROUTE_MODULE.GenerateRequest(), user)
         assert captured["kwargs"]["_model_config"]["api_key"] == "sk-selected"
         assert captured["kwargs"]["_model_config"]["model_name"] == "selected-model"
+        assert captured["kwargs"]["_runtime_context"]["runtime_ai"]["model_config"]["id"] == "model-selected"
+        assert captured["kwargs"]["_runtime_context"]["runtime_ai"]["source"] == "session_model_config"
     finally:
         manager.sessions.pop(session.id, None)
 

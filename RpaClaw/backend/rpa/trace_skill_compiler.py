@@ -254,7 +254,7 @@ class TraceSkillCompiler:
             "",
             "async def _execute_runtime_ai_instruction(page, results, kwargs, instruction, output_key):",
             "    from backend.rpa.recording_runtime_agent import RecordingRuntimeAgent",
-            "    agent = RecordingRuntimeAgent(model_config=kwargs.get('_model_config'))",
+            "    agent = RecordingRuntimeAgent(model_config=_runtime_ai_model_config(kwargs))",
             "    outcome = await agent.run(page=page, instruction=instruction, runtime_results=results)",
             "    if not outcome.success:",
             "        detail = '; '.join(str(item.message) for item in outcome.diagnostics) or outcome.message",
@@ -268,6 +268,12 @@ class TraceSkillCompiler:
             "    if output_key:",
             "        results[output_key] = payload",
             "    return payload",
+            "",
+            "def _runtime_ai_model_config(kwargs):",
+            "    runtime_context = kwargs.get('_runtime_context') if isinstance(kwargs, dict) else None",
+            "    runtime_ai = runtime_context.get('runtime_ai') if isinstance(runtime_context, dict) else None",
+            "    model_config = runtime_ai.get('model_config') if isinstance(runtime_ai, dict) else None",
+            "    return model_config or kwargs.get('_model_config')",
             "",
             "async def execute_skill(page, **kwargs):",
             '    """Auto-generated skill from RPA trace recording."""',
@@ -1020,12 +1026,21 @@ from playwright.async_api import async_playwright
 {execute_skill_func}
 
 
+def _parse_cli_value(key, value):
+    if key in {{"_runtime_context", "_model_config"}}:
+        try:
+            return _json.loads(value)
+        except Exception:
+            return value
+    return value
+
+
 async def main():
     kwargs = {{}}
     for arg in sys.argv[1:]:
         if arg.startswith("--") and "=" in arg:
             k, v = arg[2:].split("=", 1)
-            kwargs[k] = v
+            kwargs[k] = _parse_cli_value(k, v)
     pw = await async_playwright().start()
     browser = await pw.chromium.launch(**{launch_kwargs})
     context = await browser.new_context(**{context_kwargs})
@@ -1069,12 +1084,21 @@ async def _get_cdp_url() -> str:
 {execute_skill_func}
 
 
+def _parse_cli_value(key, value):
+    if key in {{"_runtime_context", "_model_config"}}:
+        try:
+            return _json.loads(value)
+        except Exception:
+            return value
+    return value
+
+
 async def main():
     kwargs = {{}}
     for arg in sys.argv[1:]:
         if arg.startswith("--") and "=" in arg:
             k, v = arg[2:].split("=", 1)
-            kwargs[k] = v
+            kwargs[k] = _parse_cli_value(k, v)
     cdp_url = await _get_cdp_url()
     pw = await async_playwright().start()
     browser = await pw.chromium.connect_over_cdp(cdp_url)

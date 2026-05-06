@@ -97,6 +97,39 @@ def test_validate_cookies_rejects_disallowed_domain():
 
 
 @pytest.mark.anyio
+async def test_execute_injects_runtime_ai_context_for_current_user():
+    page = _FakePage()
+    context = _FakeContext(page)
+    browser = _FakeBrowser(context)
+
+    async def fake_runtime_context_builder(user_id, kwargs, **_options):
+        assert user_id == "user-1"
+        merged = dict(kwargs)
+        merged["_runtime_context"] = {
+            "runtime_ai": {
+                "model_config": {"id": "model-user", "api_key": "sk-user", "model_name": "user-model"},
+                "source": "user_default_model",
+            }
+        }
+        merged["_model_config"] = merged["_runtime_context"]["runtime_ai"]["model_config"]
+        return merged
+
+    executor = RpaMcpExecutor(
+        browser_factory=lambda *_args, **_kwargs: browser,
+        script_runner=_fake_runner,
+        user_id="user-1",
+        runtime_context_builder=fake_runtime_context_builder,
+    )
+
+    result = await executor.execute(_sample_tool(requires_cookies=False), {"month": "2026-03"})
+
+    kwargs = result["data"]["kwargs"]
+    assert kwargs["month"] == "2026-03"
+    assert kwargs["_model_config"]["api_key"] == "sk-user"
+    assert kwargs["_runtime_context"]["runtime_ai"]["source"] == "user_default_model"
+
+
+@pytest.mark.anyio
 async def test_execute_adds_cookies_before_goto():
     page = _FakePage()
     context = _FakeContext(page)

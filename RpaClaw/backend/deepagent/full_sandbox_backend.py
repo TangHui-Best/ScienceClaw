@@ -14,6 +14,7 @@ import asyncio
 import concurrent.futures
 import json
 import logging
+import re
 import shlex
 import time
 from typing import Any, List, Optional, cast
@@ -89,6 +90,14 @@ def _truncate_for_log(value: Any, limit: int = 500) -> str:
         return text
     return text[:limit] + "...(truncated)"
 
+
+def _sanitize_command_for_log(command: str) -> str:
+    return re.sub(
+        r"--(?:_runtime_context|_model_config)=\S+",
+        "--<runtime-ai-context>=<redacted>",
+        command,
+    )
+
 class FullSandboxBackend(SandboxBackendProtocol):
     """全沙盒后端：完全依赖远程 API 进行计算和存储。"""
 
@@ -101,6 +110,7 @@ class FullSandboxBackend(SandboxBackendProtocol):
         sandbox_base_dir: str = _SANDBOX_WORKSPACE,
         execute_timeout: int = _EXECUTE_TIMEOUT,
         max_output_chars: int = _MAX_OUTPUT_CHARS,
+        session_model_config: dict | None = None,
     ) -> None:
         self._session_id = session_id
         self._user_id = user_id
@@ -111,6 +121,7 @@ class FullSandboxBackend(SandboxBackendProtocol):
         self._remote_workspace = f"{sandbox_base_dir}/{session_id}"
         self._execute_timeout = execute_timeout
         self._max_output_chars = max_output_chars
+        self._session_model_config = session_model_config
         self._shell_session_id: Optional[str] = None
         self._env_context: Optional[dict] = None
         self._client: Optional[httpx.AsyncClient] = None
@@ -219,6 +230,27 @@ class FullSandboxBackend(SandboxBackendProtocol):
         except Exception as exc:
             logger.warning(f"[FullSandbox] Credential injection failed: {exc}")
 
+        try:
+            from backend.rpa.runtime_context import inject_runtime_context_kwargs
+
+            runtime_kwargs = await inject_runtime_context_kwargs(
+                self._user_id,
+                {},
+                session_model_config=self._session_model_config,
+            )
+            runtime_args = {
+                key: value
+                for key, value in runtime_kwargs.items()
+                if key in {"_runtime_context", "_model_config"}
+            }
+            if runtime_args:
+                extra_args += " " + " ".join(
+                    f"--{key}={shlex.quote(json.dumps(value, ensure_ascii=False, separators=(',', ':')))}"
+                    for key, value in runtime_args.items()
+                )
+        except Exception as exc:
+            logger.warning(f"[FullSandbox] Runtime AI context injection failed: {exc}")
+
         return f"{command} {extra_args}"
 
     # ── 命令执行 (Execute) ────────────────────────────────────
@@ -282,7 +314,7 @@ class FullSandboxBackend(SandboxBackendProtocol):
             "[FullSandbox] Malformed exec response detected: "
             f"count={self._consecutive_sandbox_errors}/{_CIRCUIT_BREAKER_THRESHOLD}, "
             f"timeout={effective_timeout}s, "
-            f"command={_truncate_for_log(command, limit=200)}"
+            f"command={_truncate_for_log(_sanitize_command_for_log(command), limit=200)}"
         )
 
         guidance = (
@@ -297,7 +329,7 @@ class FullSandboxBackend(SandboxBackendProtocol):
                 "[FullSandbox] Opening sandbox exec circuit breaker: "
                 f"cooldown={_CIRCUIT_BREAKER_COOLDOWN}s, "
                 f"timeout={effective_timeout}s, "
-                f"command={_truncate_for_log(command, limit=200)}"
+                f"command={_truncate_for_log(_sanitize_command_for_log(command), limit=200)}"
             )
             guidance = (
                 f"Sandbox returned malformed execution data "
@@ -341,7 +373,7 @@ class FullSandboxBackend(SandboxBackendProtocol):
                     "[FullSandbox] Executing command: "
                     f"timeout={effective_timeout}s, "
                     f"attempt={attempt + 1}/2, "
-                    f"command={_truncate_for_log(command, limit=200)}"
+                    f"command={_truncate_for_log(_sanitize_command_for_log(command), limit=200)}"
                 )
                 resp = await client.post(
                     "/v1/shell/exec",
