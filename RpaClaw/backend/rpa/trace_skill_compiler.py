@@ -1013,6 +1013,22 @@ def _should_preserve_runtime_ai_instruction(trace: RPAAcceptedTrace) -> bool:
     return isinstance(output, dict) and bool(output.get("url") or output.get("value"))
 
 
+def trace_requires_runtime_ai_replay(trace: RPAAcceptedTrace) -> bool:
+    if trace.trace_type != RPATraceType.AI_OPERATION:
+        return False
+    if _trace_signal(trace, "extract_snapshot"):
+        return False
+    if _should_preserve_runtime_ai_instruction(trace):
+        return True
+    if trace.ai_execution and trace.ai_execution.code:
+        return False
+    return bool(trace.user_instruction or trace.description)
+
+
+def traces_require_runtime_ai_replay(traces: Iterable[RPAAcceptedTrace]) -> bool:
+    return any(trace_requires_runtime_ai_replay(trace) for trace in traces)
+
+
 def _runner_template(is_local: bool) -> str:
     if is_local:
         return '''\

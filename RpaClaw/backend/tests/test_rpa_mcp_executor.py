@@ -61,6 +61,15 @@ def _sample_tool(*, requires_cookies: bool = True):
     )
 
 
+def _runtime_ai_tool(*, runtime_ai: bool):
+    tool = _sample_tool(requires_cookies=False)
+    return tool.model_copy(
+        update={
+            "runtime_requirements": {"runtime_ai": runtime_ai},
+        }
+    )
+
+
 def _trace_backed_tool():
     tool = _sample_tool(requires_cookies=False)
     tool.steps = [
@@ -121,12 +130,36 @@ async def test_execute_injects_runtime_ai_context_for_current_user():
         runtime_context_builder=fake_runtime_context_builder,
     )
 
-    result = await executor.execute(_sample_tool(requires_cookies=False), {"month": "2026-03"})
+    result = await executor.execute(_runtime_ai_tool(runtime_ai=True), {"month": "2026-03"})
 
     kwargs = result["data"]["kwargs"]
     assert kwargs["month"] == "2026-03"
     assert kwargs["_model_config"]["api_key"] == "sk-user"
     assert kwargs["_runtime_context"]["runtime_ai"]["source"] == "user_default_model"
+
+
+@pytest.mark.anyio
+async def test_execute_does_not_inject_runtime_ai_context_without_requirement():
+    page = _FakePage()
+    context = _FakeContext(page)
+    browser = _FakeBrowser(context)
+
+    async def forbidden_runtime_context_builder(user_id, kwargs, **_options):
+        raise AssertionError("tool without runtime AI requirement should not request context")
+
+    executor = RpaMcpExecutor(
+        browser_factory=lambda *_args, **_kwargs: browser,
+        script_runner=_fake_runner,
+        user_id="user-1",
+        runtime_context_builder=forbidden_runtime_context_builder,
+    )
+
+    result = await executor.execute(_runtime_ai_tool(runtime_ai=False), {"month": "2026-03"})
+
+    kwargs = result["data"]["kwargs"]
+    assert kwargs["month"] == "2026-03"
+    assert "_model_config" not in kwargs
+    assert "_runtime_context" not in kwargs
 
 
 @pytest.mark.anyio

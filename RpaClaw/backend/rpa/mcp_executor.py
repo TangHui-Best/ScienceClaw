@@ -61,7 +61,7 @@ class RpaMcpExecutor:
         downloads_dir = self._prepare_downloads_dir(tool)
         if downloads_dir:
             kwargs.setdefault('_downloads_dir', downloads_dir)
-        if self._user_id:
+        if self._user_id and self._tool_requires_runtime_ai(tool):
             builder = self._runtime_context_builder
             if builder is None:
                 from backend.rpa.runtime_context import inject_runtime_context_kwargs
@@ -102,6 +102,13 @@ class RpaMcpExecutor:
             return None
         Path(downloads_dir).mkdir(parents=True, exist_ok=True)
         return downloads_dir
+
+    @staticmethod
+    def _tool_requires_runtime_ai(tool) -> bool:
+        requirements = getattr(tool, "runtime_requirements", None)
+        if not isinstance(requirements, dict):
+            return False
+        return requirements.get("runtime_ai") is True
 
     async def _default_runner(self, page, script: str, kwargs: dict[str, Any]) -> dict[str, Any]:
         namespace: dict[str, Any] = {}

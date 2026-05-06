@@ -212,6 +212,7 @@ class FullSandboxBackend(SandboxBackendProtocol):
         # Always inject _downloads_dir for skill.py commands
         downloads_dir = f"{self._remote_workspace}/downloads"
         extra_args = f"--_downloads_dir={shlex.quote(downloads_dir)}"
+        doc = None
 
         # Also inject credentials if available
         try:
@@ -231,23 +232,28 @@ class FullSandboxBackend(SandboxBackendProtocol):
             logger.warning(f"[FullSandbox] Credential injection failed: {exc}")
 
         try:
-            from backend.rpa.runtime_context import inject_runtime_context_kwargs
+            from backend.rpa.runtime_context import inject_runtime_context_kwargs, should_inject_runtime_ai_context
 
-            runtime_kwargs = await inject_runtime_context_kwargs(
-                self._user_id,
-                {},
-                session_model_config=self._session_model_config,
-            )
-            runtime_args = {
-                key: value
-                for key, value in runtime_kwargs.items()
-                if key in {"_runtime_context", "_model_config"}
-            }
-            if runtime_args:
-                extra_args += " " + " ".join(
-                    f"--{key}={shlex.quote(json.dumps(value, ensure_ascii=False, separators=(',', ':')))}"
-                    for key, value in runtime_args.items()
+            files = doc.get("files") if isinstance(doc, dict) else {}
+            skill_meta = files.get("skill.meta.json") if isinstance(files, dict) else None
+            if skill_meta is None and isinstance(doc, dict):
+                skill_meta = doc.get("skill_meta") or doc.get("meta") or doc
+            if should_inject_runtime_ai_context(skill_meta):
+                runtime_kwargs = await inject_runtime_context_kwargs(
+                    self._user_id,
+                    {},
+                    session_model_config=self._session_model_config,
                 )
+                runtime_args = {
+                    key: value
+                    for key, value in runtime_kwargs.items()
+                    if key in {"_runtime_context", "_model_config"}
+                }
+                if runtime_args:
+                    extra_args += " " + " ".join(
+                        f"--{key}={shlex.quote(json.dumps(value, ensure_ascii=False, separators=(',', ':')))}"
+                        for key, value in runtime_args.items()
+                    )
         except Exception as exc:
             logger.warning(f"[FullSandbox] Runtime AI context injection failed: {exc}")
 

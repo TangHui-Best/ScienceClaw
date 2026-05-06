@@ -1,9 +1,43 @@
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from typing import Any, Dict, Optional
 
 from backend.models import get_model_config, resolve_default_model_config
+
+
+def _coerce_meta(meta: Any) -> Dict[str, Any]:
+    if isinstance(meta, dict):
+        return meta
+    if isinstance(meta, str) and meta.strip():
+        try:
+            parsed = json.loads(meta)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _recording_traces_require_runtime_ai(meta: Dict[str, Any]) -> bool:
+    recording = meta.get("recording")
+    if not isinstance(recording, dict):
+        return False
+    raw_traces = recording.get("traces")
+    if not isinstance(raw_traces, list):
+        return False
+
+    from backend.rpa.trace_models import RPAAcceptedTrace
+
+    traces = []
+    for raw_trace in raw_traces:
+        if not isinstance(raw_trace, dict):
+            continue
+        try:
+            traces.append(RPAAcceptedTrace.model_validate(raw_trace))
+        except Exception:
+            continue
+    return runtime_requirements_from_traces(traces).get("runtime_ai") is True
 
 
 def _user_matches(value: Any, user_id: str | None) -> bool:
@@ -20,6 +54,24 @@ def _can_use_model_config(model_config: Dict[str, Any], user_id: str | None) -> 
     if bool(model_config.get("is_system", False)):
         return True
     return bool(user_id) and _user_matches(model_config.get("user_id"), user_id)
+
+
+def should_inject_runtime_ai_context(skill_meta: Any) -> bool:
+    """Return whether a skill explicitly requires runtime AI replay context."""
+    meta = _coerce_meta(skill_meta)
+    if meta.get("kind") != "rpa-recording":
+        return False
+    requirements = meta.get("runtime_requirements")
+    if isinstance(requirements, dict):
+        return requirements.get("runtime_ai") is True
+    return _recording_traces_require_runtime_ai(meta)
+
+
+def runtime_requirements_from_traces(traces: Any) -> Dict[str, bool]:
+    """Build runtime requirement metadata from accepted RPA traces."""
+    from backend.rpa.trace_skill_compiler import traces_require_runtime_ai_replay
+
+    return {"runtime_ai": traces_require_runtime_ai_replay(traces or [])}
 
 
 async def resolve_runtime_ai_model_config(

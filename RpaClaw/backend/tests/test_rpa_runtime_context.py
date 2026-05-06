@@ -83,3 +83,43 @@ async def test_runtime_ai_context_preserves_existing_business_kwargs(monkeypatch
 
     assert kwargs["query"] == "recorded query"
     assert kwargs["_model_config"]["model_name"] == "default-model"
+
+
+def test_should_inject_runtime_ai_context_requires_rpa_recording_runtime_requirement():
+    assert RUNTIME_CONTEXT.should_inject_runtime_ai_context(
+        {
+            "kind": "rpa-recording",
+            "runtime_requirements": {"runtime_ai": True},
+        }
+    )
+    assert not RUNTIME_CONTEXT.should_inject_runtime_ai_context(
+        {
+            "kind": "rpa-recording",
+            "runtime_requirements": {"runtime_ai": False},
+        }
+    )
+    assert not RUNTIME_CONTEXT.should_inject_runtime_ai_context(
+        {
+            "kind": "custom-skill",
+            "runtime_requirements": {"runtime_ai": True},
+        }
+    )
+
+
+def test_should_inject_runtime_ai_context_falls_back_to_legacy_recording_traces():
+    assert RUNTIME_CONTEXT.should_inject_runtime_ai_context(
+        {
+            "kind": "rpa-recording",
+            "recording": {
+                "traces": [
+                    {
+                        "trace_type": "ai_operation",
+                        "source": "ai",
+                        "user_instruction": "open the project most related to SKILL",
+                        "description": "Click semantic project",
+                        "signals": {"runtime_ai": {"preserve": True}},
+                    }
+                ],
+            },
+        }
+    )

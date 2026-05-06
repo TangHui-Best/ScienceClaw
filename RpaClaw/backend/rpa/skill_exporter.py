@@ -46,6 +46,10 @@ class SkillExporter:
             "entry_script": "skill.py",
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "params": params,
+            "runtime_requirements": recording_meta.get(
+                "runtime_requirements",
+                {"runtime_ai": False},
+            ),
             "recording_source": recording_meta.get("recording_source", "trace"),
             "recording": recording_meta,
             "steps": legacy_steps,
@@ -152,6 +156,7 @@ The skill is implemented in `skill.py` using Playwright for browser automation.
                 "recorded_actions": [],
                 "legacy_steps": steps or [],
                 "runtime_results": {},
+                "runtime_requirements": {"runtime_ai": False},
                 "trace_diagnostics": [],
                 "recording_diagnostics": [],
             },

@@ -158,6 +158,7 @@ class TestSkillExporter(unittest.IsolatedAsyncioTestCase):
                 "recorded_actions": [],
                 "legacy_steps": legacy_steps,
                 "runtime_results": {},
+                "runtime_requirements": {"runtime_ai": True},
                 "trace_diagnostics": [],
                 "recording_diagnostics": [],
             }
@@ -185,6 +186,7 @@ class TestSkillExporter(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(meta["steps"], legacy_steps)
             self.assertEqual(meta["mcp_steps"], projected_steps)
             self.assertEqual(meta["recording"]["legacy_steps"], legacy_steps)
+            self.assertEqual(meta["runtime_requirements"], {"runtime_ai": True})
 
 
 if __name__ == "__main__":

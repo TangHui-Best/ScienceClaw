@@ -471,6 +471,48 @@ def test_build_session_recording_meta_derives_traces_for_legacy_step_only_sessio
     assert meta["traces"][0]["signals"]["recording"]["sequence"] == 1
 
 
+def test_build_session_recording_meta_marks_runtime_ai_requirement_for_semantic_trace():
+    session = RPASession(id="route-meta-runtime-ai", user_id="u1", sandbox_session_id="sandbox")
+    session.traces.append(
+        RPAAcceptedTrace(
+            trace_type=RPATraceType.AI_OPERATION,
+            source="ai",
+            user_instruction="open the project most related to SKILL",
+            description="Click the semantically selected project",
+            output_key="selected_project",
+            signals={"runtime_ai": {"preserve": True}},
+            ai_execution=RPAAIExecution(
+                code=(
+                    "async def run(page, results):\n"
+                    "    await page.locator('a.project').nth(0).click()\n"
+                    "    return {'action_performed': True}"
+                ),
+            ),
+        )
+    )
+
+    meta = ROUTE_MODULE._build_session_recording_meta(session)
+
+    assert meta["runtime_requirements"]["runtime_ai"] is True
+
+
+def test_build_session_recording_meta_marks_no_runtime_ai_requirement_for_deterministic_trace():
+    session = RPASession(id="route-meta-no-runtime-ai", user_id="u1", sandbox_session_id="sandbox")
+    session.steps.append(
+        RPAStep(
+            id="step-open",
+            action="goto",
+            target="https://example.com/dashboard",
+            description="Open dashboard",
+            validation={"status": "ok"},
+        )
+    )
+
+    meta = ROUTE_MODULE._build_session_recording_meta(session)
+
+    assert meta["runtime_requirements"]["runtime_ai"] is False
+
+
 @pytest.mark.asyncio
 async def test_skill_config_draft_round_trip():
     manager = ROUTE_MODULE.rpa_manager
@@ -1060,6 +1102,15 @@ async def test_test_script_passes_route_timeout_to_executor(monkeypatch):
 async def test_test_script_passes_session_model_config_to_executor(monkeypatch):
     manager = ROUTE_MODULE.rpa_manager
     session = RPASession(id="session-model-test", user_id="u-model", sandbox_session_id="sandbox")
+    session.traces.append(
+        RPAAcceptedTrace(
+            trace_type=RPATraceType.AI_OPERATION,
+            source="ai",
+            user_instruction="open the project most related to SKILL",
+            description="Click semantic project",
+            signals={"runtime_ai": {"preserve": True}},
+        )
+    )
     session.llm_model_config = {
         "id": "model-selected",
         "provider": "openai",
