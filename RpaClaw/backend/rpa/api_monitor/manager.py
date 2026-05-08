@@ -777,6 +777,7 @@ class ApiMonitorSessionManager:
                 if not capture:
                     continue
                 calls = capture.drain_new_calls()
+                self._cleanup_stale_evidence(session_id, max_age_seconds=30)
                 if calls:
                     # Link calls to the most recent action anchor
                     anchors = self._action_anchors.get(session_id)
@@ -2476,9 +2477,11 @@ class ApiMonitorSessionManager:
 
         # Try to find CDP evidence by matching linked request ID
         cdp_map = self._cdp_to_pw.get(session_id, {})
+        match_path = "miss"
         for cdp_id, stored_pw_id in cdp_map.items():
             if stored_pw_id == pw_id:
                 evidence = dict(by_cdp.get(cdp_id, {}))
+                match_path = "linked"
                 break
 
         # Fallback: find by URL+method match among unlinked CDP evidence
@@ -2492,10 +2495,17 @@ class ApiMonitorSessionManager:
                     evidence = dict(cdp_ev)
                     # Link this CDP entry to the current Playwright request
                     cdp_map[cdp_id] = pw_id
+                    match_path = "fallback"
                     break
 
         evidence.setdefault("frame_url", self.sessions.get(session_id).target_url if self.sessions.get(session_id) else "")
         evidence["action_window_matched"] = self._action_window_matched(session_id)
+        logger.debug(
+            "[ApiMonitor] Evidence lookup: session=%s path=%s cdp_entries=%d initiator=%s url=%s",
+            session_id, match_path, len(by_cdp),
+            "found" if evidence.get("initiator_urls") else "empty",
+            getattr(request, "url", "")[:80],
+        )
         return evidence
 
     def _retry_sync_evidence(
@@ -2553,10 +2563,33 @@ class ApiMonitorSessionManager:
         for cdp_id in cdp_ids:
             self._cleanup_request_evidence(session_id, cdp_id)
 
+    def _cleanup_stale_evidence(self, session_id: str, max_age_seconds: float = 30) -> int:
+        """Remove CDP evidence entries older than max_age_seconds. Returns count removed."""
+        by_cdp = self._request_evidence.get(session_id, {})
+        if not by_cdp:
+            return 0
+        now = time.monotonic()
+        stale_ids = [
+            cdp_id for cdp_id, ev in by_cdp.items()
+            if ev.get("_stored_at") and (now - ev["_stored_at"]) > max_age_seconds
+        ]
+        for cdp_id in stale_ids:
+            self._cleanup_request_evidence(session_id, cdp_id)
+        if stale_ids:
+            logger.debug(
+                "[ApiMonitor] Cleaned %d stale evidence entries for session=%s",
+                len(stale_ids), session_id,
+            )
+        return len(stale_ids)
+
     async def _install_source_evidence_capture(self, session_id: str, context, page: Page) -> None:
         try:
             cdp = await context.new_cdp_session(page)
             await cdp.send("Network.enable")
+            logger.info(
+                "[ApiMonitor] CDP evidence capture installed: session=%s page=%s",
+                session_id, page.url[:80],
+            )
 
             def on_request_will_be_sent(event: Dict) -> None:
                 request = event.get("request") or {}
@@ -2568,16 +2601,27 @@ class ApiMonitorSessionManager:
                 evidence["frame_url"] = page.url
                 evidence["_cdp_url"] = url
                 evidence["_cdp_method"] = (request.get("method") or "GET").upper()
+                evidence["_stored_at"] = time.monotonic()
                 self._request_evidence.setdefault(session_id, {})[cdp_req_id] = evidence
+                logger.debug(
+                    "[ApiMonitor] CDP evidence stored: session=%s cdp_id=%s url=%s initiator=%s",
+                    session_id, cdp_req_id[:16], url[:80], evidence.get("initiator_type", "?"),
+                )
 
             cdp.on("Network.requestWillBeSent", on_request_will_be_sent)
         except Exception as exc:
-            logger.debug("[ApiMonitor] CDP source evidence capture unavailable: %s", exc)
+            logger.warning(
+                "[ApiMonitor] CDP source evidence capture unavailable: session=%s %s",
+                session_id, exc,
+            )
 
         try:
             await page.add_init_script(_FETCH_XHR_STACK_CAPTURE_JS)
         except Exception as exc:
-            logger.debug("[ApiMonitor] Fetch/XHR stack capture injection failed: %s", exc)
+            logger.warning(
+                "[ApiMonitor] Fetch/XHR stack capture injection failed: session=%s %s",
+                session_id, exc,
+            )
 
     async def _async_evidence_for_request(self, session_id: str, request) -> Dict:
         # Resolve the correct page from request's frame, not the active page

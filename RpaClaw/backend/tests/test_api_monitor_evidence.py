@@ -324,3 +324,49 @@ class TestNetworkCaptureRetryEvidence:
             evidence_cleanup_provider=mock_cleanup,
         )
         assert engine._evidence_cleanup_provider is mock_cleanup
+
+
+class TestStaleEvidenceCleanup:
+    def test_cleanup_removes_old_entries(self):
+        """Entries older than max_age should be removed."""
+        import time as _time
+
+        manager = ApiMonitorSessionManager()
+        session_id = "test_session"
+        manager.sessions[session_id] = MagicMock()
+
+        cdp_evidence_store = manager._request_evidence.setdefault(session_id, {})
+        now = _time.monotonic()
+
+        # Old entry (60 seconds ago)
+        cdp_evidence_store["old.1"] = {
+            "initiator_type": "script",
+            "_stored_at": now - 60,
+        }
+        # Recent entry (5 seconds ago)
+        cdp_evidence_store["new.1"] = {
+            "initiator_type": "script",
+            "_stored_at": now - 5,
+        }
+
+        removed = manager._cleanup_stale_evidence(session_id, max_age_seconds=30)
+
+        assert removed == 1
+        assert "old.1" not in cdp_evidence_store
+        assert "new.1" in cdp_evidence_store
+
+    def test_cleanup_handles_missing_timestamp(self):
+        """Entries without _stored_at should be kept (backward compat)."""
+        manager = ApiMonitorSessionManager()
+        session_id = "test_session"
+        manager.sessions[session_id] = MagicMock()
+
+        cdp_evidence_store = manager._request_evidence.setdefault(session_id, {})
+        cdp_evidence_store["no_ts"] = {
+            "initiator_type": "script",
+        }
+
+        removed = manager._cleanup_stale_evidence(session_id, max_age_seconds=30)
+
+        assert removed == 0
+        assert "no_ts" in cdp_evidence_store
