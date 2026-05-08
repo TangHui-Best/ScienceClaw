@@ -288,14 +288,72 @@ def _dedupe_strings(values: List[str]) -> List[str]:
     return result
 
 
+_USER_ACTION_CAPTURE_JS = r"""
+(() => {
+  if (window.__apiMonitorActionInstalled) return;
+  window.__apiMonitorActionInstalled = true;
+
+  function emit(evt) {
+    try {
+      const payload = JSON.stringify(evt);
+      if (window.__apiMonitorAction) {
+        window.__apiMonitorAction(payload);
+      }
+    } catch (_) {}
+  }
+
+  function describeElement(el) {
+    const tag = (el.tagName || '').toLowerCase();
+    const text = (el.innerText || el.value || el.placeholder || '').trim().slice(0, 80);
+    const role = el.getAttribute('role') || '';
+    const type = el.getAttribute('type') || '';
+    return { tag, text, role, type };
+  }
+
+  // Click events
+  document.addEventListener('click', (e) => {
+    const target = e.target.closest('a, button, [role="button"], input[type="submit"], [onclick]') || e.target;
+    emit({
+      action: 'click',
+      target: describeElement(target),
+      url: location.href,
+      timestamp: Date.now(),
+    });
+  }, true);
+
+  // Form submit
+  document.addEventListener('submit', (e) => {
+    emit({
+      action: 'submit',
+      target: describeElement(e.target),
+      url: location.href,
+      timestamp: Date.now(),
+    });
+  }, true);
+
+  // SPA navigation
+  const originalPushState = history.pushState;
+  history.pushState = function() {
+    emit({ action: 'navigate', url: location.href, timestamp: Date.now() });
+    return originalPushState.apply(this, arguments);
+  };
+  window.addEventListener('popstate', () => {
+    emit({ action: 'navigate', url: location.href, timestamp: Date.now() });
+  });
+})();
+"""
+
+
 # ── Manager ──────────────────────────────────────────────────────────
 
 
 def _apply_confidence_to_tool(
     tool: ApiToolDefinition,
     calls: List[CapturedApiCall],
+    *,
+    action_context: Optional[Dict] = None,
 ) -> ApiToolDefinition:
-    result = score_api_candidate(calls)
+    result = score_api_candidate(calls, action_context=action_context)
     tool.confidence = result.confidence
     tool.score = result.score
     tool.selected = result.selected
@@ -311,6 +369,52 @@ def _richness_score(tool: ApiToolDefinition) -> int:
         return int(breakdown.get("response_richness", 0))
     except (AttributeError, TypeError, ValueError):
         return 0
+
+
+def _merge_dom_context(existing: Dict, new: Dict) -> Dict:
+    """Merge two DOM context snapshots, deduplicating by key fields."""
+    if not existing:
+        return dict(new)
+    if not new:
+        return dict(existing)
+
+    result: Dict = {}
+
+    # Merge forms by action URL; actionless forms keyed by index
+    existing_forms: Dict[str, Dict] = {}
+    for i, f in enumerate(existing.get("forms", [])):
+        key = f.get("action") or f"__form_{i}"
+        existing_forms[key] = f
+    for j, f in enumerate(new.get("forms", [])):
+        action = f.get("action")
+        if action:
+            if action not in existing_forms:
+                existing_forms[action] = f
+        elif f"__form_{j}" not in existing_forms:
+            existing_forms[f"__form_{j}"] = f
+    result["forms"] = list(existing_forms.values())
+
+    # Merge inputs by name
+    seen_names: set = set()
+    merged_inputs = []
+    for inp in [*existing.get("inputs", []), *new.get("inputs", [])]:
+        name = inp.get("name") or inp.get("id") or ""
+        if name not in seen_names:
+            seen_names.add(name)
+            merged_inputs.append(inp)
+    result["inputs"] = merged_inputs
+
+    # Merge buttons by text
+    seen_texts: set = set()
+    merged_buttons = []
+    for btn in [*existing.get("buttons", []), *new.get("buttons", [])]:
+        text = btn.get("text", "")
+        if text not in seen_texts:
+            seen_texts.add(text)
+            merged_buttons.append(btn)
+    result["buttons"] = merged_buttons
+
+    return result
 
 
 class ApiMonitorSessionManager:
@@ -329,6 +433,9 @@ class ApiMonitorSessionManager:
         self._captures: Dict[str, NetworkCaptureEngine] = {}
         self._screencasts: Dict[str, SessionScreencastController] = {}
         self._request_evidence: Dict[str, Dict[str, Dict]] = {}
+        self._cdp_to_pw: Dict[str, Dict[str, int]] = defaultdict(dict)
+        self._frame_to_page: Dict[int, Page] = {}
+        self._action_anchors: Dict[str, List[Dict]] = {}
         self._last_action_at: Dict[str, float] = {}
         self._stop_recording_tasks: Dict[str, asyncio.Task[List[ApiToolDefinition]]] = {}
         self._recording_drain_tasks: Dict[str, asyncio.Task[None]] = {}
@@ -409,6 +516,10 @@ class ApiMonitorSessionManager:
         )
         context = await browser.new_context(**get_context_kwargs())
         await context.grant_permissions(["clipboard-read", "clipboard-write"])
+
+        # Install user action capture for recording flow operation awareness
+        await self._install_user_action_capture(session_id, context)
+
         page = await context.new_page()
         page.set_default_timeout(PAGE_TIMEOUT_MS)
         page.set_default_navigation_timeout(PAGE_TIMEOUT_MS)
@@ -429,6 +540,12 @@ class ApiMonitorSessionManager:
             page_url_provider=_capture_page_url,
             evidence_provider=lambda request: self._evidence_for_request(session_id, request),
             async_evidence_provider=lambda request: self._async_evidence_for_request(session_id, request),
+            evidence_retry_provider=lambda url, method, frame_url="": self._retry_sync_evidence(
+                session_id, url, method, frame_url,
+            ),
+            evidence_cleanup_provider=lambda request_id: self._cleanup_evidence_by_request_id(
+                session_id, request_id,
+            ),
         )
         self._captures[session_id] = capture
         self._adopt_page(session_id, page, make_active=True)
@@ -461,12 +578,22 @@ class ApiMonitorSessionManager:
 
         self._captures.pop(session_id, None)
         self._request_evidence.pop(session_id, None)
+        self._cdp_to_pw.pop(session_id, None)
+        self._action_anchors.pop(session_id, None)
         self._last_action_at.pop(session_id, None)
         self._stop_recording_tasks.pop(session_id, None)
         await self._stop_recording_drain_task(session_id)
         self._last_recording_tools.pop(session_id, None)
         self._last_recording_calls.pop(session_id, None)
-        self._session_pages.pop(session_id, None)
+        # Clean up frame-to-page mapping for all pages in this session
+        session_pages = self._session_pages.pop(session_id, [])
+        for page in session_pages:
+            try:
+                self._frame_to_page.pop(id(page.main_frame), None)
+                for frame in page.frames:
+                    self._frame_to_page.pop(id(frame), None)
+            except Exception:
+                pass
         self._listener_pages = {
             key for key in self._listener_pages
             if key[0] != session_id
@@ -650,11 +777,19 @@ class ApiMonitorSessionManager:
                 if not capture:
                     continue
                 calls = capture.drain_new_calls()
+                self._cleanup_stale_evidence(session_id, max_age_seconds=30)
                 if calls:
+                    # Link calls to the most recent action anchor
+                    anchors = self._action_anchors.get(session_id)
+                    if anchors:
+                        last_anchor = anchors[-1]
+                        last_anchor["call_ids"].extend(call.id for call in calls)
+
                     processing_task = asyncio.create_task(
                         self._process_captured_calls_for_generation(
                             session_id,
                             calls,
+                            action_context=self._last_action_context(session_id),
                             model_config=model_config,
                         )
                     )
@@ -857,6 +992,10 @@ class ApiMonitorSessionManager:
                     await self._process_captured_calls_for_generation(
                         session_id,
                         probed_calls,
+                        action_context={
+                            "action": "probe",
+                            "description": f"probe {elem.get('tag', '')} {elem.get('text', '')[:30]}",
+                        },
                         model_config=model_config,
                     )
                     yield {
@@ -1195,6 +1334,11 @@ class ApiMonitorSessionManager:
                             await self._process_captured_calls_for_generation(
                                 session_id,
                                 failed_step_calls,
+                                action_context={
+                                    "action": describe_action(allowed_action),
+                                    "description": allowed_action.description,
+                                    "page_url": observation.get("url", ""),
+                                },
                                 model_config=model_config,
                             )
                     try:
@@ -1290,6 +1434,11 @@ class ApiMonitorSessionManager:
                         page_url=observation.get("url", ""),
                         title=observation.get("title", ""),
                         dom_digest=observation.get("dom_digest", ""),
+                        action_context={
+                            "action": describe_action(allowed_action),
+                            "description": allowed_action.description,
+                            "page_url": observation.get("url", ""),
+                        },
                         model_config=model_config,
                     )
                     if run_history:
@@ -1739,6 +1888,14 @@ class ApiMonitorSessionManager:
         page.set_default_timeout(PAGE_TIMEOUT_MS)
         page.set_default_navigation_timeout(PAGE_TIMEOUT_MS)
 
+        # Maintain frame-to-page mapping for evidence lookup
+        try:
+            self._frame_to_page[id(page.main_frame)] = page
+            for frame in page.frames:
+                self._frame_to_page[id(frame)] = page
+        except Exception:
+            pass
+
         capture = self._captures.get(session_id)
         if capture:
             self._install_listeners(session_id, page, capture)
@@ -1760,6 +1917,13 @@ class ApiMonitorSessionManager:
             if page in current_pages:
                 current_pages.remove(page)
             self._listener_pages.discard((session_id, id(page)))
+            # Clean up frame-to-page mapping
+            try:
+                self._frame_to_page.pop(id(page.main_frame), None)
+                for frame in page.frames:
+                    self._frame_to_page.pop(id(frame), None)
+            except Exception:
+                pass
             if self._pages.get(session_id) is page:
                 fallback = current_pages[-1] if current_pages else None
                 if fallback is not None:
@@ -1800,6 +1964,7 @@ class ApiMonitorSessionManager:
         page_url: str = "",
         title: str = "",
         dom_digest: str = "",
+        action_context: Optional[Dict] = None,
     ) -> tuple[ApiToolGenerationCandidate, bool]:
         session = self._require_session(session_id)
         key = self._candidate_dedup_key(call)
@@ -1827,11 +1992,26 @@ class ApiMonitorSessionManager:
         if call.id not in candidate.sample_call_ids and len(candidate.sample_call_ids) < 5:
             candidate.sample_call_ids.append(call.id)
 
-        if not candidate.capture_dom_context and dom_context:
-            candidate.capture_dom_context = dom_context
-            candidate.capture_page_url = page_url
-            candidate.capture_title = title
-            candidate.capture_dom_digest = dom_digest
+        if dom_context and not created:
+            candidate.capture_dom_context = _merge_dom_context(
+                candidate.capture_dom_context or {},
+                dom_context,
+            )
+            if page_url:
+                candidate.capture_page_url = page_url
+            if title:
+                candidate.capture_title = title
+            if dom_digest:
+                candidate.capture_dom_digest = dom_digest
+
+        if action_context and added_call:
+            candidate.step_metadata.append({
+                "action": action_context.get("action", ""),
+                "action_description": action_context.get("description", ""),
+                "page_url": page_url or action_context.get("page_url", ""),
+                "call_count": 1,
+                "call_ids": [call.id],
+            })
 
         if added_call and not created and candidate.status in ("generated", "running"):
             candidate.status = "stale"
@@ -1976,6 +2156,16 @@ class ApiMonitorSessionManager:
         candidate.updated_at = datetime.now()
         dom_context = json.dumps(candidate.capture_dom_context, ensure_ascii=False, indent=2)
 
+        step_context = ""
+        if candidate.step_metadata:
+            lines = []
+            for sm in candidate.step_metadata[:5]:
+                lines.append(
+                    f"- 操作 '{sm.get('action_description', '')}' "
+                    f"在页面 {sm.get('page_url', '')} 触发了 {sm.get('call_count', 0)} 次调用"
+                )
+            step_context = "\n此 API 在以下操作中被观察到:\n" + "\n".join(lines)
+
         try:
             yaml_def = await generate_tool_definition(
                 method=candidate.method,
@@ -1983,6 +2173,7 @@ class ApiMonitorSessionManager:
                 samples=samples,
                 page_context=candidate.capture_page_url or session.target_url or "",
                 dom_context=dom_context,
+                step_context=step_context,
                 model_config=model_config,
             )
         except Exception as exc:
@@ -2029,7 +2220,10 @@ class ApiMonitorSessionManager:
             tool.source_calls = [call.id for call in samples]
             tool.updated_at = datetime.now()
 
-        tool = _apply_confidence_to_tool(tool, samples)
+        tool = _apply_confidence_to_tool(
+            tool, samples,
+            action_context=candidate.step_metadata[-1] if candidate.step_metadata else None,
+        )
         new_tools = [tool]
         self._dedup_session_tools(session_id, new_tools)
 
@@ -2080,6 +2274,7 @@ class ApiMonitorSessionManager:
         page_url: str = "",
         title: str = "",
         dom_digest: str = "",
+        action_context: Optional[Dict] = None,
         model_config: Optional[Dict] = None,
     ) -> list[ApiToolGenerationCandidate]:
         if not calls:
@@ -2110,6 +2305,7 @@ class ApiMonitorSessionManager:
                 page_url=page_url,
                 title=title,
                 dom_digest=dom_digest,
+                action_context=action_context,
             )
             event_name = "api_candidate_created" if _created else "api_candidate_updated"
             self._emit_analysis_event(session_id, event_name, self._candidate_event_payload(candidate))
@@ -2217,56 +2413,256 @@ class ApiMonitorSessionManager:
     def _mark_action(self, session_id: str) -> None:
         self._last_action_at[session_id] = time.monotonic()
 
+    async def _handle_user_action(self, session_id: str, event_json: str) -> None:
+        try:
+            evt = json.loads(event_json)
+        except (json.JSONDecodeError, TypeError):
+            return
+
+        action_type = evt.get("action", "")
+        if action_type not in ("click", "fill", "press", "navigate", "submit"):
+            return
+
+        self._mark_action(session_id)
+
+        target = evt.get("target") or {}
+        self._action_anchors.setdefault(session_id, []).append({
+            "action": action_type,
+            "description": (target.get("text") or target.get("tag") or "")[:80],
+            "timestamp": time.monotonic(),
+            "page_url": evt.get("url", ""),
+            "frame_path": evt.get("frame_path", []),
+            "call_ids": [],
+        })
+
+        # Cap anchors at 100 to bound memory
+        anchors = self._action_anchors.get(session_id, [])
+        if len(anchors) > 100:
+            self._action_anchors[session_id] = anchors[-100:]
+
+        logger.info(
+            "[ApiMonitor] User action for session %s: %s %s",
+            session_id, action_type, (target.get("text") or "")[:40],
+        )
+
+    def _last_action_context(self, session_id: str) -> Optional[Dict]:
+        anchors = self._action_anchors.get(session_id)
+        if not anchors:
+            return None
+        last = anchors[-1]
+        return {
+            "action": last.get("action", ""),
+            "description": last.get("description", ""),
+            "page_url": last.get("page_url", ""),
+        }
+
+    async def _install_user_action_capture(self, session_id: str, context) -> None:
+        async def on_user_action(source, event_json: str):
+            await self._handle_user_action(session_id, event_json)
+
+        try:
+            await context.expose_binding("__apiMonitorAction", on_user_action, handle=False)
+            await context.add_init_script(_USER_ACTION_CAPTURE_JS)
+        except Exception as exc:
+            logger.debug("[ApiMonitor] User action capture install failed: %s", exc)
+
     def _action_window_matched(self, session_id: str, window_seconds: float = 2.0) -> bool:
         last_action_at = self._last_action_at.get(session_id)
         return last_action_at is not None and (time.monotonic() - last_action_at) <= window_seconds
 
     def _evidence_for_request(self, session_id: str, request) -> Dict:
-        by_url = self._request_evidence.get(session_id, {})
-        evidence = dict(by_url.get(request.url) or {})
+        pw_id = id(request)
+        by_cdp = self._request_evidence.get(session_id, {})
+        evidence: Dict = {}
+
+        # Try to find CDP evidence by matching linked request ID
+        cdp_map = self._cdp_to_pw.get(session_id, {})
+        match_path = "miss"
+        for cdp_id, stored_pw_id in cdp_map.items():
+            if stored_pw_id == pw_id:
+                evidence = dict(by_cdp.get(cdp_id, {}))
+                match_path = "linked"
+                break
+
+        # Fallback: find by URL+method match among unlinked CDP evidence
+        if not evidence:
+            request_url = getattr(request, "url", "")
+            request_method = (getattr(request, "method", "GET") or "GET").upper()
+            for cdp_id, cdp_ev in by_cdp.items():
+                if (cdp_ev.get("_cdp_url") == request_url
+                        and cdp_ev.get("_cdp_method") == request_method
+                        and cdp_id not in cdp_map):
+                    evidence = dict(cdp_ev)
+                    # Link this CDP entry to the current Playwright request
+                    cdp_map[cdp_id] = pw_id
+                    match_path = "fallback"
+                    break
+
         evidence.setdefault("frame_url", self.sessions.get(session_id).target_url if self.sessions.get(session_id) else "")
         evidence["action_window_matched"] = self._action_window_matched(session_id)
+        logger.debug(
+            "[ApiMonitor] Evidence lookup: session=%s path=%s cdp_entries=%d initiator=%s url=%s",
+            session_id, match_path, len(by_cdp),
+            "found" if evidence.get("initiator_urls") else "empty",
+            getattr(request, "url", "")[:80],
+        )
         return evidence
+
+    def _retry_sync_evidence(
+        self,
+        session_id: str,
+        request_url: str,
+        request_method: str,
+        frame_url: str = "",
+    ) -> Dict:
+        """Second-chance lookup of CDP evidence for requests where the initial
+        _evidence_for_request call missed because CDP event arrived late."""
+        by_cdp = self._request_evidence.get(session_id, {})
+        if not by_cdp:
+            logger.debug("[ApiMonitor] Retry evidence: no CDP evidence for session=%s", session_id)
+            return {}
+
+        method_upper = request_method.upper()
+        for cdp_id, cdp_ev in by_cdp.items():
+            if cdp_id in self._cdp_to_pw.get(session_id, {}):
+                continue
+            if (cdp_ev.get("_cdp_url") == request_url
+                    and cdp_ev.get("_cdp_method") == method_upper):
+                if frame_url and cdp_ev.get("frame_url") != frame_url:
+                    logger.debug(
+                        "[ApiMonitor] Retry evidence: frame_url mismatch for %s (expected=%s got=%s)",
+                        request_url[:80], frame_url[:60], cdp_ev.get("frame_url", "")[:60],
+                    )
+                    continue
+                # Update the actual _cdp_to_pw mapping
+                self._cdp_to_pw[session_id][cdp_id] = 0
+                result = dict(cdp_ev)
+                result.pop("_cdp_url", None)
+                result.pop("_cdp_method", None)
+                result.pop("_stored_at", None)
+                logger.info(
+                    "[ApiMonitor] Retry evidence: HIT session=%s url=%s initiator=%s",
+                    session_id, request_url[:80], cdp_ev.get("initiator_type", "?"),
+                )
+                return result
+        logger.debug(
+            "[ApiMonitor] Retry evidence: MISS session=%s url=%s method=%s (checked %d entries)",
+            session_id, request_url[:80], method_upper, len(by_cdp),
+        )
+        return {}
+
+    def _cleanup_request_evidence(self, session_id: str, cdp_request_id: str) -> None:
+        self._request_evidence.get(session_id, {}).pop(cdp_request_id, None)
+        self._cdp_to_pw.get(session_id, {}).pop(cdp_request_id, None)
+
+    def _cleanup_evidence_by_request_id(self, session_id: str, pw_request_id: str) -> None:
+        """Clean up CDP evidence linked to a Playwright request ID (string form of id())."""
+        cdp_map = self._cdp_to_pw.get(session_id, {})
+        cdp_ids = [cdp_id for cdp_id, stored_pw_id in cdp_map.items()
+                    if str(stored_pw_id) == pw_request_id]
+        for cdp_id in cdp_ids:
+            self._cleanup_request_evidence(session_id, cdp_id)
+
+    def _cleanup_stale_evidence(self, session_id: str, max_age_seconds: float = 30) -> int:
+        """Remove CDP evidence entries older than max_age_seconds. Returns count removed."""
+        by_cdp = self._request_evidence.get(session_id, {})
+        if not by_cdp:
+            return 0
+        now = time.monotonic()
+        stale_ids = [
+            cdp_id for cdp_id, ev in by_cdp.items()
+            if ev.get("_stored_at") and (now - ev["_stored_at"]) > max_age_seconds
+        ]
+        for cdp_id in stale_ids:
+            self._cleanup_request_evidence(session_id, cdp_id)
+        if stale_ids:
+            logger.debug(
+                "[ApiMonitor] Cleaned %d stale evidence entries for session=%s",
+                len(stale_ids), session_id,
+            )
+        return len(stale_ids)
 
     async def _install_source_evidence_capture(self, session_id: str, context, page: Page) -> None:
         try:
             cdp = await context.new_cdp_session(page)
             await cdp.send("Network.enable")
+            logger.info(
+                "[ApiMonitor] CDP evidence capture installed: session=%s page=%s",
+                session_id, page.url[:80],
+            )
 
             def on_request_will_be_sent(event: Dict) -> None:
                 request = event.get("request") or {}
                 url = request.get("url") or ""
+                cdp_req_id = event.get("requestId") or ""
                 if not url:
                     return
                 evidence = _initiator_to_evidence(event.get("initiator") or {})
                 evidence["frame_url"] = page.url
-                self._request_evidence.setdefault(session_id, {})[url] = evidence
+                evidence["_cdp_url"] = url
+                evidence["_cdp_method"] = (request.get("method") or "GET").upper()
+                evidence["_stored_at"] = time.monotonic()
+                self._request_evidence.setdefault(session_id, {})[cdp_req_id] = evidence
+                logger.debug(
+                    "[ApiMonitor] CDP evidence stored: session=%s cdp_id=%s url=%s initiator=%s",
+                    session_id, cdp_req_id[:16], url[:80], evidence.get("initiator_type", "?"),
+                )
 
             cdp.on("Network.requestWillBeSent", on_request_will_be_sent)
         except Exception as exc:
-            logger.debug("[ApiMonitor] CDP source evidence capture unavailable: %s", exc)
+            logger.warning(
+                "[ApiMonitor] CDP source evidence capture unavailable: session=%s %s",
+                session_id, exc,
+            )
 
         try:
             await page.add_init_script(_FETCH_XHR_STACK_CAPTURE_JS)
         except Exception as exc:
-            logger.debug("[ApiMonitor] Fetch/XHR stack capture injection failed: %s", exc)
+            logger.warning(
+                "[ApiMonitor] Fetch/XHR stack capture injection failed: session=%s %s",
+                session_id, exc,
+            )
 
     async def _async_evidence_for_request(self, session_id: str, request) -> Dict:
-        page = self._pages.get(session_id)
+        # Resolve the correct page from request's frame, not the active page
+        frame = getattr(request, 'frame', None)
+        page = self._frame_to_page.get(id(frame)) if frame else None
+        page = page or self._pages.get(session_id)
         if not page:
+            logger.debug("[ApiMonitor] Async evidence: no page for session=%s", session_id)
             return {}
-        stack_record = await page.evaluate(
-            """({url, method}) => {
-              const records = window.__apiMonitorStacks || [];
-              for (let i = records.length - 1; i >= 0; i--) {
-                const item = records[i];
-                if (item.url === url && item.method === method.toUpperCase()) return item;
-              }
-              return null;
-            }""",
-            {"url": request.url, "method": request.method},
-        )
+
+        js_code = """({url, method}) => {
+          const records = window.__apiMonitorStacks || [];
+          for (let i = records.length - 1; i >= 0; i--) {
+            const item = records[i];
+            if (item.url === url && item.method === method.toUpperCase()) return item;
+          }
+          return null;
+        }"""
+        args = {"url": request.url, "method": request.method}
+
+        stack_record = None
+        for attempt in range(2):
+            try:
+                stack_record = await page.evaluate(js_code, args)
+            except Exception as exc:
+                logger.debug("[ApiMonitor] Async evidence: page.evaluate failed (attempt %d): %s", attempt + 1, exc)
+                break
+            if stack_record:
+                break
+            if attempt == 0:
+                logger.debug(
+                    "[ApiMonitor] Async evidence: no stack record for %s %s, retrying in 50ms",
+                    request.method, request.url[:80],
+                )
+                await asyncio.sleep(0.05)
+
         if not stack_record:
+            logger.debug(
+                "[ApiMonitor] Async evidence: no stack found for %s %s after retry",
+                request.method, request.url[:80],
+            )
             return {}
         return {
             "js_stack_urls": _stack_to_urls(stack_record.get("stack") or ""),

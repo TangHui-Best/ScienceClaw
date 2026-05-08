@@ -54,7 +54,11 @@ class ConfidenceResult:
     breakdown: dict[str, int]
 
 
-def score_api_candidate(calls: list[CapturedApiCall]) -> ConfidenceResult:
+def score_api_candidate(
+    calls: list[CapturedApiCall],
+    *,
+    action_context: dict | None = None,
+) -> ConfidenceResult:
     first = calls[0]
     evidence = _merge_evidence(calls)
     reasons: list[str] = []
@@ -82,6 +86,12 @@ def score_api_candidate(calls: list[CapturedApiCall]) -> ConfidenceResult:
         reasons.append("由用户动作触发")
     else:
         breakdown["action_window"] = 0
+
+    if action_context:
+        score += 15
+        breakdown["confirmed_user_action"] = 15
+        desc = action_context.get("description", "")
+        reasons.append(f"由用户操作确认触发: {desc}" if desc else "由用户操作确认触发")
 
     if business_path:
         score += 25

@@ -165,12 +165,16 @@ class NetworkCaptureEngine:
         page_url_provider: Optional[Callable[[], str]] = None,
         evidence_provider: Optional[Callable[[object], Dict]] = None,
         async_evidence_provider: Optional[Callable[[object], Awaitable[Dict]]] = None,
+        evidence_retry_provider: Optional[Callable[[str, str, str], Dict]] = None,
+        evidence_cleanup_provider: Optional[Callable[[str], None]] = None,
     ) -> None:
         self._in_flight: Dict[int, Dict] = {}
         self._captured_calls: List[CapturedApiCall] = []
         self._page_url_provider = page_url_provider
         self._evidence_provider = evidence_provider
         self._async_evidence_provider = async_evidence_provider
+        self._evidence_retry_provider = evidence_retry_provider
+        self._evidence_cleanup_provider = evidence_cleanup_provider
         # Optional callback invoked when a request/response is captured or skipped.
         # Signature: (level: str, message: str) -> None
         self.on_log: Optional[Callable[[str, str], None]] = None
@@ -226,6 +230,7 @@ class NetworkCaptureEngine:
             content_type=content_type,
             timestamp=datetime.now(),
             resource_type=request.resource_type,
+            frame_url=page_url,
         )
 
         source_evidence = self._source_evidence(request)
@@ -306,6 +311,25 @@ class NetworkCaptureEngine:
         )
 
         source_evidence: Dict = dict(info.get("source_evidence") or {})
+
+        # Retry CDP evidence lookup if initiator info was missed during on_request
+        if not source_evidence.get("initiator_urls") and self._evidence_retry_provider:
+            try:
+                retry = self._evidence_retry_provider(
+                    captured_req.url,
+                    captured_req.method,
+                    captured_req.frame_url or "",
+                )
+                if retry.get("initiator_urls"):
+                    source_evidence.update(retry)
+                    logger.debug(
+                        "[ApiMonitor] Retry evidence filled initiator_urls for %s %s",
+                        captured_req.method,
+                        captured_req.url[:80],
+                    )
+            except Exception as exc:
+                logger.debug("[ApiMonitor] Retry evidence lookup failed: %s", exc)
+
         async_evidence = await self._async_source_evidence(req)
         for key, value in async_evidence.items():
             if key in ("initiator_urls", "js_stack_urls"):
@@ -316,6 +340,13 @@ class NetworkCaptureEngine:
             elif value and not source_evidence.get(key):
                 source_evidence[key] = value
 
+        # Clean up CDP evidence for this request
+        if self._evidence_cleanup_provider:
+            try:
+                self._evidence_cleanup_provider(captured_req.request_id)
+            except Exception:
+                pass
+
         call = CapturedApiCall(
             request=captured_req,
             response=captured_resp,
@@ -325,12 +356,16 @@ class NetworkCaptureEngine:
         )
 
         self._captured_calls.append(call)
+        init_count = len(source_evidence.get("initiator_urls", []))
+        stack_count = len(source_evidence.get("js_stack_urls", []))
         logger.info(
-            "[ApiMonitor] Captured %s %s -> %d (%.0fms)",
+            "[ApiMonitor] Captured %s %s -> %d (%.0fms) evidence:init=%d,stack=%d",
             captured_req.method,
             captured_req.url[:80],
             response.status,
             duration_ms,
+            init_count,
+            stack_count,
         )
         if self.on_log:
             status_label = response.status

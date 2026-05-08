@@ -26,6 +26,7 @@ class CapturedRequest(BaseModel):
     content_type: Optional[str] = None
     timestamp: datetime
     resource_type: str  # "xhr" or "fetch"
+    frame_url: Optional[str] = None
 
 
 class CapturedResponse(BaseModel):
@@ -104,6 +105,7 @@ class ApiToolGenerationCandidate(BaseModel):
     capture_page_url: str = ""
     capture_title: str = ""
     capture_dom_digest: str = ""
+    step_metadata: List[Dict] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
 
