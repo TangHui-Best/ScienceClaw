@@ -216,6 +216,73 @@ class McpSdkRuntime:
         return _normalize_mcp_result(result)
 
 
+def _execute_openapi_request(
+    doc: Mapping[str, Any],
+    arguments: Mapping[str, Any],
+    base_url: str,
+) -> dict[str, Any]:
+    """Build request components from OpenAPI parameters."""
+    openapi_params = doc.get("openapi_parameters", [])
+    known_params = {p.get("name") for p in openapi_params if isinstance(p, dict)}
+
+    query_params: dict[str, Any] = {}
+    path_params: dict[str, Any] = {}
+    body_data: dict[str, Any] = {}
+    header_params: dict[str, Any] = {}
+
+    for param in openapi_params:
+        if not isinstance(param, dict):
+            continue
+        pname = param.get("name", "")
+        location = param.get("in", "query")
+        value = arguments.get(pname)
+
+        if value is None:
+            continue
+
+        if location == "query":
+            query_params[pname] = value
+        elif location == "path":
+            path_params[pname] = value
+        elif location == "header":
+            header_params[pname] = value
+        elif location == "body":
+            if isinstance(value, dict):
+                body_data.update(value)
+            else:
+                body_data[pname] = value
+
+    # Handle extra arguments not in OpenAPI spec
+    extra_args = {k: v for k, v in arguments.items() if k not in known_params and k != "_auth"}
+    method = str(doc.get("method", "GET")).upper()
+    if extra_args:
+        if method in ("GET", "DELETE"):
+            query_params.update(extra_args)
+        else:
+            body_data.update(extra_args)
+
+    # Build URL with path parameters
+    url_pattern = str(doc.get("url", ""))
+    url = url_pattern
+    for pname, pvalue in path_params.items():
+        url = url.replace("{" + pname + "}", str(pvalue))
+
+    # Resolve against base_url
+    if url.startswith(("http://", "https://")):
+        final_url = url
+    elif not base_url:
+        final_url = ""
+    else:
+        final_url = urljoin(base_url.rstrip("/") + "/", url.lstrip("/"))
+
+    return {
+        "url": final_url,
+        "query": query_params,
+        "body": body_data,
+        "headers": header_params,
+    }
+
+
 class ApiMonitorMcpRuntime:
     def __init__(
         self,
@@ -254,25 +321,34 @@ class ApiMonitorMcpRuntime:
         method = str(doc.get("method") or "GET").upper()
         rendered_arguments = dict(arguments)
         rendered_arguments.pop("_auth", None)
-
-        # Resolve mappings: use stored mappings if present, otherwise auto-derive from input_schema.
-        query_mapping = doc.get("query_mapping") or {}
-        body_mapping = doc.get("body_mapping") or {}
-        header_mapping = doc.get("header_mapping") or {}
-        path_mapping = doc.get("path_mapping") or {}
-        has_explicit_mapping = query_mapping or body_mapping or header_mapping or path_mapping
-
-        if not has_explicit_mapping:
-            query_mapping, body_mapping, header_mapping, path_mapping = _auto_derive_mappings(
-                method, doc.get("input_schema") or {},
-            )
+        has_openapi = bool(doc.get("openapi_parameters"))
 
         request_base_url = _api_monitor_request_base_url(self._server, doc)
-        url = _build_api_monitor_url(
-            request_base_url,
-            _api_monitor_tool_url(doc),
-            rendered_arguments,
-        )
+
+        if has_openapi:
+            req_parts = _execute_openapi_request(doc, rendered_arguments, request_base_url)
+            url = req_parts["url"]
+            query_mapping = req_parts["query"]
+            body_mapping = req_parts["body"]
+            header_mapping = req_parts["headers"]
+        else:
+            # Resolve mappings: use stored mappings if present, otherwise auto-derive from input_schema.
+            query_mapping = doc.get("query_mapping") or {}
+            body_mapping = doc.get("body_mapping") or {}
+            header_mapping = doc.get("header_mapping") or {}
+            path_mapping = doc.get("path_mapping") or {}
+            has_explicit_mapping = query_mapping or body_mapping or header_mapping or path_mapping
+
+            if not has_explicit_mapping:
+                query_mapping, body_mapping, header_mapping, path_mapping = _auto_derive_mappings(
+                    method, doc.get("input_schema") or {},
+                )
+
+            url = _build_api_monitor_url(
+                request_base_url,
+                _api_monitor_tool_url(doc),
+                rendered_arguments,
+            )
         if not url:
             return {"success": False, "error": f"API Monitor tool '{tool_name}' has no callable URL"}
 
