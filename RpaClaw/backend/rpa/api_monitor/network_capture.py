@@ -356,12 +356,16 @@ class NetworkCaptureEngine:
         )
 
         self._captured_calls.append(call)
+        init_count = len(source_evidence.get("initiator_urls", []))
+        stack_count = len(source_evidence.get("js_stack_urls", []))
         logger.info(
-            "[ApiMonitor] Captured %s %s -> %d (%.0fms)",
+            "[ApiMonitor] Captured %s %s -> %d (%.0fms) evidence:init=%d,stack=%d",
             captured_req.method,
             captured_req.url[:80],
             response.status,
             duration_ms,
+            init_count,
+            stack_count,
         )
         if self.on_log:
             status_label = response.status
