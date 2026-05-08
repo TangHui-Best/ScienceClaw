@@ -85,13 +85,14 @@ class ApiMonitorToolContract:
 
 
 def parse_api_monitor_tool_yaml(yaml_definition: str) -> ApiMonitorToolContract:
+    """Parse an OpenAPI 2.0 spec (or legacy format) into a tool contract."""
     try:
         parsed = yaml.safe_load(yaml_definition) or {}
     except Exception as exc:  # noqa: BLE001
         return ApiMonitorToolContract(
             valid=False,
             yaml_definition=yaml_definition,
-            validation_errors=[f"YAML parse error: {exc}"],
+            validation_errors=[f"Invalid YAML: {exc}"],
         )
 
     if not isinstance(parsed, dict):
@@ -102,17 +103,81 @@ def parse_api_monitor_tool_yaml(yaml_definition: str) -> ApiMonitorToolContract:
             validation_errors=["YAML root must be an object"],
         )
 
+    # Detect OpenAPI 2.0 format
+    if parsed.get("swagger") == "2.0":
+        return _parse_openapi_2_spec(parsed, yaml_definition)
+
+    # Fallback: legacy format parsing
+    return _parse_legacy_format(parsed, yaml_definition)
+
+
+def _parse_openapi_2_spec(data: dict, yaml_str: str) -> ApiMonitorToolContract:
+    """Parse a standard OpenAPI 2.0 specification."""
+    paths = data.get("paths")
+    if not paths or not isinstance(paths, dict):
+        return ApiMonitorToolContract(valid=False, validation_errors=["OpenAPI spec must have paths"], yaml_definition=yaml_str)
+    if len(paths) != 1:
+        return ApiMonitorToolContract(valid=False, validation_errors=["OpenAPI spec must have exactly one path"], yaml_definition=yaml_str)
+
+    path_url = next(iter(paths))
+    path_item = paths[path_url]
+    if not isinstance(path_item, dict):
+        return ApiMonitorToolContract(valid=False, validation_errors=["Path item must be a mapping"], yaml_definition=yaml_str)
+
+    http_methods = [m for m in ("get", "post", "put", "patch", "delete", "head", "options") if m in path_item]
+    if len(http_methods) != 1:
+        return ApiMonitorToolContract(valid=False, validation_errors=["Path must have exactly one HTTP method"], yaml_definition=yaml_str)
+
+    method = http_methods[0].upper()
+    operation = path_item[http_methods[0]]
+
+    name = str(operation.get("operationId", "")).strip()
+    description = str(operation.get("summary", "") or data.get("info", {}).get("description", "")).strip()
+    parameters = operation.get("parameters", [])
+
     errors: list[str] = []
-    name = _string_value(parsed.get("name"))
-    description = _string_value(parsed.get("description"))
-    method = _string_value(parsed.get("method")).upper()
-    url = _string_value(parsed.get("url"))
+    if not name:
+        errors.append("operationId is required")
+    if name and not TOOL_NAME_RE.match(name):
+        errors.append(f"Invalid operationId: {name!r}")
+
+    input_schema = _build_input_schema_from_openapi_params(parameters)
+    response_schema = _extract_openapi_response_schema(operation.get("responses", {}))
+
+    if errors:
+        return ApiMonitorToolContract(
+            valid=False, yaml_definition=yaml_str, name=name, description=description,
+            method=method, url=path_url, validation_errors=errors,
+        )
+
+    return ApiMonitorToolContract(
+        valid=True,
+        yaml_definition=yaml_str,
+        name=name,
+        description=description,
+        method=method,
+        url=path_url,
+        input_schema=input_schema,
+        response_schema=response_schema,
+        openapi_spec=data,
+        openapi_parameters=parameters,
+        raw_definition=data,
+    )
+
+
+def _parse_legacy_format(data: dict, yaml_str: str) -> ApiMonitorToolContract:
+    """Parse the legacy (pre-OpenAPI) YAML format for backward compatibility."""
+    errors: list[str] = []
+
+    name = _string_value(data.get("name"))
+    description = _string_value(data.get("description"))
+    method = _string_value(data.get("method")).upper()
+    url = _string_value(data.get("url"))
 
     if not name:
         errors.append("name is required")
     elif not TOOL_NAME_RE.match(name):
         errors.append("name must match ^[A-Za-z_][A-Za-z0-9_]*$")
-
     if not description:
         errors.append("description is required")
     if not method:
@@ -122,9 +187,9 @@ def parse_api_monitor_tool_yaml(yaml_definition: str) -> ApiMonitorToolContract:
     if not url:
         errors.append("url is required")
 
-    parameters_raw = parsed.get("parameters")
+    parameters_raw = data.get("parameters")
     parameters = _as_dict(parameters_raw)
-    input_schema = parameters
+    input_schema: dict[str, Any] = parameters
     properties = _as_dict(parameters.get("properties")) if parameters else {}
     if parameters_raw is None:
         errors.append("parameters is required")
@@ -135,7 +200,7 @@ def parse_api_monitor_tool_yaml(yaml_definition: str) -> ApiMonitorToolContract:
     if parameters and not isinstance(parameters.get("properties"), dict):
         errors.append("parameters.properties must be an object")
 
-    request_raw = parsed.get("request")
+    request_raw = data.get("request")
     request: dict[str, Any] = {}
     if request_raw is None:
         pass
@@ -183,9 +248,9 @@ def parse_api_monitor_tool_yaml(yaml_definition: str) -> ApiMonitorToolContract:
     errors.extend(body_errors)
     errors.extend(headers_errors)
 
-    response_raw = parsed.get("response")
+    response_raw = data.get("response")
     if response_raw is None:
-        response_schema = {}
+        response_schema: dict[str, Any] = {}
     elif isinstance(response_raw, dict):
         response_schema = response_raw
     else:
@@ -194,7 +259,7 @@ def parse_api_monitor_tool_yaml(yaml_definition: str) -> ApiMonitorToolContract:
 
     return ApiMonitorToolContract(
         valid=not errors,
-        yaml_definition=yaml_definition,
+        yaml_definition=yaml_str,
         name=name,
         description=description,
         method=method,
@@ -206,8 +271,83 @@ def parse_api_monitor_tool_yaml(yaml_definition: str) -> ApiMonitorToolContract:
         body_mapping=body_mapping,
         header_mapping=header_mapping,
         validation_errors=errors,
-        raw_definition=parsed,
+        raw_definition=data,
     )
+
+
+def _build_input_schema_from_openapi_params(parameters: list) -> dict:
+    """Convert OpenAPI 2.0 parameters list to JSON Schema input_schema."""
+    properties: dict[str, Any] = {}
+    required: list[str] = []
+
+    for param in parameters:
+        if not isinstance(param, dict):
+            continue
+        pname = param.get("name", "")
+        location = param.get("in", "")
+
+        if location == "body" and "schema" in param:
+            body_schema = param["schema"]
+            if isinstance(body_schema, dict):
+                for prop_name, prop_def in body_schema.get("properties", {}).items():
+                    properties[prop_name] = _openapi_prop_to_json_schema(prop_def)
+                required.extend(body_schema.get("required", []))
+        else:
+            prop: dict[str, Any] = {}
+            ptype = param.get("type", "string")
+            if ptype == "integer":
+                prop["type"] = "integer"
+            elif ptype == "number":
+                prop["type"] = "number"
+            elif ptype == "boolean":
+                prop["type"] = "boolean"
+            elif ptype == "array":
+                prop["type"] = "array"
+                if "items" in param:
+                    prop["items"] = param["items"]
+            else:
+                prop["type"] = "string"
+            if param.get("description"):
+                prop["description"] = param["description"]
+            if "default" in param:
+                prop["default"] = param["default"]
+            if param.get("enum"):
+                prop["enum"] = param["enum"]
+            properties[pname] = prop
+            if param.get("required"):
+                required.append(pname)
+
+    schema: dict[str, Any] = {"type": "object", "properties": properties}
+    if required:
+        schema["required"] = required
+    return schema
+
+
+def _openapi_prop_to_json_schema(prop_def: Any) -> dict:
+    """Convert a single OpenAPI property definition to JSON Schema."""
+    if not isinstance(prop_def, dict):
+        return {"type": "string"}
+    result: dict[str, Any] = {"type": prop_def.get("type", "string")}
+    if "description" in prop_def:
+        result["description"] = prop_def["description"]
+    if "default" in prop_def:
+        result["default"] = prop_def["default"]
+    if "enum" in prop_def:
+        result["enum"] = prop_def["enum"]
+    if "items" in prop_def:
+        result["items"] = prop_def["items"]
+    if "properties" in prop_def:
+        result["properties"] = prop_def["properties"]
+    return result
+
+
+def _extract_openapi_response_schema(responses: dict) -> dict:
+    """Extract the response schema from OpenAPI responses section."""
+    for status_code in ("200", "201", "default"):
+        resp = responses.get(status_code, {})
+        if isinstance(resp, dict) and "schema" in resp:
+            return dict(resp["schema"])
+    return {}
 
 
 def render_template_value(value: Any, arguments: dict[str, Any] | Any) -> Any:
