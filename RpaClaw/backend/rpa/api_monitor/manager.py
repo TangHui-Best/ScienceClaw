@@ -776,6 +776,7 @@ class ApiMonitorSessionManager:
                         self._process_captured_calls_for_generation(
                             session_id,
                             calls,
+                            action_context=self._last_action_context(session_id),
                             model_config=model_config,
                         )
                     )
@@ -978,6 +979,10 @@ class ApiMonitorSessionManager:
                     await self._process_captured_calls_for_generation(
                         session_id,
                         probed_calls,
+                        action_context={
+                            "action": "probe",
+                            "description": f"probe {elem.get('tag', '')} {elem.get('text', '')[:30]}",
+                        },
                         model_config=model_config,
                     )
                     yield {
@@ -1316,6 +1321,11 @@ class ApiMonitorSessionManager:
                             await self._process_captured_calls_for_generation(
                                 session_id,
                                 failed_step_calls,
+                                action_context={
+                                    "action": describe_action(allowed_action),
+                                    "description": allowed_action.description,
+                                    "page_url": observation.get("url", ""),
+                                },
                                 model_config=model_config,
                             )
                     try:
@@ -1411,6 +1421,11 @@ class ApiMonitorSessionManager:
                         page_url=observation.get("url", ""),
                         title=observation.get("title", ""),
                         dom_digest=observation.get("dom_digest", ""),
+                        action_context={
+                            "action": describe_action(allowed_action),
+                            "description": allowed_action.description,
+                            "page_url": observation.get("url", ""),
+                        },
                         model_config=model_config,
                     )
                     if run_history:
@@ -1936,6 +1951,7 @@ class ApiMonitorSessionManager:
         page_url: str = "",
         title: str = "",
         dom_digest: str = "",
+        action_context: Optional[Dict] = None,
     ) -> tuple[ApiToolGenerationCandidate, bool]:
         session = self._require_session(session_id)
         key = self._candidate_dedup_key(call)
@@ -1974,6 +1990,15 @@ class ApiMonitorSessionManager:
                 candidate.capture_title = title
             if dom_digest:
                 candidate.capture_dom_digest = dom_digest
+
+        if action_context and added_call:
+            candidate.step_metadata.append({
+                "action": action_context.get("action", ""),
+                "action_description": action_context.get("description", ""),
+                "page_url": page_url or action_context.get("page_url", ""),
+                "call_count": 1,
+                "call_ids": [call.id],
+            })
 
         if added_call and not created and candidate.status in ("generated", "running"):
             candidate.status = "stale"
@@ -2118,6 +2143,16 @@ class ApiMonitorSessionManager:
         candidate.updated_at = datetime.now()
         dom_context = json.dumps(candidate.capture_dom_context, ensure_ascii=False, indent=2)
 
+        step_context = ""
+        if candidate.step_metadata:
+            lines = []
+            for sm in candidate.step_metadata[:5]:
+                lines.append(
+                    f"- 操作 '{sm.get('action_description', '')}' "
+                    f"在页面 {sm.get('page_url', '')} 触发了 {sm.get('call_count', 0)} 次调用"
+                )
+            step_context = "\n此 API 在以下操作中被观察到:\n" + "\n".join(lines)
+
         try:
             yaml_def = await generate_tool_definition(
                 method=candidate.method,
@@ -2125,6 +2160,7 @@ class ApiMonitorSessionManager:
                 samples=samples,
                 page_context=candidate.capture_page_url or session.target_url or "",
                 dom_context=dom_context,
+                step_context=step_context,
                 model_config=model_config,
             )
         except Exception as exc:
@@ -2171,7 +2207,10 @@ class ApiMonitorSessionManager:
             tool.source_calls = [call.id for call in samples]
             tool.updated_at = datetime.now()
 
-        tool = _apply_confidence_to_tool(tool, samples)
+        tool = _apply_confidence_to_tool(
+            tool, samples,
+            action_context=candidate.step_metadata[-1] if candidate.step_metadata else None,
+        )
         new_tools = [tool]
         self._dedup_session_tools(session_id, new_tools)
 
@@ -2222,6 +2261,7 @@ class ApiMonitorSessionManager:
         page_url: str = "",
         title: str = "",
         dom_digest: str = "",
+        action_context: Optional[Dict] = None,
         model_config: Optional[Dict] = None,
     ) -> list[ApiToolGenerationCandidate]:
         if not calls:
@@ -2252,6 +2292,7 @@ class ApiMonitorSessionManager:
                 page_url=page_url,
                 title=title,
                 dom_digest=dom_digest,
+                action_context=action_context,
             )
             event_name = "api_candidate_created" if _created else "api_candidate_updated"
             self._emit_analysis_event(session_id, event_name, self._candidate_event_payload(candidate))

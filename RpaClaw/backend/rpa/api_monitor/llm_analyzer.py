@@ -105,6 +105,8 @@ Page context: {page_context}
 
 {dom_context_section}
 
+{step_context_section}
+
 API call samples:
 {samples_json}
 
@@ -181,6 +183,7 @@ async def generate_tool_definition(
     samples: List[CapturedApiCall],
     page_context: str = "",
     dom_context: str = "",
+    step_context: str = "",
     model_config: Optional[Dict] = None,
 ) -> str:
     """Generate an OpenAI YAML tool definition from captured API call samples.
@@ -212,11 +215,16 @@ async def generate_tool_definition(
     if dom_context:
         dom_context_section = f"DOM context (form structure):\n{dom_context}"
 
+    step_context_section = ""
+    if step_context:
+        step_context_section = f"Observed context:{step_context}"
+
     user_prompt = TOOL_GEN_USER.format(
         method=method,
         url_pattern=url_pattern,
         page_context=page_context or "Unknown page",
         dom_context_section=dom_context_section,
+        step_context_section=step_context_section,
         samples_json=json.dumps(sample_data, indent=2, ensure_ascii=False),
     )
 
