@@ -46,6 +46,10 @@ class ApiMonitorToolContract:
     url: str = ""
     input_schema: dict[str, Any] = field(default_factory=dict)
     response_schema: dict[str, Any] = field(default_factory=dict)
+    # OpenAPI 2.0 native fields
+    openapi_spec: dict[str, Any] = field(default_factory=dict)
+    openapi_parameters: list[dict[str, Any]] = field(default_factory=list)
+    # Legacy mapping fields (kept for backward compat with old DB docs)
     path_mapping: dict[str, Any] = field(default_factory=dict)
     query_mapping: dict[str, Any] = field(default_factory=dict)
     body_mapping: dict[str, Any] = field(default_factory=dict)
@@ -54,22 +58,30 @@ class ApiMonitorToolContract:
     raw_definition: Any = field(default_factory=dict)
 
     def to_document(self) -> dict[str, Any]:
-        return {
-            "yaml_definition": self.yaml_definition,
+        doc: dict[str, Any] = {
             "name": self.name,
             "description": self.description,
             "method": self.method,
             "url": self.url,
+            "yaml_definition": self.yaml_definition,
             "input_schema": self.input_schema,
             "response_schema": self.response_schema,
-            "path_mapping": self.path_mapping,
-            "query_mapping": self.query_mapping,
-            "body_mapping": self.body_mapping,
-            "header_mapping": self.header_mapping,
-            "raw_definition": self.raw_definition,
+            "openapi_spec": self.openapi_spec,
+            "openapi_parameters": self.openapi_parameters,
             "validation_status": "valid" if self.valid else "invalid",
-            "validation_errors": list(self.validation_errors),
         }
+        if self.validation_errors:
+            doc["validation_errors"] = self.validation_errors
+        # Include legacy mappings if present (for old tools)
+        if self.path_mapping:
+            doc["path_mapping"] = self.path_mapping
+        if self.query_mapping:
+            doc["query_mapping"] = self.query_mapping
+        if self.body_mapping:
+            doc["body_mapping"] = self.body_mapping
+        if self.header_mapping:
+            doc["header_mapping"] = self.header_mapping
+        return doc
 
 
 def parse_api_monitor_tool_yaml(yaml_definition: str) -> ApiMonitorToolContract:
