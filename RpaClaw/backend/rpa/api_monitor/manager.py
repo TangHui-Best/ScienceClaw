@@ -329,6 +329,9 @@ class ApiMonitorSessionManager:
         self._captures: Dict[str, NetworkCaptureEngine] = {}
         self._screencasts: Dict[str, SessionScreencastController] = {}
         self._request_evidence: Dict[str, Dict[str, Dict]] = {}
+        self._cdp_to_pw: Dict[str, Dict[str, int]] = defaultdict(dict)
+        self._frame_to_page: Dict[int, Page] = {}
+        self._action_anchors: Dict[str, List[Dict]] = {}
         self._last_action_at: Dict[str, float] = {}
         self._stop_recording_tasks: Dict[str, asyncio.Task[List[ApiToolDefinition]]] = {}
         self._recording_drain_tasks: Dict[str, asyncio.Task[None]] = {}
@@ -461,6 +464,9 @@ class ApiMonitorSessionManager:
 
         self._captures.pop(session_id, None)
         self._request_evidence.pop(session_id, None)
+        self._cdp_to_pw.pop(session_id, None)
+        self._frame_to_page.pop(session_id, None)
+        self._action_anchors.pop(session_id, None)
         self._last_action_at.pop(session_id, None)
         self._stop_recording_tasks.pop(session_id, None)
         await self._stop_recording_drain_task(session_id)
@@ -2222,11 +2228,37 @@ class ApiMonitorSessionManager:
         return last_action_at is not None and (time.monotonic() - last_action_at) <= window_seconds
 
     def _evidence_for_request(self, session_id: str, request) -> Dict:
-        by_url = self._request_evidence.get(session_id, {})
-        evidence = dict(by_url.get(request.url) or {})
+        pw_id = id(request)
+        by_cdp = self._request_evidence.get(session_id, {})
+        evidence: Dict = {}
+
+        # Try to find CDP evidence by matching linked request ID
+        cdp_map = self._cdp_to_pw.get(session_id, {})
+        for cdp_id, stored_pw_id in cdp_map.items():
+            if stored_pw_id == pw_id:
+                evidence = dict(by_cdp.get(cdp_id, {}))
+                break
+
+        # Fallback: find by URL+method match among unlinked CDP evidence
+        if not evidence:
+            request_url = getattr(request, "url", "")
+            request_method = (getattr(request, "method", "GET") or "GET").upper()
+            for cdp_id, cdp_ev in by_cdp.items():
+                if (cdp_ev.get("_cdp_url") == request_url
+                        and cdp_ev.get("_cdp_method") == request_method
+                        and cdp_id not in cdp_map):
+                    evidence = dict(cdp_ev)
+                    # Link this CDP entry to the current Playwright request
+                    cdp_map[cdp_id] = pw_id
+                    break
+
         evidence.setdefault("frame_url", self.sessions.get(session_id).target_url if self.sessions.get(session_id) else "")
         evidence["action_window_matched"] = self._action_window_matched(session_id)
         return evidence
+
+    def _cleanup_request_evidence(self, session_id: str, cdp_request_id: str) -> None:
+        self._request_evidence.get(session_id, {}).pop(cdp_request_id, None)
+        self._cdp_to_pw.get(session_id, {}).pop(cdp_request_id, None)
 
     async def _install_source_evidence_capture(self, session_id: str, context, page: Page) -> None:
         try:
@@ -2236,11 +2268,14 @@ class ApiMonitorSessionManager:
             def on_request_will_be_sent(event: Dict) -> None:
                 request = event.get("request") or {}
                 url = request.get("url") or ""
+                cdp_req_id = event.get("requestId") or ""
                 if not url:
                     return
                 evidence = _initiator_to_evidence(event.get("initiator") or {})
                 evidence["frame_url"] = page.url
-                self._request_evidence.setdefault(session_id, {})[url] = evidence
+                evidence["_cdp_url"] = url
+                evidence["_cdp_method"] = (request.get("method") or "GET").upper()
+                self._request_evidence.setdefault(session_id, {})[cdp_req_id] = evidence
 
             cdp.on("Network.requestWillBeSent", on_request_will_be_sent)
         except Exception as exc:
