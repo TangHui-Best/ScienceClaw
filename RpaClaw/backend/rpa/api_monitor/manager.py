@@ -371,6 +371,46 @@ def _richness_score(tool: ApiToolDefinition) -> int:
         return 0
 
 
+def _merge_dom_context(existing: Dict, new: Dict) -> Dict:
+    """Merge two DOM context snapshots, deduplicating by key fields."""
+    if not existing:
+        return dict(new)
+    if not new:
+        return dict(existing)
+
+    result: Dict = {}
+
+    # Merge forms by action URL
+    existing_forms = {f.get("action", ""): f for f in existing.get("forms", []) if f.get("action")}
+    for f in new.get("forms", []):
+        action = f.get("action", "")
+        if action and action not in existing_forms:
+            existing_forms[action] = f
+    result["forms"] = list(existing_forms.values())
+
+    # Merge inputs by name
+    seen_names: set = set()
+    merged_inputs = []
+    for inp in [*existing.get("inputs", []), *new.get("inputs", [])]:
+        name = inp.get("name") or inp.get("id") or ""
+        if name not in seen_names:
+            seen_names.add(name)
+            merged_inputs.append(inp)
+    result["inputs"] = merged_inputs
+
+    # Merge buttons by text
+    seen_texts: set = set()
+    merged_buttons = []
+    for btn in [*existing.get("buttons", []), *new.get("buttons", [])]:
+        text = btn.get("text", "")
+        if text not in seen_texts:
+            seen_texts.add(text)
+            merged_buttons.append(btn)
+    result["buttons"] = merged_buttons
+
+    return result
+
+
 class ApiMonitorSessionManager:
     """Core session manager for API Monitor.
 
@@ -1923,11 +1963,17 @@ class ApiMonitorSessionManager:
         if call.id not in candidate.sample_call_ids and len(candidate.sample_call_ids) < 5:
             candidate.sample_call_ids.append(call.id)
 
-        if not candidate.capture_dom_context and dom_context:
-            candidate.capture_dom_context = dom_context
-            candidate.capture_page_url = page_url
-            candidate.capture_title = title
-            candidate.capture_dom_digest = dom_digest
+        if dom_context:
+            candidate.capture_dom_context = _merge_dom_context(
+                candidate.capture_dom_context or {},
+                dom_context,
+            )
+            if page_url:
+                candidate.capture_page_url = page_url
+            if title:
+                candidate.capture_title = title
+            if dom_digest:
+                candidate.capture_dom_digest = dom_digest
 
         if added_call and not created and candidate.status in ("generated", "running"):
             candidate.status = "stale"

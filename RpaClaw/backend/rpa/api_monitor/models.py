@@ -105,6 +105,7 @@ class ApiToolGenerationCandidate(BaseModel):
     capture_page_url: str = ""
     capture_title: str = ""
     capture_dom_digest: str = ""
+    step_metadata: List[Dict] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
 
