@@ -465,14 +465,21 @@ class ApiMonitorSessionManager:
         self._captures.pop(session_id, None)
         self._request_evidence.pop(session_id, None)
         self._cdp_to_pw.pop(session_id, None)
-        self._frame_to_page.pop(session_id, None)
         self._action_anchors.pop(session_id, None)
         self._last_action_at.pop(session_id, None)
         self._stop_recording_tasks.pop(session_id, None)
         await self._stop_recording_drain_task(session_id)
         self._last_recording_tools.pop(session_id, None)
         self._last_recording_calls.pop(session_id, None)
-        self._session_pages.pop(session_id, None)
+        # Clean up frame-to-page mapping for all pages in this session
+        session_pages = self._session_pages.pop(session_id, [])
+        for page in session_pages:
+            try:
+                self._frame_to_page.pop(id(page.main_frame), None)
+                for frame in page.frames:
+                    self._frame_to_page.pop(id(frame), None)
+            except Exception:
+                pass
         self._listener_pages = {
             key for key in self._listener_pages
             if key[0] != session_id
