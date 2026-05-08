@@ -1745,6 +1745,14 @@ class ApiMonitorSessionManager:
         page.set_default_timeout(PAGE_TIMEOUT_MS)
         page.set_default_navigation_timeout(PAGE_TIMEOUT_MS)
 
+        # Maintain frame-to-page mapping for evidence lookup
+        try:
+            self._frame_to_page[id(page.main_frame)] = page
+            for frame in page.frames:
+                self._frame_to_page[id(frame)] = page
+        except Exception:
+            pass
+
         capture = self._captures.get(session_id)
         if capture:
             self._install_listeners(session_id, page, capture)
@@ -1766,6 +1774,13 @@ class ApiMonitorSessionManager:
             if page in current_pages:
                 current_pages.remove(page)
             self._listener_pages.discard((session_id, id(page)))
+            # Clean up frame-to-page mapping
+            try:
+                self._frame_to_page.pop(id(page.main_frame), None)
+                for frame in page.frames:
+                    self._frame_to_page.pop(id(frame), None)
+            except Exception:
+                pass
             if self._pages.get(session_id) is page:
                 fallback = current_pages[-1] if current_pages else None
                 if fallback is not None:
@@ -2287,7 +2302,10 @@ class ApiMonitorSessionManager:
             logger.debug("[ApiMonitor] Fetch/XHR stack capture injection failed: %s", exc)
 
     async def _async_evidence_for_request(self, session_id: str, request) -> Dict:
-        page = self._pages.get(session_id)
+        # Resolve the correct page from request's frame, not the active page
+        frame = getattr(request, 'frame', None)
+        page = self._frame_to_page.get(id(frame)) if frame else None
+        page = page or self._pages.get(session_id)
         if not page:
             return {}
         stack_record = await page.evaluate(
