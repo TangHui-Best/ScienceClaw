@@ -205,3 +205,74 @@ response:
         assert contract.url == "/api/orders"
         assert contract.openapi_spec == {}  # No OpenAPI spec for legacy
         assert contract.query_mapping  # Should have auto-derived mappings
+
+
+class TestOpenApiExecutionParts:
+    def test_execute_get_request_parts(self):
+        from backend.deepagent.mcp_runtime import _execute_openapi_request
+
+        doc = {
+            "method": "GET",
+            "url": "/api/orders",
+            "openapi_parameters": [
+                {"name": "keyword", "in": "query", "type": "string"},
+                {"name": "page", "in": "query", "type": "integer"},
+            ],
+        }
+        parts = _execute_openapi_request(doc, {"keyword": "test", "page": 2}, "https://api.example.com")
+        assert parts["url"] == "https://api.example.com/api/orders"
+        assert parts["query"] == {"keyword": "test", "page": 2}
+        assert parts["body"] == {}
+
+    def test_execute_post_request_parts(self):
+        from backend.deepagent.mcp_runtime import _execute_openapi_request
+
+        doc = {
+            "method": "POST",
+            "url": "/api/orders",
+            "openapi_parameters": [
+                {"name": "body", "in": "body", "schema": {
+                    "type": "object",
+                    "properties": {"product_id": {"type": "string"}},
+                }},
+            ],
+        }
+        parts = _execute_openapi_request(doc, {"product_id": "abc"}, "https://api.example.com")
+        assert parts["body"] == {"product_id": "abc"}
+        assert parts["query"] == {}
+
+    def test_execute_path_params(self):
+        from backend.deepagent.mcp_runtime import _execute_openapi_request
+
+        doc = {
+            "method": "GET",
+            "url": "/users/{user_id}",
+            "openapi_parameters": [
+                {"name": "user_id", "in": "path", "type": "string", "required": True},
+            ],
+        }
+        parts = _execute_openapi_request(doc, {"user_id": "123"}, "https://api.example.com")
+        assert parts["url"] == "https://api.example.com/users/123"
+
+    def test_execute_extra_args_fallback(self):
+        from backend.deepagent.mcp_runtime import _execute_openapi_request
+
+        doc = {
+            "method": "GET",
+            "url": "/api/search",
+            "openapi_parameters": [
+                {"name": "q", "in": "query", "type": "string"},
+            ],
+        }
+        parts = _execute_openapi_request(doc, {"q": "test", "extra": "val"}, "https://api.example.com")
+        assert parts["query"]["q"] == "test"
+        assert parts["query"]["extra"] == "val"
+
+    def test_execute_no_openapi_params_returns_empty(self):
+        from backend.deepagent.mcp_runtime import _execute_openapi_request
+
+        doc = {"method": "GET", "url": "/api/test", "openapi_parameters": []}
+        parts = _execute_openapi_request(doc, {}, "https://api.example.com")
+        assert parts["query"] == {}
+        assert parts["body"] == {}
+        assert parts["url"] == "https://api.example.com/api/test"
