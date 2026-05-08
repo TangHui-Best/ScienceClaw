@@ -84,3 +84,61 @@ class TestHandleUserAction:
 
         assert session_id not in manager._last_action_at
         assert not manager._action_anchors.get(session_id, [])
+
+
+class TestRecordingDrainWithAnchors:
+    def test_drain_links_calls_to_last_anchor(self):
+        async def _run():
+            manager = ApiMonitorSessionManager()
+            session_id = "test_session"
+
+            # Set up session with recording status
+            session = MagicMock()
+            session.status = "recording"
+            manager.sessions[session_id] = session
+
+            # Pre-create an action anchor
+            manager._action_anchors[session_id] = [{
+                "action": "click",
+                "description": "Search",
+                "timestamp": time.monotonic(),
+                "page_url": "https://example.com/list",
+                "call_ids": [],
+            }]
+
+            # Create mock capture with one call
+            call = CapturedApiCall(
+                request=CapturedRequest(
+                    request_id="test",
+                    url="https://example.com/api/search?q=test",
+                    method="GET",
+                    headers={},
+                    timestamp=datetime(2026, 1, 1),
+                    resource_type="fetch",
+                ),
+            )
+            capture = MagicMock()
+            capture.drain_new_calls = MagicMock(return_value=[call])
+            manager._captures[session_id] = capture
+
+            # Mock _process_captured_calls_for_generation to avoid LLM calls
+            async def mock_process(sid, calls, **kwargs):
+                return []
+
+            manager._process_captured_calls_for_generation = mock_process
+
+            # Run one iteration of drain loop
+            task = asyncio.create_task(manager._recording_drain_loop(session_id, interval_s=0.05))
+            await asyncio.sleep(0.15)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+            # Verify call was linked to the anchor
+            anchors = manager._action_anchors[session_id]
+            assert len(anchors) == 1
+            assert call.id in anchors[0]["call_ids"]
+
+        asyncio.run(_run())

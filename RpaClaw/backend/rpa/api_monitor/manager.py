@@ -724,6 +724,12 @@ class ApiMonitorSessionManager:
                     continue
                 calls = capture.drain_new_calls()
                 if calls:
+                    # Link calls to the most recent action anchor
+                    anchors = self._action_anchors.get(session_id)
+                    if anchors:
+                        last_anchor = anchors[-1]
+                        last_anchor["call_ids"].extend(call.id for call in calls)
+
                     processing_task = asyncio.create_task(
                         self._process_captured_calls_for_generation(
                             session_id,
@@ -2336,6 +2342,17 @@ class ApiMonitorSessionManager:
             "[ApiMonitor] User action for session %s: %s %s",
             session_id, action_type, (target.get("text") or "")[:40],
         )
+
+    def _last_action_context(self, session_id: str) -> Optional[Dict]:
+        anchors = self._action_anchors.get(session_id)
+        if not anchors:
+            return None
+        last = anchors[-1]
+        return {
+            "action": last.get("action", ""),
+            "description": last.get("description", ""),
+            "page_url": last.get("page_url", ""),
+        }
 
     async def _install_user_action_capture(self, session_id: str, context) -> None:
         async def on_user_action(source, event_json: str):
