@@ -380,12 +380,18 @@ def _merge_dom_context(existing: Dict, new: Dict) -> Dict:
 
     result: Dict = {}
 
-    # Merge forms by action URL
-    existing_forms = {f.get("action", ""): f for f in existing.get("forms", []) if f.get("action")}
-    for f in new.get("forms", []):
-        action = f.get("action", "")
-        if action and action not in existing_forms:
-            existing_forms[action] = f
+    # Merge forms by action URL; actionless forms keyed by index
+    existing_forms: Dict[str, Dict] = {}
+    for i, f in enumerate(existing.get("forms", [])):
+        key = f.get("action") or f"__form_{i}"
+        existing_forms[key] = f
+    for j, f in enumerate(new.get("forms", [])):
+        action = f.get("action")
+        if action:
+            if action not in existing_forms:
+                existing_forms[action] = f
+        elif f"__form_{j}" not in existing_forms:
+            existing_forms[f"__form_{j}"] = f
     result["forms"] = list(existing_forms.values())
 
     # Merge inputs by name
@@ -1979,7 +1985,7 @@ class ApiMonitorSessionManager:
         if call.id not in candidate.sample_call_ids and len(candidate.sample_call_ids) < 5:
             candidate.sample_call_ids.append(call.id)
 
-        if dom_context:
+        if dom_context and not created:
             candidate.capture_dom_context = _merge_dom_context(
                 candidate.capture_dom_context or {},
                 dom_context,
