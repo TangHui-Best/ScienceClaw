@@ -370,3 +370,42 @@ class TestStaleEvidenceCleanup:
 
         assert removed == 0
         assert "no_ts" in cdp_evidence_store
+
+
+class TestEndToEndRetryIntegration:
+    def test_evidence_for_request_miss_then_retry_hits(self):
+        """Simulates the race: on_request misses, on_response retry finds it."""
+        manager = ApiMonitorSessionManager()
+        session_id = "test_session"
+        manager.sessions[session_id] = MagicMock()
+        manager.sessions[session_id].target_url = "https://example.com"
+
+        # No CDP evidence yet when on_request fires
+        request = MagicMock()
+        request.url = "https://example.com/api/data"
+        request.method = "GET"
+        result1 = manager._evidence_for_request(session_id, request)
+
+        # Should be empty (no initiator_urls)
+        assert not result1.get("initiator_urls")
+
+        # Now CDP evidence arrives (late)
+        cdp_evidence_store = manager._request_evidence.setdefault(session_id, {})
+        cdp_evidence_store["cdp.late"] = {
+            "initiator_type": "script",
+            "initiator_urls": ["https://example.com/app.js"],
+            "frame_url": "https://example.com/page",
+            "_cdp_url": "https://example.com/api/data",
+            "_cdp_method": "GET",
+            "_stored_at": time.monotonic(),
+        }
+
+        # on_response retry should find it
+        result2 = manager._retry_sync_evidence(
+            session_id,
+            request_url="https://example.com/api/data",
+            request_method="GET",
+            frame_url="https://example.com/page",
+        )
+
+        assert result2["initiator_urls"] == ["https://example.com/app.js"]
