@@ -468,6 +468,10 @@ class ApiMonitorSessionManager:
         )
         context = await browser.new_context(**get_context_kwargs())
         await context.grant_permissions(["clipboard-read", "clipboard-write"])
+
+        # Install user action capture for recording flow operation awareness
+        await self._install_user_action_capture(session_id, context)
+
         page = await context.new_page()
         page.set_default_timeout(PAGE_TIMEOUT_MS)
         page.set_default_navigation_timeout(PAGE_TIMEOUT_MS)
@@ -2300,6 +2304,48 @@ class ApiMonitorSessionManager:
 
     def _mark_action(self, session_id: str) -> None:
         self._last_action_at[session_id] = time.monotonic()
+
+    async def _handle_user_action(self, session_id: str, event_json: str) -> None:
+        try:
+            evt = json.loads(event_json)
+        except (json.JSONDecodeError, TypeError):
+            return
+
+        action_type = evt.get("action", "")
+        if action_type not in ("click", "fill", "press", "navigate", "submit"):
+            return
+
+        self._mark_action(session_id)
+
+        target = evt.get("target") or {}
+        self._action_anchors.setdefault(session_id, []).append({
+            "action": action_type,
+            "description": (target.get("text") or target.get("tag") or "")[:80],
+            "timestamp": time.monotonic(),
+            "page_url": evt.get("url", ""),
+            "frame_path": evt.get("frame_path", []),
+            "call_ids": [],
+        })
+
+        # Cap anchors at 100 to bound memory
+        anchors = self._action_anchors.get(session_id, [])
+        if len(anchors) > 100:
+            self._action_anchors[session_id] = anchors[-100:]
+
+        logger.info(
+            "[ApiMonitor] User action for session %s: %s %s",
+            session_id, action_type, (target.get("text") or "")[:40],
+        )
+
+    async def _install_user_action_capture(self, session_id: str, context) -> None:
+        async def on_user_action(source, event_json: str):
+            await self._handle_user_action(session_id, event_json)
+
+        try:
+            await context.expose_binding("__apiMonitorAction", on_user_action, handle=False)
+            await context.add_init_script(_USER_ACTION_CAPTURE_JS)
+        except Exception as exc:
+            logger.debug("[ApiMonitor] User action capture install failed: %s", exc)
 
     def _action_window_matched(self, session_id: str, window_seconds: float = 2.0) -> bool:
         last_action_at = self._last_action_at.get(session_id)
