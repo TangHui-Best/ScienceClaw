@@ -264,6 +264,37 @@ class TestRetrySyncEvidence:
         assert result == {}
 
 
+class TestAsyncEvidenceRetry:
+    @pytest.mark.anyio
+    async def test_retries_js_stack_on_first_miss(self):
+        """When JS stack is empty on first try, should retry once after delay."""
+        manager = ApiMonitorSessionManager()
+        session_id = "test_session"
+        manager.sessions[session_id] = MagicMock()
+
+        page = MagicMock()
+        page.url = "https://example.com/page"
+        # First call returns None, second returns data
+        page.evaluate = AsyncMock(side_effect=[
+            None,
+            {"stack": "Error\n    at https://example.com/app.js)", "frameUrl": "https://example.com/page"},
+        ])
+        manager._pages[session_id] = page
+
+        request = MagicMock()
+        request.url = "https://example.com/api/data"
+        request.method = "GET"
+        request.frame = None
+
+        result = await manager._async_evidence_for_request(session_id, request)
+
+        assert page.evaluate.call_count == 2
+        print(f"Result: {result}")
+        # The second call returned: {"stack": "Error\n    at https://example.com/app.js:10:5", "frameUrl": "https://example.com/page"}
+        # So stack_to_urls should extract "https://example.com/app.js"
+        assert result["js_stack_urls"] == ["https://example.com/app.js"]
+
+
 class TestNetworkCaptureRetryEvidence:
     def test_engine_accepts_retry_provider(self):
         """NetworkCaptureEngine should accept evidence_retry_provider."""

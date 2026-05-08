@@ -2585,19 +2585,40 @@ class ApiMonitorSessionManager:
         page = self._frame_to_page.get(id(frame)) if frame else None
         page = page or self._pages.get(session_id)
         if not page:
+            logger.debug("[ApiMonitor] Async evidence: no page for session=%s", session_id)
             return {}
-        stack_record = await page.evaluate(
-            """({url, method}) => {
-              const records = window.__apiMonitorStacks || [];
-              for (let i = records.length - 1; i >= 0; i--) {
-                const item = records[i];
-                if (item.url === url && item.method === method.toUpperCase()) return item;
-              }
-              return null;
-            }""",
-            {"url": request.url, "method": request.method},
-        )
+
+        js_code = """({url, method}) => {
+          const records = window.__apiMonitorStacks || [];
+          for (let i = records.length - 1; i >= 0; i--) {
+            const item = records[i];
+            if (item.url === url && item.method === method.toUpperCase()) return item;
+          }
+          return null;
+        }"""
+        args = {"url": request.url, "method": request.method}
+
+        stack_record = None
+        for attempt in range(2):
+            try:
+                stack_record = await page.evaluate(js_code, args)
+            except Exception as exc:
+                logger.debug("[ApiMonitor] Async evidence: page.evaluate failed (attempt %d): %s", attempt + 1, exc)
+                break
+            if stack_record:
+                break
+            if attempt == 0:
+                logger.debug(
+                    "[ApiMonitor] Async evidence: no stack record for %s %s, retrying in 50ms",
+                    request.method, request.url[:80],
+                )
+                await asyncio.sleep(0.05)
+
         if not stack_record:
+            logger.debug(
+                "[ApiMonitor] Async evidence: no stack found for %s %s after retry",
+                request.method, request.url[:80],
+            )
             return {}
         return {
             "js_stack_urls": _stack_to_urls(stack_record.get("stack") or ""),
