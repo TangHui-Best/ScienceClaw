@@ -226,6 +226,7 @@ class NetworkCaptureEngine:
             content_type=content_type,
             timestamp=datetime.now(),
             resource_type=request.resource_type,
+            frame_url=page_url,
         )
 
         source_evidence = self._source_evidence(request)

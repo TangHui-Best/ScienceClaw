@@ -187,6 +187,31 @@ class TestCaptureEvidence:
         assert id(request) in engine._in_flight
 
 
+def test_captured_request_has_optional_frame_url():
+    from backend.rpa.api_monitor.models import CapturedRequest
+
+    req = CapturedRequest(
+        request_id="test",
+        url="https://example.com/api/data",
+        method="GET",
+        headers={},
+        timestamp=datetime(2026, 1, 1),
+        resource_type="fetch",
+        frame_url="https://example.com/page",
+    )
+    assert req.frame_url == "https://example.com/page"
+
+    req_default = CapturedRequest(
+        request_id="test",
+        url="https://example.com/api/data",
+        method="GET",
+        headers={},
+        timestamp=datetime(2026, 1, 1),
+        resource_type="fetch",
+    )
+    assert req_default.frame_url is None
+
+
 class TestSourceEvidenceHelpers:
     def test_extract_initiator_urls_from_cdp_stack(self):
         from backend.rpa.api_monitor.manager import _initiator_to_evidence

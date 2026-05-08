@@ -26,6 +26,7 @@ class CapturedRequest(BaseModel):
     content_type: Optional[str] = None
     timestamp: datetime
     resource_type: str  # "xhr" or "fetch"
+    frame_url: Optional[str] = None
 
 
 class CapturedResponse(BaseModel):
