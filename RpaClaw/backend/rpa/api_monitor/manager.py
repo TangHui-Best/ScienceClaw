@@ -2492,6 +2492,49 @@ class ApiMonitorSessionManager:
         evidence["action_window_matched"] = self._action_window_matched(session_id)
         return evidence
 
+    def _retry_sync_evidence(
+        self,
+        session_id: str,
+        request_url: str,
+        request_method: str,
+        frame_url: str = "",
+    ) -> Dict:
+        """Second-chance lookup of CDP evidence for requests where the initial
+        _evidence_for_request call missed because CDP event arrived late."""
+        by_cdp = self._request_evidence.get(session_id, {})
+        if not by_cdp:
+            logger.debug("[ApiMonitor] Retry evidence: no CDP evidence for session=%s", session_id)
+            return {}
+
+        method_upper = request_method.upper()
+        for cdp_id, cdp_ev in by_cdp.items():
+            if cdp_id in self._cdp_to_pw.get(session_id, {}):
+                continue
+            if (cdp_ev.get("_cdp_url") == request_url
+                    and cdp_ev.get("_cdp_method") == method_upper):
+                if frame_url and cdp_ev.get("frame_url") != frame_url:
+                    logger.debug(
+                        "[ApiMonitor] Retry evidence: frame_url mismatch for %s (expected=%s got=%s)",
+                        request_url[:80], frame_url[:60], cdp_ev.get("frame_url", "")[:60],
+                    )
+                    continue
+                # Update the actual _cdp_to_pw mapping
+                self._cdp_to_pw[session_id][cdp_id] = 0
+                result = dict(cdp_ev)
+                result.pop("_cdp_url", None)
+                result.pop("_cdp_method", None)
+                result.pop("_stored_at", None)
+                logger.info(
+                    "[ApiMonitor] Retry evidence: HIT session=%s url=%s initiator=%s",
+                    session_id, request_url[:80], cdp_ev.get("initiator_type", "?"),
+                )
+                return result
+        logger.debug(
+            "[ApiMonitor] Retry evidence: MISS session=%s url=%s method=%s (checked %d entries)",
+            session_id, request_url[:80], method_upper, len(by_cdp),
+        )
+        return {}
+
     def _cleanup_request_evidence(self, session_id: str, cdp_request_id: str) -> None:
         self._request_evidence.get(session_id, {}).pop(cdp_request_id, None)
         self._cdp_to_pw.get(session_id, {}).pop(cdp_request_id, None)

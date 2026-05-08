@@ -167,3 +167,98 @@ class TestStepMetadata:
         })
         assert len(candidate.step_metadata) == 1
         assert candidate.step_metadata[0]["action_description"] == "click Search"
+
+
+class TestRetrySyncEvidence:
+    def test_retry_finds_unlinked_cdp_evidence_by_url_method(self):
+        """Re-lookup should find unlinked CDP evidence matching URL+method."""
+        manager = ApiMonitorSessionManager()
+        session_id = "test_session"
+        manager.sessions[session_id] = MagicMock()
+
+        # Store CDP evidence without linking to any Playwright request
+        cdp_evidence_store = manager._request_evidence.setdefault(session_id, {})
+        cdp_evidence_store["cdp.123"] = {
+            "initiator_type": "script",
+            "initiator_urls": ["https://example.com/app.js"],
+            "frame_url": "https://example.com/page",
+            "_cdp_url": "https://example.com/api/data",
+            "_cdp_method": "GET",
+        }
+
+        result = manager._retry_sync_evidence(
+            session_id,
+            request_url="https://example.com/api/data",
+            request_method="GET",
+            frame_url="https://example.com/page",
+        )
+
+        assert result["initiator_urls"] == ["https://example.com/app.js"]
+        assert "_cdp_url" not in result
+        assert "_cdp_method" not in result
+        # Should be marked as linked now
+        assert "cdp.123" in manager._cdp_to_pw[session_id]
+
+    def test_retry_skips_linked_evidence(self):
+        """Re-lookup should skip CDP evidence already linked to a Playwright request."""
+        manager = ApiMonitorSessionManager()
+        session_id = "test_session"
+        manager.sessions[session_id] = MagicMock()
+
+        cdp_evidence_store = manager._request_evidence.setdefault(session_id, {})
+        cdp_evidence_store["cdp.456"] = {
+            "initiator_type": "script",
+            "initiator_urls": ["https://example.com/app.js"],
+            "frame_url": "https://example.com/page",
+            "_cdp_url": "https://example.com/api/data",
+            "_cdp_method": "GET",
+        }
+        # Already linked
+        manager._cdp_to_pw[session_id]["cdp.456"] = 9999
+
+        result = manager._retry_sync_evidence(
+            session_id,
+            request_url="https://example.com/api/data",
+            request_method="GET",
+            frame_url="https://example.com/page",
+        )
+
+        assert result == {}
+
+    def test_retry_filters_by_frame_url(self):
+        """Re-lookup should not match evidence from a different page."""
+        manager = ApiMonitorSessionManager()
+        session_id = "test_session"
+        manager.sessions[session_id] = MagicMock()
+
+        cdp_evidence_store = manager._request_evidence.setdefault(session_id, {})
+        cdp_evidence_store["cdp.789"] = {
+            "initiator_type": "script",
+            "initiator_urls": ["https://other.com/app.js"],
+            "frame_url": "https://other.com/page",
+            "_cdp_url": "https://example.com/api/data",
+            "_cdp_method": "GET",
+        }
+
+        result = manager._retry_sync_evidence(
+            session_id,
+            request_url="https://example.com/api/data",
+            request_method="GET",
+            frame_url="https://example.com/my-page",
+        )
+
+        assert result == {}
+
+    def test_retry_returns_empty_when_no_evidence(self):
+        """Re-lookup should return empty dict when no CDP evidence exists."""
+        manager = ApiMonitorSessionManager()
+        session_id = "test_session"
+        manager.sessions[session_id] = MagicMock()
+
+        result = manager._retry_sync_evidence(
+            session_id,
+            request_url="https://example.com/api/data",
+            request_method="GET",
+        )
+
+        assert result == {}
