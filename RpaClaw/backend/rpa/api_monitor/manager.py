@@ -2671,23 +2671,31 @@ class ApiMonitorSessionManager:
 
     @staticmethod
     def _parse_yaml_metadata(yaml_str: str) -> tuple:
-        """Extract name and description from generated YAML.
+        """Extract name and description from generated YAML (OpenAPI or legacy).
 
         Returns (name, description). Falls back to defaults on parse failure.
         """
+        import yaml as _yaml
+
         name = "unnamed_tool"
         description = "Auto-generated API tool"
 
         try:
-            # Extract name field
-            name_match = re.search(r"^name:\s*(.+)$", yaml_str, re.MULTILINE)
-            if name_match:
-                name = name_match.group(1).strip().strip("'\"")
-
-            # Extract description field
-            desc_match = re.search(r"^description:\s*(.+)$", yaml_str, re.MULTILINE)
-            if desc_match:
-                description = desc_match.group(1).strip().strip("'\"")
+            data = _yaml.safe_load(yaml_str)
+            if isinstance(data, dict):
+                if data.get("swagger") == "2.0":
+                    paths = data.get("paths", {})
+                    for path_item in paths.values():
+                        for method_key in ("get", "post", "put", "patch", "delete"):
+                            if method_key in path_item:
+                                op = path_item[method_key]
+                                name = op.get("operationId", name)
+                                description = op.get("summary", description)
+                                break
+                        break
+                else:
+                    name = data.get("name", name)
+                    description = data.get("description", description)
         except Exception:
             pass
 
