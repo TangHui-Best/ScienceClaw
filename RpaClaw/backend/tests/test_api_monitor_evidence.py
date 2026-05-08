@@ -262,3 +262,34 @@ class TestRetrySyncEvidence:
         )
 
         assert result == {}
+
+
+class TestNetworkCaptureRetryEvidence:
+    def test_engine_accepts_retry_provider(self):
+        """NetworkCaptureEngine should accept evidence_retry_provider."""
+        from backend.rpa.api_monitor.network_capture import NetworkCaptureEngine
+
+        retry_called = []
+
+        def mock_retry(url, method, frame_url=""):
+            retry_called.append((url, method, frame_url))
+            return {"initiator_urls": ["https://app.js"]}
+
+        engine = NetworkCaptureEngine(
+            evidence_retry_provider=mock_retry,
+        )
+        assert engine._evidence_retry_provider is mock_retry
+
+    def test_engine_accepts_cleanup_provider(self):
+        """NetworkCaptureEngine should accept evidence_cleanup_provider."""
+        from backend.rpa.api_monitor.network_capture import NetworkCaptureEngine
+
+        cleanup_called = []
+
+        def mock_cleanup(request_id):
+            cleanup_called.append(request_id)
+
+        engine = NetworkCaptureEngine(
+            evidence_cleanup_provider=mock_cleanup,
+        )
+        assert engine._evidence_cleanup_provider is mock_cleanup

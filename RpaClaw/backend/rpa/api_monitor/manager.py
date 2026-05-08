@@ -540,6 +540,12 @@ class ApiMonitorSessionManager:
             page_url_provider=_capture_page_url,
             evidence_provider=lambda request: self._evidence_for_request(session_id, request),
             async_evidence_provider=lambda request: self._async_evidence_for_request(session_id, request),
+            evidence_retry_provider=lambda url, method, frame_url="": self._retry_sync_evidence(
+                session_id, url, method, frame_url,
+            ),
+            evidence_cleanup_provider=lambda request_id: self._cleanup_evidence_by_request_id(
+                session_id, request_id,
+            ),
         )
         self._captures[session_id] = capture
         self._adopt_page(session_id, page, make_active=True)
@@ -2538,6 +2544,14 @@ class ApiMonitorSessionManager:
     def _cleanup_request_evidence(self, session_id: str, cdp_request_id: str) -> None:
         self._request_evidence.get(session_id, {}).pop(cdp_request_id, None)
         self._cdp_to_pw.get(session_id, {}).pop(cdp_request_id, None)
+
+    def _cleanup_evidence_by_request_id(self, session_id: str, pw_request_id: str) -> None:
+        """Clean up CDP evidence linked to a Playwright request ID (string form of id())."""
+        cdp_map = self._cdp_to_pw.get(session_id, {})
+        cdp_ids = [cdp_id for cdp_id, stored_pw_id in cdp_map.items()
+                    if str(stored_pw_id) == pw_request_id]
+        for cdp_id in cdp_ids:
+            self._cleanup_request_evidence(session_id, cdp_id)
 
     async def _install_source_evidence_capture(self, session_id: str, context, page: Page) -> None:
         try:
