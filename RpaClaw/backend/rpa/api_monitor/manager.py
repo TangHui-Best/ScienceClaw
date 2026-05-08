@@ -288,6 +288,62 @@ def _dedupe_strings(values: List[str]) -> List[str]:
     return result
 
 
+_USER_ACTION_CAPTURE_JS = r"""
+(() => {
+  if (window.__apiMonitorActionInstalled) return;
+  window.__apiMonitorActionInstalled = true;
+
+  function emit(evt) {
+    try {
+      const payload = JSON.stringify(evt);
+      if (window.__apiMonitorAction) {
+        window.__apiMonitorAction(payload);
+      }
+    } catch (_) {}
+  }
+
+  function describeElement(el) {
+    const tag = (el.tagName || '').toLowerCase();
+    const text = (el.innerText || el.value || el.placeholder || '').trim().slice(0, 80);
+    const role = el.getAttribute('role') || '';
+    const type = el.getAttribute('type') || '';
+    return { tag, text, role, type };
+  }
+
+  // Click events
+  document.addEventListener('click', (e) => {
+    const target = e.target.closest('a, button, [role="button"], input[type="submit"], [onclick]') || e.target;
+    emit({
+      action: 'click',
+      target: describeElement(target),
+      url: location.href,
+      timestamp: Date.now(),
+    });
+  }, true);
+
+  // Form submit
+  document.addEventListener('submit', (e) => {
+    emit({
+      action: 'submit',
+      target: describeElement(e.target),
+      url: location.href,
+      timestamp: Date.now(),
+    });
+  }, true);
+
+  // SPA navigation
+  const originalPushState = history.pushState;
+  history.pushState = function() {
+    emit({ action: 'navigate', url: location.href, timestamp: Date.now() });
+    return originalPushState.apply(this, arguments);
+  };
+  window.addEventListener('popstate', () => {
+    emit({ action: 'navigate', url: location.href, timestamp: Date.now() });
+  });
+})();
+"""
+
+
 # ── Manager ──────────────────────────────────────────────────────────
 
 
