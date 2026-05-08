@@ -114,9 +114,11 @@ async_evidence = await self._async_source_evidence(req)
 
 `_evidence_retry_provider` 是一个新的回调，由 manager 注入到 NetworkCaptureEngine，指向 `_retry_sync_evidence`。
 
+**重试次数**：CDP evidence 重查找仅执行 1 次（不做循环重试）。`on_response` 触发时 CDP `requestWillBeSent` 事件一定已经到达（响应在请求之后），所以 1 次查找足够。
+
 ### 4.2 JS 调用栈重试
 
-`_async_evidence_for_request` 增加一次重试（最多 2 次查询，间隔 50ms）：
+`_async_evidence_for_request` 增加一次重试（**最多 2 次查询**：1 次初始 + 1 次重试，间隔 50ms）：
 
 ```python
 async def _async_evidence_for_request(self, session_id: str, request) -> Dict:
