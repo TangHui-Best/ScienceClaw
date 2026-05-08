@@ -350,8 +350,10 @@ _USER_ACTION_CAPTURE_JS = r"""
 def _apply_confidence_to_tool(
     tool: ApiToolDefinition,
     calls: List[CapturedApiCall],
+    *,
+    action_context: Optional[Dict] = None,
 ) -> ApiToolDefinition:
-    result = score_api_candidate(calls)
+    result = score_api_candidate(calls, action_context=action_context)
     tool.confidence = result.confidence
     tool.score = result.score
     tool.selected = result.selected

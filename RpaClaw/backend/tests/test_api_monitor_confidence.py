@@ -82,9 +82,9 @@ def test_missing_source_evidence_still_scores_from_other_strong_signals():
         _call("https://example.com/api/orders", initiator_urls=[], js_stack_urls=[])
     ])
 
-    assert result.confidence == "high"
-    assert result.score == 85
-    assert result.selected is True
+    assert result.confidence == "medium"
+    assert result.score == 75
+    assert result.selected is False
     assert "缺少 initiator 或 JS 调用栈" in result.reasons
 
 
@@ -128,6 +128,37 @@ def test_apply_confidence_to_tool_definition():
     assert updated.confidence_reasons
     assert updated.source_evidence["action_window_matched"] is True
     assert updated.source_evidence["breakdown"]["response_richness"] == 10
+
+
+def test_action_context_adds_confirmed_user_action_bonus():
+    call = _call(
+        "https://example.com/api/orders",
+        initiator_urls=["https://example.com/app/assets/main.js"],
+    )
+    result = score_api_candidate(
+        [call],
+        action_context={"action": "click", "description": "Search"},
+    )
+
+    assert result.breakdown["confirmed_user_action"] == 15
+    assert "由用户操作确认触发: Search" in result.reasons
+    assert result.score == 100  # cap at 100
+
+
+def test_action_context_on_low_confidence_still_helps():
+    call = _call(
+        "https://example.com/api/config",
+        action_window_matched=False,
+        initiator_urls=[],
+        js_stack_urls=[],
+    )
+    result = score_api_candidate(
+        [call],
+        action_context={"action": "click", "description": "Settings"},
+    )
+
+    assert result.breakdown["confirmed_user_action"] == 15
+    assert "由用户操作确认触发: Settings" in result.reasons
 
 
 def test_dedup_session_tools_keeps_highest_score_and_strips_query():
