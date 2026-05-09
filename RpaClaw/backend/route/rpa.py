@@ -34,6 +34,7 @@ from backend.config import settings
 from backend.models import get_model_config, resolve_default_model_config
 from backend.storage import get_repository
 from backend.credential.vault import inject_credentials
+from backend.rpa.runtime_context import inject_runtime_context_kwargs, runtime_requirements_from_traces
 
 logger = logging.getLogger(__name__)
 
@@ -285,9 +286,14 @@ def _build_session_recording_meta(session) -> Dict[str, Any]:
         "recorded_actions": recorded_actions,
         "legacy_steps": legacy_steps,
         "runtime_results": runtime_results,
+        "runtime_requirements": runtime_requirements_from_traces(traces),
         "trace_diagnostics": trace_diagnostics,
         "recording_diagnostics": recording_diagnostics,
     }
+
+
+def _session_requires_runtime_ai(session) -> bool:
+    return runtime_requirements_from_traces(_session_traces_for_compile(session)).get("runtime_ai") is True
 
 
 def _merge_recorded_action_trace_metadata(session, derived_manual_traces: Dict[str, RPAAcceptedTrace]) -> None:
@@ -815,10 +821,14 @@ async def test_script(
     if settings.storage_backend == "local":
         test_kwargs: Dict[str, Any] = {"_downloads_dir": downloads_dir}
         model_config = _session_model_config(session)
-        if model_config:
-            test_kwargs["_model_config"] = model_config
         if request.params:
             test_kwargs.update(await inject_credentials(str(current_user.id), request.params, {}))
+        if _session_requires_runtime_ai(session):
+            test_kwargs = await inject_runtime_context_kwargs(
+                str(current_user.id),
+                test_kwargs,
+                session_model_config=model_config,
+            )
         result = await executor.execute(
             browser,
             script,
@@ -835,14 +845,16 @@ async def test_script(
         # Docker 模式：使用原有逻辑
         docker_kwargs: Dict[str, Any] = {}
         model_config = _session_model_config(session)
-        if model_config:
-            docker_kwargs["_model_config"] = model_config
         if request.params:
             docker_kwargs = await inject_credentials(
                 str(current_user.id), request.params, {}
             )
-            if model_config:
-                docker_kwargs["_model_config"] = model_config
+        if _session_requires_runtime_ai(session):
+            docker_kwargs = await inject_runtime_context_kwargs(
+                str(current_user.id),
+                docker_kwargs,
+                session_model_config=model_config,
+            )
         result = await executor.execute(
             browser,
             script,

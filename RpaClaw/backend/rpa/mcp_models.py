@@ -78,6 +78,7 @@ class RpaMcpToolDefinition(BaseModel):
     post_auth_start_url: str = ""
     steps: list[dict[str, Any]] = Field(default_factory=list)
     params: dict[str, Any] = Field(default_factory=dict)
+    runtime_requirements: dict[str, bool] = Field(default_factory=lambda: {"runtime_ai": False})
     input_schema: dict[str, Any] = Field(default_factory=dict)
     schema_source: str = "rule_inferred"
     output_schema: dict[str, Any] = Field(default_factory=build_rpa_mcp_output_schema)

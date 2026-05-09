@@ -532,6 +532,7 @@ async def deep_agent(
                 timeout=ts.sandbox_exec_timeout,
                 inherit_env=True,
                 user_id=user_id or "",
+                session_model_config=model_config,
             )
         )
         sandbox_workspace = local_workspace.replace("\\", "/")
@@ -549,6 +550,7 @@ async def deep_agent(
             sandbox_base_dir=_SANDBOX_WORKSPACE_DIR,
             execute_timeout=ts.sandbox_exec_timeout,
             max_output_chars=ts.max_output_chars,
+            session_model_config=model_config,
         )
         # sandbox_workspace: 沙箱内路径（如 /home/rpaclaw/{sid}），用于 system prompt、exec_dir
         # local_workspace:   backend 本地路径（如 D:\...\workspace\{sid}），用于本地文件 I/O

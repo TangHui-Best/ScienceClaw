@@ -1092,9 +1092,32 @@ def test_runtime_ai_instruction_uses_runtime_model_config_kwarg_without_embeddin
     script = TraceSkillCompiler().generate_script([trace], is_local=True)
     body = _execute_body(script)
 
-    assert "RecordingRuntimeAgent(model_config=kwargs.get('_model_config'))" in script
+    assert "RecordingRuntimeAgent(model_config=_runtime_ai_model_config(kwargs))" in script
     assert "sk-secret" not in script
     assert "_execute_runtime_ai_instruction(current_page, _results, kwargs," in body
+
+
+def test_runtime_ai_instruction_prefers_runtime_context_over_legacy_model_config():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        source="ai",
+        user_instruction="open the project most related to SKILL",
+        description="Click the semantically selected project",
+        output_key="selected_project",
+        output={"action_performed": True},
+        ai_execution=RPAAIExecution(
+            code=(
+                "async def run(page, results):\n"
+                "    await page.locator('a.project').nth(0).click()\n"
+                "    return {'action_performed': True}"
+            ),
+        ),
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+
+    assert "_runtime_ai_model_config(kwargs)" in script
+    assert "kwargs.get('_model_config')" in script
 
 
 def test_runtime_ai_preserve_signal_overrides_embedded_code():
