@@ -13,6 +13,8 @@ Use this order of authority:
 
 These designs match important parts of the current codebase, though details should still be checked against code:
 
+- `docs/rpa/rpa-harness-engineering.md`
+  - Active design guideline for RPA harness engineering. Batch 0 fact-packet foundation is implemented; tracked by `docs/features/F001-rpa-harness-engineering.md`. Use it as the current direction for observation packets, failure packets, DOM morphology cases, snapshot diff, compiler, repair, and scenario harness work.
 - `docs/superpowers/specs/2026-04-20-rpa-trace-first-recording-design.md`
   - Current baseline direction: trace-first recording, Python Playwright scripts, post-recording compilation.
 - `docs/superpowers/specs/2026-04-24-rpa-manual-recording-single-source-design.md`
