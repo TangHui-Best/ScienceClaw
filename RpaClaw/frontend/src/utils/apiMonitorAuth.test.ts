@@ -7,7 +7,7 @@ import {
 } from './apiMonitorAuth';
 
 describe('API Monitor auth helpers', () => {
-  it('exposes the placeholder and test credential types', () => {
+  it('exposes all credential types including placeholder, test, and idaas', () => {
     expect(API_MONITOR_CREDENTIAL_TYPE_OPTIONS).toEqual([
       {
         value: 'placeholder',
@@ -18,6 +18,11 @@ describe('API Monitor auth helpers', () => {
         value: 'test',
         labelKey: 'API Monitor Test credential type',
         descriptionKey: 'API Monitor Test credential type hint',
+      },
+      {
+        value: 'idaas',
+        labelKey: 'API Monitor IDaaS credential type',
+        descriptionKey: 'API Monitor IDaaS credential type hint',
       },
     ]);
   });
