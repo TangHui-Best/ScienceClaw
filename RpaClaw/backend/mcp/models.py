@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
 
-McpTransport = Literal["stdio", "streamable_http", "sse"]
+McpTransport = Literal["stdio", "streamable_http", "sse", "api_monitor"]
 McpScope = Literal["system", "user"]
 McpSessionMode = Literal["inherit", "enabled", "disabled"]
 
@@ -30,6 +30,7 @@ class McpToolPolicy(BaseModel):
 
 class McpServerDefinition(BaseModel):
     id: str
+    user_id: str = ""
     name: str
     description: str = ""
     transport: McpTransport
@@ -45,6 +46,7 @@ class McpServerDefinition(BaseModel):
     timeout_ms: int = 20000
     credential_ref: str = ""
     credential_binding: McpCredentialBinding = Field(default_factory=McpCredentialBinding)
+    api_monitor_auth: Dict[str, Any] = Field(default_factory=dict)
     tool_policy: McpToolPolicy = Field(default_factory=McpToolPolicy)
 
 

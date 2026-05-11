@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 
 from fastapi import FastAPI
@@ -69,6 +70,47 @@ class _MemoryRepo:
         return 0
 
 
+def _api_monitor_server_doc(**overrides):
+    doc = {
+        "_id": "mcp_api_monitor",
+        "user_id": "user-1",
+        "name": "Example MCP",
+        "description": "Captured APIs",
+        "transport": "api_monitor",
+        "source_type": "api_monitor",
+        "enabled": True,
+        "default_enabled": False,
+        "endpoint_config": {},
+        "credential_binding": {},
+    }
+    doc.update(overrides)
+    return doc
+
+
+def _api_monitor_tool_doc(**overrides):
+    doc = {
+        "_id": "tool_1",
+        "mcp_server_id": "mcp_api_monitor",
+        "user_id": "user-1",
+        "name": "search_orders",
+        "description": "Search orders by keyword",
+        "method": "GET",
+        "url": "/api/orders",
+        "input_schema": {"type": "object", "properties": {"keyword": {"type": "string"}}},
+        "path_mapping": {"tenant_id": "{{ tenant_id }}"},
+        "query_mapping": {"keyword": "{{ keyword }}"},
+        "body_mapping": {"page_size": 20},
+        "header_mapping": {"X-Tenant-ID": "{{ tenant_id }}"},
+        "response_schema": {"type": "object"},
+        "yaml_definition": "name: search_orders\n",
+        "validation_status": "valid",
+        "validation_errors": [],
+        "order": 0,
+    }
+    doc.update(overrides)
+    return doc
+
+
 def _build_app():
     app = FastAPI()
     app.include_router(mcp_route.router, prefix="/api/v1")
@@ -133,6 +175,594 @@ def test_list_mcp_servers_returns_normalized_system_and_user_entries(monkeypatch
     assert data[0]["endpoint_config"]["headers"] == {"Authorization": "Bearer top-secret"}
     assert "env" not in data[0]["endpoint_config"]
     assert data[0]["credential_binding"] == {}
+
+
+def test_list_mcp_servers_includes_api_monitor_source(monkeypatch):
+    app = _build_app()
+    client = TestClient(app)
+
+    monkeypatch.setattr(mcp_route, "load_system_mcp_servers", lambda: [])
+
+    async def fake_user_servers(user_id: str):
+        assert user_id == "user-1"
+        return [
+            {
+                "_id": "mcp_api_monitor",
+                "user_id": "user-1",
+                "name": "Example MCP",
+                "description": "Captured APIs",
+                "transport": "api_monitor",
+                "enabled": True,
+                "default_enabled": False,
+                "source_type": "api_monitor",
+            }
+        ]
+
+    monkeypatch.setattr(mcp_route, "_list_user_mcp_servers", fake_user_servers)
+
+    response = client.get("/api/v1/mcp/servers")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data[0]["server_key"] == "user:mcp_api_monitor"
+    assert data[0]["transport"] == "api_monitor"
+    assert data[0]["source_type"] == "api_monitor"
+    assert data[0]["endpoint_config"] == {}
+
+
+def test_discover_mcp_tools_reads_internal_api_monitor_tools(monkeypatch):
+    app = _build_app()
+    client = TestClient(app)
+
+    async def fake_resolve(server_key: str, user_id: str):
+        assert server_key == "user:mcp_api_monitor"
+        assert user_id == "user-1"
+        return {
+            "id": "mcp_api_monitor",
+            "server_key": "user:mcp_api_monitor",
+            "scope": "user",
+            "name": "Example MCP",
+            "description": "Captured APIs",
+            "transport": "api_monitor",
+            "source_type": "api_monitor",
+        }
+
+    async def fake_load_tools(server_id: str, user_id: str):
+        assert server_id == "mcp_api_monitor"
+        assert user_id == "user-1"
+        return [
+            {
+                "name": "list_users",
+                "description": "List users",
+                "input_schema": {"type": "object", "properties": {}},
+            }
+        ]
+
+    monkeypatch.setattr(mcp_route, "_resolve_server_by_key", fake_resolve)
+    monkeypatch.setattr(mcp_route, "_load_api_monitor_tools", fake_load_tools)
+
+    response = client.post("/api/v1/mcp/servers/user:mcp_api_monitor/discover-tools")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["tool_count"] == 1
+    assert data["tools"][0]["name"] == "list_users"
+
+
+def test_api_monitor_detail_includes_external_access_and_caller_auth_requirements(monkeypatch):
+    app = _build_app()
+    client = TestClient(app)
+    server_repo = _MemoryRepo(
+        [
+            _api_monitor_server_doc(
+                api_monitor_auth={
+                    "credential_type": "test",
+                    "credential_id": "cred_1",
+                    "login_url": "https://login.test",
+                },
+                external_access={"enabled": False},
+            )
+        ]
+    )
+    tool_repo = _MemoryRepo([_api_monitor_tool_doc()])
+
+    def fake_get_repository(collection_name: str):
+        return tool_repo if collection_name == "api_monitor_mcp_tools" else server_repo
+
+    monkeypatch.setattr(mcp_route, "get_repository", fake_get_repository)
+
+    response = client.get("/api/v1/mcp/servers/user:mcp_api_monitor/api-monitor-detail")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["server"]["external_access"]["enabled"] is False
+    assert data["server"]["external_access"]["require_caller_credentials"] is True
+    assert data["tools"][0]["caller_auth_requirements"]["required"] is True
+    assert data["tools"][0]["caller_auth_requirements"]["accepted_fields"] == ["_auth.headers.Authorization"]
+
+
+def test_enable_api_monitor_external_access_updates_existing_server_only(monkeypatch):
+    app = _build_app()
+    client = TestClient(app)
+    server_repo = _MemoryRepo([_api_monitor_server_doc(api_monitor_auth={"credential_type": "placeholder"})])
+    monkeypatch.setattr(mcp_route, "get_repository", lambda collection_name: server_repo)
+
+    response = client.post("/api/v1/mcp/servers/user:mcp_api_monitor/api-monitor-external-access/enable")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["enabled"] is True
+    assert data["url"].endswith("/api/v1/api-monitor-mcp/mcp_api_monitor/mcp")
+    stored = server_repo.docs["mcp_api_monitor"]["external_access"]
+    assert stored["enabled"] is True
+    assert "access_token" not in stored
+    assert "access_token_hash" not in stored
+    assert "token_hint" not in stored
+    assert set(server_repo.docs) == {"mcp_api_monitor"}
+
+
+def test_get_api_monitor_external_access_does_not_return_token_fields(monkeypatch):
+    app = _build_app()
+    client = TestClient(app)
+    server_repo = _MemoryRepo(
+        [
+            _api_monitor_server_doc(
+                api_monitor_auth={"credential_type": "test", "login_url": "https://login.test"},
+                external_access={
+                    "enabled": True,
+                },
+            )
+        ]
+    )
+    monkeypatch.setattr(mcp_route, "get_repository", lambda collection_name: server_repo)
+
+    response = client.get("/api/v1/mcp/servers/user:mcp_api_monitor/api-monitor-external-access")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["enabled"] is True
+    assert "access_token" not in data
+    assert "access_token_hash" not in data
+    assert "token_hint" not in data
+
+
+def test_disable_api_monitor_external_access_marks_disabled(monkeypatch):
+    app = _build_app()
+    client = TestClient(app)
+    server_repo = _MemoryRepo(
+        [
+            _api_monitor_server_doc(
+                external_access={
+                    "enabled": True,
+                    "access_token_hash": "legacy-hash",
+                    "token_hint": "legacy",
+                }
+            )
+        ]
+    )
+    monkeypatch.setattr(mcp_route, "get_repository", lambda collection_name: server_repo)
+
+    response = client.post("/api/v1/mcp/servers/user:mcp_api_monitor/api-monitor-external-access/disable")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["enabled"] is False
+    assert server_repo.docs["mcp_api_monitor"]["external_access"]["enabled"] is False
+    assert "access_token_hash" not in server_repo.docs["mcp_api_monitor"]["external_access"]
+    assert "token_hint" not in server_repo.docs["mcp_api_monitor"]["external_access"]
+
+
+def test_load_api_monitor_tools_filters_invalid_and_prefers_parsed_schema(monkeypatch):
+    tool_repo = _MemoryRepo(
+        [
+            {
+                "_id": "tool_valid",
+                "mcp_server_id": "mcp_api_monitor",
+                "user_id": "user-1",
+                "name": "search_orders",
+                "description": "Search orders",
+                "validation_status": "valid",
+                "input_schema": {"type": "object", "properties": {"keyword": {"type": "string"}}},
+                "request_body_schema": {"type": "object", "properties": {"legacy": {"type": "string"}}},
+            },
+            {
+                "_id": "tool_invalid",
+                "mcp_server_id": "mcp_api_monitor",
+                "user_id": "user-1",
+                "name": "broken_tool",
+                "validation_status": "invalid",
+                "input_schema": {"type": "object", "properties": {"broken": {"type": "string"}}},
+            },
+            {
+                "_id": "tool_legacy",
+                "mcp_server_id": "mcp_api_monitor",
+                "user_id": "user-1",
+                "name": "legacy_tool",
+                "request_body_schema": {"type": "object", "properties": {"page": {"type": "integer"}}},
+            },
+        ]
+    )
+    monkeypatch.setattr(mcp_route, "get_repository", lambda collection_name: tool_repo)
+
+    tools = asyncio.run(mcp_route._load_api_monitor_tools("mcp_api_monitor", "user-1"))
+
+    assert [tool["name"] for tool in tools] == ["search_orders", "legacy_tool"]
+    assert tools[0]["input_schema"]["properties"] == {"keyword": {"type": "string"}}
+    assert tools[1]["input_schema"]["properties"] == {"page": {"type": "integer"}}
+
+
+def test_discover_api_monitor_tools_uses_transport_without_source_type(monkeypatch):
+    app = _build_app()
+    client = TestClient(app)
+    tool_repo = _MemoryRepo(
+        [
+            _api_monitor_tool_doc(
+                input_schema={"type": "object", "properties": {"keyword": {"type": "string"}}},
+                request_body_schema={"type": "object", "properties": {"legacy": {"type": "string"}}},
+            ),
+            _api_monitor_tool_doc(
+                _id="tool_invalid",
+                name="broken_tool",
+                validation_status="invalid",
+                input_schema={"type": "object", "properties": {"broken": {"type": "string"}}},
+            ),
+        ]
+    )
+
+    async def fake_user_servers(user_id: str):
+        assert user_id == "user-1"
+        return [
+            _api_monitor_server_doc(
+                source_type="",
+                transport="api_monitor",
+            )
+        ]
+
+    class _RuntimeFactory:
+        def create_runtime(self, server):
+            raise AssertionError("transport=api_monitor discovery should use the internal API Monitor loader")
+
+    monkeypatch.setattr(mcp_route, "load_system_mcp_servers", lambda: [])
+    monkeypatch.setattr(mcp_route, "_list_user_mcp_servers", fake_user_servers)
+    monkeypatch.setattr(mcp_route, "get_repository", lambda collection_name: tool_repo)
+    monkeypatch.setattr(mcp_route, "McpSdkRuntimeFactory", lambda: _RuntimeFactory())
+
+    response = client.post("/api/v1/mcp/servers/user:mcp_api_monitor/discover-tools")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["tool_count"] == 1
+    assert data["tools"] == [
+        {
+            "name": "search_orders",
+            "description": "Search orders by keyword",
+            "input_schema": {"type": "object", "properties": {"keyword": {"type": "string"}}},
+        }
+    ]
+
+
+def test_api_monitor_mcp_detail_returns_yaml_and_contract(monkeypatch):
+    app = _build_app()
+    client = TestClient(app)
+    server_repo = _MemoryRepo([_api_monitor_server_doc()])
+    tool_repo = _MemoryRepo(
+        [
+            _api_monitor_tool_doc(_id="tool_2", name="second_tool", order=2),
+            _api_monitor_tool_doc(_id="tool_1", name="search_orders", order=1),
+        ]
+    )
+
+    def fake_get_repository(collection_name):
+        return server_repo if collection_name == "user_mcp_servers" else tool_repo
+
+    monkeypatch.setattr(mcp_route, "get_repository", fake_get_repository)
+
+    response = client.get("/api/v1/mcp/servers/user:mcp_api_monitor/api-monitor-detail")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["server"]["server_key"] == "user:mcp_api_monitor"
+    assert data["server"]["transport"] == "api_monitor"
+    assert [tool["id"] for tool in data["tools"]] == ["tool_1", "tool_2"]
+    tool = data["tools"][0]
+    assert tool["yaml_definition"] == "name: search_orders\n"
+    assert tool["method"] == "GET"
+    assert tool["url"] == "/api/orders"
+    assert tool["input_schema"]["properties"]["keyword"] == {"type": "string"}
+    assert tool["path_mapping"] == {"tenant_id": "{{ tenant_id }}"}
+    assert tool["query_mapping"] == {"keyword": "{{ keyword }}"}
+    assert tool["body_mapping"] == {"page_size": 20}
+    assert tool["header_mapping"] == {"X-Tenant-ID": "{{ tenant_id }}"}
+    assert tool["response_schema"] == {"type": "object"}
+    assert tool["validation_status"] == "valid"
+    assert tool["validation_errors"] == []
+
+
+def test_update_api_monitor_mcp_config_saves_shared_auth(monkeypatch):
+    app = _build_app()
+    client = TestClient(app)
+    server_repo = _MemoryRepo([_api_monitor_server_doc()])
+
+    monkeypatch.setattr(mcp_route, "get_repository", lambda collection_name: server_repo)
+
+    response = client.put(
+        "/api/v1/mcp/servers/user:mcp_api_monitor/api-monitor-config",
+        json={
+            "name": "Orders MCP",
+            "description": "Updated",
+            "enabled": False,
+            "default_enabled": True,
+            "endpoint_config": {"base_url": "https://api.example.test", "timeout_ms": 15000},
+            "credential_binding": {
+                "credentials": [{"alias": "orders", "credential_id": "cred-orders"}],
+                "headers": {"Authorization": "Bearer {{ orders.password }}"},
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    updated = server_repo.docs["mcp_api_monitor"]
+    assert updated["name"] == "Orders MCP"
+    assert updated["description"] == "Updated"
+    assert updated["enabled"] is False
+    assert updated["default_enabled"] is True
+    assert updated["endpoint_config"]["base_url"] == "https://api.example.test"
+    assert updated["credential_binding"]["credentials"][0]["credential_id"] == "cred-orders"
+    assert "updated_at" in updated
+
+
+def test_update_api_monitor_mcp_config_partial_preserves_existing_shared_auth(monkeypatch):
+    app = _build_app()
+    client = TestClient(app)
+    server_repo = _MemoryRepo(
+        [
+            _api_monitor_server_doc(
+                name="Before",
+                description="Keep me",
+                enabled=False,
+                default_enabled=True,
+                endpoint_config={
+                    "base_url": "https://api.example.test",
+                    "timeout_ms": 15000,
+                    "headers": {"X-Existing": "keep", "X-Override": "old"},
+                    "query": {"existing": "keep"},
+                },
+                credential_binding={
+                    "credentials": [{"alias": "orders", "credential_id": "cred-orders"}],
+                    "headers": {
+                        "Authorization": "Bearer {{ orders.password }}",
+                        "X-Cred-Override": "old",
+                    },
+                    "query": {"api_key": "{{ orders.password }}"},
+                },
+            )
+        ]
+    )
+
+    monkeypatch.setattr(mcp_route, "get_repository", lambda collection_name: server_repo)
+
+    response = client.put(
+        "/api/v1/mcp/servers/user:mcp_api_monitor/api-monitor-config",
+        json={
+            "name": "After",
+            "endpoint_config": {
+                "headers": {"X-New": "1", "X-Override": "new"},
+            },
+            "credential_binding": {
+                "headers": {"X-Cred-New": "1", "X-Cred-Override": "new"},
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    updated = server_repo.docs["mcp_api_monitor"]
+    assert updated["name"] == "After"
+    assert updated["description"] == "Keep me"
+    assert updated["enabled"] is False
+    assert updated["default_enabled"] is True
+    assert updated["endpoint_config"] == {
+        "base_url": "https://api.example.test",
+        "timeout_ms": 15000,
+        "headers": {"X-Existing": "keep", "X-Override": "new", "X-New": "1"},
+        "query": {"existing": "keep"},
+    }
+    assert updated["credential_binding"] == {
+        "credentials": [{"alias": "orders", "credential_id": "cred-orders"}],
+        "headers": {
+            "Authorization": "Bearer {{ orders.password }}",
+            "X-Cred-Override": "new",
+            "X-Cred-New": "1",
+        },
+        "query": {"api_key": "{{ orders.password }}"},
+    }
+
+
+def test_api_monitor_detail_rejects_non_api_monitor_server(monkeypatch):
+    app = _build_app()
+    client = TestClient(app)
+    server_repo = _MemoryRepo(
+        [
+            {
+                "_id": "mcp_user_1",
+                "user_id": "user-1",
+                "name": "Regular MCP",
+                "transport": "streamable_http",
+                "source_type": "",
+                "endpoint_config": {"url": "https://example.test/mcp"},
+            }
+        ]
+    )
+
+    monkeypatch.setattr(mcp_route, "get_repository", lambda collection_name: server_repo)
+
+    response = client.get("/api/v1/mcp/servers/user:mcp_user_1/api-monitor-detail")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "MCP server is not an API Monitor MCP"
+
+
+def test_update_api_monitor_tool_reparses_yaml(monkeypatch):
+    app = _build_app()
+    client = TestClient(app)
+    server_repo = _MemoryRepo([_api_monitor_server_doc()])
+    tool_repo = _MemoryRepo([_api_monitor_tool_doc(base_url="https://api.example.test")])
+
+    def fake_get_repository(collection_name):
+        return server_repo if collection_name == "user_mcp_servers" else tool_repo
+
+    monkeypatch.setattr(mcp_route, "get_repository", fake_get_repository)
+
+    response = client.put(
+        "/api/v1/mcp/servers/user:mcp_api_monitor/api-monitor-tools/tool_1",
+        json={
+            "yaml_definition": """
+name: create_order
+description: Create an order
+method: POST
+url: /api/orders
+parameters:
+  type: object
+  properties:
+    name:
+      type: string
+request:
+  body:
+    name: "{{ name }}"
+response:
+  type: object
+""".strip()
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["id"] == "tool_1"
+    assert data["name"] == "create_order"
+    assert data["method"] == "POST"
+    assert data["body_mapping"] == {"name": "{{ name }}"}
+    assert data["validation_status"] == "valid"
+    assert tool_repo.docs["tool_1"]["name"] == "create_order"
+    assert tool_repo.docs["tool_1"]["base_url"] == "https://api.example.test"
+    assert tool_repo.calls[0]["update"]["$set"]["url_pattern"] == "/api/orders"
+    assert "updated_at" in tool_repo.docs["tool_1"]
+
+
+def test_update_api_monitor_tool_rejects_tool_from_other_server(monkeypatch):
+    app = _build_app()
+    client = TestClient(app)
+    server_repo = _MemoryRepo([_api_monitor_server_doc()])
+    tool_repo = _MemoryRepo([_api_monitor_tool_doc(mcp_server_id="mcp_other")])
+
+    def fake_get_repository(collection_name):
+        return server_repo if collection_name == "user_mcp_servers" else tool_repo
+
+    monkeypatch.setattr(mcp_route, "get_repository", fake_get_repository)
+
+    response = client.put(
+        "/api/v1/mcp/servers/user:mcp_api_monitor/api-monitor-tools/tool_1",
+        json={"yaml_definition": "name: search_orders\n"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "API Monitor tool not found"
+    assert tool_repo.calls == []
+
+
+def test_api_monitor_tool_test_invalid_returns_structured_error(monkeypatch):
+    app = _build_app()
+    client = TestClient(app)
+    server_repo = _MemoryRepo([_api_monitor_server_doc()])
+    tool_repo = _MemoryRepo(
+        [
+            _api_monitor_tool_doc(
+                validation_status="invalid",
+                validation_errors=["name is required"],
+            )
+        ]
+    )
+
+    def fake_get_repository(collection_name):
+        return server_repo if collection_name == "user_mcp_servers" else tool_repo
+
+    class _Runtime:
+        def __init__(self, server):
+            raise AssertionError("invalid tools should not be delegated to runtime")
+
+    monkeypatch.setattr(mcp_route, "get_repository", fake_get_repository)
+    monkeypatch.setattr(mcp_route, "ApiMonitorMcpRuntime", _Runtime)
+
+    response = client.post(
+        "/api/v1/mcp/servers/user:mcp_api_monitor/api-monitor-tools/tool_1/test",
+        json={"arguments": {"keyword": "abc"}},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {
+        "success": False,
+        "validation_status": "invalid",
+        "validation_errors": ["name is required"],
+        "error": "API Monitor tool is invalid",
+    }
+
+
+def test_api_monitor_tool_test_empty_name_returns_structured_error(monkeypatch):
+    app = _build_app()
+    client = TestClient(app)
+    server_repo = _MemoryRepo([_api_monitor_server_doc()])
+    tool_repo = _MemoryRepo([_api_monitor_tool_doc(name="", validation_status="valid")])
+
+    def fake_get_repository(collection_name):
+        return server_repo if collection_name == "user_mcp_servers" else tool_repo
+
+    class _Runtime:
+        def __init__(self, server):
+            raise AssertionError("empty tool names should not be delegated to runtime")
+
+    monkeypatch.setattr(mcp_route, "get_repository", fake_get_repository)
+    monkeypatch.setattr(mcp_route, "ApiMonitorMcpRuntime", _Runtime)
+
+    response = client.post(
+        "/api/v1/mcp/servers/user:mcp_api_monitor/api-monitor-tools/tool_1/test",
+        json={"arguments": {"keyword": "abc"}},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {
+        "success": False,
+        "error": "API Monitor tool has no callable name",
+    }
+
+
+def test_api_monitor_tool_test_valid_delegates_to_runtime(monkeypatch):
+    app = _build_app()
+    client = TestClient(app)
+    server_repo = _MemoryRepo([_api_monitor_server_doc()])
+    tool_repo = _MemoryRepo([_api_monitor_tool_doc()])
+    calls = []
+
+    def fake_get_repository(collection_name):
+        return server_repo if collection_name == "user_mcp_servers" else tool_repo
+
+    class _Runtime:
+        def __init__(self, server):
+            assert server.id == "mcp_api_monitor"
+            assert server.transport == "api_monitor"
+
+        async def call_tool(self, tool_name, arguments):
+            calls.append((tool_name, arguments))
+            return {"success": True, "body": {"ok": True}}
+
+    monkeypatch.setattr(mcp_route, "get_repository", fake_get_repository)
+    monkeypatch.setattr(mcp_route, "ApiMonitorMcpRuntime", _Runtime)
+
+    response = client.post(
+        "/api/v1/mcp/servers/user:mcp_api_monitor/api-monitor-tools/tool_1/test",
+        json={"arguments": {"keyword": "abc"}},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {"success": True, "body": {"ok": True}}
+    assert calls == [("search_orders", {"keyword": "abc"})]
 
 
 def test_create_mcp_server_rejects_stdio_outside_local(monkeypatch):
@@ -766,3 +1396,207 @@ def test_list_session_mcp_returns_session_modes_for_owner(monkeypatch):
     assert data[1]["server_key"] == "user:mcp_user_1"
     assert data[1]["session_mode"] == "disabled"
     assert data[1]["effective_enabled"] is False
+
+
+def test_api_monitor_detail_returns_api_monitor_auth(monkeypatch):
+    app = _build_app()
+    client = TestClient(app)
+    server_repo = _MemoryRepo([
+        _api_monitor_server_doc(api_monitor_auth={"credential_type": "placeholder", "credential_id": "cred_1"})
+    ])
+    tool_repo = _MemoryRepo([_api_monitor_tool_doc()])
+
+    def fake_get_repository(collection_name):
+        return server_repo if collection_name == "user_mcp_servers" else tool_repo
+
+    monkeypatch.setattr(mcp_route, "get_repository", fake_get_repository)
+
+    response = client.get("/api/v1/mcp/servers/user:mcp_api_monitor/api-monitor-detail")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["server"]["api_monitor_auth"] == {
+        "credential_type": "placeholder",
+        "credential_id": "cred_1",
+    }
+
+
+def test_update_api_monitor_mcp_config_saves_api_monitor_auth_and_clears_legacy_auth(monkeypatch):
+    app = _build_app()
+    client = TestClient(app)
+    server_repo = _MemoryRepo([
+        _api_monitor_server_doc(
+            endpoint_config={"headers": {"Authorization": "old"}, "query": {"api_key": "old"}, "timeout_ms": 10000},
+            credential_binding={"headers": {"Authorization": "{{ credential.password }}"}, "query": {"api_key": "{{ credential.password }}"}},
+        )
+    ])
+
+    class _Vault:
+        async def resolve_credential_values(self, user_id: str, cred_id: str):
+            return {"username": "", "password": "secret", "domain": ""}
+
+    monkeypatch.setattr(mcp_route, "get_repository", lambda collection_name: server_repo)
+    monkeypatch.setattr(mcp_route, "get_vault", lambda: _Vault())
+
+    response = client.put(
+        "/api/v1/mcp/servers/user:mcp_api_monitor/api-monitor-config",
+        json={
+            "endpoint_config": {"timeout_ms": 30000},
+            "api_monitor_auth": {"credential_type": "placeholder", "credential_id": "cred_1"},
+        },
+    )
+
+    assert response.status_code == 200
+    updated = server_repo.docs["mcp_api_monitor"]
+    assert updated["api_monitor_auth"] == {"credential_type": "placeholder", "credential_id": "cred_1"}
+    assert updated["endpoint_config"] == {"timeout_ms": 30000}
+    assert updated["credential_binding"] == {}
+
+
+def test_update_api_monitor_mcp_config_replaces_existing_token_flows(monkeypatch):
+    app = _build_app()
+    client = TestClient(app)
+    server_repo = _MemoryRepo([
+        _api_monitor_server_doc(
+            api_monitor_auth={
+                "credential_type": "placeholder",
+                "credential_id": "",
+                "token_flows": [
+                    {
+                        "id": "old_flow",
+                        "name": "old_token",
+                        "producer": {
+                            "request": {"method": "GET", "url": "/api/old"},
+                            "extract": [{"name": "old_token", "from": "response.body", "path": "$.token"}],
+                        },
+                        "consumers": [
+                            {
+                                "method": "GET",
+                                "url": "/api/old-orders",
+                                "inject": {"headers": {"X-Old": "{{ old_token }}"}},
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+    ])
+    monkeypatch.setattr(mcp_route, "get_repository", lambda collection_name: server_repo)
+
+    response = client.put(
+        "/api/v1/mcp/servers/user:mcp_api_monitor/api-monitor-config",
+        json={
+            "api_monitor_auth": {
+                "credential_type": "placeholder",
+                "credential_id": "",
+                "token_flows": [
+                    {
+                        "id": "new_flow",
+                        "name": "csrf_token",
+                        "source": "manual",
+                        "enabled": True,
+                        "producer": {
+                            "request": {"method": "GET", "url": "/api/session"},
+                            "extract": [{"name": "csrf_token", "from": "response.body", "path": "$.csrfToken"}],
+                        },
+                        "consumers": [
+                            {
+                                "method": "POST",
+                                "url": "/api/orders",
+                                "inject": {"headers": {"X-CSRF-Token": "{{ csrf_token }}"}},
+                            }
+                        ],
+                    }
+                ],
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    flows = server_repo.docs["mcp_api_monitor"]["api_monitor_auth"]["token_flows"]
+    assert [flow["id"] for flow in flows] == ["new_flow"]
+    assert flows[0]["consumers"][0]["url"] == "/api/orders"
+
+
+def test_update_api_monitor_mcp_config_allows_clearing_token_flows(monkeypatch):
+    app = _build_app()
+    client = TestClient(app)
+    server_repo = _MemoryRepo([
+        _api_monitor_server_doc(
+            api_monitor_auth={
+                "credential_type": "placeholder",
+                "credential_id": "",
+                "token_flows": [
+                    {
+                        "id": "old_flow",
+                        "name": "old_token",
+                        "producer": {
+                            "request": {"method": "GET", "url": "/api/old"},
+                            "extract": [{"name": "old_token", "from": "response.body", "path": "$.token"}],
+                        },
+                        "consumers": [
+                            {
+                                "method": "GET",
+                                "url": "/api/orders",
+                                "inject": {"headers": {"X-Old": "{{ old_token }}"}},
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+    ])
+    monkeypatch.setattr(mcp_route, "get_repository", lambda collection_name: server_repo)
+
+    response = client.put(
+        "/api/v1/mcp/servers/user:mcp_api_monitor/api-monitor-config",
+        json={"api_monitor_auth": {"credential_type": "placeholder", "credential_id": "", "token_flows": []}},
+    )
+
+    assert response.status_code == 200
+    assert server_repo.docs["mcp_api_monitor"]["api_monitor_auth"]["token_flows"] == []
+
+
+def test_update_api_monitor_mcp_config_rejects_invalid_token_flow(monkeypatch):
+    app = _build_app()
+    client = TestClient(app)
+    server_repo = _MemoryRepo([_api_monitor_server_doc()])
+    monkeypatch.setattr(mcp_route, "get_repository", lambda collection_name: server_repo)
+
+    response = client.put(
+        "/api/v1/mcp/servers/user:mcp_api_monitor/api-monitor-config",
+        json={
+            "api_monitor_auth": {
+                "credential_type": "placeholder",
+                "credential_id": "",
+                "token_flows": [
+                    {
+                        "id": "bad_flow",
+                        "name": "csrf_token",
+                        "producer": {
+                            "request": {"method": "GET", "url": "/api/session"},
+                            "extract": [{"name": "csrf_token", "from": "response.body", "path": "$.csrfToken"}],
+                        },
+                        "consumers": [{"method": "POST", "url": "/api/orders", "inject": {"headers": {}}}],
+                    }
+                ],
+            }
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Invalid token flow: bad_flow" in response.json()["detail"]
+
+
+def test_update_api_monitor_mcp_config_rejects_unknown_credential_type(monkeypatch):
+    app = _build_app()
+    client = TestClient(app)
+    server_repo = _MemoryRepo([_api_monitor_server_doc()])
+    monkeypatch.setattr(mcp_route, "get_repository", lambda collection_name: server_repo)
+
+    response = client.put(
+        "/api/v1/mcp/servers/user:mcp_api_monitor/api-monitor-config",
+        json={"api_monitor_auth": {"credential_type": "bearer_token", "credential_id": ""}},
+    )
+
+    assert response.status_code == 400
+    assert "api_monitor_auth.credential_type" in response.json()["detail"]

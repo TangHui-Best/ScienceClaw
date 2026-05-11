@@ -83,6 +83,36 @@ def test_load_user_mcp_servers_stringifies_mongo_like_id(monkeypatch):
     assert [server.id for server in servers] == ["user-mcp-1"]
 
 
+def test_load_user_api_monitor_mcp_defaults_enabled_and_endpoint_config(monkeypatch):
+    repo = FakeRepo(
+        [
+            {
+                "_id": "mcp_api_monitor",
+                "name": "API Monitor",
+                "transport": "api_monitor",
+                "default_enabled": True,
+                "endpoint_config": {
+                    "base_url": "https://api.example.test/v1",
+                    "headers": {"X-Api-Key": "server-secret"},
+                    "query": {"tenant": "acme"},
+                    "timeout_ms": 15000,
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(mcp_registry, "get_repository", lambda _: repo)
+
+    servers = asyncio.run(mcp_registry._load_user_mcp_servers("u1"))
+
+    assert len(servers) == 1
+    assert servers[0].id == "mcp_api_monitor"
+    assert servers[0].transport == "api_monitor"
+    assert servers[0].default_enabled is True
+    assert servers[0].url == "https://api.example.test/v1?tenant=acme"
+    assert servers[0].headers == {"X-Api-Key": "server-secret"}
+    assert servers[0].timeout_ms == 15000
+
+
 def test_build_effective_mcp_servers_excludes_disabled_user_servers(monkeypatch):
     system_server = McpServerDefinition(
         id="pubmed",
@@ -238,3 +268,59 @@ def test_build_effective_mcp_servers_skips_user_mcp_when_credentials_fail(monkey
     monkeypatch.setattr(mcp_registry, "resolve_mcp_credential_config", fake_resolve)
 
     assert asyncio.run(build_effective_mcp_servers("s1", "u1")) == []
+
+
+def test_load_user_api_monitor_mcp_includes_api_monitor_auth(monkeypatch):
+    repo = FakeRepo(
+        [
+            {
+                "_id": "mcp_api_monitor",
+                "user_id": "u1",
+                "name": "API Monitor",
+                "description": "Captured APIs",
+                "transport": "api_monitor",
+                "enabled": True,
+                "default_enabled": True,
+                "source_type": "api_monitor",
+                "endpoint_config": {"base_url": "https://api.example.test"},
+                "api_monitor_auth": {"credential_type": "placeholder", "credential_id": "cred_1"},
+            }
+        ]
+    )
+    monkeypatch.setattr(mcp_registry, "get_repository", lambda _: repo)
+
+    servers = asyncio.run(mcp_registry._load_user_mcp_servers("u1"))
+
+    assert servers[0].user_id == "u1"
+    assert servers[0].api_monitor_auth == {"credential_type": "placeholder", "credential_id": "cred_1"}
+
+
+def test_build_effective_mcp_servers_skips_legacy_credential_resolution_for_new_api_monitor_auth(monkeypatch):
+    api_server = McpServerDefinition(
+        id="mcp_api_monitor",
+        user_id="u1",
+        name="API Monitor",
+        transport="api_monitor",
+        scope="user",
+        enabled=True,
+        default_enabled=True,
+        api_monitor_auth={"credential_type": "placeholder", "credential_id": "cred_1"},
+    )
+
+    async def fake_user_servers(user_id: str):
+        return [api_server]
+
+    async def fake_bindings(session_id: str, user_id: str):
+        return {}
+
+    async def exploding_apply(server, user_id):
+        raise AssertionError("new API Monitor auth should not use legacy credential templates")
+
+    monkeypatch.setattr(mcp_registry, "load_system_mcp_servers", lambda: [])
+    monkeypatch.setattr(mcp_registry, "_load_user_mcp_servers", fake_user_servers)
+    monkeypatch.setattr(mcp_registry, "_load_session_mcp_bindings", fake_bindings)
+    monkeypatch.setattr(mcp_registry, "apply_mcp_credentials", exploding_apply)
+
+    servers = asyncio.run(build_effective_mcp_servers("s1", "u1"))
+
+    assert servers == [api_server]

@@ -324,6 +324,15 @@ class SessionScreencastController:
         except Exception:
             self._running = False
 
+    async def send_monitor_log(self, level: str, message: str) -> None:
+        """Send a monitor log event to the frontend via WebSocket."""
+        if not self._ws or not self._running:
+            return
+        try:
+            await self._ws.send_json({"type": "monitor_log", "level": level, "message": message})
+        except Exception:
+            pass
+
     async def _recv_loop(self) -> None:
         while self._running:
             try:
@@ -348,6 +357,19 @@ class SessionScreencastController:
                 await self._dispatch_key(msg)
             elif msg_type == "wheel":
                 await self._dispatch_wheel(msg)
+            elif msg_type == "paste":
+                await self._dispatch_paste(msg)
+
+    async def _dispatch_paste(self, event: Dict[str, Any]) -> None:
+        if not self._cdp:
+            return
+        text = event.get("text", "")
+        if not text:
+            return
+        try:
+            await self._cdp.send("Input.insertText", {"text": text})
+        except Exception as exc:
+            logger.debug(f"[Screencast] paste dispatch error: {exc}")
 
     async def _refresh_input_metrics(self, force: bool = False) -> None:
         if not self._cdp:
@@ -522,6 +544,19 @@ class ScreencastService:
                 await self._dispatch_key(msg)
             elif msg_type == "wheel":
                 await self._dispatch_wheel(msg)
+            elif msg_type == "paste":
+                await self._dispatch_paste(msg)
+
+    async def _dispatch_paste(self, event: Dict[str, Any]) -> None:
+        if not self._cdp:
+            return
+        text = event.get("text", "")
+        if not text:
+            return
+        try:
+            await self._cdp.send("Input.insertText", {"text": text})
+        except Exception as exc:
+            logger.debug(f"[Screencast] paste dispatch error: {exc}")
 
     async def _refresh_input_metrics(self, force: bool = False) -> None:
         if not self._cdp:

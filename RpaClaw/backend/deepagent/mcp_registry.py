@@ -21,23 +21,30 @@ async def _load_user_mcp_servers(user_id: str) -> List[McpServerDefinition]:
     servers: List[McpServerDefinition] = []
     for doc in docs:
         endpoint = doc.get("endpoint_config") or {}
+        endpoint_url = endpoint.get("url") or endpoint.get("base_url", "")
+        endpoint_query = endpoint.get("query") or {}
+        if endpoint_query:
+            endpoint_url = append_query_params(endpoint_url, endpoint_query)
+        default_timeout_ms = 30000 if doc["transport"] == "api_monitor" else 20000
         servers.append(
             McpServerDefinition(
                 id=str(doc["_id"]),
+                user_id=str(doc.get("user_id") or user_id),
                 name=doc["name"],
                 description=doc.get("description", ""),
                 transport=doc["transport"],
                 scope="user",
                 enabled=doc.get("enabled", True),
                 default_enabled=doc.get("default_enabled", False),
-                url=endpoint.get("url", ""),
+                url=endpoint_url,
                 command=endpoint.get("command", ""),
                 args=endpoint.get("args", []),
                 cwd=endpoint.get("cwd", ""),
                 headers=endpoint.get("headers", {}),
                 env=endpoint.get("env", {}),
-                timeout_ms=endpoint.get("timeout_ms", 20000),
+                timeout_ms=endpoint.get("timeout_ms", default_timeout_ms),
                 credential_binding=doc.get("credential_binding") or {},
+                api_monitor_auth=doc.get("api_monitor_auth") or {},
                 tool_policy=doc.get("tool_policy", {}),
             )
         )
@@ -63,7 +70,7 @@ async def build_effective_mcp_servers(session_id: str, user_id: str) -> List[Mcp
         if mode == "disabled":
             continue
         if mode == "enabled" or server.default_enabled:
-            if server.scope == "user":
+            if server.scope == "user" and _should_apply_legacy_mcp_credentials(server):
                 try:
                     server = await apply_mcp_credentials(server, user_id)
                 except McpCredentialResolutionError as exc:
@@ -71,6 +78,10 @@ async def build_effective_mcp_servers(session_id: str, user_id: str) -> List[Mcp
                     continue
             effective.append(server)
     return effective
+
+
+def _should_apply_legacy_mcp_credentials(server: McpServerDefinition) -> bool:
+    return not (server.transport == "api_monitor" and bool(server.api_monitor_auth))
 
 
 async def apply_mcp_credentials(server: McpServerDefinition, user_id: str) -> McpServerDefinition:

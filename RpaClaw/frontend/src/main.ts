@@ -25,6 +25,7 @@ import RecorderPage from './pages/rpa/RecorderPage.vue'
 import ConfigurePage from './pages/rpa/ConfigurePage.vue'
 import TestPage from './pages/rpa/TestPage.vue'
 import McpConvertPage from './pages/rpa/McpConvertPage.vue'
+import ApiMonitorPage from './pages/rpa/ApiMonitorPage.vue'
 import McpToolEditorPage from './pages/tools/McpToolEditorPage.vue'
 import { configure } from "vue-gtag";
 
@@ -80,6 +81,11 @@ export const router = createRouter({
         {
           path: 'tools/:toolName',
           component: ToolDetailPage,
+          meta: { requiresAuth: true }
+        },
+        {
+          path: 'api-monitor',
+          component: ApiMonitorPage,
           meta: { requiresAuth: true }
         },
         {

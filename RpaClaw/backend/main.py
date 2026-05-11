@@ -13,6 +13,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from contextlib import asynccontextmanager
 
+from backend.tls_trust import configure_tls_trust
+
+configure_tls_trust()
+
 from backend.storage import init_storage, close_storage, get_repository
 from backend.route.auth import router as auth_router
 from backend.route.sessions import router as sessions_router, cleanup_orphaned_sessions, graceful_shutdown_agents
@@ -26,6 +30,8 @@ from backend.route.rpa import router as rpa_router
 from backend.route.credential import router as credential_router
 from backend.route.mcp import router as mcp_router
 from backend.route.rpa_mcp import router as rpa_mcp_router
+from backend.route.api_monitor import router as api_monitor_router
+from backend.route.api_monitor_mcp_gateway import router as api_monitor_mcp_gateway_router
 from backend.route.runtime_proxy import router as runtime_proxy_router
 from backend.runtime.session_runtime_manager import get_session_runtime_manager
 from backend.models import init_system_models
@@ -164,6 +170,8 @@ def create_app() -> FastAPI:
     app.include_router(credential_router, prefix="/api/v1")
     app.include_router(mcp_router, prefix="/api/v1")
     app.include_router(rpa_mcp_router, prefix="/api/v1")
+    app.include_router(api_monitor_router, prefix="/api/v1")
+    app.include_router(api_monitor_mcp_gateway_router, prefix="/api/v1")
 
     logger.info("FastAPI initialized with /api/v1 endpoints")
     return app

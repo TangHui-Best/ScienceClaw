@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   computeEffectiveMcpEnabled,
   buildUnifiedMcpItems,
+  formatApiMonitorRequestPreview,
   formatMcpServerDescription,
   groupMcpServers,
   hasCredentialTemplate,
@@ -77,6 +78,15 @@ describe('formatMcpServerDescription', () => {
       ),
     ).toBe('PubMed search access');
   });
+
+  it('uses API Monitor fallback copy for API Monitor MCP servers', () => {
+    expect(
+      formatMcpServerDescription(
+        { id: 'mcp_api_monitor', scope: 'user', transport: 'api_monitor', source_type: 'api_monitor' },
+        (key) => `translated:${key}`,
+      ),
+    ).toBe('translated:API Monitor MCP description');
+  });
 });
 
 describe('computeEffectiveMcpEnabled', () => {
@@ -142,6 +152,37 @@ X-Api-Key: abc:123
   it('stringifies headers back to editable text', () => {
     expect(stringifyHttpHeaders({ Authorization: 'Bearer token', Accept: 'application/json' })).toBe(
       'Authorization: Bearer token\nAccept: application/json',
+    );
+  });
+});
+
+describe('formatApiMonitorRequestPreview', () => {
+  it('formats a sanitized preview into readable request lines', () => {
+    expect(
+      formatApiMonitorRequestPreview({
+        method: 'GET',
+        url: 'https://example.test/api/users/42?access_token=***',
+        query: {
+          tenant: 'acme',
+          credential: '***',
+          expand: 'profile',
+          count: 3,
+          accessToken: '***',
+        },
+        headers: {
+          Accept: 'application/json',
+          'X-Api-Key': '***',
+          'X-Request-Id': 'req-1',
+          Authorization: '***',
+        },
+        body: null,
+      }),
+    ).toBe(
+      [
+        'GET https://example.test/api/users/42?access_token=***',
+        'query: {"tenant":"acme","credential":"***","expand":"profile","count":3,"accessToken":"***"}',
+        'headers: {"Accept":"application/json","X-Api-Key":"***","X-Request-Id":"req-1","Authorization":"***"}',
+      ].join('\n'),
     );
   });
 });
@@ -228,6 +269,15 @@ describe('formatMcpToolDisplayName', () => {
 });
 
 describe('formatMcpServerEndpoint', () => {
+  it('shows internal origin for API Monitor MCP servers', () => {
+    expect(
+      formatMcpServerEndpoint({
+        transport: 'api_monitor',
+        endpoint_config: {},
+      }),
+    ).toBe('Internal API Monitor MCP');
+  });
+
   it('shows the command for stdio MCP servers', () => {
     expect(
       formatMcpServerEndpoint({
