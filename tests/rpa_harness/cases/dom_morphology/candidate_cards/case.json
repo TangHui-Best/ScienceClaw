@@ -1,0 +1,35 @@
+{
+  "case_id": "candidate_cards",
+  "case_type": "dom_morphology",
+  "title": "Candidate cards",
+  "task_shape": "candidate_selection",
+  "instruction": "Choose the Beta Research candidate from the candidate list",
+  "source": "curated_structural_fixture",
+  "char_budget": 1,
+  "raw_snapshot": {
+    "url": "https://structure.test/candidates",
+    "title": "Candidates",
+    "containers": [
+      {
+        "container_id": "candidate-list",
+        "container_kind": "list",
+        "name": "Candidate Results"
+      }
+    ],
+    "content_nodes": [
+      {"node_id": "alpha-title", "container_id": "candidate-list", "semantic_kind": "item", "text": "Alpha Analytics", "bbox": {"x": 24, "y": 30, "width": 220, "height": 20}, "locator": {"method": "css", "value": "a[data-card='alpha']"}},
+      {"node_id": "alpha-desc", "container_id": "candidate-list", "semantic_kind": "text", "text": "Finance metrics workspace", "bbox": {"x": 24, "y": 54, "width": 260, "height": 20}},
+      {"node_id": "beta-title", "container_id": "candidate-list", "semantic_kind": "item", "text": "Beta Research", "bbox": {"x": 24, "y": 100, "width": 220, "height": 20}, "locator": {"method": "css", "value": "a[data-card='beta']"}},
+      {"node_id": "beta-desc", "container_id": "candidate-list", "semantic_kind": "text", "text": "Science literature workspace", "bbox": {"x": 24, "y": 124, "width": 260, "height": 20}},
+      {"node_id": "gamma-title", "container_id": "candidate-list", "semantic_kind": "item", "text": "Gamma Archive", "bbox": {"x": 24, "y": 170, "width": 220, "height": 20}, "locator": {"method": "css", "value": "a[data-card='gamma']"}},
+      {"node_id": "gamma-desc", "container_id": "candidate-list", "semantic_kind": "text", "text": "Historical documents workspace", "bbox": {"x": 24, "y": 194, "width": 260, "height": 20}}
+    ],
+    "actionable_nodes": [],
+    "frames": []
+  },
+  "expected_raw_facts": ["Alpha Analytics", "Beta Research", "Gamma Archive", "Science literature workspace"],
+  "expected_compact_facts": ["Alpha Analytics", "Beta Research", "Gamma Archive", "Science literature workspace"],
+  "expected_semantic_view": {"kind": "record_list"},
+  "expected_locator_preservation": ["a[data-card='beta']"],
+  "guarded_failure_mode": "candidate selection keeps only one top region and loses the horizontal candidate set or primary locator"
+}
