@@ -16,6 +16,9 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from backend.rpa.harness.failure_capture import capture_rpa_failure_packet
+from backend.rpa.harness.packets import RPAHarnessStage
+
 from .assistant_runtime import build_page_snapshot
 from .frame_selectors import build_frame_path
 from .snapshot_compression import compact_recording_snapshot
@@ -192,15 +195,25 @@ class RecordingRuntimeAgent:
             try:
                 first_plan = await self.planner(payload)
             except Exception as exc:
+                diagnostic = _planner_contract_diagnostic(
+                    exc,
+                    stage="initial",
+                    model_config=self.model_config,
+                )
+                _capture_recording_failure_packet(
+                    debug_context=debug_context,
+                    stage=RPAHarnessStage.PLANNER,
+                    failure_type="planner_contract",
+                    instruction=instruction,
+                    page_state=before,
+                    raw_error=diagnostic.raw,
+                    snapshot_after_failure=snapshot,
+                    compact_snapshot=compact_snapshot,
+                    metadata={"diagnostic_mode": False},
+                )
                 return RecordingAgentResult(
                     success=False,
-                    diagnostics=[
-                        _planner_contract_diagnostic(
-                            exc,
-                            stage="initial",
-                            model_config=self.model_config,
-                        )
-                    ],
+                    diagnostics=[diagnostic],
                     message="Recording planner failed to return a valid plan.",
                 )
         first_llm_call = self._planner_llm_call_since(first_planner_call_index)
@@ -293,6 +306,30 @@ class RecordingRuntimeAgent:
                 raw=diagnostic_raw,
             )
         ]
+        _capture_recording_failure_packet(
+            debug_context=debug_context,
+            stage=RPAHarnessStage.EXECUTION,
+            failure_type=_recording_failure_type(
+                first_failure_analysis,
+                first_error_type,
+            ),
+            instruction=instruction,
+            page_state=failed_page,
+            failed_plan=first_plan,
+            raw_error={
+                "message": first_error,
+                "error_type": first_error_type,
+                "traceback": first_traceback,
+                "result": _safe_jsonable(first_result),
+            },
+            snapshot_after_failure=failed_snapshot,
+            compact_snapshot=compact_failed_snapshot,
+            metadata={
+                "diagnostic_mode": False,
+                "error_type": first_error_type,
+                "failure_analysis": first_known_failure_analysis,
+            },
+        )
 
         repair_context = {
             "error": first_error,
@@ -314,12 +351,24 @@ class RecordingRuntimeAgent:
         try:
             repair_plan = await self.planner(repair_payload)
         except Exception as exc:
-            diagnostics.append(
-                _planner_contract_diagnostic(
-                    exc,
-                    stage="repair",
-                    model_config=self.model_config,
-                )
+            diagnostic = _planner_contract_diagnostic(
+                exc,
+                stage="repair",
+                model_config=self.model_config,
+            )
+            diagnostics.append(diagnostic)
+            _capture_recording_failure_packet(
+                debug_context=debug_context,
+                stage=RPAHarnessStage.REPAIR,
+                failure_type="planner_contract",
+                instruction=instruction,
+                page_state=failed_page,
+                failed_plan=first_plan,
+                raw_error=diagnostic.raw,
+                snapshot_after_failure=failed_snapshot,
+                compact_snapshot=compact_failed_snapshot,
+                repair_input=repair_context,
+                metadata={"diagnostic_mode": False},
             )
             return RecordingAgentResult(
                 success=False,
@@ -368,6 +417,9 @@ class RecordingRuntimeAgent:
         repair_traceback = str(repair_result.get("traceback") or "").strip()
         repair_failure_analysis = _classify_recording_failure(repair_error)
         repair_known_failure_analysis = _known_failure_analysis(repair_error)
+        repair_failed_page = await _page_state(page)
+        repair_failed_snapshot = await _safe_page_snapshot(page)
+        compact_repair_failed_snapshot = _compact_snapshot(repair_failed_snapshot, instruction)
         logger.warning(
             "[RPA] recording command repair failed type=%s error=%s",
             repair_failure_analysis.get("type", "unknown"),
@@ -391,6 +443,32 @@ class RecordingRuntimeAgent:
                 message=repair_error,
                 raw=repair_diagnostic_raw,
             )
+        )
+        _capture_recording_failure_packet(
+            debug_context=debug_context,
+            stage=RPAHarnessStage.REPAIR,
+            failure_type=_recording_failure_type(
+                repair_failure_analysis,
+                repair_error_type,
+            ),
+            instruction=instruction,
+            page_state=repair_failed_page,
+            failed_plan=repair_plan,
+            raw_error={
+                "message": repair_error,
+                "error_type": repair_error_type,
+                "traceback": repair_traceback,
+                "result": _safe_jsonable(repair_result),
+            },
+            snapshot_after_failure=repair_failed_snapshot,
+            compact_snapshot=compact_repair_failed_snapshot,
+            repair_input=repair_context,
+            repair_output=repair_diagnostic_raw,
+            metadata={
+                "diagnostic_mode": False,
+                "error_type": repair_error_type,
+                "failure_analysis": repair_known_failure_analysis,
+            },
         )
         return RecordingAgentResult(
             success=False,
@@ -2167,6 +2245,59 @@ def _write_recording_attempt_debug(
     except Exception:
         logger.warning("[RPA-DIAG] attempt dump failed stage=%s", stage, exc_info=True)
         return
+
+
+def _capture_recording_failure_packet(
+    *,
+    debug_context: Dict[str, Any],
+    stage: RPAHarnessStage,
+    failure_type: str,
+    instruction: str,
+    page_state: RPAPageState,
+    failed_plan: Optional[Dict[str, Any]] = None,
+    raw_error: Any = None,
+    snapshot_after_failure: Any = None,
+    compact_snapshot: Any = None,
+    repair_input: Any = None,
+    repair_output: Any = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    session_id = str(debug_context.get("session_id") or "").strip()
+    if not session_id:
+        return
+    capture_rpa_failure_packet(
+        session_id=session_id,
+        step_id=str(debug_context.get("step_id") or "").strip() or None,
+        stage=stage,
+        failure_type=failure_type,
+        user_instruction=instruction,
+        current_url=page_state.url,
+        current_title=page_state.title,
+        failed_plan=failed_plan,
+        raw_error=raw_error,
+        snapshot_after_failure=snapshot_after_failure,
+        compact_snapshot=compact_snapshot,
+        repair_input=repair_input,
+        repair_output=repair_output,
+        metadata=metadata,
+    )
+
+
+def _recording_failure_type(
+    analysis: Dict[str, str],
+    error_type: str,
+) -> str:
+    analysis_type = str(analysis.get("type") or "").strip()
+    if analysis_type and analysis_type != "unknown":
+        return analysis_type
+    normalized_error_type = str(error_type or "").strip().lower()
+    if "timeout" in normalized_error_type:
+        return "timeout"
+    if normalized_error_type == "runtimeerror":
+        return "runtime_error"
+    if normalized_error_type:
+        return _safe_debug_path_segment(normalized_error_type, allow_unicode=False)
+    return "unknown"
 
 
 def _build_snapshot_debug_metrics(raw_snapshot: Dict[str, Any], compact_snapshot: Dict[str, Any]) -> Dict[str, Any]:

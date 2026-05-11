@@ -8,6 +8,7 @@ from typing import Any
 from backend.rpa.harness.packets import (
     FailurePacket,
     ObservationPacket,
+    RPAHarnessArtifactRef,
     RPAHarnessRedactionPolicy,
 )
 from backend.rpa.harness.redaction import redact_payload
@@ -40,6 +41,39 @@ class RPAHarnessArtifactStore:
 
         self.prune(packet.packet_kind)
         return packet_path
+
+    def write_packet_artifact(
+        self,
+        packet_kind: str,
+        packet_id: str,
+        artifact_name: str,
+        payload: Any,
+        *,
+        media_type: str = "application/json",
+    ) -> RPAHarnessArtifactRef:
+        self._validate_path_segment(artifact_name, "artifact_name")
+        packet_dir = self._packet_dir(packet_kind, packet_id)
+        artifact_dir = (packet_dir / "artifacts").resolve()
+        self._validate_under_root(artifact_dir)
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+
+        artifact_path = (artifact_dir / artifact_name).resolve()
+        self._validate_under_root(artifact_path)
+        redacted_payload = redact_payload(payload, self.redaction_policy)
+        if media_type == "application/json":
+            artifact_path.write_text(
+                json.dumps(redacted_payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        else:
+            artifact_path.write_text(str(redacted_payload), encoding="utf-8")
+
+        relative_path = artifact_path.relative_to(self.root.resolve()).as_posix()
+        return RPAHarnessArtifactRef(
+            path=relative_path,
+            media_type=media_type,
+            redacted=True,
+        )
 
     def read_observation_packet(self, path: str | Path) -> ObservationPacket:
         return ObservationPacket.model_validate(self._read_packet_json(path))

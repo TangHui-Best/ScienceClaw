@@ -41,6 +41,7 @@ Current accepted direction:
 - Related compiler strategy: [TraceSkillCompiler Generalization](../rpa/trace-skill-compiler-generalization.md)
 - Design index: [Design Document Status](../DESIGN_STATUS.md)
 - Batch 0 plan: [RPA Harness Batch 0 Implementation Plan](../rpa/rpa-harness-batch-0-implementation-plan.md)
+- Batch 1 plan: [RPA Harness Batch 1 Implementation Plan](../rpa/rpa-harness-batch-1-implementation-plan.md)
 
 ## Acceptance Criteria
 
@@ -107,9 +108,33 @@ Required next action:
   isolation checks.
 - 2026-05-11: Verified with
   `$env:PYTHONPATH="RpaClaw"; pytest RpaClaw/backend/tests/test_rpa_trace_models.py RpaClaw/backend/tests/test_rpa_harness_packets.py -q --basetemp .pytest-tmp`.
+- 2026-05-11: Created Batch 1 implementation plan at
+  `docs/rpa/rpa-harness-batch-1-implementation-plan.md`.
+- 2026-05-11: Batch 1 implemented the first recording-time failure capture
+  loop: planner/execution/repair failures emit redacted `FailurePacket`
+  artifacts while pure successful recording paths write no failure packet.
+- 2026-05-11: Verified Batch 1 packet and trace-model checks with
+  `$env:PYTHONPATH="RpaClaw"; pytest RpaClaw/backend/tests/test_rpa_trace_models.py RpaClaw/backend/tests/test_rpa_harness_packets.py -q --basetemp .pytest-tmp-batch1`
+  (`31 passed`), and verified the runtime failure-capture tests with
+  `$env:PYTHONPATH="RpaClaw"; pytest RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_recording_runtime_agent_success_does_not_write_failure_packet RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_recording_runtime_agent_planner_failure_packet_includes_snapshots RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_recording_runtime_agent_writes_execution_failure_packet_before_repair RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_recording_runtime_agent_writes_repair_failure_packet -q --basetemp .pytest-tmp-batch1-runtime-focused`
+  (`4 passed`).
+- 2026-05-11: Independent review found two Batch 1 gaps: text/string redaction
+  was weaker than artifact `redacted=True` implied, and initial planner
+  failures omitted already-available snapshot evidence. Batch 1 fixed both and
+  added regression coverage for URL/code/email/sensitive label-value redaction
+  and planner-failure snapshot refs.
+- 2026-05-11: Follow-up review found generated-code redaction still missed
+  common Playwright and dict-literal shapes such as password fills and
+  `{"password": "..."}`. Batch 1 added regression coverage and redaction for
+  those text forms, then re-verified packet and runtime focused tests.
+- 2026-05-11: Re-ran Batch 1 verification with the project virtual
+  environment at `.venv\Scripts\python.exe`: packet/trace-model checks passed
+  with `31 passed`, and full
+  `RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py` passed with
+  `63 passed`.
 
 ## Next Step
 
-Proceed to Batch 1 only after at least one real RPA failure packet shape is
-reviewed for redaction quality and storage cost. Do not auto-promote captured
-packets into harness cases.
+Review Batch 1 failure packet shape for redaction quality and storage cost
+against one real RPA failure. Do not auto-promote captured packets into harness
+cases.
