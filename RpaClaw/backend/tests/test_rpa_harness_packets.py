@@ -1,11 +1,13 @@
 import ast
 import importlib.util
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
+from backend.rpa.harness.failure_capture import capture_rpa_failure_packet
 from backend.rpa.harness.artifact_store import RPAHarnessArtifactStore
 from backend.rpa.harness.packets import (
     FailurePacket,
@@ -79,7 +81,6 @@ def test_batch_0_does_not_import_harness_from_production_rpa_path():
     backend_root = Path(__file__).resolve().parents[1]
     root = backend_root / "rpa"
     production_files = [
-        root / "recording_runtime_agent.py",
         root / "trace_recorder.py",
         root / "trace_skill_compiler.py",
         root.parent / "route" / "rpa.py",
@@ -119,6 +120,16 @@ def test_batch_0_does_not_import_harness_from_production_rpa_path():
     ]
     for source in allowed_non_import_references:
         assert not _imports_rpa_harness(source, "backend.route.rpa")
+
+
+def test_batch_1_allows_recording_runtime_failure_capture_seam_only():
+    backend_root = Path(__file__).resolve().parents[1]
+    source = (backend_root / "rpa" / "recording_runtime_agent.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "backend.rpa.harness.failure_capture" in source
+    assert "evaluator" not in source.lower()
 
 
 def test_artifact_ref_defaults_match_task_1_schema():
@@ -179,6 +190,48 @@ def test_redaction_replaces_sensitive_keys_recursively():
     assert redacted["profile"]["name"] == "Visible Name"
     assert redacted["items"][0]["api_key"] == "<redacted>"
     assert redacted["items"][1]["label"] == "public"
+
+
+def test_redaction_replaces_sensitive_values_in_text_and_urls():
+    payload = {
+        "url": "https://example.test/callback?access_token=abc123&view=public",
+        "code": (
+            "password = 'plain-secret'\n"
+            "headers = {'Authorization': 'Bearer abc123'}\n"
+            "await page.fill(\"input[name=password]\", \"typed-secret\")\n"
+            "payload = {\"password\": \"dict-secret\"}"
+        ),
+        "contact": "user@example.test",
+        "safe": "visible",
+    }
+
+    redacted = redact_payload(payload, RPAHarnessRedactionPolicy())
+
+    assert "abc123" not in redacted["url"]
+    assert "access_token=<redacted>" in redacted["url"]
+    assert "plain-secret" not in redacted["code"]
+    assert "typed-secret" not in redacted["code"]
+    assert "dict-secret" not in redacted["code"]
+    assert "Authorization': '<redacted>'" in redacted["code"]
+    assert redacted["contact"] == "<redacted>"
+    assert redacted["safe"] == "visible"
+
+
+def test_redaction_replaces_value_when_sibling_label_is_sensitive():
+    payload = {
+        "snapshot": {
+            "content_nodes": [
+                {"label": "Password", "value": "plain-secret"},
+                {"label": "Project", "value": "ScienceClaw"},
+            ]
+        }
+    }
+
+    redacted = redact_payload(payload, RPAHarnessRedactionPolicy())
+
+    nodes = redacted["snapshot"]["content_nodes"]
+    assert nodes[0]["value"] == "<redacted>"
+    assert nodes[1]["value"] == "ScienceClaw"
 
 
 def test_observation_packet_serializes_references_and_stage():
@@ -364,6 +417,99 @@ def test_artifact_store_writes_and_reads_synthetic_failure_packet(tmp_path):
     assert loaded.packet_id == "fail-write-read"
     assert loaded.metadata["password"] == "<redacted>"
     assert loaded.metadata["visible"] == "kept"
+
+
+def test_artifact_store_writes_redacted_packet_artifact(tmp_path):
+    store = RPAHarnessArtifactStore(root=tmp_path, max_packets_per_kind=10)
+
+    ref = store.write_packet_artifact(
+        "failure",
+        "fail-artifact",
+        "raw_error.json",
+        {"password": "plain-secret", "message": "visible"},
+        media_type="application/json",
+    )
+
+    artifact_path = tmp_path / ref.path
+    payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert ref.path == "failure/fail-artifact/artifacts/raw_error.json"
+    assert ref.media_type == "application/json"
+    assert payload["password"] == "<redacted>"
+    assert payload["message"] == "visible"
+
+
+@pytest.mark.parametrize("artifact_name", ["../raw_error.json", "..\\raw_error.json"])
+def test_artifact_store_rejects_packet_artifacts_that_escape_root(
+    tmp_path, artifact_name
+):
+    store = RPAHarnessArtifactStore(root=tmp_path, max_packets_per_kind=10)
+
+    with pytest.raises(ValueError):
+        store.write_packet_artifact(
+            "failure",
+            "fail-artifact",
+            artifact_name,
+            {"message": "visible"},
+        )
+
+    assert not (tmp_path.parent / "raw_error.json").exists()
+
+
+def test_capture_rpa_failure_packet_writes_redacted_failure_bundle(tmp_path):
+    packet_path = capture_rpa_failure_packet(
+        artifact_root=tmp_path,
+        max_packets_per_kind=10,
+        session_id="session-1",
+        step_id="step-1",
+        stage=RPAHarnessStage.EXECUTION,
+        failure_type="playwright_timeout",
+        user_instruction="click export with password",
+        current_url="https://example.test/report?token=abc123",
+        current_title="Report",
+        failed_plan={
+            "description": "click Export",
+            "code": "async def run(page, results):\n    password = 'plain-secret'",
+        },
+        raw_error={"message": "Timeout", "password": "plain-secret"},
+        snapshot_after_failure={"field": {"label": "Password", "value": "plain-secret"}},
+        compact_snapshot={"title": "Report"},
+        metadata={"diagnostic_mode": False, "password": "plain-secret"},
+    )
+
+    assert packet_path is not None
+    packet = RPAHarnessArtifactStore(tmp_path).read_failure_packet(packet_path)
+    assert packet.session_id == "session-1"
+    assert packet.step_id == "step-1"
+    assert packet.stage == RPAHarnessStage.EXECUTION
+    assert packet.failure_type == "playwright_timeout"
+    assert packet.failed_plan_summary == "click Export"
+    assert packet.current_url == "https://example.test/report?token=<redacted>"
+    assert packet.metadata["password"] == "<redacted>"
+    assert packet.raw_error_ref is not None
+    assert packet.failed_code_ref is not None
+    assert packet.snapshot_after_failure_ref is not None
+    assert packet.compact_snapshot_ref is not None
+
+    raw_error = json.loads((tmp_path / packet.raw_error_ref.path).read_text(encoding="utf-8"))
+    assert raw_error["password"] == "<redacted>"
+    assert raw_error["message"] == "Timeout"
+    failed_code = (tmp_path / packet.failed_code_ref.path).read_text(encoding="utf-8")
+    assert "plain-secret" not in failed_code
+    snapshot = json.loads(
+        (tmp_path / packet.snapshot_after_failure_ref.path).read_text(encoding="utf-8")
+    )
+    assert snapshot["field"]["value"] == "<redacted>"
+
+
+def test_capture_rpa_failure_packet_returns_none_when_artifact_root_is_empty():
+    packet_path = capture_rpa_failure_packet(
+        artifact_root="",
+        session_id="session-1",
+        stage=RPAHarnessStage.EXECUTION,
+        failure_type="playwright_timeout",
+    )
+
+    assert packet_path is None
 
 
 def test_artifact_store_rejects_outside_root_failure_packet_reads(tmp_path):

@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 
 import backend.rpa.recording_runtime_agent as recording_runtime_agent
+from backend.rpa.harness.artifact_store import RPAHarnessArtifactStore
+from backend.rpa.harness.packets import RPAHarnessStage
 from backend.rpa.recording_runtime_agent import (
     RecordingRuntimeAgent,
     RECORDING_RUNTIME_SYSTEM_PROMPT,
@@ -917,6 +919,143 @@ async def test_recording_runtime_agent_repairs_once_after_failure():
     assert len(calls) == 2
     assert result.trace.ai_execution.repair_attempted is True
     assert result.diagnostics[0].message == "boom"
+
+
+@pytest.mark.asyncio
+async def test_recording_runtime_agent_success_does_not_write_failure_packet(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("RPA_HARNESS_ARTIFACT_DIR", str(tmp_path))
+
+    async def planner(_payload):
+        return {
+            "description": "Return summary",
+            "action_type": "run_python",
+            "expected_effect": "extract",
+            "output_key": "summary",
+            "code": "async def run(page, results):\n    return {'summary': 'ok'}",
+        }
+
+    result = await RecordingRuntimeAgent(planner=planner).run(
+        page=_FakePage(),
+        instruction="summarize page",
+        runtime_results={},
+        debug_context={"session_id": "session-success"},
+    )
+
+    assert result.success is True
+    assert not (tmp_path / "failure").exists()
+
+
+@pytest.mark.asyncio
+async def test_recording_runtime_agent_planner_failure_packet_includes_snapshots(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("RPA_HARNESS_ARTIFACT_DIR", str(tmp_path))
+
+    async def planner(_payload):
+        raise RuntimeError("planner boom")
+
+    result = await RecordingRuntimeAgent(planner=planner).run(
+        page=_FakePage(),
+        instruction="plan a click",
+        runtime_results={},
+        debug_context={"session_id": "session-planner"},
+    )
+
+    assert result.success is False
+    packet_paths = sorted((tmp_path / "failure").glob("*/packet.json"))
+    assert len(packet_paths) == 1
+    packet = RPAHarnessArtifactStore(tmp_path).read_failure_packet(packet_paths[0])
+    assert packet.stage == RPAHarnessStage.PLANNER
+    assert packet.raw_error_ref is not None
+    assert packet.snapshot_after_failure_ref is not None
+    assert packet.compact_snapshot_ref is not None
+
+
+@pytest.mark.asyncio
+async def test_recording_runtime_agent_writes_execution_failure_packet_before_repair(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("RPA_HARNESS_ARTIFACT_DIR", str(tmp_path))
+
+    async def planner(payload):
+        if "repair" not in payload:
+            return {
+                "description": "Broken click",
+                "action_type": "run_python",
+                "expected_effect": "click",
+                "code": "async def run(page, results):\n    raise RuntimeError('password leaked')",
+            }
+        return {
+            "description": "Fixed click",
+            "action_type": "run_python",
+            "expected_effect": "click",
+            "output_key": "fixed",
+            "code": "async def run(page, results):\n    return {'action_performed': True, 'action_type': 'click'}",
+        }
+
+    result = await RecordingRuntimeAgent(planner=planner).run(
+        page=_FakePage(),
+        instruction="click export",
+        runtime_results={},
+        debug_context={"session_id": "session-execution", "step_id": "step-1"},
+    )
+
+    assert result.success is True
+    packet_paths = sorted((tmp_path / "failure").glob("*/packet.json"))
+    assert len(packet_paths) == 1
+    packet = RPAHarnessArtifactStore(tmp_path).read_failure_packet(packet_paths[0])
+    assert packet.session_id == "session-execution"
+    assert packet.step_id == "step-1"
+    assert packet.stage == RPAHarnessStage.EXECUTION
+    assert packet.failure_type == "runtime_error"
+    assert packet.user_instruction == "click export"
+    assert packet.current_url == "https://example.test/start"
+    assert packet.current_title == "Example"
+    assert packet.failed_plan_summary == "Broken click"
+    assert packet.raw_error_ref is not None
+    assert packet.failed_code_ref is not None
+    assert packet.compact_snapshot_ref is not None
+
+
+@pytest.mark.asyncio
+async def test_recording_runtime_agent_writes_repair_failure_packet(monkeypatch, tmp_path):
+    monkeypatch.setenv("RPA_HARNESS_ARTIFACT_DIR", str(tmp_path))
+
+    async def planner(payload):
+        if "repair" not in payload:
+            return {
+                "description": "Broken first pass",
+                "action_type": "run_python",
+                "code": "async def run(page, results):\n    raise RuntimeError('first boom')",
+            }
+        return {
+            "description": "Broken repair",
+            "action_type": "run_python",
+            "code": "async def run(page, results):\n    raise TimeoutError('repair timeout')",
+        }
+
+    result = await RecordingRuntimeAgent(planner=planner).run(
+        page=_FakePage(),
+        instruction="do it",
+        runtime_results={},
+        debug_context={"session_id": "session-repair"},
+    )
+
+    assert result.success is False
+    packets = [
+        RPAHarnessArtifactStore(tmp_path).read_failure_packet(path)
+        for path in sorted((tmp_path / "failure").glob("*/packet.json"))
+    ]
+    assert sorted(packet.stage for packet in packets) == [
+        RPAHarnessStage.EXECUTION,
+        RPAHarnessStage.REPAIR,
+    ]
+    repair_packet = next(packet for packet in packets if packet.stage == RPAHarnessStage.REPAIR)
+    assert repair_packet.failure_type == "timeout"
+    assert repair_packet.failed_plan_summary == "Broken repair"
+    assert repair_packet.raw_error_ref is not None
 
 
 @pytest.mark.asyncio
