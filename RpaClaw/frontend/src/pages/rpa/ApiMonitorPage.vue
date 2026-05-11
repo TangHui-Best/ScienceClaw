@@ -67,6 +67,7 @@ const urlInput = ref('https://');
 const tools = ref<ApiToolDefinition[]>([]);
 const generationCandidates = ref<ApiToolGenerationCandidate[]>([]);
 let generationRefreshTimer: number | null = null;
+let analysisCleanup: (() => void) | null = null;
 const visibleGenerationCandidates = computed(() =>
   generationCandidates.value.filter((candidate) => candidate.status !== 'generated' || !candidate.tool_id),
 );
@@ -505,7 +506,11 @@ const startAnalysis = async () => {
   const instruction = showAnalysisInstruction.value ? analysisInstruction.value.trim() : '';
   addLog('INFO', `开始${mode.label}...`);
 
-  const cleanup = analyzeSession(sessionId.value, (evt) => {
+  // Abort any previous analysis SSE before starting a new one
+  analysisCleanup?.();
+  analysisCleanup = null;
+
+  analysisCleanup = analyzeSession(sessionId.value, (evt) => {
     let data: any;
     try { data = typeof evt.data === 'string' ? JSON.parse(evt.data) : evt.data; } catch { data = evt.data; }
     switch (evt.event) {
@@ -617,13 +622,15 @@ const startAnalysis = async () => {
         addLog('INFO', `分析完成: ${data.tools_generated} 个工具, ${data.total_calls} 个调用`);
         isAnalyzing.value = false;
         refreshGenerationState().catch(() => {});
-        cleanup();
+        analysisCleanup?.();
+        analysisCleanup = null;
         break;
       case 'analysis_error':
         addLog('ERROR', data.error);
         isAnalyzing.value = false;
         refreshGenerationState().catch(() => {});
-        cleanup();
+        analysisCleanup?.();
+        analysisCleanup = null;
         break;
     }
   }, {
@@ -996,6 +1003,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   document.removeEventListener('click', handleClickOutsideMenu, true);
   stopGenerationRefresh();
+  analysisCleanup?.();
+  analysisCleanup = null;
   shouldReconnectScreencast = false;
   disconnectScreencast();
   if (sessionId.value) {
