@@ -66,7 +66,7 @@ const session = ref<ApiMonitorSession | null>(null);
 const urlInput = ref('https://');
 const tools = ref<ApiToolDefinition[]>([]);
 const generationCandidates = ref<ApiToolGenerationCandidate[]>([]);
-let generationRefreshTimer: ReturnType<typeof window.setInterval> | null = null;
+let generationRefreshTimer: number | null = null;
 const visibleGenerationCandidates = computed(() =>
   generationCandidates.value.filter((candidate) => candidate.status !== 'generated' || !candidate.tool_id),
 );
