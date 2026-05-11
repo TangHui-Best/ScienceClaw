@@ -1,0 +1,34 @@
+{
+  "case_id": "form_fields",
+  "case_type": "dom_morphology",
+  "title": "Form fields",
+  "task_shape": "form_fill",
+  "instruction": "Fill the Research Topic and Contact Email fields",
+  "source": "curated_structural_fixture",
+  "char_budget": 1,
+  "raw_snapshot": {
+    "url": "https://structure.test/form",
+    "title": "Research Intake",
+    "containers": [
+      {
+        "container_id": "intake-form",
+        "container_kind": "form_section",
+        "name": "Research Intake"
+      }
+    ],
+    "content_nodes": [
+      {"node_id": "topic-label", "container_id": "intake-form", "semantic_kind": "label", "text": "Research Topic:", "bbox": {"x": 20, "y": 40, "width": 140, "height": 20}},
+      {"node_id": "email-label", "container_id": "intake-form", "semantic_kind": "label", "text": "Contact Email:", "bbox": {"x": 20, "y": 80, "width": 140, "height": 20}}
+    ],
+    "actionable_nodes": [
+      {"node_id": "topic-input", "container_id": "intake-form", "role": "textbox", "tag": "input", "type": "text", "placeholder": "climate robotics", "name": "", "action_kinds": ["fill"], "is_visible": true, "is_enabled": true, "hit_test_ok": true, "bbox": {"x": 180, "y": 40, "width": 260, "height": 24}, "locator": {"method": "css", "value": "input[name='topic']"}},
+      {"node_id": "email-input", "container_id": "intake-form", "role": "textbox", "tag": "input", "type": "email", "placeholder": "owner@example.test", "name": "", "action_kinds": ["fill"], "is_visible": true, "is_enabled": true, "hit_test_ok": true, "bbox": {"x": 180, "y": 80, "width": 260, "height": 24}, "locator": {"method": "css", "value": "input[name='email']"}}
+    ],
+    "frames": []
+  },
+  "expected_raw_facts": ["Research Topic", "Contact Email", "climate robotics", "owner@example.test"],
+  "expected_compact_facts": ["Research Topic", "Contact Email", "climate robotics", "owner@example.test"],
+  "expected_semantic_view": {"kind": "form_view"},
+  "expected_locator_preservation": ["input[name='topic']", "input[name='email']"],
+  "guarded_failure_mode": "visible editable fields exist in raw snapshot but compression drops labels, placeholders, or fill locators"
+}

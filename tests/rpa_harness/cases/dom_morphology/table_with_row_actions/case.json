@@ -1,0 +1,74 @@
+{
+  "case_id": "table_with_row_actions",
+  "case_type": "dom_morphology",
+  "title": "Table with row actions",
+  "task_shape": "table_extraction",
+  "instruction": "Find the ScienceClaw row and keep the row action locator",
+  "source": "curated_structural_fixture",
+  "char_budget": 1,
+  "raw_snapshot": {
+    "url": "https://structure.test/table",
+    "title": "Project Table",
+    "containers": [
+      {
+        "container_id": "projects-table",
+        "container_kind": "table",
+        "name": "Project Requests"
+      }
+    ],
+    "content_nodes": [
+      {"node_id": "h-project", "container_id": "projects-table", "semantic_kind": "header_cell", "text": "Project", "bbox": {"x": 10, "y": 20, "width": 120, "height": 20}},
+      {"node_id": "h-owner", "container_id": "projects-table", "semantic_kind": "header_cell", "text": "Owner", "bbox": {"x": 150, "y": 20, "width": 120, "height": 20}},
+      {"node_id": "h-status", "container_id": "projects-table", "semantic_kind": "header_cell", "text": "Status", "bbox": {"x": 290, "y": 20, "width": 120, "height": 20}},
+      {"node_id": "r1-project", "container_id": "projects-table", "semantic_kind": "cell", "text": "ScienceClaw", "bbox": {"x": 10, "y": 52, "width": 120, "height": 20}},
+      {"node_id": "r1-owner", "container_id": "projects-table", "semantic_kind": "cell", "text": "Lin", "bbox": {"x": 150, "y": 52, "width": 120, "height": 20}},
+      {"node_id": "r1-status", "container_id": "projects-table", "semantic_kind": "cell", "text": "Ready", "bbox": {"x": 290, "y": 52, "width": 120, "height": 20}},
+      {"node_id": "r2-project", "container_id": "projects-table", "semantic_kind": "cell", "text": "DataForge", "bbox": {"x": 10, "y": 82, "width": 120, "height": 20}},
+      {"node_id": "r2-owner", "container_id": "projects-table", "semantic_kind": "cell", "text": "Mia", "bbox": {"x": 150, "y": 82, "width": 120, "height": 20}},
+      {"node_id": "r2-status", "container_id": "projects-table", "semantic_kind": "cell", "text": "Blocked", "bbox": {"x": 290, "y": 82, "width": 120, "height": 20}}
+    ],
+    "actionable_nodes": [],
+    "frames": [],
+    "table_views": [
+      {
+        "title": "Project Requests",
+        "title_source": "nearest_preceding_heading",
+        "nearby_headings": ["Project Requests"],
+        "framework_hint": "native_table",
+        "frame_path": [],
+        "row_count_observed": 2,
+        "columns": [
+          {"id": "project", "header": "Project"},
+          {"id": "owner", "header": "Owner"},
+          {"id": "status", "header": "Status"}
+        ],
+        "rows": [
+          {
+            "index": 0,
+            "locator_hints": [{"method": "css", "value": "tr[data-row='scienceclaw']"}],
+            "cells": [
+              {"column_id": "project", "column_index": 0, "column_header": "Project", "text": "ScienceClaw", "value_kind": "text"},
+              {"column_id": "owner", "column_index": 1, "column_header": "Owner", "text": "Lin", "value_kind": "text"},
+              {
+                "column_id": "status",
+                "column_index": 2,
+                "column_header": "Status",
+                "text": "Ready",
+                "value_kind": "text",
+                "row_local_actions": [
+                  {"label": "Open", "locator": {"method": "css", "value": "tr[data-row='scienceclaw'] button.open"}}
+                ]
+              }
+            ]
+          }
+        ],
+        "auxiliary_text": []
+      }
+    ]
+  },
+  "expected_raw_facts": ["Project", "ScienceClaw", "Ready", "Open"],
+  "expected_compact_facts": ["Project", "ScienceClaw", "Ready", "Open"],
+  "expected_semantic_view": {"kind": "table_view"},
+  "expected_locator_preservation": ["tr[data-row='scienceclaw'] button.open"],
+  "guarded_failure_mode": "table facts remain in raw snapshot but compression loses headers, row relationship, or row-level action locator"
+}

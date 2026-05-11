@@ -20,9 +20,11 @@ development, CI, and diagnosis flows.
 
 ## Current Status
 
-Active implementation stage. The architecture guideline is written, and Batch 0
-has established the first packet, redaction, artifact storage, retention, and
-production-path isolation checks.
+Active implementation stage. The architecture guideline is written. Batch 0
+established packet, redaction, artifact storage, retention, and
+production-path isolation checks; Batch 1 added recording-time failure capture;
+Batch 2 added the first offline DOM morphology harness for snapshot
+compression; Batch 3 adds task-shape-aware raw-vs-compact snapshot diffing.
 
 Current accepted direction:
 
@@ -42,6 +44,8 @@ Current accepted direction:
 - Design index: [Design Document Status](../DESIGN_STATUS.md)
 - Batch 0 plan: [RPA Harness Batch 0 Implementation Plan](../rpa/rpa-harness-batch-0-implementation-plan.md)
 - Batch 1 plan: [RPA Harness Batch 1 Implementation Plan](../rpa/rpa-harness-batch-1-implementation-plan.md)
+- Batch 2 plan: [RPA Harness Batch 2 Implementation Plan](../rpa/rpa-harness-batch-2-implementation-plan.md)
+- Batch 3 plan: [RPA Harness Batch 3 Implementation Plan](../rpa/rpa-harness-batch-3-implementation-plan.md)
 
 ## Acceptance Criteria
 
@@ -132,9 +136,32 @@ Required next action:
   with `31 passed`, and full
   `RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py` passed with
   `63 passed`.
+- 2026-05-11: Created Batch 2 implementation plan at
+  `docs/rpa/rpa-harness-batch-2-implementation-plan.md`.
+- 2026-05-11: Batch 2 implemented the first DOM morphology harness under
+  `tests/rpa_harness`: curated cases for key/value split siblings, table row
+  actions, candidate cards, form fields, and iframe content; a
+  `DomMorphologyEvaluator`; and `python -m tests.rpa_harness.run dom`.
+- 2026-05-11: Verified Batch 2 with
+  `$env:PYTHONPATH="RpaClaw"; ..\..\.venv\Scripts\python.exe -m pytest tests/rpa_harness RpaClaw/backend/tests/test_rpa_snapshot_compression.py RpaClaw/backend/tests/test_rpa_snapshot_compression_structured.py -q --basetemp .pytest-tmp-batch2`
+  (`26 passed`) and
+  `$env:PYTHONPATH="RpaClaw"; ..\..\.venv\Scripts\python.exe -m tests.rpa_harness.run dom`
+  (`DOM morphology cases: 5`, `pass: 5`, `fail: 0`).
+- 2026-05-11: Created Batch 3 implementation plan at
+  `docs/rpa/rpa-harness-batch-3-implementation-plan.md`.
+- 2026-05-11: Batch 3 implemented task-shape-aware Snapshot Diff Harness under
+  `tests/rpa_harness/evaluators/snapshot_diff.py`, reusing the five Batch 2 DOM
+  morphology cases and adding `python -m tests.rpa_harness.run snapshot`.
+- 2026-05-11: Verified Batch 3 with
+  `$env:PYTHONPATH="RpaClaw"; ..\..\.venv\Scripts\python.exe -m pytest tests/rpa_harness RpaClaw/backend/tests/test_rpa_snapshot_compression.py RpaClaw/backend/tests/test_rpa_snapshot_compression_structured.py -q --basetemp .pytest-tmp-batch3`
+  (`30 passed`),
+  `$env:PYTHONPATH="RpaClaw"; ..\..\.venv\Scripts\python.exe -m tests.rpa_harness.run dom`
+  (`DOM morphology cases: 5`, `pass: 5`, `fail: 0`), and
+  `$env:PYTHONPATH="RpaClaw"; ..\..\.venv\Scripts\python.exe -m tests.rpa_harness.run snapshot`
+  (`Snapshot diff cases: 5`, `pass: 5`, `fail: 0`).
 
 ## Next Step
 
-Review Batch 1 failure packet shape for redaction quality and storage cost
-against one real RPA failure. Do not auto-promote captured packets into harness
-cases.
+Proceed to Batch 4 compiler harness. Keep the Batch 3 rule: snapshot failures
+must report the missing fact key and attribution layer before planner prompt,
+selector, repair, or compiler changes are considered.

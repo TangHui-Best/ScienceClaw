@@ -1,0 +1,40 @@
+{
+  "case_id": "iframe_content",
+  "case_type": "dom_morphology",
+  "title": "Iframe content",
+  "task_shape": "detail_extraction",
+  "instruction": "Extract the embedded report owner from the iframe",
+  "source": "curated_structural_fixture",
+  "char_budget": 1,
+  "raw_snapshot": {
+    "url": "https://structure.test/iframe",
+    "title": "Embedded Report",
+    "containers": [
+      {
+        "container_id": "embedded-details",
+        "container_kind": "section",
+        "name": "Embedded Report Details",
+        "frame_path": ["iframe#report-frame"]
+      }
+    ],
+    "content_nodes": [
+      {"node_id": "iframe-owner-label", "container_id": "embedded-details", "semantic_kind": "label", "text": "Report Owner:", "frame_path": ["iframe#report-frame"], "bbox": {"x": 18, "y": 28, "width": 120, "height": 20}, "locator": {"method": "css", "value": "[data-frame-field='owner-label']"}},
+      {"node_id": "iframe-owner-value", "container_id": "embedded-details", "semantic_kind": "field_value", "text": "Nora Wu", "frame_path": ["iframe#report-frame"], "bbox": {"x": 170, "y": 28, "width": 160, "height": 20}, "locator": {"method": "css", "value": "[data-frame-field='owner-value']"}}
+    ],
+    "actionable_nodes": [],
+    "frames": [
+      {
+        "frame_hint": "embedded-details",
+        "frame_path": ["iframe#report-frame"],
+        "elements": [
+          {"role": "button", "name": "Open Report", "tag": "button", "container_id": "embedded-details", "locator": {"method": "css", "value": "button[data-frame-action='open']"}}
+        ]
+      }
+    ]
+  },
+  "expected_raw_facts": ["Report Owner", "Nora Wu", "iframe#report-frame"],
+  "expected_compact_facts": ["Report Owner", "Nora Wu", "iframe#report-frame"],
+  "expected_semantic_view": {"kind": "label_value_group"},
+  "expected_locator_preservation": ["owner-value"],
+  "guarded_failure_mode": "iframe facts are captured in raw snapshot but compression drops frame context or iframe-local locator evidence"
+}
