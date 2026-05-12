@@ -268,6 +268,12 @@ class RPASessionManager:
         if session_id not in self.sessions:
             raise ValueError(f"Session {session_id} not found")
 
+        existing_tab_id = self._page_tab_ids.setdefault(session_id, {}).get(id(page))
+        if existing_tab_id:
+            if make_active or not self.sessions[session_id].active_tab_id:
+                await self.activate_tab(session_id, existing_tab_id, source="auto")
+            return existing_tab_id
+
         tab_id = str(uuid.uuid4())
         self._tabs.setdefault(session_id, {})[tab_id] = page
         self._page_tab_ids.setdefault(session_id, {})[id(page)] = tab_id
@@ -305,6 +311,19 @@ class RPASessionManager:
         if opener_tab_id:
             await self._upgrade_recent_click_to_open_tab(session_id, opener_tab_id, tab_id)
         return tab_id
+
+    async def activate_page(self, session_id: str, page: Page, tab_id: Optional[str] = None) -> str:
+        existing_tab_id = self._page_tab_ids.get(session_id, {}).get(id(page))
+        if existing_tab_id:
+            await self.activate_tab(session_id, existing_tab_id, source="execution")
+            return existing_tab_id
+
+        return await self.register_page(
+            session_id,
+            page,
+            opener_tab_id=None,
+            make_active=True,
+        )
 
     @classmethod
     def _step_popup_target_tab_id(cls, step: RPAStep) -> Optional[str]:

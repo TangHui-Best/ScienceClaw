@@ -31,6 +31,106 @@ def test_compiler_renders_navigation_trace():
     assert "https://github.com/trending" in script
 
 
+def test_navigation_traces_with_same_tab_id_stay_on_one_page():
+    traces = [
+        RPAAcceptedTrace(
+            trace_id="nav-a",
+            trace_type=RPATraceType.NAVIGATION,
+            after_page=RPAPageState(url="https://github.com/vercel-labs/agent-browser"),
+            signals={"tab": {"tab_id": "tab-root"}},
+        ),
+        RPAAcceptedTrace(
+            trace_id="nav-b",
+            trace_type=RPATraceType.NAVIGATION,
+            after_page=RPAPageState(url="https://www.browseract.com/"),
+            signals={"tab": {"tab_id": "tab-root"}},
+        ),
+    ]
+
+    script = TraceSkillCompiler().generate_script(traces, is_local=True)
+    body = _execute_body(script)
+
+    assert 'tabs = {"tab-root": page}' in body
+    assert "await current_page.context.new_page()" not in body
+    assert body.count("await current_page.goto(_target_url, wait_until='domcontentloaded')") == 2
+
+
+def test_navigation_trace_with_new_tab_id_materializes_page_before_goto():
+    traces = [
+        RPAAcceptedTrace(
+            trace_id="nav-root",
+            trace_type=RPATraceType.NAVIGATION,
+            after_page=RPAPageState(url="https://github.com/vercel-labs/agent-browser"),
+            signals={"tab": {"tab_id": "tab-root"}},
+        ),
+        RPAAcceptedTrace(
+            trace_id="nav-second",
+            trace_type=RPATraceType.NAVIGATION,
+            after_page=RPAPageState(url="https://www.browseract.com/"),
+            signals={"tab": {"tab_id": "tab-second"}},
+        ),
+    ]
+
+    script = TraceSkillCompiler().generate_script(traces, is_local=True)
+    body = _execute_body(script)
+
+    new_page = "current_page = await current_page.context.new_page()"
+    store_tab = 'tabs["tab-second"] = current_page'
+    second_url = "_target_url = 'https://www.browseract.com/'"
+    assert 'tabs = {"tab-root": page}' in body
+    assert new_page in body
+    assert store_tab in body
+    assert body.index(new_page) < body.index(second_url)
+    assert body.index(store_tab) < body.index(second_url)
+
+
+def test_navigation_trace_with_new_tab_id_activates_materialized_page_for_preview():
+    traces = [
+        RPAAcceptedTrace(
+            trace_id="nav-root",
+            trace_type=RPATraceType.NAVIGATION,
+            after_page=RPAPageState(url="https://github.com/vercel-labs/agent-browser"),
+            signals={"tab": {"tab_id": "tab-root"}},
+        ),
+        RPAAcceptedTrace(
+            trace_id="nav-second",
+            trace_type=RPATraceType.NAVIGATION,
+            after_page=RPAPageState(url="https://www.browseract.com/"),
+            signals={"tab": {"tab_id": "tab-second"}},
+        ),
+    ]
+
+    script = TraceSkillCompiler().generate_script(traces, is_local=True)
+    body = _execute_body(script)
+
+    assert "async def _activate_recorded_page(page, kwargs, tab_id=''):" in script
+    activation = '_activate_recorded_page(current_page, kwargs, "tab-second")'
+    second_url = "_target_url = 'https://www.browseract.com/'"
+    assert activation in body
+    assert body.index(activation) < body.index(second_url)
+
+
+def test_navigation_url_difference_without_tab_fact_does_not_create_new_page():
+    traces = [
+        RPAAcceptedTrace(
+            trace_id="nav-a",
+            trace_type=RPATraceType.NAVIGATION,
+            after_page=RPAPageState(url="https://github.com/vercel-labs/agent-browser"),
+        ),
+        RPAAcceptedTrace(
+            trace_id="nav-b",
+            trace_type=RPATraceType.NAVIGATION,
+            after_page=RPAPageState(url="https://www.browseract.com/"),
+        ),
+    ]
+
+    script = TraceSkillCompiler().generate_script(traces, is_local=True)
+    body = _execute_body(script)
+
+    assert "await current_page.context.new_page()" not in body
+    assert body.count("await current_page.goto(_target_url, wait_until='domcontentloaded')") == 2
+
+
 def test_compiler_does_not_emit_github_helpers_for_generic_web_trace():
     script = TraceSkillCompiler().generate_script(
         [

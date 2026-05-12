@@ -82,6 +82,7 @@ class _FakeSessionManager:
         self.attached = []
         self.registered = []
         self.context_pages = []
+        self.activated = []
         self.detached = []
 
     def attach_context(self, session_id, context):
@@ -94,6 +95,10 @@ class _FakeSessionManager:
     async def register_context_page(self, session_id, page, make_active=True):
         self.context_pages.append((session_id, page, make_active))
         return "popup-tab"
+
+    async def activate_page(self, session_id, page, tab_id=None):
+        self.activated.append((session_id, page, tab_id))
+        return "activated-tab"
 
     def detach_context(self, session_id, context=None):
         self.detached.append((session_id, context))
@@ -160,6 +165,29 @@ async def execute_skill(page, **kwargs):
         self.assertEqual(session_manager.detached, [("session-1", browser.contexts[0])])
         self.assertEqual(page_registry, {})
         self.assertTrue(browser.contexts[0].closed)
+
+    async def test_execute_injects_activate_recorded_page_hook_for_preview_switching(self):
+        browser = _FakeBrowser()
+        session_manager = _FakeSessionManager()
+        script = """
+async def execute_skill(page, **kwargs):
+    new_page = await page.context.new_page()
+    await kwargs["_activate_recorded_page"](new_page, "tab-second")
+    return {"ok": True}
+"""
+
+        result = await EXECUTOR_MODULE.ScriptExecutor().execute(
+            browser,
+            script,
+            session_id="session-1",
+            session_manager=session_manager,
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(len(session_manager.activated), 1)
+        self.assertEqual(session_manager.activated[0][0], "session-1")
+        self.assertEqual(session_manager.activated[0][2], "tab-second")
+        self.assertIs(session_manager.activated[0][1], browser.contexts[0].pages[1])
 
 
 class StepExecutionErrorTests(unittest.IsolatedAsyncioTestCase):

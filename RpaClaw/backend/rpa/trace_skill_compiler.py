@@ -110,6 +110,9 @@ class TraceSkillCompiler:
         return str(url or "").strip().rstrip("/")
 
     def _render_execute_skill(self, traces: List[RPAAcceptedTrace]) -> List[str]:
+        root_tab_id = self._first_trace_tab_id(traces)
+        known_tab_ids = {root_tab_id} if root_tab_id else set()
+        current_tab_id = root_tab_id
         lines = [
             "",
             "def _resolve_result_ref(results, ref):",
@@ -275,19 +278,113 @@ class TraceSkillCompiler:
             "    model_config = runtime_ai.get('model_config') if isinstance(runtime_ai, dict) else None",
             "    return model_config or kwargs.get('_model_config')",
             "",
+            "async def _activate_recorded_page(page, kwargs, tab_id=''):",
+            "    activator = kwargs.get('_activate_recorded_page') if isinstance(kwargs, dict) else None",
+            "    if callable(activator):",
+            "        await activator(page, tab_id)",
+            "",
             "async def execute_skill(page, **kwargs):",
             '    """Auto-generated skill from RPA trace recording."""',
             "    _results = {}",
             "    current_page = page",
-            "    tabs = {}",
+            f"    tabs = {{{json.dumps(root_tab_id, ensure_ascii=False)}: page}}" if root_tab_id else "    tabs = {}",
             "    _trace_logger = kwargs.get('_on_log')",
         ]
         used_output_keys: Dict[str, int] = {}
         for index, trace in enumerate(traces):
+            alignment_lines, current_tab_id = self._render_trace_tab_alignment(
+                trace,
+                known_tab_ids,
+                current_tab_id,
+            )
             trace_lines = self._render_trace(index, trace, traces[:index], used_output_keys)
+            if alignment_lines:
+                trace_lines = alignment_lines + trace_lines
             lines.extend(self._wrap_trace_logging(index, trace, trace_lines))
+            current_tab_id = self._record_trace_tab_side_effects(trace, known_tab_ids, current_tab_id)
         lines.append("    return _results")
         return lines
+
+    @staticmethod
+    def _first_trace_tab_id(traces: List[RPAAcceptedTrace]) -> str:
+        for trace in traces:
+            tab_id = TraceSkillCompiler._trace_tab_id(trace)
+            if tab_id:
+                return tab_id
+            tab_signal = _trace_signal(trace, "tab")
+            source_tab_id = str(tab_signal.get("source_tab_id") or "").strip()
+            if source_tab_id:
+                return source_tab_id
+            popup_signal = _trace_signal(trace, "popup")
+            popup_source_tab_id = str(popup_signal.get("source_tab_id") or "").strip()
+            if popup_source_tab_id:
+                return popup_source_tab_id
+        return ""
+
+    @staticmethod
+    def _trace_tab_id(trace: RPAAcceptedTrace) -> str:
+        tab_signal = _trace_signal(trace, "tab")
+        return str(tab_signal.get("tab_id") or "").strip()
+
+    @classmethod
+    def _render_trace_tab_alignment(
+        cls,
+        trace: RPAAcceptedTrace,
+        known_tab_ids: set[str],
+        current_tab_id: str,
+    ) -> tuple[List[str], str]:
+        tab_id = cls._trace_tab_id(trace)
+        if not tab_id or tab_id == current_tab_id:
+            return [], current_tab_id
+
+        tab_id_literal = json.dumps(tab_id, ensure_ascii=False)
+        if tab_id in known_tab_ids:
+            return [
+                "",
+                f"    current_page = tabs[{tab_id_literal}]",
+                "    await current_page.bring_to_front()",
+                f"    await _activate_recorded_page(current_page, kwargs, {tab_id_literal})",
+            ], tab_id
+
+        known_tab_ids.add(tab_id)
+        return [
+            "",
+            f"    # Materialize recorded tab {tab_id}; opener/popup evidence was not available.",
+            "    current_page = await current_page.context.new_page()",
+            f"    tabs[{tab_id_literal}] = current_page",
+            "    await current_page.bring_to_front()",
+            f"    await _activate_recorded_page(current_page, kwargs, {tab_id_literal})",
+        ], tab_id
+
+    @staticmethod
+    def _record_trace_tab_side_effects(
+        trace: RPAAcceptedTrace,
+        known_tab_ids: set[str],
+        current_tab_id: str,
+    ) -> str:
+        popup_signal = _trace_signal(trace, "popup")
+        popup_target_tab_id = str(popup_signal.get("target_tab_id") or "").strip()
+        if popup_target_tab_id:
+            known_tab_ids.add(popup_target_tab_id)
+            current_tab_id = popup_target_tab_id
+
+        action = str(trace.action or "")
+        tab_signal = _trace_signal(trace, "tab")
+        if action == "switch_tab":
+            target_tab_id = str(tab_signal.get("target_tab_id") or "").strip()
+            if target_tab_id:
+                known_tab_ids.add(target_tab_id)
+                current_tab_id = target_tab_id
+        elif action == "close_tab":
+            closing_tab_id = str(tab_signal.get("tab_id") or tab_signal.get("source_tab_id") or "").strip()
+            if closing_tab_id:
+                known_tab_ids.discard(closing_tab_id)
+            fallback_tab_id = str(tab_signal.get("target_tab_id") or "").strip()
+            if fallback_tab_id:
+                known_tab_ids.add(fallback_tab_id)
+                current_tab_id = fallback_tab_id
+
+        return current_tab_id
 
     def _wrap_trace_logging(
         self,
@@ -441,8 +538,10 @@ class TraceSkillCompiler:
         lines: List[str] = []
         if source_tab_id:
             lines.append(f"    tabs.setdefault({json.dumps(source_tab_id, ensure_ascii=False)}, current_page)")
-        lines.append(f"    current_page = tabs[{json.dumps(target_tab_id, ensure_ascii=False)}]")
+        target_tab_id_literal = json.dumps(target_tab_id, ensure_ascii=False)
+        lines.append(f"    current_page = tabs[{target_tab_id_literal}]")
         lines.append("    await current_page.bring_to_front()")
+        lines.append(f"    await _activate_recorded_page(current_page, kwargs, {target_tab_id_literal})")
         return lines
 
     @staticmethod
@@ -463,8 +562,10 @@ class TraceSkillCompiler:
             lines.append("    closing_page = current_page")
         lines.append("    await closing_page.close()")
         if fallback_tab_id:
-            lines.append(f"    current_page = tabs[{json.dumps(fallback_tab_id, ensure_ascii=False)}]")
+            fallback_tab_id_literal = json.dumps(fallback_tab_id, ensure_ascii=False)
+            lines.append(f"    current_page = tabs[{fallback_tab_id_literal}]")
             lines.append("    await current_page.bring_to_front()")
+            lines.append(f"    await _activate_recorded_page(current_page, kwargs, {fallback_tab_id_literal})")
         return lines
 
     @staticmethod
@@ -496,6 +597,7 @@ class TraceSkillCompiler:
             lines.append(f"{popup_indent}new_page = await popup_info.value")
             lines.append(f"{popup_indent}tabs[{json.dumps(target_tab_id, ensure_ascii=False)}] = new_page")
             lines.append(f"{popup_indent}current_page = new_page")
+            lines.append(f"{popup_indent}await _activate_recorded_page(current_page, kwargs, {json.dumps(target_tab_id, ensure_ascii=False)})")
 
         if download_signal:
             download_name = str(download_signal.get("filename") or value or "file")

@@ -7,7 +7,7 @@ CHAT_MODULE = importlib.import_module("backend.route.chat")
 from backend.rpa.manager import RPASession, RPAStep
 from backend.rpa.manual_recording_models import ManualActionKind, ManualRecordedAction, ManualRecordingDiagnostic
 from backend.rpa.recording_runtime_agent import RecordingAgentResult
-from backend.rpa.trace_models import RPAAcceptedTrace, RPAAIExecution, RPATraceDiagnostic, RPATraceType
+from backend.rpa.trace_models import RPAAcceptedTrace, RPAAIExecution, RPAPageState, RPATraceDiagnostic, RPATraceType
 
 
 ROUTE_MODULE = importlib.import_module("backend.route.rpa")
@@ -260,6 +260,33 @@ def test_generate_session_script_merges_step_tab_fields_into_existing_trace():
     assert "No stable locator was recorded" not in script
     assert 'tabs.setdefault("tab-root", current_page)' in script
     assert 'current_page = tabs["tab-sales"]' in script
+
+
+def test_generate_session_script_preserves_trace_tab_ids_for_navigation_pages():
+    session = RPASession(id="s-nav-tabs", user_id="u-nav-tabs", sandbox_session_id="sandbox")
+    session.traces.extend(
+        [
+            RPAAcceptedTrace(
+                trace_id="trace-root-nav",
+                trace_type=RPATraceType.NAVIGATION,
+                after_page=RPAPageState(url="https://github.com/vercel-labs/agent-browser"),
+                signals={"tab": {"tab_id": "tab-root"}},
+            ),
+            RPAAcceptedTrace(
+                trace_id="trace-second-nav",
+                trace_type=RPATraceType.NAVIGATION,
+                after_page=RPAPageState(url="https://www.browseract.com/"),
+                signals={"tab": {"tab_id": "tab-second"}},
+            ),
+        ]
+    )
+
+    script = ROUTE_MODULE._generate_session_script(session, {}, test_mode=True)
+
+    assert 'tabs = {"tab-root": page}' in script
+    assert "current_page = await current_page.context.new_page()" in script
+    assert 'tabs["tab-second"] = current_page' in script
+    assert "_target_url = 'https://www.browseract.com/'" in script
 
 
 def test_generate_session_script_preserves_frame_path_on_recorded_actions():
