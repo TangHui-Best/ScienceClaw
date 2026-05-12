@@ -25,8 +25,10 @@ class TraceSkillCompiler:
         self._compiled_output_keys: Dict[int, str] = {}
         self._param_lookup = self._build_param_lookup(params or {})
         self._param_cursors: Dict[str, int] = {}
-        trace_list = self._normalize_redundant_navigation_traces(
-            self._normalize_download_traces(list(traces))
+        trace_list = self._normalize_redirect_continuation_traces(
+            self._normalize_redundant_navigation_traces(
+                self._normalize_download_traces(list(traces))
+            )
         )
         execute_skill_func = "\n".join(self._render_execute_skill(trace_list))
         return _runner_template(is_local).format(
@@ -104,6 +106,120 @@ class TraceSkillCompiler:
                     continue
             normalized.append(trace)
         return normalized
+
+    @classmethod
+    def _normalize_redirect_continuation_traces(cls, traces: List[RPAAcceptedTrace]) -> List[RPAAcceptedTrace]:
+        normalized: List[RPAAcceptedTrace] = []
+        index = 0
+        while index < len(traces):
+            trace = traces[index]
+            if not cls._can_absorb_redirect_continuation(trace):
+                normalized.append(trace)
+                index += 1
+                continue
+
+            chain: List[RPAAcceptedTrace] = []
+            cursor = index + 1
+            while cursor < len(traces) and cls._is_redirect_continuation_trace(trace, traces[cursor]):
+                chain.append(traces[cursor])
+                cursor += 1
+
+            final_url = cls._redirect_continuation_final_url(
+                chain,
+                traces[cursor] if cursor < len(traces) else None,
+                trace,
+            )
+            if not final_url:
+                normalized.append(trace)
+                index += 1
+                continue
+
+            merged = trace.model_copy(deep=True)
+            signals = dict(merged.signals or {})
+            post_navigation = dict(signals.get("post_navigation") or {})
+            post_navigation.update(
+                {
+                    "final_url": final_url,
+                    "folded_trace_ids": [item.trace_id for item in chain],
+                    "source": "redirect_continuation",
+                }
+            )
+            callback_url = cls._trace_url(merged)
+            if cls._looks_like_auth_callback_url(callback_url):
+                post_navigation["callback_url"] = callback_url
+            signals["post_navigation"] = post_navigation
+            merged.signals = signals
+            merged.after_page.url = final_url
+            normalized.append(merged)
+            index = cursor
+        return normalized
+
+    @staticmethod
+    def _can_absorb_redirect_continuation(trace: RPAAcceptedTrace) -> bool:
+        return (
+            trace.trace_type == RPATraceType.MANUAL_ACTION
+            and str(trace.action or "") in {"navigate_click", "navigate_press"}
+            and not _trace_signal(trace, "popup")
+            and not _trace_signal(trace, "download")
+        )
+
+    @classmethod
+    def _is_redirect_continuation_trace(
+        cls,
+        source_trace: RPAAcceptedTrace,
+        candidate: RPAAcceptedTrace,
+    ) -> bool:
+        if candidate.trace_type != RPATraceType.NAVIGATION:
+            return False
+        if candidate.locator_candidates:
+            return False
+        source_tab = cls._trace_tab_id(source_trace)
+        candidate_tab = cls._trace_tab_id(candidate)
+        if source_tab and candidate_tab and source_tab != candidate_tab:
+            return False
+        return bool(cls._trace_url(candidate))
+
+    @classmethod
+    def _redirect_continuation_final_url(
+        cls,
+        chain: List[RPAAcceptedTrace],
+        next_trace: Optional[RPAAcceptedTrace],
+        source_trace: RPAAcceptedTrace,
+    ) -> str:
+        if not chain:
+            return ""
+        chain_urls = [cls._trace_url(trace) for trace in chain if cls._trace_url(trace)]
+        if not chain_urls:
+            return ""
+
+        next_url = cls._trace_url(next_trace) if next_trace is not None else ""
+        if next_url:
+            normalized_next = cls._normalized_url(next_url)
+            for url in reversed(chain_urls):
+                if cls._normalized_url(url) == normalized_next:
+                    return url
+
+        for url in reversed(chain_urls):
+            if not cls._looks_like_auth_callback_url(url):
+                return url
+
+        source_url = cls._trace_url(source_trace)
+        return "" if cls._looks_like_auth_callback_url(source_url) else source_url
+
+    @staticmethod
+    def _trace_url(trace: Optional[RPAAcceptedTrace]) -> str:
+        if trace is None:
+            return ""
+        return str(trace.after_page.url or trace.value or "").strip()
+
+    @staticmethod
+    def _looks_like_auth_callback_url(url: str) -> bool:
+        text = str(url or "").lower()
+        if not text:
+            return False
+        if any(token in text for token in ("code=", "state=", "token=", "ticket=", "samlresponse=")):
+            return True
+        return any(token in text for token in ("/callback", "/oauth", "/saml", "/cas", "login.html?"))
 
     @staticmethod
     def _normalized_url(url: str) -> str:
@@ -478,6 +594,10 @@ class TraceSkillCompiler:
             else:
                 lines.append(f"        await {expr}.press({str(trace.value or '')!r})")
             lines.append("    await current_page.wait_for_load_state('domcontentloaded')")
+            post_navigation = _trace_signal(trace, "post_navigation")
+            final_url = str(post_navigation.get("final_url") or "").strip()
+            if final_url:
+                lines.append(f"    await current_page.wait_for_url({final_url!r}, timeout=60000)")
             return lines
         if action == "switch_tab":
             lines.extend(self._render_switch_tab_trace(trace))

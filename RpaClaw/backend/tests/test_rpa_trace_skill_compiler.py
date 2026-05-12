@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+
 from backend.rpa.trace_models import (
     RPAAcceptedTrace,
     RPAAIExecution,
@@ -962,6 +964,93 @@ def test_manual_navigate_click_preserves_click_navigation_semantics():
     assert "expect_navigation" in body
     assert "get_by_role('button', name='登录', exact=True).click()" in body
     assert "goto(_target_url" not in body
+
+
+def test_manual_sso_redirect_chain_folds_into_post_click_url_wait():
+    base_time = datetime(2026, 5, 12, 17, 43, 15)
+    tab_signal = {"tab": {"tab_id": "tab-root"}}
+    traces = [
+        RPAAcceptedTrace(
+            trace_id="sso-click",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            action="navigate_click",
+            description='点击 button("使用 SSO 登录") 并跳转页面',
+            after_page=RPAPageState(
+                url="https://oseasy.his.huawei.com/login.html?code=abc123&state=nonce",
+            ),
+            locator_candidates=[
+                {"locator": {"method": "role", "role": "button", "name": "使用 SSO 登录"}, "selected": True},
+            ],
+            signals=tab_signal,
+            started_at=base_time,
+            ended_at=base_time,
+        ),
+        RPAAcceptedTrace(
+            trace_id="redirect-root",
+            trace_type=RPATraceType.NAVIGATION,
+            description="导航到 https://oseasy.his.huawei.com/",
+            after_page=RPAPageState(url="https://oseasy.his.huawei.com/"),
+            signals=tab_signal,
+            started_at=base_time + timedelta(milliseconds=500),
+            ended_at=base_time + timedelta(milliseconds=500),
+        ),
+        RPAAcceptedTrace(
+            trace_id="redirect-hash-root",
+            trace_type=RPATraceType.NAVIGATION,
+            description="导航到 https://oseasy.his.huawei.com/#/",
+            after_page=RPAPageState(url="https://oseasy.his.huawei.com/#/"),
+            signals=tab_signal,
+            started_at=base_time + timedelta(milliseconds=800),
+            ended_at=base_time + timedelta(milliseconds=800),
+        ),
+        RPAAcceptedTrace(
+            trace_id="redirect-final",
+            trace_type=RPATraceType.NAVIGATION,
+            description="导航到 https://oseasy.his.huawei.com/#/ha/cluster",
+            after_page=RPAPageState(url="https://oseasy.his.huawei.com/#/ha/cluster"),
+            signals=tab_signal,
+            started_at=base_time + timedelta(milliseconds=1000),
+            ended_at=base_time + timedelta(milliseconds=1000),
+        ),
+        RPAAcceptedTrace(
+            trace_id="next-menu-click",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            action="click",
+            description='点击 menuitem("虚拟机")',
+            after_page=RPAPageState(url="https://oseasy.his.huawei.com/#/ha/cluster"),
+            locator_candidates=[
+                {"locator": {"method": "role", "role": "menuitem", "name": "虚拟机"}, "selected": True},
+            ],
+            signals={**tab_signal, "menu_context": {"is_menu_item": True}},
+            started_at=base_time + timedelta(seconds=5),
+            ended_at=base_time + timedelta(seconds=5),
+        ),
+    ]
+
+    script = TraceSkillCompiler().generate_script(traces, is_local=True)
+    body = _execute_body(script)
+
+    assert "get_by_role('button', name='使用 SSO 登录', exact=True).click()" in body
+    assert "wait_for_url('https://oseasy.his.huawei.com/#/ha/cluster'" in body
+    assert "login.html?code=" not in body
+    assert "#/#/ha/cluster" not in body
+    assert "get_by_role('menuitem', name='虚拟机', exact=True).click()" in body
+    assert body.count("await current_page.goto(_target_url, wait_until='domcontentloaded')") == 0
+
+
+def test_standalone_hash_route_navigation_uses_absolute_recorded_url():
+    trace = RPAAcceptedTrace(
+        trace_id="hash-route",
+        trace_type=RPATraceType.NAVIGATION,
+        description="导航到 https://oseasy.his.huawei.com/#/ha/cluster",
+        after_page=RPAPageState(url="https://oseasy.his.huawei.com/#/ha/cluster"),
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    body = _execute_body(script)
+
+    assert "_target_url = 'https://oseasy.his.huawei.com/#/ha/cluster'" in body
+    assert "#/#/ha/cluster" not in body
 
 
 def test_manual_fill_without_valid_locator_raises_clear_runtime_error():
