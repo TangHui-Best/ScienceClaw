@@ -195,8 +195,23 @@ async def screencast_ws(websocket: WebSocket, session_id: str):
         await screencast.stop()
 
 
-async def _resolve_user_model_config(user_id: str) -> Optional[dict]:
+async def _resolve_user_model_config(user_id: str, model_id: Optional[str] = None) -> Optional[dict]:
     """Resolve the user's model config, same logic as RPA recorder."""
+    if model_id:
+        doc = await get_repository("models").find_one({
+            "_id": model_id,
+            "$or": [{"user_id": user_id}, {"is_system": True}],
+            "is_active": True,
+            "api_key": {"$nin": ["", None]},
+        })
+        if doc:
+            return {
+                "model_name": doc.get("model_name"),
+                "base_url": doc.get("base_url"),
+                "api_key": doc.get("api_key"),
+                "context_window": doc.get("context_window"),
+                "provider": doc.get("provider", ""),
+            }
     docs = await get_repository("models").find_many(
         {"$or": [{"user_id": user_id}, {"is_system": True}], "is_active": True, "api_key": {"$nin": ["", None]}},
         sort=[("is_system", 1), ("updated_at", -1)],
@@ -239,7 +254,7 @@ async def analyze_session(
             detail=f"Instruction is required for {mode_config.key} analysis",
         )
 
-    model_config = await _resolve_user_model_config(str(current_user.id))
+    model_config = await _resolve_user_model_config(str(current_user.id), model_id=payload.model_id)
 
     async def event_generator():
         import asyncio as _asyncio

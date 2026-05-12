@@ -224,3 +224,4 @@ class UpdateToolSelectionRequest(BaseModel):
 class AnalyzeSessionRequest(BaseModel):
     mode: str = "free"
     instruction: str = ""
+    model_id: Optional[str] = None

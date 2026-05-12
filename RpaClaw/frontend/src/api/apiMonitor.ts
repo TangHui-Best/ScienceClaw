@@ -116,6 +116,7 @@ export type AnalysisModeKey = 'free' | 'safe_directed' | 'directed'
 export interface AnalyzeSessionPayload {
   mode?: AnalysisModeKey | string
   instruction?: string
+  model_id?: string
 }
 
 export type ApiMonitorCredentialType = 'placeholder' | 'test'
@@ -263,6 +264,7 @@ export function analyzeSession(
   const body = {
     mode: payload.mode || 'free',
     instruction: payload.instruction || '',
+    ...(payload.model_id ? { model_id: payload.model_id } : {}),
   }
 
   createSSEConnection<unknown>(

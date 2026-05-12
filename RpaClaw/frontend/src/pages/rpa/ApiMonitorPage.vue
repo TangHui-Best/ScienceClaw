@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowLeft, Globe, BarChart2, Disc, Square, Save, Wrench, ChevronDown, MonitorPlay, X, AlertTriangle, Terminal, Loader2 } from 'lucide-vue-next';
+import { ArrowLeft, Globe, BarChart2, Disc, Square, Save, Wrench, ChevronDown, MonitorPlay, X, AlertTriangle, Terminal, Loader2, Check } from 'lucide-vue-next';
 import { ref, reactive, onMounted, onBeforeUnmount, nextTick, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
@@ -28,6 +28,9 @@ import {
   type TokenFlowSelection,
 } from '@/api/apiMonitor';
 import { listCredentials, type Credential } from '@/api/credential';
+import { listModels, type ModelConfig } from '@/api/models';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import ProviderIcon from '@/components/icons/ProviderIcon.vue';
 import { API_MONITOR_CREDENTIAL_TYPE_OPTIONS, normalizeApiMonitorAuth } from '@/utils/apiMonitorAuth';
 import { getBackendWsUrl } from '@/utils/sandbox';
 import { showErrorToast, showSuccessToast } from '@/utils/toast';
@@ -99,6 +102,18 @@ const canRunAnalysis = computed(() => canStartAnalysis({
   instruction: analysisInstruction.value,
 }));
 
+const currentModel = computed(() => {
+  if (!models.value.length) return null;
+  if (!selectedModelId.value) return models.value.find(m => m.is_system) || models.value[0];
+  return models.value.find(m => m.id === selectedModelId.value) || null;
+});
+
+const currentModelName = computed(() => {
+  const model = currentModel.value;
+  if (!model) return '选择模型';
+  return model.name.toLowerCase() === 'system' ? model.model_name : model.name;
+});
+
 const analysisMenuStyle = computed(() => {
   const anchor = analysisMenuAnchor.value;
   if (!anchor) return {};
@@ -127,6 +142,9 @@ const expandedToolId = ref<string | null>(null);
 const toolEdits = reactive<Record<string, string>>({});
 const loading = ref(false);
 const error = ref<string | null>(null);
+const models = ref<ModelConfig[]>([]);
+const selectedModelId = ref<string | null>(null);
+const isModelsOpen = ref(false);
 const publishDialogOpen = ref(false);
 const overwriteDialogOpen = ref(false);
 const isPublishing = ref(false);
@@ -636,6 +654,7 @@ const startAnalysis = async () => {
   }, {
     mode: analysisMode.value,
     instruction,
+    model_id: selectedModelId.value || undefined,
   });
 };
 
@@ -995,9 +1014,16 @@ const getCandidateStatusClass = (status: ApiToolGenerationCandidate['status']) =
 // Lifecycle
 // ---------------------------------------------------------------------------
 
-onMounted(() => {
+onMounted(async () => {
   addLog('INFO', 'API 监控已准备就绪。输入 URL 并点击 Go 开始。');
   document.addEventListener('click', handleClickOutsideMenu, true);
+  try {
+    const modelsData = await listModels();
+    models.value = modelsData;
+    const sys = modelsData.find(m => m.is_system);
+    if (sys) selectedModelId.value = sys.id;
+    else if (modelsData.length > 0) selectedModelId.value = modelsData[0].id;
+  } catch { /* non-critical */ }
 });
 
 onBeforeUnmount(() => {
@@ -1015,7 +1041,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="api-monitor-page flex h-full w-full flex-col overflow-hidden bg-[#f5f7fb] text-[var(--text-primary)] dark:bg-[#101115] api-monitor-teal">
-    <header class="relative flex-shrink-0 overflow-hidden">
+    <header class="relative flex-shrink-0">
       <!-- Background gradient matching ToolsPage -->
       <div class="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.22),transparent_32%),linear-gradient(115deg,#0ea5e9_0%,#0284c7_52%,#0369a1_100%)]"></div>
       <div class="absolute -right-16 -top-20 h-52 w-52 rounded-full bg-white/10 blur-3xl"></div>
@@ -1060,6 +1086,42 @@ onBeforeUnmount(() => {
             </div>
 
             <div class="flex items-center gap-2">
+              <!-- Model Selector -->
+              <Popover v-model:open="isModelsOpen">
+                <PopoverTrigger as-child>
+                  <div class="flex items-center gap-2 rounded-full bg-white/15 border border-white/20 px-3 py-2 text-sm font-medium text-white cursor-pointer hover:bg-white/25 transition backdrop-blur">
+                    <ProviderIcon v-if="currentModel" :provider="currentModel.provider" class="size-4" />
+                    <span class="truncate max-w-[140px]">{{ currentModelName }}</span>
+                    <ChevronDown :size="14" class="opacity-60" />
+                  </div>
+                </PopoverTrigger>
+                <PopoverContent class="w-[280px] p-0 overflow-hidden" align="end" :side-offset="8">
+                  <div class="bg-slate-50 dark:bg-white/[0.03] px-3 py-2 border-b border-slate-100 dark:border-white/10">
+                    <span class="text-xs font-medium text-slate-500 dark:text-slate-400">选择模型</span>
+                  </div>
+                  <div class="flex flex-col max-h-[300px] overflow-y-auto p-1">
+                    <button
+                      v-for="model in models"
+                      :key="model.id"
+                      @click="selectedModelId = model.id; isModelsOpen = false"
+                      class="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-slate-50 dark:hover:bg-white/5 transition-all text-left"
+                      :class="{ 'bg-slate-50 dark:bg-white/5': selectedModelId === model.id }"
+                    >
+                      <div class="flex items-center justify-center w-8 h-8 rounded-full bg-slate-100 dark:bg-white/10 border border-slate-200 dark:border-white/10 flex-shrink-0">
+                        <ProviderIcon :provider="model.provider" class="size-4" />
+                      </div>
+                      <div class="flex flex-col overflow-hidden flex-1">
+                        <span class="text-sm font-medium text-slate-900 dark:text-white truncate">
+                          {{ model.name.toLowerCase() === 'system' ? model.model_name : model.name }}
+                        </span>
+                        <span class="text-[10px] text-slate-400 truncate">{{ model.provider }}</span>
+                      </div>
+                      <Check v-if="selectedModelId === model.id" :size="16" class="text-sky-500 flex-shrink-0" />
+                    </button>
+                  </div>
+                </PopoverContent>
+              </Popover>
+
               <button
                 @click="openPublishDialog"
                 :disabled="!sessionId || !adoptedToolCount || isPublishing"
