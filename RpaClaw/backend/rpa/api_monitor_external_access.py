@@ -33,8 +33,12 @@ def build_caller_auth_requirements(auth_config: Mapping[str, Any] | None) -> dic
         return {
             "required": True,
             "credential_type": IDAAS_CREDENTIAL_TYPE,
-            "accepted_fields": ["_auth.headers.X-RE-AppId", "_auth.cookie.X-Auth-Token"],
-            "notes": ["Provide IDaaS X-RE-AppId header and X-Auth-Token cookie via _auth."],
+            "accepted_fields": [
+                "_auth.headers.X-RE-AppId",
+                "_auth.headers.X-forwarded-for",
+                "_auth.cookie.X-Auth-Token",
+            ],
+            "notes": ["Provide IDaaS X-RE-AppId header, X-forwarded-for (real IP) header, and X-Auth-Token cookie via _auth."],
         }
     return {
         "required": False,
@@ -77,9 +81,13 @@ def _idaas_auth_input_schema() -> dict[str, Any]:
                     "X-RE-AppId": {
                         "type": "string",
                         "description": "IDaaS application identifier.",
-                    }
+                    },
+                    "X-forwarded-for": {
+                        "type": "string",
+                        "description": "Caller's real IP address.",
+                    },
                 },
-                "required": ["X-RE-AppId"],
+                "required": ["X-RE-AppId", "X-forwarded-for"],
                 "additionalProperties": False,
             },
             "cookie": {
@@ -136,7 +144,8 @@ def with_caller_auth_description(
         if credential_type == IDAAS_CREDENTIAL_TYPE:
             suffix = (
                 "Caller auth: this API Monitor MCP is configured with credential_type=idaas. "
-                "Pass X-RE-AppId in _auth.headers and X-Auth-Token in _auth.cookie for each call."
+                "Pass X-RE-AppId and X-forwarded-for (your real IP address) in _auth.headers, "
+                "and X-Auth-Token in _auth.cookie for each call."
             )
         else:
             suffix = (
@@ -190,16 +199,18 @@ def extract_caller_auth_profile(
         auth_headers = auth_payload.get("headers") if isinstance(auth_payload, Mapping) else {}
         auth_cookie = auth_payload.get("cookie") if isinstance(auth_payload, Mapping) else {}
         app_id = _header_value(auth_headers, "X-RE-AppId")
+        forwarded_for = _header_value(auth_headers, "X-forwarded-for")
         auth_token = _header_value(auth_cookie, "X-Auth-Token")
-        if not app_id or not auth_token:
-            raise CallerAuthError("Missing IDaaS X-RE-AppId or X-Auth-Token via _auth")
+        if not app_id or not forwarded_for or not auth_token:
+            raise CallerAuthError("Missing IDaaS X-RE-AppId, X-forwarded-for, or X-Auth-Token via _auth")
         profile.set_header("X-RE-AppId", app_id, secret=False)
+        profile.set_header("X-forwarded-for", forwarded_for, secret=False)
         profile.set_header("Cookie", f"X-Auth-Token={auth_token}", secret=True)
         profile.set_variable("auth_token", auth_token, secret=True, source="_auth.cookie.X-Auth-Token")
         return cleaned, profile, {
             "credential_type": IDAAS_CREDENTIAL_TYPE,
             "source": "_auth",
-            "headers": ["X-RE-AppId", "Cookie"],
+            "headers": ["X-RE-AppId", "X-forwarded-for", "Cookie"],
             "injected": True,
         }
 

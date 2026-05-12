@@ -605,7 +605,7 @@ export default {
   'API Monitor Test credential type': 'Test (Login)',
   'API Monitor Test credential type hint': 'Test type POSTs credentials to login_url to obtain a token, then injects Bearer token into requests.',
   'API Monitor IDaaS credential type': 'IDaaS',
-  'API Monitor IDaaS credential type hint': 'IDaaS type requires external callers to provide X-RE-AppId (Header) and X-Auth-Token (Cookie) via _auth.',
+  'API Monitor IDaaS credential type hint': 'IDaaS type requires external callers to provide X-RE-AppId (Header), X-forwarded-for (Header, real IP address) and X-Auth-Token (Cookie) via _auth.',
   'Login URL': 'Login URL',
   'Login URL placeholder': 'e.g. http://localhost:11451/api/login',
   'Authentication': 'Authentication',
