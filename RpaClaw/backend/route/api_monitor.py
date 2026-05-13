@@ -3,6 +3,7 @@
 Prefix: /api/v1/api-monitor
 """
 
+import datetime
 import json
 import logging
 from typing import Optional
@@ -250,6 +251,7 @@ async def analyze_session(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     instruction = payload.instruction.strip()
+    intent = payload.intent or instruction or None
     if mode_config.requires_instruction and not instruction:
         raise HTTPException(
             status_code=400,
@@ -271,7 +273,7 @@ async def analyze_session(
         api_monitor_manager._analysis_event_sinks[session_id] = sink
         try:
             source = (
-                api_monitor_manager.analyze_page(session_id, model_config=model_config)
+                api_monitor_manager.analyze_page(session_id, model_config=model_config, intent=intent)
                 if mode_config.handler == "free"
                 else api_monitor_manager.analyze_directed_page(
                     session_id,
@@ -324,12 +326,14 @@ async def analyze_session(
 @router.post("/session/{session_id}/record/start")
 async def start_recording(
     session_id: str,
+    request: UpdateSessionIntentRequest | None = Body(default=None),
     current_user: User = Depends(get_current_user),
 ):
     session = api_monitor_manager.get_session(session_id)
     _verify_session_owner(session, current_user)
     model_config = await _resolve_user_model_config(str(current_user.id))
-    await api_monitor_manager.start_recording(session_id, model_config=model_config)
+    intent = request.intent if request else None
+    await api_monitor_manager.start_recording(session_id, model_config=model_config, intent=intent)
     return {"status": "success"}
 
 
@@ -395,6 +399,43 @@ async def retry_generation_candidate(
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"status": "success", "candidate": candidate.model_dump(mode="json")}
+
+
+@router.put("/session/{session_id}/intent")
+async def update_session_intent(
+    session_id: str,
+    request: UpdateSessionIntentRequest,
+    current_user: User = Depends(get_current_user),
+):
+    session = api_monitor_manager.get_session(session_id)
+    _verify_session_owner(session, current_user)
+    session.intent = request.intent or None
+    session.updated_at = datetime.datetime.now()
+    return {"status": "success", "intent": session.intent}
+
+
+@router.post("/session/{session_id}/generation-candidates/{candidate_id}/force-generate")
+async def force_generate_candidate(
+    session_id: str,
+    candidate_id: str,
+    request: ForceGenerateRequest | None = Body(default=None),
+    current_user: User = Depends(get_current_user),
+):
+    session = api_monitor_manager.get_session(session_id)
+    _verify_session_owner(session, current_user)
+    model_config = await _resolve_user_model_config(
+        str(current_user.id),
+        model_id=request.model_id if request else None,
+    )
+    try:
+        candidate = api_monitor_manager.force_generate_candidate(
+            session_id,
+            candidate_id,
+            model_config=model_config,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "success", "candidate": candidate.model_dump(mode="json")}
 
 
