@@ -85,6 +85,8 @@ GenerationStatus = Literal[
     "failed",
     "rate_limited",
     "stale",
+    "confidence_rejected",
+    "intent_filtered",
 ]
 
 
@@ -96,7 +98,9 @@ class ApiToolGenerationCandidate(BaseModel):
     url_pattern: str
     source_call_ids: List[str] = Field(default_factory=list)
     sample_call_ids: List[str] = Field(default_factory=list)
-    status: GenerationStatus = "pending"
+    rejection_reason: Optional[str] = None
+    intent_filter_reason: Optional[str] = None
+    status: GenerationStatus = "pending"  # pending, running, generated, failed, rate_limited, stale, confidence_rejected, intent_filtered
     tool_id: Optional[str] = None
     error: str = ""
     retry_after: Optional[datetime] = None
@@ -161,6 +165,7 @@ class ApiMonitorSession(BaseModel):
     id: str = Field(default_factory=_gen_id)
     user_id: str
     sandbox_session_id: str
+    intent: Optional[str] = None
     status: str = "idle"  # idle, analyzing, recording, stopped
     target_url: Optional[str] = None
     captured_calls: List[CapturedApiCall] = Field(default_factory=list)
@@ -222,6 +227,15 @@ class UpdateToolSelectionRequest(BaseModel):
 
 
 class AnalyzeSessionRequest(BaseModel):
+    intent: Optional[str] = None
     mode: str = "free"
     instruction: str = ""
+    model_id: Optional[str] = None
+
+
+class UpdateSessionIntentRequest(BaseModel):
+    intent: str = ""
+
+
+class ForceGenerateRequest(BaseModel):
     model_id: Optional[str] = None

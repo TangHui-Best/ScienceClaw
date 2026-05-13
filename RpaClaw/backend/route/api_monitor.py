@@ -23,6 +23,8 @@ from backend.rpa.api_monitor.models import (
     PublishMcpRequest,
     UpdateToolRequest,
     UpdateToolSelectionRequest,
+    UpdateSessionIntentRequest,
+    ForceGenerateRequest,
 )
 from backend.rpa.api_monitor.analysis_modes import get_analysis_mode_config
 from backend.rpa.api_monitor_mcp_registry import ApiMonitorMcpRegistry
