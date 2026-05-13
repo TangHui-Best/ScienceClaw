@@ -3,7 +3,6 @@ name: 导出合同台账报表
 tags: [reports]
 user:
   username: buyer
-  password: buyer123
 start_path: /reports
 timeout_s: 90
 instruction: >

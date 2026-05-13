@@ -3,7 +3,6 @@ name: 合同空结果处理
 tags: [smoke, contracts, empty_result]
 user:
   username: buyer
-  password: buyer123
 start_path: /contracts
 timeout_s: 90
 instruction: >

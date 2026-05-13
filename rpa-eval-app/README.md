@@ -93,9 +93,9 @@ runner 会对每个用例执行总时限控制。默认 `--case-timeout-s` 为 1
 
 | 用户名 | 密码 | 角色 |
 | --- | --- | --- |
-| `admin` | `admin123` | 管理员 |
-| `buyer` | `buyer123` | 采购员 |
-| `approver` | `approver123` | 审批人 |
+| `admin` | 运行时生成 | 管理员 |
+| `buyer` | 运行时生成 | 采购员 |
+| `approver` | 运行时生成 | 审批人 |
 
 评测 runner 会在每个用例开始前重置数据，并使用评测后端签发的 token 访问 `eval-auth.html` 写入浏览器登录态，再导航到用例起始页。发送给 RpaClaw 的指令只包含业务任务本身，避免“登录/导航前置步骤”被误判为业务完成。
 
@@ -107,10 +107,10 @@ runner 会对每个用例执行总时限控制。默认 `--case-timeout-s` 为 1
 Invoke-WebRequest `
   -Method POST `
   -Uri http://localhost:8085/api/eval/reset `
-  -Headers @{ "X-RPA-Eval-Reset-Token" = "rpa-eval-reset" }
+  -Headers @{ "X-RPA-Eval-Reset-Token" = $env:RPA_EVAL_RESET_TOKEN }
 ```
 
-重置 token 可通过环境变量覆盖：
+重置 token 必须通过环境变量提供，并在后端和 runner 中保持一致：
 
 ```powershell
 $env:RPA_EVAL_RESET_TOKEN = "your-reset-token"

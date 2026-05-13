@@ -1,13 +1,15 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import Depends
+from fastapi import Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from auth import verify_reset_token
+from auth import create_access_token, verify_reset_token
 from database import SessionLocal
 from database import ensure_app_dirs, recreate_database
 from fixtures import load_fixtures, reset_downloads_dir
+from models import User
 from routes import approvals, auth, contracts, purchase_orders, purchase_requests, reports, suppliers
+from schemas import EvalTokenRequest, EvalTokenResponse, UserOut
 
 
 app = FastAPI(title="RPA Golden Evaluation Backend", version="0.1.0")
@@ -47,6 +49,25 @@ def reset_eval() -> dict[str, str]:
     finally:
         db.close()
     return {"status": "reset", "database": "reloaded", "downloads": "cleared"}
+
+
+@app.post(
+    "/api/eval/auth-token",
+    response_model=EvalTokenResponse,
+    dependencies=[Depends(verify_reset_token)],
+)
+def issue_eval_auth_token(payload: EvalTokenRequest) -> EvalTokenResponse:
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.username == payload.username).one_or_none()
+        if user is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Eval user not found")
+        return EvalTokenResponse(
+            access_token=create_access_token(user.username),
+            user=UserOut.model_validate(user),
+        )
+    finally:
+        db.close()
 
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])

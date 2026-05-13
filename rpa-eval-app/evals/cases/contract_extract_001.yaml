@@ -3,7 +3,6 @@ name: 抽取合同关键字段
 tags: [contracts, extraction]
 user:
   username: buyer
-  password: buyer123
 start_path: /contracts/CT-2026-RPA-001
 timeout_s: 90
 instruction: >

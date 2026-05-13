@@ -3,7 +3,6 @@ name: 审批高优先级采购订单
 tags: [approvals]
 user:
   username: approver
-  password: approver123
 start_path: /approvals
 timeout_s: 120
 instruction: >
