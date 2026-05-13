@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta
 
 from backend.rpa.trace_models import (
@@ -16,6 +17,38 @@ from backend.rpa.trace_skill_compiler import TraceSkillCompiler
 def _execute_body(script: str) -> str:
     start = script.index("async def execute_skill")
     return script[start:]
+
+
+def _load_execute_skill(script: str):
+    end = script.index("\ndef _parse_cli_value")
+    namespace = {"__name__": "compiled_skill_test"}
+    exec(script[:end], namespace)
+    return namespace["execute_skill"]
+
+
+class _FakeTracePage:
+    def __init__(self, name: str = "page") -> None:
+        self.name = name
+        self.context = _FakeTraceContext()
+        self.brought_to_front = 0
+        self.closed = False
+
+    async def bring_to_front(self) -> None:
+        self.brought_to_front += 1
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class _FakeTraceContext:
+    def __init__(self) -> None:
+        self.created_pages = []
+
+    async def new_page(self):
+        page = _FakeTracePage(f"page-{len(self.created_pages) + 1}")
+        page.context = self
+        self.created_pages.append(page)
+        return page
 
 
 def test_compiler_renders_navigation_trace():
@@ -76,14 +109,15 @@ def test_navigation_trace_with_new_tab_id_materializes_page_before_goto():
     script = TraceSkillCompiler().generate_script(traces, is_local=True)
     body = _execute_body(script)
 
-    new_page = "current_page = await current_page.context.new_page()"
-    store_tab = 'tabs["tab-second"] = current_page'
+    new_page = "page = await current_page.context.new_page()"
+    store_tab = 'tabs[tab_id] = page'
+    ensure_tab = 'current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, "tab-second")'
     second_url = "_target_url = 'https://www.browseract.com/'"
     assert 'tabs = {"tab-root": page}' in body
-    assert new_page in body
-    assert store_tab in body
-    assert body.index(new_page) < body.index(second_url)
-    assert body.index(store_tab) < body.index(second_url)
+    assert new_page in script
+    assert store_tab in script
+    assert ensure_tab in body
+    assert body.index(ensure_tab) < body.index(second_url)
 
 
 def test_navigation_trace_with_new_tab_id_activates_materialized_page_for_preview():
@@ -106,7 +140,7 @@ def test_navigation_trace_with_new_tab_id_activates_materialized_page_for_previe
     body = _execute_body(script)
 
     assert "async def _activate_recorded_page(page, kwargs, tab_id=''):" in script
-    activation = '_activate_recorded_page(current_page, kwargs, "tab-second")'
+    activation = '_ensure_recorded_tab(tabs, current_page, kwargs, "tab-second")'
     second_url = "_target_url = 'https://www.browseract.com/'"
     assert activation in body
     assert body.index(activation) < body.index(second_url)
@@ -654,7 +688,7 @@ def test_manual_popup_click_registers_source_tab_before_switching_to_new_page():
     assert source_registration in body
     assert body.index(source_registration) < body.index(popup_wait)
     assert 'tabs["tab-export"] = new_page' in body
-    assert 'current_page = tabs["tab-root"]' in body
+    assert 'current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, "tab-root")' in body
 
 
 def test_manual_switch_tab_trace_compiles_to_page_context_switch():
@@ -671,8 +705,27 @@ def test_manual_switch_tab_trace_compiles_to_page_context_switch():
 
     assert "No stable locator was recorded" not in body
     assert 'tabs.setdefault("tab-root", current_page)' in body
-    assert 'current_page = tabs["tab-sales"]' in body
-    assert "await current_page.bring_to_front()" in body
+    assert 'current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, "tab-sales")' in body
+    assert "await page.bring_to_front()" in script
+
+
+def test_manual_switch_tab_without_known_target_materializes_page_at_runtime():
+    trace = RPAAcceptedTrace(
+        trace_id="switch-to-sales",
+        trace_type=RPATraceType.MANUAL_ACTION,
+        action="switch_tab",
+        description="切换到标签页 iSales+",
+        signals={"tab": {"source_tab_id": "tab-root", "target_tab_id": "tab-sales"}},
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    execute_skill = _load_execute_skill(script)
+    page = _FakeTracePage("root")
+
+    asyncio.run(execute_skill(page))
+
+    assert len(page.context.created_pages) == 1
+    assert page.context.created_pages[0].brought_to_front == 1
 
 
 def test_manual_close_tab_trace_compiles_to_page_close_and_fallback_switch():
@@ -691,7 +744,27 @@ def test_manual_close_tab_trace_compiles_to_page_close_and_fallback_switch():
     assert 'tabs.setdefault("tab-sales", current_page)' in body
     assert 'closing_page = tabs.pop("tab-sales", current_page)' in body
     assert "await closing_page.close()" in body
-    assert 'current_page = tabs["tab-root"]' in body
+    assert 'current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, "tab-root")' in body
+
+
+def test_manual_close_tab_without_known_fallback_materializes_fallback_at_runtime():
+    trace = RPAAcceptedTrace(
+        trace_id="close-sales",
+        trace_type=RPATraceType.MANUAL_ACTION,
+        action="close_tab",
+        description="关闭标签页 iSales+ 并切换到其他标签页",
+        signals={"tab": {"tab_id": "tab-sales", "target_tab_id": "tab-root"}},
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    execute_skill = _load_execute_skill(script)
+    page = _FakeTracePage("sales")
+
+    asyncio.run(execute_skill(page))
+
+    assert page.closed is True
+    assert len(page.context.created_pages) == 1
+    assert page.context.created_pages[0].brought_to_front == 1
 
 
 def test_manual_download_click_compiles_to_expect_download():
@@ -1036,6 +1109,42 @@ def test_manual_sso_redirect_chain_folds_into_post_click_url_wait():
     assert "#/#/ha/cluster" not in body
     assert "get_by_role('menuitem', name='虚拟机', exact=True).click()" in body
     assert body.count("await current_page.goto(_target_url, wait_until='domcontentloaded')") == 0
+
+
+def test_non_auth_navigation_after_click_is_not_folded_into_post_click_wait():
+    base_time = datetime(2026, 5, 12, 17, 43, 15)
+    tab_signal = {"tab": {"tab_id": "tab-root"}}
+    traces = [
+        RPAAcceptedTrace(
+            trace_id="settings-click",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            action="navigate_click",
+            description='点击 link("Settings") 并跳转页面',
+            after_page=RPAPageState(url="https://example.com/settings"),
+            locator_candidates=[
+                {"locator": {"method": "role", "role": "link", "name": "Settings"}, "selected": True},
+            ],
+            signals=tab_signal,
+            started_at=base_time,
+            ended_at=base_time,
+        ),
+        RPAAcceptedTrace(
+            trace_id="manual-address-navigation",
+            trace_type=RPATraceType.NAVIGATION,
+            description="导航到 https://example.com/reports",
+            after_page=RPAPageState(url="https://example.com/reports"),
+            signals=tab_signal,
+            started_at=base_time + timedelta(seconds=10),
+            ended_at=base_time + timedelta(seconds=10),
+        ),
+    ]
+
+    script = TraceSkillCompiler().generate_script(traces, is_local=True)
+    body = _execute_body(script)
+
+    assert "wait_for_url('https://example.com/reports'" not in body
+    assert "_target_url = 'https://example.com/reports'" in body
+    assert body.count("await current_page.goto(_target_url, wait_until='domcontentloaded')") == 1
 
 
 def test_standalone_hash_route_navigation_uses_absolute_recorded_url():

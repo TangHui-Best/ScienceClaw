@@ -19,6 +19,7 @@ rpa-eval-app/
 - Node.js 18+。
 - RpaClaw 后端可访问，默认地址为 `http://localhost:12001`。
 - RpaClaw 需要能访问本机评测前端 `http://localhost:5175`。
+- 后端和 runner 必须使用同一个 `RPA_EVAL_RESET_TOKEN`，用于重置 fixtures 和签发评测登录态。
 
 ## 1. 安装后端与评测依赖
 
@@ -43,6 +44,7 @@ python -m pip install -r requirements.txt
 继续在后端终端中执行：
 
 ```powershell
+$env:RPA_EVAL_RESET_TOKEN = "your-reset-token"
 python -m uvicorn main:app --host 127.0.0.1 --port 8085
 ```
 
@@ -110,7 +112,7 @@ Invoke-WebRequest `
   -Headers @{ "X-RPA-Eval-Reset-Token" = $env:RPA_EVAL_RESET_TOKEN }
 ```
 
-重置 token 必须通过环境变量提供，并在后端和 runner 中保持一致：
+重置 token 必须通过环境变量提供，并在后端和 runner 中保持一致。通常在启动后端前已经设置过；如果这是新的终端，请重新设置：
 
 ```powershell
 $env:RPA_EVAL_RESET_TOKEN = "your-reset-token"
@@ -122,12 +124,14 @@ $env:RPA_EVAL_RESET_TOKEN = "your-reset-token"
 
 ```powershell
 cd D:\code\MyScienceClaw
+$env:RPA_EVAL_RESET_TOKEN = "your-reset-token"
 python rpa-eval-app\evals\runner.py --tag smoke
 ```
 
 运行全部用例：
 
 ```powershell
+$env:RPA_EVAL_RESET_TOKEN = "your-reset-token"
 python rpa-eval-app\evals\runner.py --all
 ```
 

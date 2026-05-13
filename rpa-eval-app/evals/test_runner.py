@@ -14,6 +14,7 @@ from runner import (
     build_browser_instruction,
     build_eval_auth_url,
     extract_final_url,
+    require_reset_token,
     render_console_summary,
     resolve_case_timeout_s,
     read_artifact_text,
@@ -88,6 +89,13 @@ class RunnerAssertionTests(unittest.TestCase):
         text = build_eval_auth_url("http://localhost:5175", "token with/slash+plus")
 
         self.assertEqual("http://localhost:5175/eval-auth.html?token=token%20with%2Fslash%2Bplus", text)
+
+    def test_runner_rejects_missing_reset_token_before_network_calls(self):
+        with self.assertRaises(CaseAssertionError) as raised:
+            require_reset_token("")
+
+        self.assertEqual("configuration", raised.exception.stage)
+        self.assertIn("RPA_EVAL_RESET_TOKEN", str(raised.exception))
 
     def test_eval_app_client_requests_eval_token_without_password(self):
         client = EvalAppClient("http://localhost:8085")

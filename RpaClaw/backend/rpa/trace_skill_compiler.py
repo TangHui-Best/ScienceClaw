@@ -124,6 +124,11 @@ class TraceSkillCompiler:
                 chain.append(traces[cursor])
                 cursor += 1
 
+            if not cls._has_redirect_auth_evidence(trace, chain) or not cls._is_short_redirect_chain(trace, chain):
+                normalized.append(trace)
+                index += 1
+                continue
+
             final_url = cls._redirect_continuation_final_url(
                 chain,
                 traces[cursor] if cursor < len(traces) else None,
@@ -178,6 +183,25 @@ class TraceSkillCompiler:
         if source_tab and candidate_tab and source_tab != candidate_tab:
             return False
         return bool(cls._trace_url(candidate))
+
+    @classmethod
+    def _has_redirect_auth_evidence(cls, source_trace: RPAAcceptedTrace, chain: List[RPAAcceptedTrace]) -> bool:
+        return any(cls._looks_like_auth_callback_url(cls._trace_url(trace)) for trace in [source_trace, *chain])
+
+    @staticmethod
+    def _is_short_redirect_chain(source_trace: RPAAcceptedTrace, chain: List[RPAAcceptedTrace]) -> bool:
+        if not chain:
+            return False
+        source_time = source_trace.ended_at or source_trace.started_at
+        if source_time is None:
+            return False
+        for trace in chain:
+            trace_time = trace.started_at or trace.ended_at
+            if trace_time is None:
+                return False
+            if abs((trace_time - source_time).total_seconds()) > 5:
+                return False
+        return True
 
     @classmethod
     def _redirect_continuation_final_url(
@@ -399,6 +423,16 @@ class TraceSkillCompiler:
             "    if callable(activator):",
             "        await activator(page, tab_id)",
             "",
+            "async def _ensure_recorded_tab(tabs, current_page, kwargs, tab_id):",
+            "    if tab_id in tabs:",
+            "        page = tabs[tab_id]",
+            "    else:",
+            "        page = await current_page.context.new_page()",
+            "        tabs[tab_id] = page",
+            "    await page.bring_to_front()",
+            "    await _activate_recorded_page(page, kwargs, tab_id)",
+            "    return page",
+            "",
             "async def execute_skill(page, **kwargs):",
             '    """Auto-generated skill from RPA trace recording."""',
             "    _results = {}",
@@ -457,19 +491,14 @@ class TraceSkillCompiler:
         if tab_id in known_tab_ids:
             return [
                 "",
-                f"    current_page = tabs[{tab_id_literal}]",
-                "    await current_page.bring_to_front()",
-                f"    await _activate_recorded_page(current_page, kwargs, {tab_id_literal})",
+                f"    current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, {tab_id_literal})",
             ], tab_id
 
         known_tab_ids.add(tab_id)
         return [
             "",
             f"    # Materialize recorded tab {tab_id}; opener/popup evidence was not available.",
-            "    current_page = await current_page.context.new_page()",
-            f"    tabs[{tab_id_literal}] = current_page",
-            "    await current_page.bring_to_front()",
-            f"    await _activate_recorded_page(current_page, kwargs, {tab_id_literal})",
+            f"    current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, {tab_id_literal})",
         ], tab_id
 
     @staticmethod
@@ -659,9 +688,7 @@ class TraceSkillCompiler:
         if source_tab_id:
             lines.append(f"    tabs.setdefault({json.dumps(source_tab_id, ensure_ascii=False)}, current_page)")
         target_tab_id_literal = json.dumps(target_tab_id, ensure_ascii=False)
-        lines.append(f"    current_page = tabs[{target_tab_id_literal}]")
-        lines.append("    await current_page.bring_to_front()")
-        lines.append(f"    await _activate_recorded_page(current_page, kwargs, {target_tab_id_literal})")
+        lines.append(f"    current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, {target_tab_id_literal})")
         return lines
 
     @staticmethod
@@ -683,9 +710,7 @@ class TraceSkillCompiler:
         lines.append("    await closing_page.close()")
         if fallback_tab_id:
             fallback_tab_id_literal = json.dumps(fallback_tab_id, ensure_ascii=False)
-            lines.append(f"    current_page = tabs[{fallback_tab_id_literal}]")
-            lines.append("    await current_page.bring_to_front()")
-            lines.append(f"    await _activate_recorded_page(current_page, kwargs, {fallback_tab_id_literal})")
+            lines.append(f"    current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, {fallback_tab_id_literal})")
         return lines
 
     @staticmethod

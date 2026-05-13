@@ -40,6 +40,11 @@ def main() -> int:
     if not cases:
         print("No eval cases matched the requested selector.", file=sys.stderr)
         return 2
+    try:
+        require_reset_token(args.reset_token)
+    except CaseAssertionError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
     eval_client = EvalAppClient(args.eval_backend_url)
     rpa_client = RpaClawClient(
@@ -112,6 +117,15 @@ def parse_args() -> argparse.Namespace:
         help="Default wall-clock timeout for one eval case. A case can override it with timeout_s in YAML.",
     )
     return parser.parse_args()
+
+
+def require_reset_token(reset_token: str) -> None:
+    if not str(reset_token or "").strip():
+        raise CaseAssertionError(
+            "configuration",
+            "RPA_EVAL_RESET_TOKEN is required. Set it before starting the eval backend and runner, "
+            "or pass --reset-token with the same value used by the backend.",
+        )
 
 
 def load_cases(cases_dir: Path) -> list[dict[str, Any]]:
