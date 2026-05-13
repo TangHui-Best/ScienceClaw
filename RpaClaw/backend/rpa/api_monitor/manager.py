@@ -2122,6 +2122,7 @@ class ApiMonitorSessionManager:
         candidate_id: str,
         *,
         model_config: Optional[Dict] = None,
+        skip_filter: bool = False,
     ) -> None:
         session_tasks = self._generation_tasks.setdefault(session_id, {})
         existing = session_tasks.get(candidate_id)
@@ -2133,7 +2134,7 @@ class ApiMonitorSessionManager:
         except RuntimeError:
             return
         task = loop.create_task(
-            self._run_generation_candidate(session_id, candidate_id, model_config=model_config)
+            self._run_generation_candidate(session_id, candidate_id, model_config=model_config, skip_filter=skip_filter)
         )
         session_tasks[candidate_id] = task
 
@@ -2143,6 +2144,7 @@ class ApiMonitorSessionManager:
         candidate_id: str,
         *,
         model_config: Optional[Dict] = None,
+        skip_filter: bool = False,
     ) -> None:
         try:
             async with self._generation_semaphore:
@@ -2152,6 +2154,7 @@ class ApiMonitorSessionManager:
                             session_id,
                             candidate_id,
                             model_config=model_config,
+                            skip_filter=skip_filter,
                         )
                     except Exception as exc:
                         self._mark_generation_candidate_failed(session_id, candidate_id, exc)
@@ -2176,7 +2179,7 @@ class ApiMonitorSessionManager:
                 None,
             )
             if followup_requested and candidate and candidate.status in ("pending", "stale", "failed", "confidence_rejected", "intent_filtered"):
-                self._enqueue_generation_candidate(session_id, candidate_id, model_config=model_config)
+                self._enqueue_generation_candidate(session_id, candidate_id, model_config=model_config, skip_filter=skip_filter)
 
     def _mark_generation_candidate_failed(
         self,
@@ -2230,6 +2233,7 @@ class ApiMonitorSessionManager:
         candidate_id: str,
         *,
         model_config: Optional[Dict] = None,
+        skip_filter: bool = False,
     ) -> ApiToolDefinition | None:
         session = self._require_session(session_id)
         candidate = next(
@@ -2252,7 +2256,8 @@ class ApiMonitorSessionManager:
             samples,
             action_context=candidate.step_metadata[-1] if candidate.step_metadata else None,
         )
-        if confidence_result.score < 80:
+
+        if not skip_filter and confidence_result.score < 80:
             candidate.status = "confidence_rejected"
             candidate.rejection_reason = summarize_rejection_reasons(confidence_result)
             candidate.updated_at = datetime.now()
@@ -2265,7 +2270,7 @@ class ApiMonitorSessionManager:
 
         # Round 2: AI intent filter
         intent = session.intent
-        if intent and intent.strip():
+        if not skip_filter and intent and intent.strip():
             try:
                 intent_result = await filter_by_intent(
                     samples, intent.strip(), confidence_result.reasons,
@@ -2550,7 +2555,7 @@ class ApiMonitorSessionManager:
         candidate.rejection_reason = None
         candidate.intent_filter_reason = None
         candidate.updated_at = datetime.now()
-        self._enqueue_generation_candidate(session_id, candidate.id, model_config=model_config)
+        self._enqueue_generation_candidate(session_id, candidate.id, model_config=model_config, skip_filter=True)
         return candidate
 
     def _require_session(self, session_id: str) -> ApiMonitorSession:

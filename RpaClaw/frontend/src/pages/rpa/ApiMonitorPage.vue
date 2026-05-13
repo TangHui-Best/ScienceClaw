@@ -680,6 +680,7 @@ const handleForceGenerate = async (candidate: ApiToolGenerationCandidate) => {
   try {
     const updated = await forceGenerateCandidate(sessionId.value, candidate.id)
     Object.assign(candidate, updated)
+    startGenerationRefresh()
   } catch (err) {
     console.error('Force generate failed:', err)
   }
