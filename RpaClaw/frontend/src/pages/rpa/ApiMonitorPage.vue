@@ -38,8 +38,6 @@ import { showErrorToast, showSuccessToast } from '@/utils/toast';
 import {
   ANALYSIS_MODES,
   canStartAnalysis,
-  getAnalysisMode,
-  modeRequiresInstruction,
   type AnalysisModeKey,
 } from '@/utils/apiMonitorAnalysisModes';
 import {
@@ -87,20 +85,29 @@ const toolGroups = computed(() => [
   { key: 'not-adopted', title: '不采用', items: notAdoptedTools.value },
 ]);
 const terminalLines = ref<{ html: string }[]>([]);
+type ActionModeKey = 'record' | AnalysisModeKey;
+
 const isRecording = ref(false);
 const isAnalyzing = ref(false);
-const analysisModes = ANALYSIS_MODES;
-const analysisMode = ref<AnalysisModeKey>('free');
+
+const actionModes = computed(() => [
+  { key: 'record' as ActionModeKey, label: '录制', description: '手动操作页面并录制 API 调用。', requiresInstruction: false },
+  ...ANALYSIS_MODES.map(m => ({ ...m, key: m.key as ActionModeKey }))
+]);
+const actionMode = ref<ActionModeKey>('record');
 const analysisInstruction = ref('');
 const analysisIntent = ref('');
+
 const analysisMenuOpen = ref(false);
 const analysisMenuAnchor = ref<HTMLElement | null>(null);
-const selectedAnalysisMode = computed(() => getAnalysisMode(analysisMode.value));
-const showAnalysisInstruction = computed(() => modeRequiresInstruction(analysisMode.value));
+
+const selectedActionMode = computed(() => actionModes.value.find(m => m.key === actionMode.value) || actionModes.value[0]);
+const showAnalysisInstruction = computed(() => selectedActionMode.value.requiresInstruction);
+
 const canRunAnalysis = computed(() => canStartAnalysis({
   hasSession: Boolean(sessionId.value),
   isAnalyzing: isAnalyzing.value,
-  mode: analysisMode.value,
+  mode: actionMode.value === 'record' ? 'free' : actionMode.value,
   instruction: analysisInstruction.value,
 }));
 
@@ -128,8 +135,8 @@ const analysisMenuStyle = computed(() => {
   };
 });
 
-const selectAnalysisMode = (mode: AnalysisModeKey) => {
-  analysisMode.value = mode;
+const selectActionMode = (mode: ActionModeKey) => {
+  actionMode.value = mode;
   analysisMenuOpen.value = false;
 };
 
@@ -519,10 +526,11 @@ const handleStartSession = async () => {
 // ---------------------------------------------------------------------------
 
 const startAnalysis = async () => {
+  if (actionMode.value === 'record') return;
   if (!canRunAnalysis.value) return;
   isAnalyzing.value = true;
   startGenerationRefresh();
-  const mode = selectedAnalysisMode.value;
+  const mode = selectedActionMode.value;
   const instruction = showAnalysisInstruction.value ? analysisInstruction.value.trim() : '';
   addLog('INFO', `开始${mode.label}...`);
 
@@ -658,7 +666,7 @@ const startAnalysis = async () => {
         break;
     }
   }, {
-    mode: analysisMode.value,
+    mode: actionMode.value as AnalysisModeKey,
     instruction,
     intent: analysisIntent.value,
     model_id: selectedModelId.value || undefined,
@@ -1163,79 +1171,75 @@ onBeforeUnmount(() => {
       <section class="flex-1 flex flex-col relative rounded-3xl border border-slate-200/80 bg-white shadow-sm overflow-hidden dark:border-white/10 dark:bg-[#17181d]">
         
         <!-- Action Toolbar -->
-        <div v-if="sessionId" class="flex flex-col border-b border-slate-100 dark:border-white/10 bg-white dark:bg-[#1a1a1a] shrink-0 p-4 gap-4 z-10 relative">
-          <div class="flex items-center justify-between">
-            <div class="flex items-center gap-3">
-              <!-- Analysis Menu -->
-              <div ref="analysisMenuAnchor" class="inline-flex overflow-hidden rounded-xl border border-slate-200 bg-slate-50 dark:border-white/10 dark:bg-white/5">
-                <button
-                  @click="startAnalysis"
-                  :disabled="!canRunAnalysis"
-                  class="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-[var(--text-primary)] transition hover:bg-slate-100 dark:hover:bg-white/10 disabled:opacity-50"
-                >
-                  <BarChart2 :size="16" class="text-indigo-500" />
-                  分析
-                </button>
-                <button
-                  type="button"
-                  class="inline-flex items-center gap-1 border-l border-slate-200 dark:border-white/10 px-3 py-2 text-sm font-semibold text-[var(--text-primary)] transition hover:bg-slate-100 dark:hover:bg-white/10 disabled:opacity-50"
-                  :disabled="!sessionId || isAnalyzing"
-                  @click="analysisMenuOpen = !analysisMenuOpen"
-                >
-                  {{ selectedAnalysisMode.label }}
-                  <ChevronDown :size="14" />
-                </button>
-              </div>
-              <Teleport to="body">
-                <div
-                  v-if="analysisMenuOpen"
-                  :style="analysisMenuStyle"
-                  class="w-64 overflow-hidden rounded-2xl border border-slate-200 bg-white py-2 text-left shadow-xl dark:border-white/10 dark:bg-[#17181d]"
-                >
-                  <button
-                    v-for="mode in analysisModes"
-                    :key="mode.key"
-                    type="button"
-                    class="block w-full px-4 py-3 text-left transition hover:bg-slate-50 dark:hover:bg-white/[0.06]"
-                    @click="selectAnalysisMode(mode.key)"
-                  >
-                    <span class="block text-sm font-bold text-slate-900 dark:text-white">{{ mode.label }}</span>
-                    <span class="mt-1 block text-xs leading-5 text-slate-500 dark:text-slate-400">{{ mode.description }}</span>
-                  </button>
-                </div>
-              </Teleport>
+        <div v-if="sessionId" class="flex items-center border-b border-slate-100 dark:border-white/10 bg-white dark:bg-[#1a1a1a] shrink-0 p-4 gap-3 z-10 relative">
+          <!-- Unified Action Menu -->
+          <div ref="analysisMenuAnchor" class="inline-flex overflow-hidden rounded-xl border border-slate-200 bg-slate-50 dark:border-white/10 dark:bg-white/5 relative shrink-0">
+            <button
+              v-if="actionMode === 'record'"
+              @click="toggleRecording"
+              :disabled="!sessionId"
+              class="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-[var(--text-primary)] transition disabled:opacity-50"
+              :class="isRecording ? 'bg-red-500 text-white shadow-md hover:bg-red-600' : 'hover:bg-slate-100 dark:hover:bg-white/10'"
+            >
+              <component :is="isRecording ? Square : Disc" :size="16" />
+              {{ isRecording ? '停止录制' : '开始录制' }}
+            </button>
+            <button
+              v-else
+              @click="startAnalysis"
+              :disabled="!canRunAnalysis"
+              class="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-[var(--text-primary)] transition hover:bg-slate-100 dark:hover:bg-white/10 disabled:opacity-50"
+            >
+              <BarChart2 :size="16" class="text-indigo-500" />
+              分析
+            </button>
 
-              <!-- Recording Toggle -->
+            <button
+              type="button"
+              class="inline-flex items-center gap-1 border-l border-slate-200 dark:border-white/10 px-3 py-2 text-sm font-semibold text-[var(--text-primary)] transition hover:bg-slate-100 dark:hover:bg-white/10 disabled:opacity-50"
+              :disabled="!sessionId || isAnalyzing || isRecording"
+              @click="analysisMenuOpen = !analysisMenuOpen"
+            >
+              {{ selectedActionMode.label }}
+              <ChevronDown :size="14" />
+            </button>
+          </div>
+          <Teleport to="body">
+            <div
+              v-if="analysisMenuOpen"
+              :style="analysisMenuStyle"
+              class="w-64 overflow-hidden rounded-2xl border border-slate-200 bg-white py-2 text-left shadow-xl dark:border-white/10 dark:bg-[#17181d] z-[9999]"
+            >
               <button
-                @click="toggleRecording"
-                :disabled="!sessionId"
-                class="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition disabled:opacity-50"
-                :class="isRecording ? 'bg-red-500 text-white shadow-md hover:bg-red-600' : 'border border-slate-200 bg-slate-50 text-[var(--text-primary)] hover:bg-slate-100 dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10'"
+                v-for="mode in actionModes"
+                :key="mode.key"
+                type="button"
+                class="block w-full px-4 py-3 text-left transition hover:bg-slate-50 dark:hover:bg-white/[0.06]"
+                @click="selectActionMode(mode.key)"
               >
-                <component :is="isRecording ? Square : Disc" :size="16" />
-                {{ isRecording ? '停止' : '录制' }}
+                <span class="block text-sm font-bold text-slate-900 dark:text-white">{{ mode.label }}</span>
+                <span class="mt-1 block text-xs leading-5 text-slate-500 dark:text-slate-400">{{ mode.description }}</span>
               </button>
             </div>
-          </div>
+          </Teleport>
 
-          <!-- Large Instruction Input -->
-          <div v-if="showAnalysisInstruction" class="relative">
+          <!-- Unified Dynamic Input -->
+          <div class="relative flex-1 min-w-0">
             <input
+              v-if="showAnalysisInstruction"
               v-model="analysisInstruction"
               type="text"
               placeholder="请输入操作说明（例如：点击登录按钮，输入账号密码等）..."
-              class="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-[var(--text-primary)] shadow-inner outline-none transition focus:border-sky-400 focus:bg-white focus:ring-4 focus:ring-sky-400/10 dark:border-white/10 dark:bg-black/20 dark:focus:bg-[#1a1a1a]"
+              class="w-full h-[38px] rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm text-[var(--text-primary)] shadow-inner outline-none transition focus:border-sky-400 focus:bg-white focus:ring-4 focus:ring-sky-400/10 dark:border-white/10 dark:bg-black/20 dark:focus:bg-[#1a1a1a]"
               @keyup.enter="startAnalysis"
             />
-          </div>
-
-          <!-- Intent input for free analysis -->
-          <div v-if="analysisMode === 'free'" class="mt-2">
-            <textarea
+            <input
+              v-else
               v-model="analysisIntent"
-              placeholder="描述你希望获取的 API 类型（可选）..."
-              rows="2"
-              class="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:border-blue-400 focus:outline-none dark:border-white/10 dark:bg-white/5"
+              type="text"
+              placeholder="阐述目的：描述你希望获取的 API 类型或操作目标（可选）..."
+              class="w-full h-[38px] rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm text-[var(--text-primary)] shadow-inner outline-none transition focus:border-sky-400 focus:bg-white focus:ring-4 focus:ring-sky-400/10 dark:border-white/10 dark:bg-black/20 dark:focus:bg-[#1a1a1a]"
+              @keyup.enter="startAnalysis"
             />
           </div>
         </div>
@@ -1353,42 +1357,51 @@ onBeforeUnmount(() => {
               <div
                 v-for="candidate in visibleGenerationCandidates"
                 :key="candidate.id"
-                class="rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3 shadow-sm dark:border-white/10 dark:bg-white/[0.04]"
+                class="rounded-2xl border border-slate-200 bg-slate-50/80 shadow-sm overflow-hidden dark:border-white/10 dark:bg-white/[0.04]"
               >
-                <div class="flex items-center gap-3">
-                  <span class="text-[10px] font-bold px-2 py-0.5 rounded-md" :class="getMethodClass(candidate.method)">
-                    {{ candidate.method }}
-                  </span>
-                  <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--text-primary)]">
-                    {{ candidate.url_pattern }}
-                  </span>
-                  <span class="shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-bold" :class="getCandidateStatusClass(candidate.status)">
-                    {{ getCandidateStatusLabel(candidate.status) }}
-                  </span>
-                </div>
-                <!-- Rejection/intent filter reason -->
-                <div v-if="candidate.rejection_reason || candidate.intent_filter_reason" class="mt-1.5 text-[10px] text-orange-600 dark:text-orange-400">
-                  {{ candidate.rejection_reason || candidate.intent_filter_reason }}
-                </div>
-                <div class="mt-2 flex items-center justify-between gap-3 text-[10px] text-[var(--text-tertiary)]">
-                  <span>样本 {{ candidate.source_call_ids?.length || 0 }}</span>
-                  <span v-if="candidate.retry_after">下次重试 {{ new Date(candidate.retry_after).toLocaleTimeString() }}</span>
-                  <span v-else-if="candidate.error" class="truncate text-red-500">{{ candidate.error }}</span>
-                  <div class="flex gap-2">
-                    <button
-                      v-if="candidate.status === 'failed' || candidate.status === 'rate_limited'"
-                      class="rounded-lg border border-slate-200 px-2 py-1 font-bold text-[var(--text-secondary)] transition hover:bg-slate-100 dark:border-white/10 dark:hover:bg-white/10"
-                      @click="handleRetryCandidate(candidate)"
-                    >
-                      重试
-                    </button>
-                    <button
-                      v-if="candidate.status === 'confidence_rejected' || candidate.status === 'intent_filtered'"
-                      class="rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 font-bold text-blue-600 transition hover:bg-blue-100 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-300"
-                      @click="handleForceGenerate(candidate)"
-                    >
-                      强制生成
-                    </button>
+                <div class="flex flex-col px-4 py-3">
+                  <div class="flex items-center gap-3">
+                    <span class="text-[10px] font-bold px-2 py-0.5 rounded-md shrink-0" :class="getMethodClass(candidate.method)">
+                      {{ candidate.method }}
+                    </span>
+                    <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--text-primary)]">
+                      {{ candidate.url_pattern }}
+                    </span>
+                    <span class="shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-bold" :class="getCandidateStatusClass(candidate.status)">
+                      {{ getCandidateStatusLabel(candidate.status) }}
+                    </span>
+                  </div>
+
+                  <!-- Extra details: Reason, Error, Buttons -->
+                  <div v-if="candidate.rejection_reason || candidate.intent_filter_reason || candidate.error || candidate.status === 'failed' || candidate.status === 'rate_limited' || candidate.status === 'confidence_rejected' || candidate.status === 'intent_filtered'" class="mt-2 flex flex-col gap-2 border-t border-slate-100 dark:border-white/10 pt-2">
+                    <div v-if="candidate.rejection_reason || candidate.intent_filter_reason" class="text-[10px] text-orange-600 dark:text-orange-400 break-words line-clamp-2" :title="candidate.rejection_reason || candidate.intent_filter_reason || undefined">
+                      {{ candidate.rejection_reason || candidate.intent_filter_reason }}
+                    </div>
+                    <div v-else-if="candidate.error" class="text-[10px] text-red-500 break-words line-clamp-2" :title="candidate.error">
+                      {{ candidate.error }}
+                    </div>
+                    
+                    <div class="flex items-center justify-between gap-3 text-[10px] text-[var(--text-tertiary)] mt-0.5">
+                      <span>样本 {{ candidate.source_call_ids?.length || 0 }}</span>
+                      <span v-if="candidate.retry_after">下次重试 {{ new Date(candidate.retry_after).toLocaleTimeString() }}</span>
+                      
+                      <div class="flex gap-2 shrink-0 ml-auto">
+                        <button
+                          v-if="candidate.status === 'failed' || candidate.status === 'rate_limited'"
+                          class="rounded-lg border border-slate-200 px-2 py-1 font-bold text-[var(--text-secondary)] transition hover:bg-slate-100 dark:border-white/10 dark:hover:bg-white/10"
+                          @click="handleRetryCandidate(candidate)"
+                        >
+                          重试
+                        </button>
+                        <button
+                          v-if="candidate.status === 'confidence_rejected' || candidate.status === 'intent_filtered'"
+                          class="rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 font-bold text-blue-600 transition hover:bg-blue-100 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-300"
+                          @click="handleForceGenerate(candidate)"
+                        >
+                          强制生成
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
