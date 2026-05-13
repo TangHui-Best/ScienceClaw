@@ -215,3 +215,27 @@ async def filter_by_intent(
 **API 兼容性**：
 - 现有 API 的调用方式不变，新增参数均为可选
 - 前端新增的 UI 元素均为可选输入
+
+## 强制生成的实现细节
+
+### 问题
+
+强制生成存在两个问题：
+
+1. **重复过滤**：`_generate_tool_for_candidate` 在生成前会再次执行置信度/意图过滤，导致强制生成的候选被再次拒绝
+2. **状态更新丢失**：分析/录制结束后 SSE sink 被清理，强制生成的状态变更事件无法到达前端
+
+### 解决方案
+
+利用现有的 `startGenerationRefresh` 轮询机制（每秒轮询 listTools + listCandidates，候选全部终态后自动停止），无需新增轮询或同步等待。
+
+**后端变更**：
+
+- `_generate_tool_for_candidate` 新增 `skip_filter: bool = False` 参数，为 True 时跳过置信度评分和意图过滤
+- `_run_generation_candidate` 和 `_enqueue_generation_candidate` 透传 `skip_filter`
+- `force_generate_candidate` 传递 `skip_filter=True`
+
+**前端变更**：
+
+- `handleForceGenerate` 调用 `forceGenerateCandidate` API 后，调用 `startGenerationRefresh()` 确保轮询在运行
+- 轮询通过 `hasActiveGenerationCandidates`（检查 pending/running/stale）自动停止，无需手动管理
