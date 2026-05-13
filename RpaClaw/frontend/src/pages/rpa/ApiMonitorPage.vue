@@ -12,6 +12,7 @@ import {
   listTools,
   listGenerationCandidates,
   retryGenerationCandidate,
+  forceGenerateCandidate,
   updateTool as apiUpdateTool,
   deleteTool as apiDeleteTool,
   publishMcpToolBundle,
@@ -91,6 +92,7 @@ const isAnalyzing = ref(false);
 const analysisModes = ANALYSIS_MODES;
 const analysisMode = ref<AnalysisModeKey>('free');
 const analysisInstruction = ref('');
+const analysisIntent = ref('');
 const analysisMenuOpen = ref(false);
 const analysisMenuAnchor = ref<HTMLElement | null>(null);
 const selectedAnalysisMode = computed(() => getAnalysisMode(analysisMode.value));
@@ -604,6 +606,8 @@ const startAnalysis = async () => {
       case 'api_candidate_created':
       case 'api_candidate_updated':
       case 'api_candidate_rate_limited':
+      case 'api_candidate_confidence_rejected':
+      case 'api_candidate_intent_filtered':
       case 'api_tool_generation_failed':
         upsertGenerationCandidate({
           id: data.candidate_id,
@@ -622,6 +626,8 @@ const startAnalysis = async () => {
           capture_page_url: '',
           capture_title: '',
           capture_dom_digest: '',
+          rejection_reason: data.rejection_reason,
+          intent_filter_reason: data.intent_filter_reason,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         });
@@ -654,6 +660,7 @@ const startAnalysis = async () => {
   }, {
     mode: analysisMode.value,
     instruction,
+    intent: analysisIntent.value,
     model_id: selectedModelId.value || undefined,
   });
 };
@@ -668,6 +675,15 @@ const handleRetryCandidate = async (candidate: ApiToolGenerationCandidate) => {
     addLog('ERROR', `重试生成失败: ${err.message}`);
   }
 };
+
+const handleForceGenerate = async (candidate: ApiToolGenerationCandidate) => {
+  try {
+    const updated = await forceGenerateCandidate(sessionId.value, candidate.id)
+    Object.assign(candidate, updated)
+  } catch (err) {
+    console.error('Force generate failed:', err)
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Recording
@@ -692,7 +708,7 @@ const toggleRecording = async () => {
   } else {
     try {
       addLog('INFO', '正在开始录制...');
-      await apiStartRecording(sessionId.value);
+      await apiStartRecording(sessionId.value, analysisIntent.value);
       isRecording.value = true;
       startGenerationRefresh();
       addLog('INFO', '录制已开始。请与浏览器交互以捕获 API 调用。');
@@ -1000,6 +1016,8 @@ const getCandidateStatusLabel = (status: ApiToolGenerationCandidate['status']) =
   if (status === 'rate_limited') return '限流重试中';
   if (status === 'failed') return '生成失败';
   if (status === 'stale') return '等待更新';
+  if (status === 'confidence_rejected') return '置信度不足';
+  if (status === 'intent_filtered') return 'AI 过滤';
   return '已生成';
 };
 
@@ -1007,6 +1025,8 @@ const getCandidateStatusClass = (status: ApiToolGenerationCandidate['status']) =
   if (status === 'running' || status === 'pending') return 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-300';
   if (status === 'rate_limited') return 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300';
   if (status === 'failed') return 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300';
+  if (status === 'confidence_rejected') return 'border-orange-200 bg-orange-50 text-orange-700 dark:border-orange-500/30 dark:bg-orange-500/10 dark:text-orange-300';
+  if (status === 'intent_filtered') return 'border-purple-200 bg-purple-50 text-purple-700 dark:border-purple-500/30 dark:bg-purple-500/10 dark:text-purple-300';
   return 'border-slate-200 bg-slate-50 text-slate-600 dark:border-white/10 dark:bg-white/5 dark:text-slate-300';
 };
 
@@ -1207,6 +1227,16 @@ onBeforeUnmount(() => {
               @keyup.enter="startAnalysis"
             />
           </div>
+
+          <!-- Intent input for free analysis -->
+          <div v-if="analysisMode === 'free'" class="mt-2">
+            <textarea
+              v-model="analysisIntent"
+              placeholder="描述你希望获取的 API 类型（可选）..."
+              rows="2"
+              class="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:border-blue-400 focus:outline-none dark:border-white/10 dark:bg-white/5"
+            />
+          </div>
         </div>
 
         <div class="flex-1 relative overflow-hidden flex items-center justify-center bg-slate-50 dark:bg-black/20">
@@ -1335,17 +1365,30 @@ onBeforeUnmount(() => {
                     {{ getCandidateStatusLabel(candidate.status) }}
                   </span>
                 </div>
+                <!-- Rejection/intent filter reason -->
+                <div v-if="candidate.rejection_reason || candidate.intent_filter_reason" class="mt-1.5 text-[10px] text-orange-600 dark:text-orange-400">
+                  {{ candidate.rejection_reason || candidate.intent_filter_reason }}
+                </div>
                 <div class="mt-2 flex items-center justify-between gap-3 text-[10px] text-[var(--text-tertiary)]">
                   <span>样本 {{ candidate.source_call_ids?.length || 0 }}</span>
                   <span v-if="candidate.retry_after">下次重试 {{ new Date(candidate.retry_after).toLocaleTimeString() }}</span>
                   <span v-else-if="candidate.error" class="truncate text-red-500">{{ candidate.error }}</span>
-                  <button
-                    v-if="candidate.status === 'failed' || candidate.status === 'rate_limited'"
-                    class="rounded-lg border border-slate-200 px-2 py-1 font-bold text-[var(--text-secondary)] transition hover:bg-slate-100 dark:border-white/10 dark:hover:bg-white/10"
-                    @click="handleRetryCandidate(candidate)"
-                  >
-                    重试
-                  </button>
+                  <div class="flex gap-2">
+                    <button
+                      v-if="candidate.status === 'failed' || candidate.status === 'rate_limited'"
+                      class="rounded-lg border border-slate-200 px-2 py-1 font-bold text-[var(--text-secondary)] transition hover:bg-slate-100 dark:border-white/10 dark:hover:bg-white/10"
+                      @click="handleRetryCandidate(candidate)"
+                    >
+                      重试
+                    </button>
+                    <button
+                      v-if="candidate.status === 'confidence_rejected' || candidate.status === 'intent_filtered'"
+                      class="rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 font-bold text-blue-600 transition hover:bg-blue-100 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-300"
+                      @click="handleForceGenerate(candidate)"
+                    >
+                      强制生成
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
