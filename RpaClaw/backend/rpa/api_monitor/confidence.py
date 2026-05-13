@@ -69,7 +69,7 @@ def score_api_candidate(
     has_source = bool(source_urls)
     injected_source = any(_contains_marker(url, INJECTED_SOURCE_MARKERS) for url in source_urls)
     noise_path = any(marker in path for marker in NOISE_PATH_MARKERS)
-        json_response = "json" in content_type or body.strip().startswith(("{", "["))
+    json_response = "json" in content_type or body.strip().startswith(("{", "["))
     score = 0
 
     if action_window_matched:
