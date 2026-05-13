@@ -24,13 +24,6 @@ NOISE_PATH_MARKERS = (
     "modelalias",
 )
 
-BUSINESS_PATH_MARKERS = (
-    "/api/",
-    "/biz/",
-    "/v1/",
-    "/v2/",
-    "/graphql",
-)
 
 INJECTED_SOURCE_MARKERS = (
     "chrome-extension://",
@@ -76,13 +69,12 @@ def score_api_candidate(
     has_source = bool(source_urls)
     injected_source = any(_contains_marker(url, INJECTED_SOURCE_MARKERS) for url in source_urls)
     noise_path = any(marker in path for marker in NOISE_PATH_MARKERS)
-    business_path = any(marker in path for marker in BUSINESS_PATH_MARKERS)
-    json_response = "json" in content_type or body.strip().startswith(("{", "["))
+        json_response = "json" in content_type or body.strip().startswith(("{", "["))
     score = 0
 
     if action_window_matched:
-        score += 30
-        breakdown["action_window"] = 30
+        score += 35
+        breakdown["action_window"] = 35
         reasons.append("由用户动作触发")
     else:
         breakdown["action_window"] = 0
@@ -93,16 +85,10 @@ def score_api_candidate(
         desc = action_context.get("description", "")
         reasons.append(f"由用户操作确认触发: {desc}" if desc else "由用户操作确认触发")
 
-    if business_path:
-        score += 25
-        breakdown["business_path"] = 25
-        reasons.append("路径疑似业务接口")
-    else:
-        breakdown["business_path"] = 0
-
+    
     if json_response:
-        score += 20
-        breakdown["json_response"] = 20
+        score += 25
+        breakdown["json_response"] = 25
         reasons.append("响应疑似 JSON 业务数据")
     else:
         breakdown["json_response"] = 0
@@ -119,11 +105,12 @@ def score_api_candidate(
         breakdown["has_source"] = -10
         reasons.append("缺少 initiator 或 JS 调用栈")
 
-    richness_score, richness_reason = _score_response_richness(body)
-    score += richness_score
-    breakdown["response_richness"] = richness_score
-    if richness_reason:
-        reasons.append(richness_reason)
+    if body and body.strip():
+        score += 10
+        breakdown["response_richness"] = 10
+        reasons.append("有响应内容")
+    else:
+        breakdown["response_richness"] = 0
 
     if injected_source:
         score -= 40
@@ -179,24 +166,6 @@ def dedup_key_for_tool(method: str, url_pattern: str) -> str:
     return f"{method.upper()} {parameterize_url(path)}"
 
 
-def _score_response_richness(body: str | None) -> tuple[int, str]:
-    if not body or not body.strip():
-        return 0, "无响应体"
-
-    stripped = body.strip()
-    if not stripped.startswith(("{", "[")):
-        return 5, "有响应体"
-
-    try:
-        parsed = json.loads(stripped)
-    except (json.JSONDecodeError, ValueError):
-        return 5, "有响应体但非标准 JSON"
-
-    if isinstance(parsed, dict):
-        return (10, "响应体为有效 JSON") if parsed else (5, "响应体为 JSON 但内容为空")
-    if isinstance(parsed, list):
-        return (10, "响应体为有效 JSON 数组") if parsed else (5, "响应体为 JSON 但内容为空")
-    return 5, "响应体为 JSON 但内容为空"
 
 
 def _merge_evidence(calls: list[CapturedApiCall]) -> dict:
@@ -236,3 +205,23 @@ def _dedupe(values: list[str]) -> list[str]:
             seen.add(value)
             result.append(value)
     return result
+
+
+NEGATIVE_LABELS: dict[str, str] = {
+    "injected_source": "来源为注入脚本或扩展",
+    "noise_path": "路径疑似后台请求",
+    "no_action_window": "不在动作时间窗口内",
+    "has_source": "缺少来源证据",
+}
+
+
+def summarize_rejection_reasons(result: ConfidenceResult) -> str:
+    negatives = [
+        (key, val) for key, val in result.breakdown.items() if val < 0
+    ]
+    negatives.sort(key=lambda kv: kv[1])
+    parts = [
+        f"{NEGATIVE_LABELS.get(key, key)}({val})"
+        for key, val in negatives
+    ]
+    return f"置信度不足（{result.score}/100）：{'、'.join(parts)}" if parts else f"置信度不足（{result.score}/100）"
