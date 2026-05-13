@@ -43,7 +43,8 @@ from .directed_trace import (
     retry_guard_skip_reason,
 )
 
-from .confidence import dedup_key_for_tool, score_api_candidate
+from .confidence import dedup_key_for_tool, score_api_candidate, summarize_rejection_reasons
+from .intent_filter import filter_by_intent
 from .llm_analyzer import analyze_elements, generate_tool_definition
 from .models import ApiMonitorSession, ApiToolDefinition, ApiToolGenerationCandidate, CapturedApiCall, DirectedAnalysisTrace
 from .network_capture import NetworkCaptureEngine, dedup_key
@@ -362,6 +363,42 @@ def _apply_confidence_to_tool(
     return tool
 
 
+def _create_rejected_candidate(
+    session_id: str,
+    dedup_key: str,
+    method: str,
+    url_pattern: str,
+    samples: List[CapturedApiCall],
+    confidence_result,
+    *,
+    dom_context: str = "",
+    page_url: str = "",
+    status: str = "confidence_rejected",
+    intent_filter_reason: Optional[str] = None,
+    adjusted_score: Optional[int] = None,
+) -> ApiToolGenerationCandidate:
+    dom_dict: Dict = {}
+    if dom_context:
+        try:
+            dom_dict = json.loads(dom_context)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    candidate = ApiToolGenerationCandidate(
+        session_id=session_id,
+        dedup_key=dedup_key,
+        method=method,
+        url_pattern=url_pattern,
+        source_call_ids=[c.id for c in samples],
+        sample_call_ids=[c.id for c in samples[:5]],
+        status=status,
+        capture_dom_context=dom_dict,
+        capture_page_url=page_url,
+        rejection_reason=summarize_rejection_reasons(confidence_result) if status == "confidence_rejected" else None,
+        intent_filter_reason=intent_filter_reason,
+    )
+    return candidate
+
+
 def _richness_score(tool: ApiToolDefinition) -> int:
     evidence = tool.source_evidence or {}
     breakdown = evidence.get("breakdown") or {}
@@ -462,6 +499,8 @@ class ApiMonitorSessionManager:
             "tool_id": candidate.tool_id,
             "error": candidate.error,
             "retry_after": candidate.retry_after.isoformat() if candidate.retry_after else None,
+            "rejection_reason": candidate.rejection_reason,
+            "intent_filter_reason": candidate.intent_filter_reason,
         }
 
     def register_screencast(self, session_id: str, controller: SessionScreencastController) -> None:
@@ -725,11 +764,13 @@ class ApiMonitorSessionManager:
         self,
         session_id: str,
         model_config: Optional[Dict] = None,
+        intent: Optional[str] = None,
     ) -> None:
         """Clear capture buffer and set session status to recording."""
         self._require_session(session_id)
 
         session = self.sessions[session_id]
+        session.intent = intent
 
         capture = self._captures.get(session_id)
         if capture:
@@ -895,12 +936,14 @@ class ApiMonitorSessionManager:
         self,
         session_id: str,
         model_config: Optional[Dict] = None,
+        intent: Optional[str] = None,
     ) -> AsyncGenerator[Dict, None]:
         """Automatic page analysis: scan DOM, probe elements, generate tools.
 
         Yields SSE event dicts like {"event": <name>, "data": json.dumps({...})}.
         """
         session = self._require_session(session_id)
+        session.intent = intent
         page = self._require_page(session_id)
         session.status = "analyzing"
         session.updated_at = datetime.now()
@@ -1040,6 +1083,7 @@ class ApiMonitorSessionManager:
     ) -> AsyncGenerator[Dict, None]:
         """Directed analysis: dynamically plan one action from the current DOM each step."""
         session = self._require_session(session_id)
+        session.intent = instruction
         page = self._require_page(session_id)
         session.status = "analyzing"
         session.updated_at = datetime.now()
@@ -1671,6 +1715,55 @@ class ApiMonitorSessionManager:
             method = first.request.method
             url_pattern = first.url_pattern or first.request.url
 
+            # Round 1: Rule-based confidence scoring (before LLM generation)
+            confidence_result = score_api_candidate(samples)
+
+            if confidence_result.score < 80:
+                candidate = _create_rejected_candidate(
+                    session_id, key, method, url_pattern, samples,
+                    confidence_result, dom_context=dom_context,
+                    page_url=session.target_url or "",
+                )
+                session.generation_candidates.append(candidate)
+                self._emit_analysis_event(
+                    session_id, "api_candidate_confidence_rejected",
+                    {**self._candidate_event_payload(candidate), "score": confidence_result.score},
+                )
+                continue
+
+            # Round 2: AI intent filter (only when intent is provided)
+            intent = session.intent
+            final_score = confidence_result.score
+            if intent and intent.strip():
+                try:
+                    intent_result = await filter_by_intent(
+                        samples, intent.strip(), confidence_result.reasons,
+                        model_config=model_config,
+                    )
+                    if not intent_result.relevant:
+                        final_score = confidence_result.score - 25
+                        candidate = _create_rejected_candidate(
+                            session_id, key, method, url_pattern, samples,
+                            confidence_result, dom_context=dom_context,
+                            page_url=session.target_url or "",
+                            status="intent_filtered",
+                            intent_filter_reason=intent_result.reason,
+                            adjusted_score=final_score,
+                        )
+                        session.generation_candidates.append(candidate)
+                        self._emit_analysis_event(
+                            session_id, "api_candidate_intent_filtered",
+                            {
+                                **self._candidate_event_payload(candidate),
+                                "score": final_score,
+                                "intent_filter_reason": intent_result.reason,
+                            },
+                        )
+                        continue
+                except Exception as exc:
+                    logger.warning("[ApiMonitor] Intent filter failed for %s: %s", key, exc)
+
+            # Generate tool definition via LLM
             try:
                 yaml_def = await generate_tool_definition(
                     method=method,
@@ -1681,7 +1774,6 @@ class ApiMonitorSessionManager:
                     model_config=model_config,
                 )
 
-                # Parse the YAML to extract name/description
                 name, description = self._parse_yaml_metadata(yaml_def)
 
                 tool = ApiToolDefinition(
@@ -1693,15 +1785,19 @@ class ApiMonitorSessionManager:
                     yaml_definition=yaml_def,
                     source_calls=[c.id for c in samples],
                     source=source,
+                    confidence=confidence_result.confidence,
+                    score=confidence_result.score,
+                    selected=True,
+                    confidence_reasons=confidence_result.reasons,
+                    source_evidence=confidence_result.evidence_summary,
                 )
-                tool = _apply_confidence_to_tool(tool, samples)
 
                 session.tool_definitions.append(tool)
                 tools.append(tool)
 
                 logger.info(
-                    "[ApiMonitor] Generated tool '%s' for %s %s",
-                    name, method, url_pattern,
+                    "[ApiMonitor] Generated tool '%s' for %s %s (score: %d)",
+                    name, method, url_pattern, confidence_result.score,
                 )
 
             except Exception as exc:
@@ -2079,7 +2175,7 @@ class ApiMonitorSessionManager:
                 (item for item in (session.generation_candidates if session else []) if item.id == candidate_id),
                 None,
             )
-            if followup_requested and candidate and candidate.status in ("pending", "stale", "failed"):
+            if followup_requested and candidate and candidate.status in ("pending", "stale", "failed", "confidence_rejected", "intent_filtered"):
                 self._enqueue_generation_candidate(session_id, candidate_id, model_config=model_config)
 
     def _mark_generation_candidate_failed(
@@ -2151,6 +2247,48 @@ class ApiMonitorSessionManager:
             return None
         generated_sample_ids = {call.id for call in samples}
 
+        # Round 1: Confidence scoring before LLM generation
+        confidence_result = score_api_candidate(
+            samples,
+            action_context=candidate.step_metadata[-1] if candidate.step_metadata else None,
+        )
+        if confidence_result.score < 80:
+            candidate.status = "confidence_rejected"
+            candidate.rejection_reason = summarize_rejection_reasons(confidence_result)
+            candidate.updated_at = datetime.now()
+            session.updated_at = datetime.now()
+            self._emit_analysis_event(
+                session_id, "api_candidate_confidence_rejected",
+                {**self._candidate_event_payload(candidate), "score": confidence_result.score},
+            )
+            return None
+
+        # Round 2: AI intent filter
+        intent = session.intent
+        if intent and intent.strip():
+            try:
+                intent_result = await filter_by_intent(
+                    samples, intent.strip(), confidence_result.reasons,
+                    model_config=model_config,
+                )
+                if not intent_result.relevant:
+                    final_score = confidence_result.score - 25
+                    candidate.status = "intent_filtered"
+                    candidate.intent_filter_reason = intent_result.reason
+                    candidate.updated_at = datetime.now()
+                    session.updated_at = datetime.now()
+                    self._emit_analysis_event(
+                        session_id, "api_candidate_intent_filtered",
+                        {
+                            **self._candidate_event_payload(candidate),
+                            "score": final_score,
+                            "intent_filter_reason": intent_result.reason,
+                        },
+                    )
+                    return None
+            except Exception as exc:
+                logger.warning("[ApiMonitor] Intent filter failed for candidate %s: %s", candidate_id, exc)
+
         candidate.status = "running"
         candidate.error = ""
         candidate.updated_at = datetime.now()
@@ -2220,10 +2358,11 @@ class ApiMonitorSessionManager:
             tool.source_calls = [call.id for call in samples]
             tool.updated_at = datetime.now()
 
-        tool = _apply_confidence_to_tool(
-            tool, samples,
-            action_context=candidate.step_metadata[-1] if candidate.step_metadata else None,
-        )
+        tool.confidence = confidence_result.confidence
+        tool.score = confidence_result.score
+        tool.selected = True
+        tool.confidence_reasons = confidence_result.reasons
+        tool.source_evidence = confidence_result.evidence_summary
         new_tools = [tool]
         self._dedup_session_tools(session_id, new_tools)
 
@@ -2355,7 +2494,7 @@ class ApiMonitorSessionManager:
 
         for call in session.captured_calls:
             candidate, created = self._upsert_generation_candidate(session_id, call)
-            if created or candidate.status in ("pending", "failed", "rate_limited", "stale"):
+            if created or candidate.status in ("pending", "failed", "rate_limited", "stale", "confidence_rejected", "intent_filtered"):
                 changed.append(candidate)
 
         if enqueue:
@@ -2385,6 +2524,31 @@ class ApiMonitorSessionManager:
         candidate.status = "pending"
         candidate.error = ""
         candidate.retry_after = None
+        candidate.updated_at = datetime.now()
+        self._enqueue_generation_candidate(session_id, candidate.id, model_config=model_config)
+        return candidate
+
+    def force_generate_candidate(
+        self,
+        session_id: str,
+        candidate_id: str,
+        *,
+        model_config: Optional[Dict] = None,
+    ) -> ApiToolGenerationCandidate:
+        session = self._require_session(session_id)
+        candidate = next(
+            (item for item in session.generation_candidates if item.id == candidate_id),
+            None,
+        )
+        if candidate is None:
+            raise ValueError("Generation candidate not found")
+        if candidate.status not in ("confidence_rejected", "intent_filtered"):
+            raise ValueError("Only rejected/filtered candidates can be force-generated")
+        candidate.status = "pending"
+        candidate.error = ""
+        candidate.retry_after = None
+        candidate.rejection_reason = None
+        candidate.intent_filter_reason = None
         candidate.updated_at = datetime.now()
         self._enqueue_generation_candidate(session_id, candidate.id, model_config=model_config)
         return candidate
