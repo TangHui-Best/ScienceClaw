@@ -47,15 +47,15 @@
 ```
 API 调用捕获 → 分组去重 → 第一轮规则置信度评分
                               ↓
-                        <80 → medium/low，不生成工具
+                        <80 → confidence_rejected，不生成工具
                         ≥80 + 有意图 → 第二轮 AI 意图判断
                               ├── 相关 (+0) → 分数不变，≥80 → 生成工具
                               └── 不相关 (-25) → ≤75 → intent_filtered
                         ≥80 + 无意图 → 直接生成工具
 
 前端候选列表：
-  - medium/low：第一轮规则评分不够，不生成工具
-  - intent_filtered：第一轮通过但 AI 意图判断不相关
+  - confidence_rejected：第一轮规则评分不够，显示规则总结理由
+  - intent_filtered：第一轮通过但 AI 意图判断不相关，显示 AI 理由
   → 用户可点击"强制生成"触发工具定义生成并自动采用
 ```
 
@@ -132,9 +132,9 @@ async def filter_by_intent(
 - `intent: Optional[str] = None`
 
 `ApiToolGenerationCandidate` 新增：
-- 状态枚举新增 `intent_filtered`
-- 字段 `intent_filter_reason: Optional[str] = None`
-- 字段 `rejection_reason: Optional[str] = None` — 第一轮淘汰的规则总结理由
+- 状态枚举新增 `confidence_rejected`（第一轮淘汰）和 `intent_filtered`（第二轮淘汰）
+- 字段 `intent_filter_reason: Optional[str] = None` — 第二轮 AI 淘汰理由
+- 字段 `rejection_reason: Optional[str] = None` — 第一轮规则淘汰总结理由
 
 ### 5. 评分流程前置
 
@@ -143,7 +143,7 @@ async def filter_by_intent(
 修改 `_generate_tools_from_calls`（批量路径）和 `_process_single_candidate`（实时录制路径）：
 
 1. 先对每组 API 调用执行 `score_api_candidate`（第一轮规则评分）
-2. <80 分：创建候选，标记为 medium/low 状态，**不调用 LLM 生成工具定义**
+2. <80 分：创建候选，标记为 `confidence_rejected` 状态，写入 `rejection_reason`，**不调用 LLM 生成工具定义**
 3. ≥80 分 + 有意图：调用 `filter_by_intent`（第二轮 AI 判断）
    - 相关（+0）：分数不变 → 调用 LLM 生成工具
    - 不相关（-25）：分数 ≤75 → 创建候选，标记 `intent_filtered`，记录理由
@@ -175,10 +175,10 @@ async def filter_by_intent(
 
 ### 2. 候选列表状态展示
 
-新增 `intent_filtered` 状态展示：
-- 显示标签："AI 过滤"
-- 显示 AI 判断理由
-- 提供"强制生成"按钮
+新增 `confidence_rejected` 和 `intent_filtered` 两种状态的展示：
+- `confidence_rejected`：显示标签"置信度不足" + 规则总结理由（如"置信度不足（45/100）：不在动作时间窗口内(-20)"）
+- `intent_filtered`：显示标签"AI 过滤" + AI 判断理由
+- 两种状态都提供"强制生成"按钮
 
 ### 3. API 调用
 
@@ -194,6 +194,7 @@ async def filter_by_intent(
 
 新增翻译键：
 - `apiMonitor.intentPlaceholder` — "描述你希望获取的 API 类型..."
+- `apiMonitor.confidenceRejected` — "置信度不足"
 - `apiMonitor.intentFiltered` — "AI 过滤"
 - `apiMonitor.forceGenerate` — "强制生成"
 
