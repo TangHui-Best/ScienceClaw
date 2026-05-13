@@ -82,7 +82,25 @@ API 调用捕获 → 分组去重 → 第一轮规则置信度评分
 - 简化 `response_richness` 为固定 +10（移除 +5 分支）
 - 移除 `_score_response_richness` 函数中的梯度逻辑
 
-### 2. 新增意图过滤模块
+### 2. 淘汰理由生成
+
+**第一轮淘汰（medium/low）**：规则生成总结理由，无需 AI 调用。
+
+从 `ConfidenceResult.breakdown` 中提取所有负分项，按分值从低到高排列，拼接为一句话：
+```
+置信度不足（45/100）：不在动作时间窗口内(-20)、缺少来源证据(-10)
+```
+
+新增函数：
+```python
+def summarize_rejection_reasons(result: ConfidenceResult) -> str
+```
+
+存入候选的 `rejection_reason` 字段。
+
+**第二轮淘汰（intent_filtered）**：直接使用 AI 返回的 `reason` 字段，无需额外处理。
+
+### 3. 新增意图过滤模块
 
 **文件**：`backend/rpa/api_monitor/intent_filter.py`
 
@@ -106,7 +124,7 @@ async def filter_by_intent(
 - 输出：JSON `{"relevant": bool, "reason": string}`
 - Prompt 强调保守判断：如果不确定相关性，判定为相关（避免误杀）
 
-### 3. 数据模型变更
+### 4. 数据模型变更
 
 **文件**：`backend/rpa/api_monitor/models.py`
 
@@ -116,8 +134,9 @@ async def filter_by_intent(
 `ApiToolGenerationCandidate` 新增：
 - 状态枚举新增 `intent_filtered`
 - 字段 `intent_filter_reason: Optional[str] = None`
+- 字段 `rejection_reason: Optional[str] = None` — 第一轮淘汰的规则总结理由
 
-### 4. 评分流程前置
+### 5. 评分流程前置
 
 **文件**：`backend/rpa/api_monitor/manager.py`
 
@@ -130,7 +149,7 @@ async def filter_by_intent(
    - 不相关（-25）：分数 ≤75 → 创建候选，标记 `intent_filtered`，记录理由
 4. ≥80 分 + 无意图：直接调用 LLM 生成工具
 
-### 5. API 变更
+### 6. API 变更
 
 **文件**：`backend/route/api_monitor.py`
 
@@ -141,7 +160,7 @@ async def filter_by_intent(
 | `PUT /api-monitor/sessions/{id}/intent` | **新增**，允许随时更新意图 |
 | `POST /api-monitor/sessions/{id}/candidates/{id}/force-generate` | **新增**，强制生成工具定义 |
 
-### 6. SSE 事件
+### 7. SSE 事件
 
 新增事件类型：
 - `api_candidate_intent_filtered` — payload 含候选 ID、AI 理由、调整后分数
