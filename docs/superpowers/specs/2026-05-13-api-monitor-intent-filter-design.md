@@ -180,6 +180,17 @@ async def filter_by_intent(
 - `intent_filtered`：显示标签"AI 过滤" + AI 判断理由
 - 两种状态都提供"强制生成"按钮
 
+### 3. 候补工具分组展示
+
+强制生成的工具在前端作为独立分组"候补"展示，与现有的"采用"、"不采用"分开。
+
+**后端**：`ApiToolDefinition` 新增 `is_reserve: bool = False` 字段。`_generate_tool_for_candidate` 在 `skip_filter=True` 时设置 `is_reserve=True`。
+
+**前端**：
+- `toolGroups` 从两组改为三组：`adopted`（采用）、`reserve`（候补）、`not-adopted`（不采用）
+- 候补工具默认 `selected=False`，用户可手动切换为"采用"
+- 录制结束时日志分开报告：`"录制已停止。X 个正式工具，Y 个候补工具。"`
+
 ### 3. API 调用
 
 **文件**：`frontend/src/api/apiMonitor.ts`
