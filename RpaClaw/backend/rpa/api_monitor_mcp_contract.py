@@ -119,7 +119,9 @@ def _parse_openapi_2_spec(data: dict, yaml_str: str) -> ApiMonitorToolContract:
     if len(paths) != 1:
         return ApiMonitorToolContract(valid=False, validation_errors=["OpenAPI spec must have exactly one path"], yaml_definition=yaml_str)
 
+    base_path = str(data.get("basePath") or "").rstrip("/")
     path_url = next(iter(paths))
+    full_path = base_path + path_url if base_path else path_url
     path_item = paths[path_url]
     if not isinstance(path_item, dict):
         return ApiMonitorToolContract(valid=False, validation_errors=["Path item must be a mapping"], yaml_definition=yaml_str)
@@ -147,7 +149,7 @@ def _parse_openapi_2_spec(data: dict, yaml_str: str) -> ApiMonitorToolContract:
     if errors:
         return ApiMonitorToolContract(
             valid=False, yaml_definition=yaml_str, name=name, description=description,
-            method=method, url=path_url, validation_errors=errors,
+            method=method, url=full_path, validation_errors=errors,
         )
 
     return ApiMonitorToolContract(
@@ -156,7 +158,7 @@ def _parse_openapi_2_spec(data: dict, yaml_str: str) -> ApiMonitorToolContract:
         name=name,
         description=description,
         method=method,
-        url=path_url,
+        url=full_path,
         input_schema=input_schema,
         response_schema=response_schema,
         openapi_spec=data,
