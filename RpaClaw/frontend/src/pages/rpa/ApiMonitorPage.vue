@@ -1461,12 +1461,20 @@ onBeforeUnmount(() => {
                     </div>
                     <div class="mt-2 flex items-center justify-between gap-3 text-[10px] text-[var(--text-tertiary)]">
                       <span>样本 {{ candidate.source_call_ids?.length || 0 }}</span>
-                      <button
-                        class="rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 font-bold text-blue-600 transition hover:bg-blue-100 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-300"
-                        @click="handleForceGenerate(candidate)"
-                      >
-                        强制生成
-                      </button>
+                      <div class="flex gap-2">
+                        <button
+                          class="rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 font-bold text-blue-600 transition hover:bg-blue-100 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-300"
+                          @click="handleForceGenerate(candidate)"
+                        >
+                          强制生成
+                        </button>
+                        <button
+                          class="rounded-lg border border-red-200 px-2 py-1 font-bold text-red-600 transition hover:bg-red-50 dark:border-red-500/20 dark:text-red-400 dark:hover:bg-red-500/10"
+                          @click="handleDeleteCandidate(candidate)"
+                        >
+                          删除
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </template>
