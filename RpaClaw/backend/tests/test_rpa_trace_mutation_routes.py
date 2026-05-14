@@ -197,6 +197,68 @@ async def test_promote_trace_locator_route_selects_one_candidate_and_updates_dat
 
 
 @pytest.mark.asyncio
+async def test_promote_trace_locator_route_promotes_manual_diagnostic_without_step_api():
+    manager = ROUTE_MODULE.rpa_manager
+    session = RPASession(
+        id="trace-mutation-promote-manual-diagnostic",
+        user_id="u1",
+        sandbox_session_id="sandbox",
+    )
+    manager.sessions[session.id] = session
+
+    try:
+        await manager.add_step(
+            session.id,
+            {
+                "action": "click",
+                "target": "",
+                "description": "click missing target",
+                "source": "record",
+                "locator_candidates": [
+                    {
+                        "kind": "role",
+                        "playwright_locator": 'page.locator(".unknown")',
+                        "selected": True,
+                    },
+                    {
+                        "kind": "role",
+                        "locator": {"method": "role", "role": "button", "name": "Search"},
+                        "selected": False,
+                        "strict_match_count": 1,
+                    },
+                ],
+                "validation": {"status": "ok"},
+            },
+        )
+
+        assert session.traces == []
+        assert len(session.trace_diagnostics) == 1
+        trace_id = session.trace_diagnostics[0].trace_id
+
+        user = type("User", (), {"id": "u1"})()
+        response = await ROUTE_MODULE.promote_trace_locator(
+            session.id,
+            trace_id,
+            ROUTE_MODULE.PromoteLocatorRequest(candidate_index=1),
+            user,
+        )
+
+        trace = response["trace"]
+        assert response["status"] == "success"
+        assert trace.trace_id == trace_id
+        assert [candidate["selected"] for candidate in trace.locator_candidates] == [True]
+        assert trace.locator_candidates[0]["locator"] == {
+            "method": "role",
+            "role": "button",
+            "name": "Search",
+        }
+        assert session.trace_diagnostics == []
+        assert [item.trace_id for item in session.traces] == [trace_id]
+    finally:
+        manager.sessions.pop(session.id, None)
+
+
+@pytest.mark.asyncio
 async def test_delete_diagnostic_route_uses_diagnostic_id():
     manager = ROUTE_MODULE.rpa_manager
     session = RPASession(id="trace-mutation-diagnostic", user_id="u1", sandbox_session_id="sandbox")
@@ -224,6 +286,54 @@ async def test_delete_diagnostic_route_uses_diagnostic_id():
 
         assert response == {"status": "success"}
         assert [diagnostic.diagnostic_id for diagnostic in session.trace_diagnostics] == ["diag-keep"]
+    finally:
+        manager.sessions.pop(session.id, None)
+
+
+@pytest.mark.asyncio
+async def test_delete_manual_diagnostic_route_deletes_backing_bad_step():
+    manager = ROUTE_MODULE.rpa_manager
+    session = RPASession(
+        id="trace-mutation-delete-manual-diagnostic",
+        user_id="u1",
+        sandbox_session_id="sandbox",
+    )
+    manager.sessions[session.id] = session
+
+    try:
+        await manager.add_step(
+            session.id,
+            {
+                "action": "click",
+                "target": "",
+                "description": "click missing target",
+                "source": "record",
+                "locator_candidates": [
+                    {
+                        "kind": "role",
+                        "playwright_locator": 'page.locator(".unknown")',
+                        "selected": True,
+                    }
+                ],
+                "validation": {"status": "ok"},
+            },
+        )
+
+        assert len(session.steps) == 1
+        assert session.traces == []
+        assert len(session.recording_diagnostics) == 1
+        assert len(session.trace_diagnostics) == 1
+        diagnostic_id = session.trace_diagnostics[0].diagnostic_id
+
+        user = type("User", (), {"id": "u1"})()
+        response = await ROUTE_MODULE.delete_diagnostic_item(session.id, diagnostic_id, user)
+
+        assert response == {"status": "success"}
+        assert session.steps == []
+        assert session.traces == []
+        assert session.recorded_actions == []
+        assert session.recording_diagnostics == []
+        assert session.trace_diagnostics == []
     finally:
         manager.sessions.pop(session.id, None)
 

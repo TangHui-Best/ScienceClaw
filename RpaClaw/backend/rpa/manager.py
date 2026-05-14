@@ -789,6 +789,22 @@ class RPASessionManager:
         session = self.sessions.get(session_id)
         if not session or not diagnostic_id:
             return False
+        diagnostic = next(
+            (
+                item
+                for item in session.trace_diagnostics
+                if item.diagnostic_id == diagnostic_id
+            ),
+            None,
+        )
+        if (
+            diagnostic is not None
+            and diagnostic.source == "manual_recording"
+            and isinstance(diagnostic.raw, dict)
+        ):
+            related_step_id = str(diagnostic.raw.get("related_step_id") or "")
+            if related_step_id:
+                return await self.delete_step_by_id(session_id, related_step_id)
         original_count = len(session.trace_diagnostics)
         session.trace_diagnostics = [
             diagnostic
@@ -1200,7 +1216,32 @@ class RPASessionManager:
 
         trace = next((item for item in session.traces if item.trace_id == trace_id), None)
         if trace is None:
-            raise ValueError("Invalid trace id")
+            diagnostic = next(
+                (
+                    item
+                    for item in session.trace_diagnostics
+                    if item.source == "manual_recording" and item.trace_id == trace_id
+                ),
+                None,
+            )
+            if diagnostic is None:
+                raise ValueError("Invalid trace id")
+            related_step_id = str((diagnostic.raw or {}).get("related_step_id") or "")
+            step_index = next(
+                (
+                    index
+                    for index, step in enumerate(session.steps)
+                    if step.id == related_step_id
+                ),
+                None,
+            )
+            if step_index is None:
+                raise ValueError("Invalid trace id")
+            await self.select_step_locator_candidate(session_id, step_index, candidate_index)
+            trace = next((item for item in session.traces if item.trace_id == trace_id), None)
+            if trace is None:
+                raise ValueError("Invalid trace id")
+            return trace
         if candidate_index < 0 or candidate_index >= len(trace.locator_candidates):
             raise ValueError("Invalid locator candidate index")
 
@@ -1509,6 +1550,7 @@ class RPASessionManager:
                             last_step.action = "navigate_click"
                             last_step.url = evt.get("url", last_step.url)
                             last_step.description = f"{last_step.description} 并跳转页面"
+                            self._rebuild_manual_recording_state(session)
                             await self._record_manual_trace_for_step(session_id, last_step)
                             await self._broadcast_step(session_id, last_step)
                             logger.debug(f"[RPA] Upgraded click to navigate_click: {evt.get('url', '')[:60]}")
@@ -1516,6 +1558,7 @@ class RPASessionManager:
                         if last_step.action == "press":
                             last_step.action = "navigate_press"
                             last_step.url = evt.get("url", last_step.url)
+                            self._rebuild_manual_recording_state(session)
                             await self._record_manual_trace_for_step(session_id, last_step)
                             await self._broadcast_step(session_id, last_step)
                             logger.debug(f"[RPA] Upgraded press to navigate_press: {evt.get('url', '')[:60]}")
@@ -1629,6 +1672,55 @@ class RPASessionManager:
         return step
 
     @staticmethod
+    def _manual_trace_diagnostic_from_recording(
+        diagnostic: ManualRecordingDiagnostic,
+    ) -> RPATraceDiagnostic:
+        related_step_id = diagnostic.related_step_id or ""
+        page_state = dict(diagnostic.page_state or {})
+        raw = {
+            "related_step_id": related_step_id,
+            "failure_reason": diagnostic.failure_reason,
+            "action": diagnostic.related_action_kind.value,
+            "locator_candidates": list(diagnostic.raw_candidates or []),
+            "element_snapshot": dict(diagnostic.element_snapshot or {}),
+            "page_state": page_state,
+            "url": str(page_state.get("url", "") or ""),
+        }
+        return RPATraceDiagnostic(
+            diagnostic_id=f"diag-{related_step_id}" if related_step_id else "",
+            trace_id=f"trace-{related_step_id}" if related_step_id else None,
+            source="manual_recording",
+            message=diagnostic.failure_reason,
+            raw=raw,
+        )
+
+    @classmethod
+    def _sync_manual_trace_diagnostics(cls, session: RPASession) -> None:
+        preserved = [
+            diagnostic
+            for diagnostic in session.trace_diagnostics
+            if diagnostic.source != "manual_recording"
+        ]
+        manual_diagnostics = [
+            cls._manual_trace_diagnostic_from_recording(diagnostic)
+            for diagnostic in session.recording_diagnostics
+            if diagnostic.related_step_id
+        ]
+        session.trace_diagnostics = preserved + manual_diagnostics
+
+    @staticmethod
+    def _has_manual_trace_diagnostic_for_step(session: RPASession, step_id: str) -> bool:
+        trace_id = f"trace-{step_id}"
+        return any(
+            diagnostic.source == "manual_recording"
+            and (
+                diagnostic.trace_id == trace_id
+                or str((diagnostic.raw or {}).get("related_step_id") or "") == step_id
+            )
+            for diagnostic in session.trace_diagnostics
+        )
+
+    @staticmethod
     def _rebuild_manual_recording_state(session: RPASession) -> None:
         session.recorded_actions = []
         session.recording_diagnostics = []
@@ -1652,7 +1744,10 @@ class RPASessionManager:
             if outcome.accepted_action is not None:
                 session.recorded_actions.append(outcome.accepted_action)
             if outcome.diagnostic is not None:
+                if step.action in {"navigate_click", "navigate_press"} and step.url:
+                    continue
                 session.recording_diagnostics.append(outcome.diagnostic)
+        RPASessionManager._sync_manual_trace_diagnostics(session)
 
     @staticmethod
     def _step_event_ts_ms(step: RPAStep) -> int:
@@ -1782,6 +1877,12 @@ class RPASessionManager:
         if not session:
             return
         try:
+            trace_id = f"trace-{step.id}"
+            if self._has_manual_trace_diagnostic_for_step(session, step.id):
+                session.traces = [
+                    existing for existing in session.traces if existing.trace_id != trace_id
+                ]
+                return
             trace = manual_step_to_trace(step.model_dump())
             trace = infer_dataflow_for_fill(trace, session.runtime_results)
             session.traces = [existing for existing in session.traces if existing.trace_id != trace.trace_id]

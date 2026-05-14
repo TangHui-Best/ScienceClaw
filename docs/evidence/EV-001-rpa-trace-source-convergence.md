@@ -250,6 +250,42 @@ Implementation and review records will be appended per task:
 - Residual risk:
   - Backend still has legacy step endpoints and export/MCP compatibility paths outside this focused UI contract fix. They remain follow-up cleanup for the broader “remove step / recorded_actions” acceptance target.
 
+### Task 3G Manual Locator Diagnostics Stay Trace-first
+
+- Trigger:
+  - User reproduced a recording where Configure showed unresolved locator diagnostics for `点击 None`, but script generation could still produce a runtime `raise RuntimeError('Recorded click action is missing a valid target locator...')`.
+  - The desired behavior is not to compile a broken accepted trace; the unresolved locator must stay in the trace diagnostic repair flow.
+- Root cause:
+  - Manual recording rebuild produced legacy `recording_diagnostics`, but the trace timeline did not receive an equivalent `trace_diagnostics` entry with a stable future `trace_id`.
+  - `_record_manual_trace_for_step()` still converted the same bad manual step into an accepted trace, so the compiler emitted a runtime error placeholder instead of keeping the user in locator repair.
+  - `/trace/{traceId}/locator` could only mutate existing accepted traces; it could not promote a trace diagnostic created from a bad manual step.
+- Fix:
+  - Projected `ManualRecordingDiagnostic` into `RPATraceDiagnostic(source="manual_recording")` with deterministic `diagnostic_id=diag-{step_id}` and future `trace_id=trace-{step_id}`.
+  - Synchronized manual trace diagnostics whenever manual recording state is rebuilt.
+  - Blocked `_record_manual_trace_for_step()` from appending accepted traces while a manual trace diagnostic exists for that step.
+  - Extended `select_trace_locator_candidate()` so selecting a candidate on a manual diagnostic promotes the backing step through the existing normalization path, then returns the newly accepted trace.
+  - Changed manual diagnostic deletion to delete the backing bad step, matching the UI's "delete step" semantics and preventing legacy step fallback from compiling the unresolved action.
+  - Preserved navigation-upgrade behavior by rebuilding manual state before recording `navigate_click` / `navigate_press`, and by not treating URL-backed navigation composites as unresolved locator diagnostics.
+- Verification:
+  - Backend focused command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_manager.py -k "manual_diagnostic or select_step_locator_candidate_rebuilds_manual_recording_outcomes or select_trace_locator_candidate_promotes_manual_diagnostic_to_trace or delete_step_rebuilds_manual_recording_outcomes" -q`
+  - Backend focused result: `4 passed, 83 deselected`.
+  - Backend route command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_trace_mutation_routes.py -k "delete_manual_diagnostic or delete_diagnostic_route_uses_diagnostic_id or promotes_manual_diagnostic" -q`
+  - Backend route result: `3 passed, 5 deselected, 24 warnings`.
+  - Backend regression command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_manager.py RpaClaw/backend/tests/test_rpa_trace_mutation_routes.py -q`
+  - Backend regression result: `95 passed, 24 warnings`.
+  - Frontend command: `npm.cmd --prefix RpaClaw/frontend test -- ConfigurePage rpaConfigureTimeline`
+  - Frontend result: `2 passed`, `15 passed` tests.
+  - Diff check command: `git diff --check -- RpaClaw/backend/rpa/manager.py RpaClaw/backend/tests/test_rpa_manager.py RpaClaw/backend/tests/test_rpa_trace_mutation_routes.py`
+  - Diff check result: passed; only existing CRLF normalization warnings from Git.
+- Review:
+  - Independent review requested from subagent Erdos for the focused manager/route/test diff.
+  - Erdos found P1: deleting a manual diagnostic only removed `trace_diagnostics`, leaving the bad legacy step available for fallback compilation.
+  - Fix added route coverage proving manual diagnostic deletion removes the backing bad step and clears both legacy and trace diagnostics.
+  - Erdos re-review verdict: APPROVED. P1 bypass repro now leaves `steps/traces/recorded_actions/recording_diagnostics/trace_diagnostics` all empty after deleting the manual diagnostic.
+- Residual risk:
+  - Legacy step locator endpoint still exists for compatibility, but this regression path no longer requires the frontend to use it.
+  - `recording_diagnostics` still exists as an internal normalization byproduct until the broader removal work deletes it completely; generation/UI contracts are trace diagnostic based.
+
 ## Required Final Verification
 
 Backend:
