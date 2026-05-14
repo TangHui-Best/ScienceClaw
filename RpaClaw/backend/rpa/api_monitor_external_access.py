@@ -9,6 +9,9 @@ from backend.rpa.api_monitor_runtime_profile import ApiMonitorRuntimeProfile
 
 CALLER_AUTH_EXTENSION_KEY = "x-rpaclaw-authRequirements"
 TARGET_AUTH_HEADER = "X-RpaClaw-Target-Authorization"
+PASSTHROUGH_FILTERED_HEADERS = frozenset({
+    "host", "content-length", "connection", "content-type", "transfer-encoding",
+})
 
 
 class CallerAuthError(ValueError):
@@ -178,19 +181,30 @@ def extract_caller_auth_profile(
     *,
     requirements: Mapping[str, Any],
     request_headers: Mapping[str, Any] | None,
+    passthrough_headers: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], ApiMonitorRuntimeProfile, dict[str, Any]]:
     cleaned = dict(arguments or {})
     auth_payload = cleaned.pop("_auth", None)
     profile = ApiMonitorRuntimeProfile()
     credential_type = str(requirements.get("credential_type") or PLACEHOLDER_CREDENTIAL_TYPE)
 
+    # Inject passthrough headers first (lowest priority)
+    if passthrough_headers:
+        for name, value in passthrough_headers.items():
+            if name.lower() not in PASSTHROUGH_FILTERED_HEADERS:
+                profile.set_header(name, str(value), secret=False)
+
     if not requirements.get("required"):
         preview = {
             "credential_type": credential_type,
             "source": "",
-            "headers": [],
+            "headers": list(profile.headers.keys()),
             "injected": False,
         }
+        if passthrough_headers:
+            preview["passthrough_headers"] = [
+                k for k in passthrough_headers if k.lower() not in PASSTHROUGH_FILTERED_HEADERS
+            ]
         if auth_payload is not None:
             preview["ignored_fields"] = ["_auth"]
         return cleaned, profile, preview
