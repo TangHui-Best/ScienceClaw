@@ -472,9 +472,35 @@ async def update_tool(
             tool.yaml_definition = request.yaml_definition
             from datetime import datetime
             tool.updated_at = datetime.now()
+
+            from backend.rpa.api_monitor_mcp_contract import parse_api_monitor_tool_yaml
+            contract = parse_api_monitor_tool_yaml(request.yaml_definition)
+            tool.validation_status = "valid" if contract.valid else "invalid"
+            tool.validation_errors = contract.validation_errors if contract.validation_errors else []
+
             return {"status": "success", "tool": tool.model_dump()}
 
     raise HTTPException(status_code=404, detail="Tool not found")
+
+
+@router.post("/session/{session_id}/tools/{tool_id}/regenerate")
+async def regenerate_tool(
+    session_id: str,
+    tool_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    session = api_monitor_manager.get_session(session_id)
+    _verify_session_owner(session, current_user)
+    model_config = await _resolve_user_model_config(str(current_user.id))
+    try:
+        tool = await api_monitor_manager.regenerate_tool(
+            session_id,
+            tool_id,
+            model_config=model_config,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"status": "success", "tool": tool.model_dump()}
 
 
 @router.patch("/session/{session_id}/tools/{tool_id}/selection")
