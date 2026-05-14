@@ -195,6 +195,26 @@ Implementation and review records will be appended per task:
 - Residual risk:
   - Some backend internals still use `STEP_FAILED:` string parsing to extract an index from generated scripts, but the API-facing result is now `failed_trace_index`. Full removal of step terminology from generated runtime error strings should be handled with compiler/runtime cleanup tasks.
 
+### Task 3E Configure Generation Gate Uses Trace Diagnostics
+
+- Trigger:
+  - Internal validation found Configure could show trace-backed unresolved diagnostics for manual confirmation, while `/generate` still blocked on legacy `recording_diagnostics`.
+  - User-facing symptom: after recording completed, Configure could display `生成脚本失败: 2 unresolved diagnostics must be resolved before generation` instead of keeping the user in the manual diagnostic confirmation/repair flow.
+- Root cause:
+  - Frontend timeline and diagnostic UI had moved to trace projection / `trace_diagnostics`, but backend `_ensure_no_unresolved_manual_diagnostics()` still checked legacy `recording_diagnostics`.
+  - This created two competing diagnostic sources after trace-first migration.
+- Fix:
+  - Changed backend generation/test/save diagnostic gate to use `trace_diagnostics`.
+  - Added poison coverage proving legacy `recording_diagnostics` no longer blocks generation.
+  - Kept trace diagnostics as the blocking source, so manual confirmation/repair still happens before script generation.
+- Verification:
+  - Backend command: `$env:PYTHONPATH="RpaClaw"; python -m pytest RpaClaw/backend/tests/test_rpa_trace_mutation_routes.py -q`
+  - Backend result: `6 passed, 24 warnings`.
+  - Frontend command: `npm.cmd --prefix RpaClaw/frontend test -- ConfigurePage rpaConfigureTimeline`
+  - Frontend result: `2 passed`, `13 passed` tests.
+- Recurrence protection:
+  - Test protection is sufficient for this incident class: generation must block on trace diagnostics and ignore legacy `recording_diagnostics` poison.
+
 ## Required Final Verification
 
 Backend:

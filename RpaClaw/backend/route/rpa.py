@@ -399,7 +399,7 @@ def _merge_recorded_action_trace_metadata(session, derived_manual_traces: Dict[s
 
 
 def _ensure_no_unresolved_manual_diagnostics(session) -> None:
-    diagnostics = getattr(session, "recording_diagnostics", None) or []
+    diagnostics = getattr(session, "trace_diagnostics", None) or []
     if diagnostics:
         raise HTTPException(
             status_code=400,

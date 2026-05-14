@@ -58,7 +58,11 @@ def _load_route_module():
 ROUTE_MODULE = _load_route_module()
 
 from backend.rpa.manager import RPASession, RPAStep
-from backend.rpa.manual_recording_models import ManualActionKind, ManualRecordedAction
+from backend.rpa.manual_recording_models import (
+    ManualActionKind,
+    ManualRecordedAction,
+    ManualRecordingDiagnostic,
+)
 from backend.rpa.trace_models import (
     RPAAcceptedTrace,
     RPADataflowMapping,
@@ -220,6 +224,53 @@ async def test_delete_diagnostic_route_uses_diagnostic_id():
 
         assert response == {"status": "success"}
         assert [diagnostic.diagnostic_id for diagnostic in session.trace_diagnostics] == ["diag-keep"]
+    finally:
+        manager.sessions.pop(session.id, None)
+
+
+@pytest.mark.asyncio
+async def test_generate_script_blocks_on_trace_diagnostics():
+    manager = ROUTE_MODULE.rpa_manager
+    session = RPASession(id="trace-diagnostic-generate-block", user_id="u1", sandbox_session_id="sandbox")
+    session.trace_diagnostics.append(
+        RPATraceDiagnostic(
+            diagnostic_id="diag-block",
+            trace_id="trace-fill",
+            source="manual",
+            message="canonical target missing",
+        )
+    )
+    manager.sessions[session.id] = session
+
+    try:
+        user = type("User", (), {"id": "u1"})()
+        with pytest.raises(ROUTE_MODULE.HTTPException) as exc_info:
+            await ROUTE_MODULE.generate_script(session.id, ROUTE_MODULE.GenerateRequest(), user)
+        assert exc_info.value.status_code == 400
+        assert "unresolved diagnostics" in exc_info.value.detail
+    finally:
+        manager.sessions.pop(session.id, None)
+
+
+@pytest.mark.asyncio
+async def test_generate_script_ignores_legacy_recording_diagnostics_poison(monkeypatch):
+    manager = ROUTE_MODULE.rpa_manager
+    session = RPASession(id="trace-diagnostic-generate-legacy-poison", user_id="u1", sandbox_session_id="sandbox")
+    session.recording_diagnostics.append(
+        ManualRecordingDiagnostic(
+            related_action_kind=ManualActionKind.FILL,
+            failure_reason="DO_NOT_USE_LEGACY",
+        )
+    )
+    manager.sessions[session.id] = session
+
+    try:
+        user = type("User", (), {"id": "u1"})()
+        monkeypatch.setattr(ROUTE_MODULE, "_generate_session_script", lambda *_args, **_kwargs: "ok")
+
+        response = await ROUTE_MODULE.generate_script(session.id, ROUTE_MODULE.GenerateRequest(), user)
+
+        assert response == {"status": "success", "script": "ok"}
     finally:
         manager.sessions.pop(session.id, None)
 
