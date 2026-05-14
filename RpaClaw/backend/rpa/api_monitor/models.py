@@ -70,6 +70,8 @@ class ApiToolDefinition(BaseModel):
     selected: bool = False
     confidence_reasons: List[str] = Field(default_factory=list)
     source_evidence: Dict = Field(default_factory=dict)
+    validation_status: str = "valid"
+    validation_errors: List[str] = Field(default_factory=list)
     generation_candidate_id: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
