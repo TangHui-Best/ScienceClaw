@@ -824,6 +824,17 @@ class RPASessionManager:
     def _unescape_playwright_literal(value: str) -> str:
         return value.replace('\\"', '"').replace("\\\\", "\\")
 
+    @staticmethod
+    def _playwright_literal_pattern() -> str:
+        return r'(?:"((?:\\.|[^"\\])*)"|\'((?:\\.|[^\'\\])*)\')'
+
+    @staticmethod
+    def _playwright_literal_value(match: re.Match, first_group: int) -> str:
+        value = match.group(first_group)
+        if value is None:
+            value = match.group(first_group + 1)
+        return RPASessionManager._unescape_playwright_literal(value or "")
+
     @classmethod
     def _parse_playwright_locator_expression(cls, expression: str) -> Optional[Dict[str, Any]]:
         if not expression:
@@ -832,14 +843,15 @@ class RPASessionManager:
         if remaining.startswith("page."):
             remaining = remaining[5:]
 
+        literal = cls._playwright_literal_pattern()
         current: Optional[Dict[str, Any]] = None
         value_patterns = (
-            ("testid", r'get_by_test_id\("((?:\\.|[^"\\])*)"\)'),
-            ("label", r'get_by_label\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)'),
-            ("placeholder", r'get_by_placeholder\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)'),
-            ("alt", r'get_by_alt_text\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)'),
-            ("title", r'get_by_title\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)'),
-            ("text", r'get_by_text\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)'),
+            ("testid", rf'get_by_test_id\({literal}\)'),
+            ("label", rf'get_by_label\({literal}(?:,\s*exact=True)?\)'),
+            ("placeholder", rf'get_by_placeholder\({literal}(?:,\s*exact=True)?\)'),
+            ("alt", rf'get_by_alt_text\({literal}(?:,\s*exact=True)?\)'),
+            ("title", rf'get_by_title\({literal}(?:,\s*exact=True)?\)'),
+            ("text", rf'get_by_text\({literal}(?:,\s*exact=True)?\)'),
         )
 
         while remaining:
@@ -847,25 +859,21 @@ class RPASessionManager:
             step: Optional[Dict[str, Any]] = None
 
             if current is None:
-                locator_match = re.match(r'locator\("((?:\\.|[^"\\])*)"\)', remaining)
+                locator_match = re.match(rf'locator\({literal}\)', remaining)
                 if locator_match:
                     matched_text = locator_match.group(0)
-                    step = {"method": "css", "value": cls._unescape_playwright_literal(locator_match.group(1))}
+                    step = {"method": "css", "value": cls._playwright_literal_value(locator_match, 1)}
                 else:
                     role_match = re.match(
-                        r'get_by_role\("((?:\\.|[^"\\])*)"(?:,\s*name="((?:\\.|[^"\\])*)"(?:,\s*exact=True)?)?\)',
+                        rf'get_by_role\({literal}(?:,\s*name={literal}(?:,\s*exact=True)?)?\)',
                         remaining,
                     )
                     if role_match:
                         matched_text = role_match.group(0)
                         step = {
                             "method": "role",
-                            "role": cls._unescape_playwright_literal(role_match.group(1)),
-                            "name": (
-                                cls._unescape_playwright_literal(role_match.group(2))
-                                if role_match.group(2) is not None
-                                else ""
-                            ),
+                            "role": cls._playwright_literal_value(role_match, 1),
+                            "name": cls._playwright_literal_value(role_match, 3),
                         }
                     else:
                         for method, pattern in value_patterns:
@@ -873,7 +881,7 @@ class RPASessionManager:
                             if not match:
                                 continue
                             matched_text = match.group(0)
-                            step = {"method": method, "value": cls._unescape_playwright_literal(match.group(1))}
+                            step = {"method": method, "value": cls._playwright_literal_value(match, 1)}
                             break
             else:
                 nth_match = re.match(r'\.nth\((\d+)\)', remaining)
@@ -885,34 +893,39 @@ class RPASessionManager:
                         "index": int(nth_match.group(1)),
                     }
                 else:
-                    locator_match = re.match(r'\.locator\("((?:\\.|[^"\\])*)"\)', remaining)
-                    if locator_match:
-                        matched_text = locator_match.group(0)
-                        step = {"method": "css", "value": cls._unescape_playwright_literal(locator_match.group(1))}
+                    first_match = re.match(r'\.first\b', remaining)
+                    if first_match:
+                        matched_text = first_match.group(0)
+                        current = {
+                            "method": "nth",
+                            "locator": current,
+                            "index": 0,
+                        }
                     else:
-                        role_match = re.match(
-                            r'\.get_by_role\("((?:\\.|[^"\\])*)"(?:,\s*name="((?:\\.|[^"\\])*)"(?:,\s*exact=True)?)?\)',
-                            remaining,
-                        )
-                        if role_match:
-                            matched_text = role_match.group(0)
-                            step = {
-                                "method": "role",
-                                "role": cls._unescape_playwright_literal(role_match.group(1)),
-                                "name": (
-                                    cls._unescape_playwright_literal(role_match.group(2))
-                                    if role_match.group(2) is not None
-                                    else ""
-                                ),
-                            }
+                        locator_match = re.match(rf'\.locator\({literal}\)', remaining)
+                        if locator_match:
+                            matched_text = locator_match.group(0)
+                            step = {"method": "css", "value": cls._playwright_literal_value(locator_match, 1)}
                         else:
-                            for method, pattern in value_patterns:
-                                match = re.match(r"\." + pattern, remaining)
-                                if not match:
-                                    continue
-                                matched_text = match.group(0)
-                                step = {"method": method, "value": cls._unescape_playwright_literal(match.group(1))}
-                                break
+                            role_match = re.match(
+                                rf'\.get_by_role\({literal}(?:,\s*name={literal}(?:,\s*exact=True)?)?\)',
+                                remaining,
+                            )
+                            if role_match:
+                                matched_text = role_match.group(0)
+                                step = {
+                                    "method": "role",
+                                    "role": cls._playwright_literal_value(role_match, 1),
+                                    "name": cls._playwright_literal_value(role_match, 3),
+                                }
+                            else:
+                                for method, pattern in value_patterns:
+                                    match = re.match(r"\." + pattern, remaining)
+                                    if not match:
+                                        continue
+                                    matched_text = match.group(0)
+                                    step = {"method": method, "value": cls._playwright_literal_value(match, 1)}
+                                    break
 
             if not matched_text:
                 return None

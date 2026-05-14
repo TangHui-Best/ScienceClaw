@@ -286,6 +286,34 @@ Implementation and review records will be appended per task:
   - Legacy step locator endpoint still exists for compatibility, but this regression path no longer requires the frontend to use it.
   - `recording_diagnostics` still exists as an internal normalization byproduct until the broader removal work deletes it completely; generation/UI contracts are trace diagnostic based.
 
+### Task 3H Playwright Locator String Candidates Promote From Diagnostics
+
+- Trigger:
+  - User verified unresolved manual diagnostics are visible again, but clicking `使用此定位器` failed with `Locator candidate is missing locator payload`.
+  - User noted the older version had no visible error because clicking the button did not take effect.
+- Root cause:
+  - The diagnostic candidate from recorder carried only a `playwright_locator` string, not a normalized `locator` payload.
+  - Backend trace locator promotion had reached the right `/trace/{traceId}/locator` path, but `_parse_playwright_locator_expression()` only handled a narrow double-quoted subset and did not parse common recorder output such as `page.get_by_role('textbox', name='请输入').first`.
+- Fix:
+  - Extended Playwright locator expression parsing to support single-quoted literals.
+  - Added `.first` support by converting it to the existing canonical `nth(index=0)` locator form.
+  - Added regression coverage for promoting a manual diagnostic candidate with `page.get_by_role('textbox', name='请输入').first`.
+- Verification:
+  - Backend focused command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_manager.py -k "single_quoted_playwright_first or select_trace_locator_candidate_promotes_manual_diagnostic_to_trace" -q`
+  - Backend focused result: `2 passed, 86 deselected`.
+  - Backend regression command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_manager.py RpaClaw/backend/tests/test_rpa_trace_mutation_routes.py -q`
+  - Backend regression result: `96 passed, 24 warnings`.
+  - Frontend command: `npm.cmd --prefix RpaClaw/frontend test -- ConfigurePage rpaConfigureTimeline`
+  - Frontend result: `2 passed`, `15 passed` tests.
+  - Diff check command: `git diff --check -- RpaClaw/backend/rpa/manager.py RpaClaw/backend/tests/test_rpa_manager.py`
+  - Diff check result: passed; only existing CRLF normalization warnings from Git.
+- Review:
+  - Independent reviewer Erdos was asked to review the focused parser/test diff.
+  - Erdos verdict: APPROVED. The reported `page.get_by_role('textbox', name='请输入').first` path now promotes to a canonical `nth(role(...), 0)` locator.
+- Residual risk:
+  - Parser remains intentionally bounded to recorder-style Playwright locator strings, not arbitrary Playwright expressions such as regex/lambda names.
+  - Escaped apostrophes inside single-quoted literals may need a later parser hardening if such candidates appear in real recordings.
+
 ## Required Final Verification
 
 Backend:

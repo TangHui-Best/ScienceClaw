@@ -446,6 +446,44 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.session.traces), 1)
         self.assertEqual(self.session.traces[0].trace_id, trace_id)
 
+    async def test_select_trace_locator_candidate_accepts_single_quoted_playwright_first(self):
+        await self.manager.add_step(
+            self.session.id,
+            {
+                "action": "click",
+                "target": "",
+                "description": "点击 None",
+                "source": "record",
+                "locator_candidates": [
+                    {
+                        "kind": "role",
+                        "playwright_locator": "page.get_by_role('textbox', name='请输入').first",
+                        "selected": True,
+                        "strict_match_count": 0,
+                    },
+                    {
+                        "kind": "placeholder",
+                        "playwright_locator": "page.get_by_placeholder('请输入').first",
+                        "selected": False,
+                        "strict_match_count": 0,
+                    },
+                ],
+                "validation": {"status": "fallback"},
+            },
+        )
+        trace_id = self.session.trace_diagnostics[0].trace_id
+
+        trace = await self.manager.select_trace_locator_candidate(self.session.id, trace_id, 0)
+
+        self.assertEqual(trace.trace_id, trace_id)
+        self.assertEqual(trace.locator_candidates[0]["locator"], {
+            "method": "nth",
+            "locator": {"method": "role", "role": "textbox", "name": "请输入"},
+            "index": 0,
+        })
+        self.assertEqual(len(self.session.trace_diagnostics), 0)
+        self.assertEqual(len(self.session.traces), 1)
+
     async def test_delete_step_rebuilds_manual_recording_outcomes(self):
         await self.manager.add_step(
             self.session.id,
