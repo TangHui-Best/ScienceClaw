@@ -78,11 +78,13 @@ const hasActiveGenerationCandidates = computed(() =>
   generationCandidates.value.some((candidate) => ['pending', 'running', 'stale'].includes(candidate.status)),
 );
 const detectedItemCount = computed(() => tools.value.length + visibleGenerationCandidates.value.length);
-const adoptedTools = computed(() => tools.value.filter((tool) => tool.selected));
-const notAdoptedTools = computed(() => tools.value.filter((tool) => !tool.selected));
+const adoptedTools = computed(() => tools.value.filter((tool) => tool.selected && !tool.is_reserve));
+const notAdoptedTools = computed(() => tools.value.filter((tool) => !tool.selected && !tool.is_reserve));
+const reserveTools = computed(() => tools.value.filter((tool) => tool.is_reserve));
 const adoptedToolCount = computed(() => adoptedTools.value.length);
 const toolGroups = computed(() => [
   { key: 'adopted', title: '采用', items: adoptedTools.value },
+  { key: 'reserve', title: '候补', items: reserveTools.value },
   { key: 'not-adopted', title: '不采用', items: notAdoptedTools.value },
 ]);
 const terminalLines = ref<{ html: string }[]>([]);
@@ -721,7 +723,7 @@ const toggleRecording = async () => {
       await refreshGenerationState();
       addLog(
         'INFO',
-        `录制已停止。当前 ${tools.value.length} 个工具，${visibleGenerationCandidates.value.length} 个仍在生成。`,
+        `录制已停止。${adoptedTools.value.length} 个正式工具，${reserveTools.value.length} 个候补工具${visibleGenerationCandidates.value.length ? `，${visibleGenerationCandidates.value.length} 个仍在生成` : ''}。`,
       );
     } catch (err: any) {
       addLog('ERROR', `停止录制失败: ${err.message}`);

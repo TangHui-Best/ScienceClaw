@@ -2351,6 +2351,7 @@ class ApiMonitorSessionManager:
                 source_calls=[call.id for call in samples],
                 source="auto",
                 generation_candidate_id=candidate.id,
+                is_reserve=skip_filter,
             )
             session.tool_definitions.append(tool)
         else:
