@@ -1776,6 +1776,12 @@ class ApiMonitorSessionManager:
 
                 name, description = self._parse_yaml_metadata(yaml_def)
 
+                from backend.rpa.api_monitor_mcp_contract import parse_api_monitor_tool_yaml
+
+                contract = parse_api_monitor_tool_yaml(yaml_def)
+                validation_status = "valid" if contract.valid else "invalid"
+                validation_errors = contract.validation_errors if contract.validation_errors else []
+
                 tool = ApiToolDefinition(
                     session_id=session_id,
                     name=name,
@@ -1790,6 +1796,8 @@ class ApiMonitorSessionManager:
                     selected=True,
                     confidence_reasons=confidence_result.reasons,
                     source_evidence=confidence_result.evidence_summary,
+                    validation_status=validation_status,
+                    validation_errors=validation_errors,
                 )
 
                 session.tool_definitions.append(tool)
@@ -2511,6 +2519,53 @@ class ApiMonitorSessionManager:
     def list_generation_candidates(self, session_id: str) -> list[ApiToolGenerationCandidate]:
         self.reconcile_generation_candidates(session_id, enqueue=False)
         return list(self._require_session(session_id).generation_candidates)
+
+    async def regenerate_tool(
+        self,
+        session_id: str,
+        tool_id: str,
+        model_config: dict | None = None,
+    ):
+        """Regenerate a tool's YAML from its source captured calls."""
+        from backend.rpa.api_monitor.llm_analyzer import generate_tool_definition
+        from backend.rpa.api_monitor_mcp_contract import parse_api_monitor_tool_yaml
+
+        session = self.sessions.get(session_id)
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+
+        tool = next((t for t in session.tool_definitions if t.id == tool_id), None)
+        if not tool:
+            raise ValueError(f"Tool {tool_id} not found")
+
+        source_calls = [c for c in session.captured_calls if c.id in tool.source_calls]
+        if not source_calls:
+            raise ValueError(f"No source calls found for tool {tool_id}")
+
+        yaml_def = await generate_tool_definition(
+            method=tool.method,
+            url_pattern=tool.url_pattern,
+            samples=source_calls,
+            page_context=session.target_url or "",
+            dom_context="",
+            model_config=model_config,
+        )
+
+        name, description = self._parse_yaml_metadata(yaml_def)
+        contract = parse_api_monitor_tool_yaml(yaml_def)
+
+        tool.yaml_definition = yaml_def
+        tool.name = name
+        tool.description = description
+        tool.validation_status = "valid" if contract.valid else "invalid"
+        tool.validation_errors = contract.validation_errors if contract.validation_errors else []
+        tool.updated_at = datetime.now()
+
+        logger.info(
+            "[ApiMonitor] Regenerated tool '%s' (valid=%s)",
+            name, contract.valid,
+        )
+        return tool
 
     def retry_generation_candidate(
         self,
