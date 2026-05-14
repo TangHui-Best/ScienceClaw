@@ -2533,6 +2533,20 @@ class ApiMonitorSessionManager:
         self._enqueue_generation_candidate(session_id, candidate.id, model_config=model_config)
         return candidate
 
+    def delete_generation_candidate(
+        self,
+        session_id: str,
+        candidate_id: str,
+    ) -> None:
+        session = self._require_session(session_id)
+        idx = next(
+            (i for i, item in enumerate(session.generation_candidates) if item.id == candidate_id),
+            None,
+        )
+        if idx is None:
+            raise ValueError("Generation candidate not found")
+        session.generation_candidates.pop(idx)
+
     def force_generate_candidate(
         self,
         session_id: str,

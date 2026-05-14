@@ -13,6 +13,7 @@ import {
   listGenerationCandidates,
   retryGenerationCandidate,
   forceGenerateCandidate,
+  deleteGenerationCandidate,
   updateTool as apiUpdateTool,
   deleteTool as apiDeleteTool,
   publishMcpToolBundle,
@@ -691,6 +692,17 @@ const handleForceGenerate = async (candidate: ApiToolGenerationCandidate) => {
     startGenerationRefresh()
   } catch (err) {
     console.error('Force generate failed:', err)
+  }
+}
+
+const handleDeleteCandidate = async (candidate: ApiToolGenerationCandidate) => {
+  if (!sessionId.value) return;
+  try {
+    await deleteGenerationCandidate(sessionId.value, candidate.id);
+    generationCandidates.value = generationCandidates.value.filter(c => c.id !== candidate.id);
+    addLog('INFO', `已删除队列工具: ${candidate.method} ${candidate.url_pattern}`);
+  } catch (err: any) {
+    addLog('ERROR', `删除队列工具失败: ${err.message}`);
   }
 }
 
@@ -1386,6 +1398,12 @@ onBeforeUnmount(() => {
                       <span v-if="candidate.retry_after">下次重试 {{ new Date(candidate.retry_after).toLocaleTimeString() }}</span>
                       
                       <div class="flex gap-2 shrink-0 ml-auto">
+                        <button
+                          class="rounded-lg border border-red-200 px-2 py-1 font-bold text-red-600 transition hover:bg-red-50 dark:border-red-500/20 dark:text-red-400 dark:hover:bg-red-500/10"
+                          @click="handleDeleteCandidate(candidate)"
+                        >
+                          删除
+                        </button>
                         <button
                           v-if="candidate.status === 'failed' || candidate.status === 'rate_limited'"
                           class="rounded-lg border border-slate-200 px-2 py-1 font-bold text-[var(--text-secondary)] transition hover:bg-slate-100 dark:border-white/10 dark:hover:bg-white/10"

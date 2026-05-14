@@ -406,6 +406,18 @@ export async function retryGenerationCandidate(
 }
 
 /**
+ * Delete a generation candidate.
+ */
+export async function deleteGenerationCandidate(
+  sessionId: string,
+  candidateId: string,
+): Promise<void> {
+  await apiClient.delete(
+    `/api-monitor/session/${sessionId}/generation-candidates/${candidateId}`,
+  )
+}
+
+/**
  * Update the intent description for a session.
  */
 export async function updateSessionIntent(sessionId: string, intent: string): Promise<void> {

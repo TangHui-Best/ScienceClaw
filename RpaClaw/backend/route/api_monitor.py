@@ -398,8 +398,26 @@ async def retry_generation_candidate(
             model_config=model_config,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail=str(exc))
     return {"status": "success", "candidate": candidate.model_dump(mode="json")}
+
+
+@router.delete("/session/{session_id}/generation-candidates/{candidate_id}")
+async def delete_generation_candidate(
+    session_id: str,
+    candidate_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    session = api_monitor_manager.get_session(session_id)
+    _verify_session_owner(session, current_user)
+    try:
+        api_monitor_manager.delete_generation_candidate(
+            session_id,
+            candidate_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"status": "success"}
 
 
 @router.put("/session/{session_id}/intent")
