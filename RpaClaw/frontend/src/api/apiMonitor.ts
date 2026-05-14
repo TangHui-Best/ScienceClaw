@@ -87,6 +87,8 @@ export interface ApiToolDefinition {
   confidence_reasons: string[]
   source_evidence: Record<string, unknown>
   generation_candidate_id?: string | null
+  validation_status?: 'valid' | 'invalid'
+  validation_errors?: string[]
   created_at: string
   updated_at: string
 }
@@ -351,6 +353,19 @@ export async function updateToolSelection(
   const response = await apiClient.patch(
     `/api-monitor/session/${sessionId}/tools/${toolId}/selection`,
     { selected },
+  )
+  return response.data.tool
+}
+
+/**
+ * Regenerate a tool's YAML by re-calling LLM with source calls.
+ */
+export async function regenerateTool(
+  sessionId: string,
+  toolId: string,
+): Promise<ApiToolDefinition> {
+  const response = await apiClient.post(
+    `/api-monitor/session/${sessionId}/tools/${toolId}/regenerate`,
   )
   return response.data.tool
 }
