@@ -72,19 +72,23 @@ const generationCandidates = ref<ApiToolGenerationCandidate[]>([]);
 let generationRefreshTimer: number | null = null;
 let analysisCleanup: (() => void) | null = null;
 const visibleGenerationCandidates = computed(() =>
-  generationCandidates.value.filter((candidate) => candidate.status !== 'generated' || !candidate.tool_id),
+  generationCandidates.value.filter((candidate) =>
+    candidate.status !== 'generated' && candidate.status !== 'confidence_rejected' && candidate.status !== 'intent_filtered',
+  ),
 );
 const hasActiveGenerationCandidates = computed(() =>
   generationCandidates.value.some((candidate) => ['pending', 'running', 'stale'].includes(candidate.status)),
 );
 const detectedItemCount = computed(() => tools.value.length + visibleGenerationCandidates.value.length);
-const adoptedTools = computed(() => tools.value.filter((tool) => tool.selected && !tool.is_reserve));
-const notAdoptedTools = computed(() => tools.value.filter((tool) => !tool.selected && !tool.is_reserve));
-const reserveTools = computed(() => tools.value.filter((tool) => tool.is_reserve));
+const adoptedTools = computed(() => tools.value.filter((tool) => tool.selected));
+const notAdoptedTools = computed(() => tools.value.filter((tool) => !tool.selected));
+const reserveCandidates = computed(() =>
+  generationCandidates.value.filter((c) => c.status === 'confidence_rejected' || c.status === 'intent_filtered'),
+);
 const adoptedToolCount = computed(() => adoptedTools.value.length);
 const toolGroups = computed(() => [
   { key: 'adopted', title: '采用', items: adoptedTools.value },
-  { key: 'reserve', title: '候补', items: reserveTools.value },
+  { key: 'reserve', title: '候补', items: reserveCandidates.value },
   { key: 'not-adopted', title: '不采用', items: notAdoptedTools.value },
 ]);
 const terminalLines = ref<{ html: string }[]>([]);
@@ -723,7 +727,7 @@ const toggleRecording = async () => {
       await refreshGenerationState();
       addLog(
         'INFO',
-        `录制已停止。${adoptedTools.value.length} 个正式工具，${reserveTools.value.length} 个候补工具${visibleGenerationCandidates.value.length ? `，${visibleGenerationCandidates.value.length} 个仍在生成` : ''}。`,
+        `录制已停止。${adoptedTools.value.length} 个正式工具，${reserveCandidates.value.length} 个候补工具${visibleGenerationCandidates.value.length ? `，${visibleGenerationCandidates.value.length} 个仍在生成` : ''}。`,
       );
     } catch (err: any) {
       addLog('ERROR', `停止录制失败: ${err.message}`);
@@ -1434,6 +1438,40 @@ onBeforeUnmount(() => {
                   <span>{{ group.title }}</span>
                   <span>{{ group.items.length }}</span>
                 </div>
+                <!-- Reserve candidates (confidence_rejected / intent_filtered) -->
+                <template v-if="group.key === 'reserve'">
+                  <div
+                    v-for="candidate in group.items"
+                    :key="candidate.id"
+                    class="rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3 shadow-sm dark:border-white/10 dark:bg-white/[0.04]"
+                  >
+                    <div class="flex items-center gap-3">
+                      <span class="text-[10px] font-bold px-2 py-0.5 rounded-md" :class="getMethodClass(candidate.method)">
+                        {{ candidate.method }}
+                      </span>
+                      <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--text-primary)]">
+                        {{ candidate.url_pattern }}
+                      </span>
+                      <span class="shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-bold" :class="getCandidateStatusClass(candidate.status)">
+                        {{ getCandidateStatusLabel(candidate.status) }}
+                      </span>
+                    </div>
+                    <div v-if="candidate.rejection_reason || candidate.intent_filter_reason" class="mt-1.5 text-[10px] text-orange-600 dark:text-orange-400">
+                      {{ candidate.rejection_reason || candidate.intent_filter_reason }}
+                    </div>
+                    <div class="mt-2 flex items-center justify-between gap-3 text-[10px] text-[var(--text-tertiary)]">
+                      <span>样本 {{ candidate.source_call_ids?.length || 0 }}</span>
+                      <button
+                        class="rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 font-bold text-blue-600 transition hover:bg-blue-100 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-300"
+                        @click="handleForceGenerate(candidate)"
+                      >
+                        强制生成
+                      </button>
+                    </div>
+                  </div>
+                </template>
+                <!-- Regular tool cards -->
+                <template v-else>
                 <div
                   v-for="tool in group.items"
                   :key="tool.id"
@@ -1485,7 +1523,7 @@ onBeforeUnmount(() => {
                       </button>
                     </div>
                   </div>
-                </div>
+                </template>
               </div>
             </template>
           </div>

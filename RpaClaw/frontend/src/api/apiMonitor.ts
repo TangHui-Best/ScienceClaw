@@ -87,7 +87,6 @@ export interface ApiToolDefinition {
   confidence_reasons: string[]
   source_evidence: Record<string, unknown>
   generation_candidate_id?: string | null
-  is_reserve: boolean
   created_at: string
   updated_at: string
 }

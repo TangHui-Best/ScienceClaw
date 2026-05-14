@@ -71,7 +71,6 @@ class ApiToolDefinition(BaseModel):
     confidence_reasons: List[str] = Field(default_factory=list)
     source_evidence: Dict = Field(default_factory=dict)
     generation_candidate_id: Optional[str] = None
-    is_reserve: bool = False
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
 
