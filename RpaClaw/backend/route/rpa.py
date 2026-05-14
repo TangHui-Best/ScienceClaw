@@ -1063,6 +1063,7 @@ async def chat_with_assistant(
                         "data": json.dumps(evt_data, ensure_ascii=False),
                     }
             else:
+                before_trace_ids = {trace.trace_id for trace in session.traces}
                 yield {
                     "event": "agent_thought",
                     "data": json.dumps({"text": "Planning one trace-first recording command."}, ensure_ascii=False),
@@ -1075,6 +1076,11 @@ async def chat_with_assistant(
                     debug_context={"session_id": session_id},
                 )
                 await _apply_recording_agent_result(session_id, result)
+                run_trace_count = len([
+                    trace for trace in session.traces
+                    if trace.trace_id not in before_trace_ids
+                ])
+                session_trace_count = len(session.traces)
 
                 if result.trace:
                     code = result.trace.ai_execution.code if result.trace.ai_execution else ""
@@ -1108,8 +1114,8 @@ async def chat_with_assistant(
                         "data": json.dumps(
                             {
                                 "message": result.message,
-                                "total_steps": len(session.traces),
-                                "trace_count": len(session.traces),
+                                "trace_count": run_trace_count,
+                                "session_trace_count": session_trace_count,
                             },
                             ensure_ascii=False,
                         ),

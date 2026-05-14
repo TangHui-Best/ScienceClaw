@@ -1107,7 +1107,7 @@ const sendMessage = async () => {
                     <div class="mt-0.5 flex flex-wrap gap-1 text-[9px] font-semibold text-gray-500 dark:text-gray-400">
                       <span>{{ runRoundCount(msg.run) }} 次尝试</span>
                       <span>·</span>
-                      <span>已记录 {{ getRunTraceCount(msg) }} 步</span>
+                      <span>本次记录 {{ getRunTraceCount(msg) }} 步</span>
                       <span>·</span>
                       <span>{{ msg.time }}</span>
                     </div>
@@ -1179,7 +1179,7 @@ const sendMessage = async () => {
                 class="mt-3 flex items-start gap-2 rounded-lg bg-emerald-50 p-2 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200"
               >
                 <CheckCircle :size="13" class="mt-0.5 shrink-0" />
-                <span class="min-w-0 break-words">任务完成，已记录 {{ getRunTraceCount(msg) }} 个可回放步骤。</span>
+                <span class="min-w-0 break-words">任务完成，本次记录 {{ getRunTraceCount(msg) }} 个可回放步骤。</span>
               </div>
 
               <div

@@ -1,4 +1,5 @@
 import importlib
+import json
 from datetime import datetime
 
 import pytest
@@ -578,6 +579,72 @@ async def test_skill_config_draft_missing_session_returns_404():
         await ROUTE_MODULE.get_skill_config_draft("missing-draft-session", user)
 
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_chat_agent_done_reports_run_trace_count_not_session_total(monkeypatch):
+    manager = ROUTE_MODULE.rpa_manager
+    session = RPASession(id="route-chat-run-count", user_id="u1", sandbox_session_id="sandbox")
+    for index in range(3):
+        session.traces.append(
+            RPAAcceptedTrace(
+                trace_id=f"trace-existing-{index}",
+                trace_type=RPATraceType.AI_OPERATION,
+                source="ai",
+                description=f"Existing trace {index}",
+            )
+        )
+    manager.sessions[session.id] = session
+
+    new_trace = RPAAcceptedTrace(
+        trace_id="trace-new-run",
+        trace_type=RPATraceType.AI_OPERATION,
+        source="ai",
+        user_instruction="获取start数",
+        description="Extract star count",
+        output_key="star_count",
+        output="48.2k stars",
+        ai_execution=RPAAIExecution(code="async def run(page, results):\n    return '48.2k stars'"),
+    )
+
+    class FakeRecordingRuntimeAgent:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def run(self, **kwargs):
+            return RecordingAgentResult(
+                success=True,
+                trace=new_trace,
+                output_key="star_count",
+                output="48.2k stars",
+                message="Recording command completed.",
+            )
+
+    monkeypatch.setattr(ROUTE_MODULE, "RecordingRuntimeAgent", FakeRecordingRuntimeAgent)
+    monkeypatch.setattr(manager, "get_page", lambda target_session_id: object() if target_session_id == session.id else None)
+
+    try:
+        user = type("User", (), {"id": "u1"})()
+        response = await ROUTE_MODULE.chat_with_assistant(
+            session.id,
+            ROUTE_MODULE.ChatRequest(message="获取start数"),
+            user,
+        )
+        chunks = []
+        async for chunk in response.body_iterator:
+            chunks.append(chunk.decode("utf-8") if isinstance(chunk, bytes) else str(chunk))
+        body = "".join(chunks)
+        done_payloads = [
+            json.loads(line.removeprefix("data:").strip())
+            for line in body.splitlines()
+            if line.startswith("data:") and "trace_count" in line
+        ]
+
+        assert done_payloads[-1]["trace_count"] == 1
+        assert done_payloads[-1]["session_trace_count"] == 4
+        assert "total_steps" not in done_payloads[-1]
+    finally:
+        manager.sessions.pop(session.id, None)
 
 
 @pytest.mark.asyncio

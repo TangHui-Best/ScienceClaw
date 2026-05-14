@@ -341,6 +341,28 @@ Implementation and review records will be appended per task:
 - Residual risk:
   - Intentionally empty `default_value` still falls back to `original_value`, matching the current Configure behavior where blank defaults are treated as "use recorded value".
 
+### Task 3J Assistant Run Trace Count Uses Run Scope
+
+- Trigger:
+  - User reported that a single natural-language command on GitHub, `获取start数`, showed `已记录 4 步`.
+- Root cause:
+  - The trace-first chat route emitted `trace_count=len(session.traces)` in `agent_done`, so the current assistant message displayed the cumulative session trace count rather than the traces accepted during this run.
+  - RecorderPage already ignored legacy `total_steps`, visible timeline length, and accepted trace array fallbacks, but the backend field it trusted still used the wrong scope.
+- Fix:
+  - Changed trace-first `agent_done.trace_count` to count only traces whose `trace_id` did not exist before the current `RecordingRuntimeAgent.run()`.
+  - Added `session_trace_count` for callers that need the cumulative session count.
+  - Removed `total_steps` from the trace-first `agent_done` payload.
+  - Changed the RecorderPage assistant copy from `已记录` to `本次记录` for run-scoped counts.
+- Verification:
+  - Frontend focused command: `npm.cmd --prefix RpaClaw/frontend test -- RecorderPage rpaAssistantRun`
+  - Frontend focused result: `2 passed`, `9 passed` tests.
+  - Backend focused command attempted: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_route_trace.py -q -k chat_agent_done_reports_run_trace_count_not_session_total`
+  - Backend focused result: blocked during collection because the active Python environment is missing `langchain_core`.
+  - Diff check command: `git diff --check -- RpaClaw/backend/route/rpa.py RpaClaw/backend/tests/test_rpa_route_trace.py RpaClaw/frontend/src/pages/rpa/RecorderPage.vue RpaClaw/frontend/src/pages/rpa/RecorderPage.test.ts`
+  - Diff check result: passed; only existing CRLF normalization warnings from Git.
+- Residual risk:
+  - The new backend regression test still needs to be run in the project backend environment with `RpaClaw/backend/requirements.txt` installed.
+
 ## Required Final Verification
 
 Backend:

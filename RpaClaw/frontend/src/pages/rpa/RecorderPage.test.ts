@@ -290,8 +290,8 @@ describe('RecorderPage trace timeline convergence', () => {
     root.querySelector<HTMLButtonElement>('button.flex.h-8.w-8')?.click();
     await flushAsyncUpdates();
 
-    expect(root.textContent).toContain('已记录 0 个可回放步骤');
-    expect(root.textContent).not.toContain('已记录 2 个可回放步骤');
+    expect(root.textContent).toContain('本次记录 0 个可回放步骤');
+    expect(root.textContent).not.toContain('本次记录 2 个可回放步骤');
     expect(root.textContent).not.toContain('999');
 
     app.unmount();
@@ -326,8 +326,8 @@ describe('RecorderPage trace timeline convergence', () => {
     root.querySelector<HTMLButtonElement>('button.flex.h-8.w-8')?.click();
     await flushAsyncUpdates();
 
-    expect(root.textContent).toContain('已记录 0 个可回放步骤');
-    expect(root.textContent).not.toContain('已记录 2 个可回放步骤');
+    expect(root.textContent).toContain('本次记录 0 个可回放步骤');
+    expect(root.textContent).not.toContain('本次记录 2 个可回放步骤');
     expect(root.textContent).not.toContain('999');
 
     app.unmount();
