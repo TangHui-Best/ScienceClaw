@@ -423,12 +423,16 @@ class TraceSkillCompiler:
             "    if callable(activator):",
             "        await activator(page, tab_id)",
             "",
-            "async def _ensure_recorded_tab(tabs, current_page, kwargs, tab_id):",
+            "async def _ensure_recorded_tab(tabs, current_page, kwargs, tab_id, recorded_url='', require_recorded_url=False):",
             "    if tab_id in tabs:",
             "        page = tabs[tab_id]",
             "    else:",
+            "        if require_recorded_url and not recorded_url:",
+            "            raise RuntimeError(f'Recorded tab {tab_id} is missing recorded URL; cannot materialize replay page safely')",
             "        page = await current_page.context.new_page()",
             "        tabs[tab_id] = page",
+            "        if recorded_url:",
+            "            await page.goto(recorded_url, wait_until='domcontentloaded')",
             "    await page.bring_to_front()",
             "    await _activate_recorded_page(page, kwargs, tab_id)",
             "    return page",
@@ -688,7 +692,11 @@ class TraceSkillCompiler:
         if source_tab_id:
             lines.append(f"    tabs.setdefault({json.dumps(source_tab_id, ensure_ascii=False)}, current_page)")
         target_tab_id_literal = json.dumps(target_tab_id, ensure_ascii=False)
-        lines.append(f"    current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, {target_tab_id_literal})")
+        recorded_url_literal = json.dumps(str(trace.after_page.url or "").strip(), ensure_ascii=False)
+        lines.append(
+            "    current_page = await _ensure_recorded_tab("
+            f"tabs, current_page, kwargs, {target_tab_id_literal}, {recorded_url_literal}, True)"
+        )
         return lines
 
     @staticmethod
@@ -710,7 +718,16 @@ class TraceSkillCompiler:
         lines.append("    await closing_page.close()")
         if fallback_tab_id:
             fallback_tab_id_literal = json.dumps(fallback_tab_id, ensure_ascii=False)
-            lines.append(f"    current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, {fallback_tab_id_literal})")
+            fallback_url = str(
+                tab_signal.get("target_url")
+                or tab_signal.get("target_tab_url")
+                or ""
+            ).strip()
+            fallback_url_literal = json.dumps(fallback_url, ensure_ascii=False)
+            lines.append(
+                "    current_page = await _ensure_recorded_tab("
+                f"tabs, current_page, kwargs, {fallback_tab_id_literal}, {fallback_url_literal}, True)"
+            )
         return lines
 
     @staticmethod

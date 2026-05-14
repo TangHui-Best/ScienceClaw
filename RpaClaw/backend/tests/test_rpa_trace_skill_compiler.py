@@ -27,17 +27,23 @@ def _load_execute_skill(script: str):
 
 
 class _FakeTracePage:
-    def __init__(self, name: str = "page") -> None:
+    def __init__(self, name: str = "page", url: str = "about:blank") -> None:
         self.name = name
+        self.url = url
         self.context = _FakeTraceContext()
         self.brought_to_front = 0
         self.closed = False
+        self.goto_calls = []
 
     async def bring_to_front(self) -> None:
         self.brought_to_front += 1
 
     async def close(self) -> None:
         self.closed = True
+
+    async def goto(self, url: str, wait_until: str = "") -> None:
+        self.goto_calls.append((url, wait_until))
+        self.url = url
 
 
 class _FakeTraceContext:
@@ -688,7 +694,7 @@ def test_manual_popup_click_registers_source_tab_before_switching_to_new_page():
     assert source_registration in body
     assert body.index(source_registration) < body.index(popup_wait)
     assert 'tabs["tab-export"] = new_page' in body
-    assert 'current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, "tab-root")' in body
+    assert 'current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, "tab-root", "", True)' in body
 
 
 def test_manual_switch_tab_trace_compiles_to_page_context_switch():
@@ -705,11 +711,33 @@ def test_manual_switch_tab_trace_compiles_to_page_context_switch():
 
     assert "No stable locator was recorded" not in body
     assert 'tabs.setdefault("tab-root", current_page)' in body
-    assert 'current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, "tab-sales")' in body
+    assert 'current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, "tab-sales", "", True)' in body
     assert "await page.bring_to_front()" in script
 
 
-def test_manual_switch_tab_without_known_target_materializes_page_at_runtime():
+def test_manual_switch_tab_without_known_target_materializes_recorded_url_at_runtime():
+    trace = RPAAcceptedTrace(
+        trace_id="switch-to-sales",
+        trace_type=RPATraceType.MANUAL_ACTION,
+        action="switch_tab",
+        description="切换到标签页 iSales+",
+        after_page=RPAPageState(url="https://example.com/sales"),
+        signals={"tab": {"source_tab_id": "tab-root", "target_tab_id": "tab-sales"}},
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    execute_skill = _load_execute_skill(script)
+    page = _FakeTracePage("root")
+
+    asyncio.run(execute_skill(page))
+
+    assert len(page.context.created_pages) == 1
+    created_page = page.context.created_pages[0]
+    assert created_page.goto_calls == [("https://example.com/sales", "domcontentloaded")]
+    assert created_page.brought_to_front == 1
+
+
+def test_manual_switch_tab_without_known_target_or_recorded_url_fails_clearly():
     trace = RPAAcceptedTrace(
         trace_id="switch-to-sales",
         trace_type=RPATraceType.MANUAL_ACTION,
@@ -722,10 +750,15 @@ def test_manual_switch_tab_without_known_target_materializes_page_at_runtime():
     execute_skill = _load_execute_skill(script)
     page = _FakeTracePage("root")
 
-    asyncio.run(execute_skill(page))
+    try:
+        asyncio.run(execute_skill(page))
+    except RuntimeError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("missing recorded tab URL should fail")
 
-    assert len(page.context.created_pages) == 1
-    assert page.context.created_pages[0].brought_to_front == 1
+    assert "tab-sales" in message
+    assert "recorded URL" in message
 
 
 def test_manual_close_tab_trace_compiles_to_page_close_and_fallback_switch():
@@ -744,16 +777,53 @@ def test_manual_close_tab_trace_compiles_to_page_close_and_fallback_switch():
     assert 'tabs.setdefault("tab-sales", current_page)' in body
     assert 'closing_page = tabs.pop("tab-sales", current_page)' in body
     assert "await closing_page.close()" in body
-    assert 'current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, "tab-root")' in body
+    assert 'current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, "tab-root", "", True)' in body
 
 
-def test_manual_close_tab_without_known_fallback_materializes_fallback_at_runtime():
+def test_manual_close_tab_without_known_fallback_url_does_not_use_closing_page_url():
     trace = RPAAcceptedTrace(
         trace_id="close-sales",
         trace_type=RPATraceType.MANUAL_ACTION,
         action="close_tab",
         description="关闭标签页 iSales+ 并切换到其他标签页",
+        after_page=RPAPageState(url="https://example.com/sales"),
         signals={"tab": {"tab_id": "tab-sales", "target_tab_id": "tab-root"}},
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    execute_skill = _load_execute_skill(script)
+    page = _FakeTracePage("sales")
+
+    try:
+        asyncio.run(execute_skill(page))
+    except RuntimeError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("missing fallback tab URL should fail")
+
+    assert page.closed is True
+    assert "tab-root" in message
+    assert "recorded URL" in message
+    assert all(
+        ("https://example.com/sales", "domcontentloaded") not in created.goto_calls
+        for created in page.context.created_pages
+    )
+
+
+def test_manual_close_tab_with_recorded_fallback_url_materializes_fallback_at_runtime():
+    trace = RPAAcceptedTrace(
+        trace_id="close-sales",
+        trace_type=RPATraceType.MANUAL_ACTION,
+        action="close_tab",
+        description="关闭标签页 iSales+ 并切换到其他标签页",
+        after_page=RPAPageState(url="https://example.com/sales"),
+        signals={
+            "tab": {
+                "tab_id": "tab-sales",
+                "target_tab_id": "tab-root",
+                "target_url": "https://example.com/root",
+            }
+        },
     )
 
     script = TraceSkillCompiler().generate_script([trace], is_local=True)
@@ -764,7 +834,9 @@ def test_manual_close_tab_without_known_fallback_materializes_fallback_at_runtim
 
     assert page.closed is True
     assert len(page.context.created_pages) == 1
-    assert page.context.created_pages[0].brought_to_front == 1
+    created_page = page.context.created_pages[0]
+    assert created_page.goto_calls == [("https://example.com/root", "domcontentloaded")]
+    assert created_page.brought_to_front == 1
 
 
 def test_manual_download_click_compiles_to_expect_download():
