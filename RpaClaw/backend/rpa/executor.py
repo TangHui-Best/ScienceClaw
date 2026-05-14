@@ -157,7 +157,7 @@ class ScriptExecutor:
                     "success": False,
                     "output": output,
                     "error": f"Timeout after {timeout}s",
-                    "failed_step_index": failed_step_index,
+                    "failed_trace_index": failed_step_index,
                 }
 
             except Exception as e:
@@ -184,7 +184,7 @@ class ScriptExecutor:
                     "success": False,
                     "output": output,
                     "error": original_error,
-                    "failed_step_index": failed_step_index,
+                    "failed_trace_index": failed_step_index,
                 }
 
             finally:

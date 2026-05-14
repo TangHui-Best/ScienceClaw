@@ -21,6 +21,7 @@ from backend.rpa.assistant import RPAAssistant, RPAReActAgent, _active_agents
 from backend.rpa.recording_runtime_agent import RecordingRuntimeAgent, RecordingAgentResult
 from backend.rpa.trace_recorder import manual_step_to_trace, recorded_action_to_trace
 from backend.rpa.trace_models import RPAAcceptedTrace
+from backend.rpa.trace_timeline import build_trace_timeline_items
 from backend.rpa.trace_skill_compiler import TraceSkillCompiler
 from backend.rpa.mcp_step_projection import session_to_mcp_steps
 from backend.rpa.cdp_connector import get_cdp_connector
@@ -118,6 +119,16 @@ def _model_dump_json(value: Any) -> Any:
     if hasattr(value, "model_dump"):
         return value.model_dump(mode="json")
     return value
+
+
+def _build_session_timeline(session) -> list[dict[str, Any]]:
+    return [
+        item.model_dump(mode="json")
+        for item in build_trace_timeline_items(
+            traces=list(getattr(session, "traces", None) or []),
+            trace_diagnostics=list(getattr(session, "trace_diagnostics", None) or []),
+        )
+    ]
 
 
 def _step_tab_signal(step) -> Dict[str, Any]:
@@ -294,6 +305,59 @@ def _build_session_recording_meta(session) -> Dict[str, Any]:
 
 def _session_requires_runtime_ai(session) -> bool:
     return runtime_requirements_from_traces(_session_traces_for_compile(session)).get("runtime_ai") is True
+
+
+def _failed_trace_retry_context(session, result: Dict[str, Any]) -> Dict[str, Any]:
+    failed_trace_index = result.get("failed_trace_index")
+
+    failed_trace_id = None
+    failed_step_candidates = []
+    traces = _session_traces_for_compile(session)
+    if failed_trace_index is None:
+        return {
+            "failed_trace_id": failed_trace_id,
+            "failed_trace_index": None,
+            "failed_step_candidates": failed_step_candidates,
+        }
+
+    try:
+        failed_trace_index = int(failed_trace_index)
+    except (TypeError, ValueError):
+        failed_trace_index = None
+
+    if failed_trace_index is not None and 0 <= failed_trace_index < len(traces):
+        failed_trace = traces[failed_trace_index]
+        failed_trace_id = failed_trace.trace_id
+        candidates = getattr(failed_trace, "locator_candidates", None) or []
+        filtered = []
+        for orig_idx, candidate in enumerate(candidates):
+            entry = _model_dump_json(candidate)
+            if not isinstance(entry, dict):
+                continue
+            if not entry.get("selected"):
+                entry = dict(entry)
+                entry["original_index"] = orig_idx
+                filtered.append(entry)
+        def _candidate_score(candidate: dict[str, Any]) -> float:
+            try:
+                value = float(candidate.get("score", 999))
+            except (TypeError, ValueError):
+                return 999.0
+            return value
+
+        failed_step_candidates = sorted(
+            filtered,
+            key=lambda candidate: (
+                0 if candidate.get("strict_match_count") == 1 else 1,
+                _candidate_score(candidate),
+            ),
+        )
+
+    return {
+        "failed_trace_id": failed_trace_id,
+        "failed_trace_index": failed_trace_index,
+        "failed_step_candidates": failed_step_candidates,
+    }
 
 
 def _merge_recorded_action_trace_metadata(session, derived_manual_traces: Dict[str, RPAAcceptedTrace]) -> None:
@@ -520,7 +584,21 @@ async def get_rpa_session(
     if session.user_id != str(current_user.id):
         raise HTTPException(status_code=403, detail="Not authorized")
     rpa_manager.touch_session(session_id)
-    return {"status": "success", "session": session}
+    return {"status": "success", "session": session, "timeline": _build_session_timeline(session)}
+
+
+@router.get("/session/{session_id}/timeline")
+async def get_session_timeline(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    session = await rpa_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.user_id != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    rpa_manager.touch_session(session_id)
+    return {"status": "success", "timeline": _build_session_timeline(session)}
 
 
 @router.get("/session/{session_id}/skill-config-draft")
@@ -804,7 +882,6 @@ async def test_script(
     rpa_manager.touch_session(session_id)
 
     _ensure_no_unresolved_manual_diagnostics(session)
-    steps = [step.model_dump() for step in session.steps]
     script = _generate_session_script(session, request.params, test_mode=True)
 
     logs = []
@@ -867,47 +944,16 @@ async def test_script(
             downloads_dir=downloads_dir,
         )
 
-    # Extract failed step candidates for locator retry
-    deduped_failed_index = result.get("failed_step_index")
-    failed_step_index = None
-    failed_step_candidates = []
-    if deduped_failed_index is not None:
-        deduped = generator._deduplicate_steps(steps)
-        deduped = generator._infer_missing_tab_transitions(deduped)
-        deduped = generator._normalize_step_signals(deduped)
-        if 0 <= deduped_failed_index < len(deduped):
-            failed_step = deduped[deduped_failed_index]
-            # Map deduped index back to original steps index via step id
-            failed_step_id = failed_step.get("id")
-            if failed_step_id:
-                for orig_i, orig_step in enumerate(steps):
-                    if orig_step.get("id") == failed_step_id:
-                        failed_step_index = orig_i
-                        break
-            if failed_step_index is None:
-                failed_step_index = min(deduped_failed_index, len(steps) - 1)
-            candidates = failed_step.get("locator_candidates", [])
-            filtered = []
-            for orig_idx, c in enumerate(candidates):
-                if not c.get("selected"):
-                    entry = dict(c)
-                    entry["original_index"] = orig_idx
-                    filtered.append(entry)
-            failed_step_candidates = sorted(
-                filtered,
-                key=lambda c: (
-                    0 if c.get("strict_match_count") == 1 else 1,
-                    c.get("score", 999),
-                ),
-            )
+    result_payload = dict(result)
+    result_payload.pop("failed_step_index", None)
+    failed_retry_context = _failed_trace_retry_context(session, result_payload)
 
     return {
         "status": "success" if result.get("success") else "failed",
-        "result": result,
+        "result": result_payload,
         "logs": logs,
         "script": script,
-        "failed_step_index": failed_step_index,
-        "failed_step_candidates": failed_step_candidates,
+        **failed_retry_context,
     }
 
 

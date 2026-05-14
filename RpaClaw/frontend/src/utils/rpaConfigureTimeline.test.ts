@@ -8,118 +8,120 @@ import {
 } from './rpaConfigureTimeline';
 
 describe('rpaConfigureTimeline', () => {
-  it('deduplicates recorded actions and their derived manual traces', () => {
+  it('maps display steps only from timeline projection trace and diagnostic ids', () => {
     const session = {
-      steps: [
+      timeline: [
         {
-          id: 'step-search',
-          action: 'click',
-          description: 'legacy click should only remain for parameterization',
-        },
-      ],
-      traces: [
-        {
-          trace_id: 'trace-step-search',
-          trace_type: 'manual_action',
+          id: 'backend-trace-projection-id',
+          kind: 'trace',
+          trace_id: 'trace-click-search',
           source: 'manual',
+          trace_type: 'manual_action',
           action: 'click',
-          description: 'derived manual trace should not duplicate recorded action',
+          title: 'Click search',
+          summary: 'button("Search")',
+          url: 'https://example.test/search',
+          locator: { method: 'role', role: 'button', name: 'Search' },
+          locator_candidates: [
+            {
+              kind: 'role',
+              selected: true,
+              locator: { method: 'role', role: 'button', name: 'Search' },
+            },
+          ],
+          validation: { status: 'ok', details: 'Manual action' },
         },
-      ],
-      recorded_actions: [
         {
-          step_id: 'step-search',
-          action_kind: 'click',
-          description: 'click button("Search")',
-          target: { method: 'role', role: 'button', name: 'Search' },
-          validation: { status: 'ok' },
-          page_state: { url: 'https://example.test/search' },
+          id: 'backend-diagnostic-projection-id',
+          kind: 'diagnostic',
+          diagnostic_id: 'diagnostic-missing-target',
+          trace_id: 'trace-fill-name',
+          source: 'manual',
+          action: 'fill',
+          title: 'Fill needs repair',
+          summary: 'canonical_target_missing',
+          url: 'https://example.test/form',
+          locator_candidates: [
+            {
+              kind: 'css',
+              selected: true,
+              locator: { method: 'css', selector: '.name' },
+            },
+          ],
+          validation: { status: 'broken', details: 'canonical target missing' },
         },
       ],
     };
 
     const displaySteps = mapRpaConfigureDisplaySteps(session);
 
-    expect(displaySteps).toHaveLength(1);
+    expect(displaySteps).toHaveLength(2);
     expect(displaySteps[0]).toMatchObject({
-      id: 'step-search',
-      stepId: 'step-search',
-      traceId: 'trace-step-search',
+      id: 'trace-click-search',
+      traceId: 'trace-click-search',
       action: 'click',
-      description: 'click button("Search")',
+      description: 'Click search',
+      label: 'button("Search")',
       source: 'record',
       url: 'https://example.test/search',
-      validation: { status: 'ok', details: 'Accepted manual action' },
+      validation: { status: 'ok', details: 'Manual action' },
     });
     expect(displaySteps[0].target).toEqual({ method: 'role', role: 'button', name: 'Search' });
+    expect(displaySteps[1]).toMatchObject({
+      id: 'diagnostic-missing-target',
+      diagnosticId: 'diagnostic-missing-target',
+      action: 'fill',
+      description: 'Fill needs repair',
+      label: 'canonical_target_missing',
+      source: 'record',
+      validation: { status: 'broken', details: 'canonical target missing' },
+    });
+    expect(displaySteps[1].traceId).toBeUndefined();
+    expect(displaySteps[1]).not.toHaveProperty('stepIndex');
   });
 
-  it('keeps AI traces when recorded actions replace manual traces', () => {
+  it('does not fall back to legacy sources when timeline projection is absent', () => {
     const session = {
       steps: [
-        {
-          id: 'step-search',
-          action: 'click',
-          description: 'legacy click should only remain for parameterization',
-        },
+        { id: 'legacy-step', action: 'click', description: 'DO_NOT_USE_LEGACY step' },
       ],
       traces: [
-        {
-          trace_id: 'trace-step-search',
-          trace_type: 'manual_action',
-          source: 'manual',
-          action: 'click',
-          description: 'legacy manual trace',
-        },
-        {
-          trace_id: 'trace-ai-select',
-          trace_type: 'ai_operation',
-          source: 'ai',
-          user_instruction: 'click the first project',
-          description: 'Click first project',
-          after_page: { url: 'https://github.com/example/repo' },
-          ai_execution: { code: 'async def run(page, results):\n    return {}' },
-        },
+        { trace_id: 'trace-legacy', trace_type: 'manual_action', description: 'DO_NOT_USE_LEGACY trace' },
       ],
       recorded_actions: [
-        {
-          step_id: 'step-search',
-          action_kind: 'click',
-          description: 'click button("Search")',
-          target: { method: 'role', role: 'button', name: 'Search' },
-          validation: { status: 'ok' },
-          page_state: { url: 'https://example.test/search' },
-        },
+        { step_id: 'legacy-action', action_kind: 'click', description: 'DO_NOT_USE_LEGACY action' },
+      ],
+      recording_diagnostics: [
+        { related_step_id: 'legacy-step', failure_reason: 'DO_NOT_USE_LEGACY diagnostic' },
       ],
     };
 
-    const displaySteps = mapRpaConfigureDisplaySteps(session);
-
-    expect(displaySteps.map((step) => step.description)).toEqual([
-      'click button("Search")',
-      'Click first project',
-    ]);
-    expect(displaySteps.map((step) => step.source)).toEqual(['record', 'ai']);
-    expect(displaySteps[1]).toMatchObject({
-      id: 'trace-ai-select',
-      traceId: 'trace-ai-select',
-      action: 'ai_operation',
-      url: 'https://github.com/example/repo',
-      validation: { status: 'ok', details: 'AI Trace' },
-    });
+    expect(mapRpaConfigureDisplaySteps(session)).toEqual([]);
+    expect(getLegacyRpaSteps(session)).toEqual([]);
+    expect(getManualRecordingDiagnostics(session)).toEqual([]);
+    expect(hasManualRecordingDiagnostics(session)).toBe(false);
   });
 
-  it('keeps accepted traces as fallback when recorded actions are absent', () => {
+  it('ignores legacy poison pills when a valid timeline projection exists', () => {
     const session = {
-      steps: [
-        { id: 'fill-1', action: 'fill', value: 'Alice', sensitive: false },
-      ],
-      traces: [
+      timeline: [
         {
-          trace_id: 'trace-fill',
-          trace_type: 'dataflow_fill',
-          description: 'Dataflow fill',
+          kind: 'trace',
+          trace_id: 'trace-valid',
+          action: 'navigate',
+          title: 'Open project',
+          summary: 'https://example.test/project',
+          url: 'https://example.test/project',
         },
+      ],
+      steps: [
+        { id: 'legacy-step', action: 'click', description: 'DO_NOT_USE_LEGACY step' },
+      ],
+      recorded_actions: [
+        { step_id: 'legacy-action', action_kind: 'click', description: 'DO_NOT_USE_LEGACY action' },
+      ],
+      recording_diagnostics: [
+        { related_step_id: 'legacy-step', failure_reason: 'DO_NOT_USE_LEGACY diagnostic' },
       ],
     };
 
@@ -127,42 +129,35 @@ describe('rpaConfigureTimeline', () => {
 
     expect(displaySteps).toHaveLength(1);
     expect(displaySteps[0]).toMatchObject({
-      id: 'trace-fill',
-      traceId: 'trace-fill',
+      id: 'trace-valid',
+      traceId: 'trace-valid',
+      action: 'navigate',
+      description: 'Open project',
     });
-    expect(getLegacyRpaSteps(session)).toEqual(session.steps);
+    expect(JSON.stringify(displaySteps)).not.toContain('DO_NOT_USE_LEGACY');
   });
 
-  it('falls back to legacy steps when no recorded actions or traces are present', () => {
+  it('maps diagnostics only from timeline projection diagnostic ids', () => {
     const session = {
-      steps: [
-        { id: 'click-1', action: 'click', description: 'Click search' },
-      ],
-      traces: [],
-      recorded_actions: [],
-    };
-
-    expect(mapRpaConfigureDisplaySteps(session)).toEqual(session.steps);
-  });
-
-  it('maps recording diagnostics back to legacy step indexes', () => {
-    const session = {
-      steps: [
+      timeline: [
         {
-          id: 'step-bad',
+          kind: 'diagnostic',
+          diagnostic_id: 'diagnostic-unresolved-fill',
+          trace_id: 'trace-fill',
           action: 'fill',
-          description: 'Input "foo" into None',
-          locator_candidates: [{ playwright_locator: 'page.locator(".mystery")', selected: true }],
-          url: 'https://example.test/search',
+          title: 'Fill requires repair',
+          summary: 'canonical_target_missing',
+          locator_candidates: [
+            { playwright_locator: 'page.locator(".name")', selected: true },
+          ],
+          validation: { status: 'broken', details: 'canonical target missing' },
+          url: 'https://example.test/form',
         },
       ],
       recording_diagnostics: [
         {
-          related_step_id: 'step-bad',
-          related_action_kind: 'fill',
-          failure_reason: 'canonical_target_missing',
-          raw_candidates: [{ playwright_locator: 'page.locator(".mystery")', selected: true }],
-          page_state: { url: 'https://example.test/search' },
+          related_step_id: 'legacy-step',
+          failure_reason: 'DO_NOT_USE_LEGACY diagnostic',
         },
       ],
     };
@@ -171,14 +166,19 @@ describe('rpaConfigureTimeline', () => {
 
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0]).toMatchObject({
-      stepId: 'step-bad',
-      stepIndex: 0,
+      id: 'diagnostic-unresolved-fill',
+      stepId: '',
+      stepIndex: null,
+      traceId: 'trace-fill',
+      diagnosticId: 'diagnostic-unresolved-fill',
       action: 'fill',
-      failureReason: 'canonical_target_missing',
+      description: 'Fill requires repair',
+      failureReason: 'canonical target missing',
       validation: { status: 'broken', details: 'canonical target missing' },
       configurable: true,
-      url: 'https://example.test/search',
+      url: 'https://example.test/form',
     });
+    expect(JSON.stringify(diagnostics)).not.toContain('DO_NOT_USE_LEGACY');
     expect(hasManualRecordingDiagnostics(session)).toBe(true);
   });
 
@@ -188,25 +188,27 @@ describe('rpaConfigureTimeline', () => {
     expect(isRpaTimelineStepDeletable({ source: 'record', traceId: 'trace-step-search' })).toBe(true);
   });
 
-  it('preserves frame path from recorded actions', () => {
+  it('does not expose diagnostic projection rows as trace deletable identities', () => {
     const session = {
-      recorded_actions: [
+      timeline: [
         {
-          step_id: 'step-iframe',
-          action_kind: 'click',
-          description: 'click link("Runoob Note")',
-          target: { method: 'role', role: 'link', name: 'Runoob Note' },
-          frame_path: ['iframe[title="result"]', 'iframe[src="https://www.runoob.com"]'],
-          validation: { status: 'ok' },
+          kind: 'diagnostic',
+          diagnostic_id: 'diagnostic-delete-me',
+          trace_id: 'trace-related-but-not-primary',
+          action: 'click',
+          title: 'Click requires repair',
+          summary: 'locator_missing',
         },
       ],
     };
 
-    const displaySteps = mapRpaConfigureDisplaySteps(session);
+    const [diagnosticStep] = mapRpaConfigureDisplaySteps(session);
 
-    expect(displaySteps[0].frame_path).toEqual([
-      'iframe[title="result"]',
-      'iframe[src="https://www.runoob.com"]',
-    ]);
+    expect(diagnosticStep).toMatchObject({
+      id: 'diagnostic-delete-me',
+      diagnosticId: 'diagnostic-delete-me',
+    });
+    expect(diagnosticStep.traceId).toBeUndefined();
+    expect(isRpaTimelineStepDeletable(diagnosticStep)).toBe(true);
   });
 });

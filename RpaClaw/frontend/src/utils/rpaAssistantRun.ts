@@ -187,7 +187,7 @@ export const applyRpaAssistantRunEvent = (
     case 'agent_done': {
       run.status = 'done';
       run.summary = normalizeDoneSummary(data.message || '');
-      run.traceCount = Number(data.trace_count ?? data.total_steps ?? run.traceCount ?? 0);
+      run.traceCount = Number(data.trace_count ?? run.traceCount ?? 0);
       break;
     }
     case 'agent_aborted': {

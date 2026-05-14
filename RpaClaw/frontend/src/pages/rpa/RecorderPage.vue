@@ -128,22 +128,6 @@ const formatFramePath = (framePath?: string[]) => {
   return framePath.join(' -> ');
 };
 
-const mapServerSteps = (serverSteps: any[]) => ([
-  { id: '0', title: '环境就绪', description: '已成功启动 Playwright 浏览器', status: 'completed' },
-  ...serverSteps.map((s: any, i: number) => ({
-    id: String(i + 1),
-    title: s.description || s.action,
-    description: s.source === 'ai' ? (s.prompt || s.description || 'AI 操作') : `${s.action} -> ${formatLocator(s.target || s.label || '')}`,
-    status: 'completed',
-    source: s.source || 'record',
-    sensitive: s.sensitive || false,
-    locatorSummary: formatLocator(s.target),
-    frameSummary: formatFramePath(s.frame_path),
-    validationStatus: s.validation?.status || '',
-    validationDetails: s.validation?.details || '',
-  }))
-]);
-
 const formatTraceType = (traceType?: string) => {
   const value = traceType || '';
   if (value === 'ai_operation') return 'AI Trace';
@@ -197,17 +181,15 @@ const mapConfigureTimelineSteps = (session: any) => ([
 ]);
 
 const refreshTimeline = (session: any) => {
-  const serverSteps = Array.isArray(session?.steps) ? session.steps : [];
   const serverTraces = Array.isArray(session?.traces) ? session.traces : [];
-  const serverTimeline = Array.isArray(session?.timeline) ? session.timeline : [];
   acceptedTraces.value = serverTraces;
   recordingDiagnostics.value = getManualRecordingDiagnostics(session);
-  if (serverTimeline.length > 0 || (Array.isArray(session?.recorded_actions) && session.recorded_actions.length > 0) || serverTraces.length > 0) {
+  if (Array.isArray(session?.timeline)) {
     steps.value = mapConfigureTimelineSteps(session);
     return;
   }
-  if (serverSteps.length > 0) {
-    steps.value = mapServerSteps(serverSteps);
+  if (serverTraces.length > 0) {
+    steps.value = mapServerTraces(serverTraces);
   }
 };
 
@@ -284,7 +266,7 @@ const scrollAssistantToBottom = () => {
 const runRoundCount = (run?: RpaAssistantRun) => run?.rounds.length || 0;
 
 const getRunTraceCount = (msg: ChatMessage) => (
-  msg.run?.traceCount || Math.max(acceptedTraces.value.length, 0)
+  Number(msg.run?.traceCount ?? 0)
 );
 
 const getRunStatusLabel = (msg: ChatMessage) => {
@@ -756,19 +738,16 @@ const goToSkills = () => {
   router.push('/chat/skills');
 };
 
-const deleteStep = async (step: any, fallbackStepIndex: number) => {
+const deleteStep = async (step: any) => {
   if (!sessionId.value) return;
   try {
     if (step.traceId) {
       await apiClient.delete(`/rpa/session/${sessionId.value}/trace/${step.traceId}`);
     } else if (step.diagnosticId) {
       await apiClient.delete(`/rpa/session/${sessionId.value}/diagnostic/${step.diagnosticId}`);
-    } else if (step.stepId) {
-      await apiClient.delete(`/rpa/session/${sessionId.value}/timeline-item`, {
-        data: { kind: 'manual_step', step_id: step.stepId },
-      });
     } else {
-      await apiClient.delete(`/rpa/session/${sessionId.value}/step/${fallbackStepIndex}`);
+      error.value = 'Cannot delete timeline item without trace or diagnostic id';
+      return;
     }
     const resp = await apiClient.get(`/rpa/session/${sessionId.value}`);
     refreshTimeline(sessionWithTimeline(resp.data));
@@ -908,17 +887,6 @@ const sendMessage = async () => {
                 acceptedTraces.value = [...acceptedTraces.value.filter((t: any) => t.trace_id !== data.trace.trace_id), data.trace];
                 steps.value = mapServerTraces(acceptedTraces.value);
               }
-              if (data.step) {
-                const s = data.step;
-                steps.value.push({
-                  id: String(steps.value.length),
-                  title: s.description || s.action,
-                  description: s.prompt || s.description || 'AI 操作',
-                  status: 'completed',
-                  source: 'ai',
-                  sensitive: s.sensitive || false,
-                });
-              }
               // Show output if present
               if (data.output) {
                 const outputText = typeof data.output === 'string' ? data.output : JSON.stringify(data.output);
@@ -933,7 +901,7 @@ const sendMessage = async () => {
               pendingConfirm.value = data;
             } else if (eventType === 'agent_done') {
               chatMessages.value[msgIdx].status = 'done';
-              const completedCount = data.trace_count ?? data.total_steps ?? Math.max(steps.value.length - 1, 0);
+              const completedCount = Number(data.trace_count ?? chatMessages.value[msgIdx].run?.traceCount ?? 0);
               chatMessages.value[msgIdx].text += `\nTask completed, accepted ${completedCount} trace(s).`;
               agentRunning.value = false;
               pendingConfirm.value = null;
@@ -1000,7 +968,7 @@ const sendMessage = async () => {
           diagnostics-message="这些步骤不会进入 accepted timeline，完成录制后需要在配置页修复或删除。"
           show-delete
           empty-message="在浏览器中操作后，步骤会自动出现在这里。"
-          @delete-step="deleteStep($event.step, $event.index - 1)"
+          @delete-step="deleteStep($event.step)"
         />
       </aside>
 
