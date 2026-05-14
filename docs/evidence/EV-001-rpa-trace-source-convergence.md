@@ -314,6 +314,33 @@ Implementation and review records will be appended per task:
   - Parser remains intentionally bounded to recorder-style Playwright locator strings, not arbitrary Playwright expressions such as regex/lambda names.
   - Escaped apostrophes inside single-quoted literals may need a later parser hardening if such candidates appear in real recordings.
 
+### Task 3I Plain Parameter Defaults Apply During Test Execution
+
+- Trigger:
+  - User verified credential parameters configured on Configure are effective, but changing a plain captured value from `JE` to `JET` still filled `JE` during Test.
+- Root cause:
+  - `TraceSkillCompiler` already generated ordinary fill code as `kwargs.get(param_name, default_value)`, so generated scripts could represent the configured default.
+  - During Test, `inject_credentials()` also injects non-sensitive ordinary params into runtime kwargs. That function used `original_value`, so it passed `kwargs[param_name]="JE"` and overrode the compiler fallback `JET`.
+  - Credential params worked because they use the separate `credential_id` decrypt branch.
+- Fix:
+  - Changed non-sensitive param injection to prefer `default_value` and fall back to `original_value` only when default is empty or missing.
+  - Preserved explicit runtime kwargs precedence.
+  - Added direct regression coverage in `test_credential_vault.py`.
+- Verification:
+  - Backend focused command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_credential_vault.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -k "injects_configured_default_value or preserves_explicit_runtime_kwargs or configured_default_value_as_runtime_fallback or plain_param_default" -q`
+  - Backend focused result: `4 passed, 63 deselected`.
+  - Backend regression command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_credential_vault.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q`
+  - Backend regression result: `67 passed`.
+  - Frontend command: `npm.cmd --prefix RpaClaw/frontend test -- ConfigurePage TestPage rpaSkillConfigDraft`
+  - Frontend result: first run hit two 5s test timeouts with no assertion failure; rerun with `--testTimeout=15000` passed: `3 passed`, `13 passed` tests.
+  - Diff check command: `git diff --check -- RpaClaw/backend/credential/vault.py RpaClaw/backend/tests/test_credential_vault.py`
+  - Diff check result: passed; only existing CRLF normalization warnings from Git.
+- Review:
+  - Independent reviewer Erdos was asked to review the focused runtime param injection diff.
+  - Erdos verdict: APPROVED. `inject_credentials()` now matches the compiler contract while credential params remain on the credential path.
+- Residual risk:
+  - Intentionally empty `default_value` still falls back to `original_value`, matching the current Configure behavior where blank defaults are treated as "use recorded value".
+
 ## Required Final Verification
 
 Backend:
