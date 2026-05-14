@@ -200,6 +200,64 @@ describe('ConfigurePage script preview entry', () => {
     app.unmount();
   });
 
+  it('renders credential selector for sensitive fill traces from timeline projection', async () => {
+    get.mockImplementation((url: string) => {
+      if (url === '/credentials') {
+        return Promise.resolve({
+          data: {
+            credentials: [
+              { id: 'cred-portal', name: 'Portal Password', username: 'demo@example.test' },
+            ],
+          },
+        });
+      }
+      if (url === '/rpa/session/session-1/skill-config-draft') {
+        return Promise.resolve({ data: { draft: null } });
+      }
+      if (url === '/rpa/session/session-1') {
+        return Promise.resolve({
+          data: {
+            session: {
+              timeline: [
+                {
+                  kind: 'trace',
+                  trace_id: 'trace-password',
+                  action: 'fill',
+                  title: 'Fill password',
+                  summary: 'Password',
+                  locator: { method: 'role', role: 'textbox', name: 'Password' },
+                  value: '{{credential}}',
+                  sensitive: true,
+                  raw_trace: {
+                    value: 'DO_NOT_USE_RAW_TRACE_VALUE',
+                    sensitive: false,
+                  },
+                },
+              ],
+              recorded_actions: [
+                { step_id: 'legacy-action', description: 'DO_NOT_USE_LEGACY action' },
+              ],
+              recording_diagnostics: [],
+            },
+          },
+        });
+      }
+      return Promise.reject(new Error(`Unexpected GET ${url}`));
+    });
+    post.mockResolvedValue({ data: { script: 'print("generated script")' } });
+
+    const { app, root } = await mountConfigurePage();
+    await flushAsyncUpdates();
+
+    const credentialSelect = root.querySelector<HTMLSelectElement>('select');
+    expect(credentialSelect).not.toBeNull();
+    expect(credentialSelect?.textContent).toContain('Portal Password');
+    expect(root.textContent).toContain('敏感');
+    expect(root.textContent).not.toContain('DO_NOT_USE_RAW_TRACE_VALUE');
+
+    app.unmount();
+  });
+
   it('promotes trace-backed locators by trace id and never calls step locator endpoints', async () => {
     mockCommonRequests({
       timeline: [

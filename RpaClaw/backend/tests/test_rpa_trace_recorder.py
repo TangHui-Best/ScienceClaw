@@ -55,6 +55,23 @@ def test_manual_fill_step_records_value_and_locator_candidates():
     assert trace.locator_candidates[0]["kind"] == "role"
 
 
+def test_manual_sensitive_fill_step_records_credential_placeholder_and_sensitive_flag():
+    trace = manual_step_to_trace(
+        {
+            "id": "step-password",
+            "action": "fill",
+            "source": "record",
+            "description": "Fill password",
+            "target": '{"method":"role","role":"textbox","name":"Password"}',
+            "value": "secret-password",
+            "sensitive": True,
+        }
+    )
+
+    assert trace.value == "{{credential}}"
+    assert trace.sensitive is True
+
+
 def test_extract_text_step_becomes_data_capture_trace():
     trace = manual_step_to_trace(
         {

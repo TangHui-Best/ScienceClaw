@@ -67,6 +67,8 @@ def manual_step_to_trace(step: Dict[str, Any]) -> RPAAcceptedTrace:
     trace_type = RPATraceType.NAVIGATION if action in {"navigate", "goto"} else RPATraceType.MANUAL_ACTION
     if action == "extract_text":
         trace_type = RPATraceType.DATA_CAPTURE
+    sensitive = bool(_step_get(step, "sensitive", False))
+    value = "{{credential}}" if sensitive else _step_get(step, "value")
 
     trace_id = f"trace-{_step_get(step, 'id', '') or action or 'manual'}"
     after_page = _page_state_from_step(step, prefer_after=True)
@@ -91,7 +93,8 @@ def manual_step_to_trace(step: Dict[str, Any]) -> RPAAcceptedTrace:
         locator_candidates=_locator_candidates(step),
         validation=dict(_step_get(step, "validation", {}) or {}),
         signals=signals,
-        value=_step_get(step, "value"),
+        value=value,
+        sensitive=sensitive,
         output_key=_step_get(step, "result_key"),
         output=_step_get(step, "output"),
     )

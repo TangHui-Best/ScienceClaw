@@ -137,6 +137,38 @@ describe('rpaConfigureTimeline', () => {
     expect(JSON.stringify(displaySteps)).not.toContain('DO_NOT_USE_LEGACY');
   });
 
+  it('maps configurable values and sensitivity only from timeline projection fields', () => {
+    const session = {
+      timeline: [
+        {
+          kind: 'trace',
+          trace_id: 'trace-password',
+          action: 'fill',
+          title: 'Fill password',
+          summary: 'Password',
+          locator: { method: 'role', role: 'textbox', name: 'Password' },
+          value: '{{credential}}',
+          sensitive: true,
+          raw_trace: {
+            value: 'DO_NOT_USE_RAW_TRACE_VALUE',
+            sensitive: false,
+          },
+        },
+      ],
+    };
+
+    const [displayStep] = mapRpaConfigureDisplaySteps(session);
+
+    expect(displayStep).toMatchObject({
+      id: 'trace-password',
+      traceId: 'trace-password',
+      action: 'fill',
+      value: '{{credential}}',
+      sensitive: true,
+    });
+    expect(JSON.stringify(displayStep)).not.toContain('DO_NOT_USE_RAW_TRACE_VALUE');
+  });
+
   it('maps diagnostics only from timeline projection diagnostic ids', () => {
     const session = {
       timeline: [

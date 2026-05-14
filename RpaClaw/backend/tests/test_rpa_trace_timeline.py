@@ -117,6 +117,33 @@ def test_trace_timeline_projects_manual_and_ai_traces_in_order():
     assert items[1].deletable is True
 
 
+def test_trace_timeline_exposes_sensitive_fill_contract_without_raw_trace_dependency():
+    trace = RPAAcceptedTrace(
+        trace_id="trace-password",
+        trace_type=RPATraceType.MANUAL_ACTION,
+        source="manual",
+        action="fill",
+        description="Fill password",
+        value="{{credential}}",
+        sensitive=True,
+        locator_candidates=[
+            {
+                "kind": "role",
+                "locator": {"method": "role", "role": "textbox", "name": "Password"},
+                "selected": True,
+            }
+        ],
+        signals={"recording": {"event_timestamp_ms": 1000}},
+    )
+
+    [item] = build_trace_timeline_items(traces=[trace], trace_diagnostics=[])
+
+    assert item.value == "{{credential}}"
+    assert item.sensitive is True
+    assert item.raw_trace["value"] == "{{credential}}"
+    assert item.raw_trace["sensitive"] is True
+
+
 def test_trace_timeline_projects_diagnostics_without_accepting_them():
     diagnostic = RPATraceDiagnostic(
         diagnostic_id="diag-1",

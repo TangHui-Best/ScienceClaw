@@ -215,6 +215,41 @@ Implementation and review records will be appended per task:
 - Recurrence protection:
   - Test protection is sufficient for this incident class: generation must block on trace diagnostics and ignore legacy `recording_diagnostics` poison.
 
+### Task 3F Timeline Projection Restores Sensitive Credential Configuration
+
+- Trigger:
+  - User reported Configure no longer allowed choosing configured credentials after trace-first UI cleanup.
+  - Audit also found `McpToolEditorPage` still had a `/step/{index}/locator` fallback and `source_step_index` param confirmation path.
+- Root cause:
+  - Manual recording events carried `sensitive`, and sensitive values were normalized to `{{credential}}`, but `RPAAcceptedTrace` and timeline projection did not expose `sensitive` / `value` as first-class fields.
+  - Frontend `rpaConfigureTimeline` therefore read `raw_trace.value` and hard-coded `sensitive: false`, which hid the credential selector.
+  - MCP editor kept a step-index fallback for locator promotion and param source metadata after the trace-first UI path was introduced.
+- Fix:
+  - Added `sensitive` to `RPAAcceptedTrace`.
+  - Changed `manual_step_to_trace()` so sensitive fill steps emit `value="{{credential}}"` and `sensitive=True`.
+  - Added top-level `value` and `sensitive` to `RPATimelineItem`.
+  - Changed `rpaConfigureTimeline` to consume top-level projection `value` / `sensitive`, not `raw_trace`.
+  - Added Configure coverage proving sensitive fill traces show the credential selector and ignore `raw_trace` poison.
+  - Removed MCP editor locator fallback to `/step/{index}/locator`; promotion now requires trace id / `rpa_trace.trace_id`.
+  - Removed MCP editor `source_step_index` confirmation writes.
+- Verification:
+  - Backend command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_trace_timeline.py RpaClaw/backend/tests/test_rpa_trace_recorder.py RpaClaw/backend/tests/test_rpa_trace_mutation_routes.py -q`
+  - Backend result: `22 passed, 24 warnings`.
+  - Frontend command: `npm.cmd --prefix RpaClaw/frontend test -- rpaConfigureTimeline ConfigurePage McpToolEditorPage.view TestPage RecorderPage`
+  - Frontend result: `5 passed`, `26 passed` tests.
+  - Removal grep command: `rg -n "raw_trace\\?\\.value|item\\.raw_trace\\?\\.value|source_step_index|sourceStepIndex|/step/locator|/step/\\$\\{" RpaClaw/frontend/src/pages/rpa RpaClaw/frontend/src/utils/rpaConfigureTimeline.ts RpaClaw/frontend/src/pages/tools/McpToolEditorPage.vue -S`
+  - Removal grep result: no production matches.
+  - Frontend build command: `npm.cmd --prefix RpaClaw/frontend run build`
+  - Frontend build result: passed with existing bundle-size/CSS warnings.
+  - Frontend type-check command: `npm.cmd --prefix RpaClaw/frontend run type-check`
+  - Frontend type-check result: failed on pre-existing unrelated TypeScript errors in non-RPA files such as `ActivityPanel.vue`, `ChatMessage.vue`, `SessionItem.vue`, and `desktopWindow.ts`.
+- Review:
+  - Frontend UI flow audit used independent explorer Boyle.
+  - Backend projection/API audit used independent explorer Franklin.
+  - MCP editor implementation was started by worker Helmholtz, then controller completed the implementation after worker shutdown.
+- Residual risk:
+  - Backend still has legacy step endpoints and export/MCP compatibility paths outside this focused UI contract fix. They remain follow-up cleanup for the broader “remove step / recorded_actions” acceptance target.
+
 ## Required Final Verification
 
 Backend:

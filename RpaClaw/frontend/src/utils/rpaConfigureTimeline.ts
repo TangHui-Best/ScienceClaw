@@ -54,6 +54,8 @@ export interface RpaTimelineProjectionItem {
   locator?: any;
   locator_candidates?: any[];
   validation?: { status?: string; details?: string };
+  value?: string;
+  sensitive?: boolean;
   editable?: boolean;
   deletable?: boolean;
   raw_trace?: any;
@@ -122,10 +124,10 @@ export const mapRpaTimelineProjection = (session: any): RpaConfigureStep[] => {
       status: item.kind === 'diagnostic' ? 'broken' : 'ok',
       details: item.trace_type || item.kind,
     },
-    value: item.raw_trace?.value,
+    value: item.value,
     description: item.title || item.summary || item.action,
     label: item.summary || item.action,
-    sensitive: false,
+    sensitive: !!item.sensitive,
     url: item.url || '',
     source: item.source === 'ai' ? 'ai' : 'record',
     configurable: !!item.editable,

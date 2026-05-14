@@ -24,6 +24,8 @@ class RPATimelineItem(BaseModel):
     locator: dict[str, Any] = Field(default_factory=dict)
     locator_candidates: list[dict[str, Any]] = Field(default_factory=list)
     validation: dict[str, Any] = Field(default_factory=dict)
+    value: Any = None
+    sensitive: bool = False
     editable: bool = False
     deletable: bool = False
     order_ms: float | None = None
@@ -64,6 +66,8 @@ def _trace_to_item(trace: RPAAcceptedTrace) -> RPATimelineItem:
         locator=deepcopy(locator) if isinstance(locator, dict) else {},
         locator_candidates=locator_candidates,
         validation=deepcopy(dict(trace.validation or {})),
+        value=deepcopy(trace.value),
+        sensitive=bool(getattr(trace, "sensitive", False)),
         editable=bool(is_manual and trace.locator_candidates),
         deletable=True,
         order_ms=_trace_order_ms(trace),
