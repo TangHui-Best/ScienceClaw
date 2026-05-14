@@ -1472,11 +1472,11 @@ onBeforeUnmount(() => {
                 </template>
                 <!-- Regular tool cards -->
                 <template v-else>
-                <div
-                  v-for="tool in group.items"
-                  :key="tool.id"
-                  class="rounded-2xl border border-slate-200 bg-slate-50/80 shadow-sm overflow-hidden dark:border-white/10 dark:bg-white/[0.04]"
-                >
+                  <div
+                    v-for="tool in group.items"
+                    :key="tool.id"
+                    class="rounded-2xl border border-slate-200 bg-slate-50/80 shadow-sm overflow-hidden dark:border-white/10 dark:bg-white/[0.04]"
+                  >
                   <div
                     class="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors"
                     @click="toggleToolExpand(tool.id)"
@@ -1522,6 +1522,7 @@ onBeforeUnmount(() => {
                         删除
                       </button>
                     </div>
+                  </div>
                   </div>
                 </template>
               </div>
