@@ -18,6 +18,7 @@ import {
   deleteTool as apiDeleteTool,
   publishMcpToolBundle,
   updateToolSelection as apiUpdateToolSelection,
+  regenerateTool,
   getAuthProfile,
   getTokenFlowProfile,
   type ApiMonitorSession,
@@ -799,6 +800,24 @@ const handleDeleteTool = async (toolId: string) => {
   }
 };
 
+const handleRegenerateTool = async (toolId: string) => {
+  if (!sessionId.value) return;
+  try {
+    addLog('INFO', `正在重新生成工具: ${toolId}`);
+    const updated = await regenerateTool(sessionId.value, toolId);
+    const idx = tools.value.findIndex((t) => t.id === toolId);
+    if (idx >= 0) {
+      tools.value[idx] = updated;
+    }
+    if (toolEdits[toolId] !== undefined) {
+      toolEdits[toolId] = updated.yaml_definition;
+    }
+    addLog('INFO', `工具重新生成完成: ${updated.name}`);
+  } catch (e: any) {
+    addLog('ERROR', `重新生成失败: ${e.message}`);
+  }
+};
+
 const toggleToolSelection = async (tool: ApiToolDefinition, selected: boolean) => {
   if (!sessionId.value) return;
   try {
@@ -1503,6 +1522,12 @@ onBeforeUnmount(() => {
                     <span class="shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-bold" :class="getConfidenceClass(tool.confidence)">
                       {{ getConfidenceLabelWithScore(tool.confidence, tool.score) }}
                     </span>
+                    <span
+                      v-if="tool.validation_status === 'invalid'"
+                      class="shrink-0 rounded-md border border-red-300 bg-red-50 px-2 py-0.5 text-[10px] font-bold text-red-600 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-400"
+                    >
+                      YAML 无效
+                    </span>
                     <ChevronDown :size="16" class="text-[var(--text-tertiary)] transition-transform" :class="expandedToolId === tool.id ? 'rotate-180' : ''" />
                   </div>
 
@@ -1517,12 +1542,25 @@ onBeforeUnmount(() => {
                         {{ reason }}
                       </span>
                     </div>
+                    <div v-if="tool.validation_status === 'invalid' && tool.validation_errors?.length" class="mb-3 rounded-xl bg-red-50 border border-red-200 px-3 py-2 dark:bg-red-500/10 dark:border-red-500/20">
+                      <p class="text-[10px] font-bold text-red-600 dark:text-red-400 mb-1">YAML 校验错误：</p>
+                      <ul class="text-[10px] text-red-500 dark:text-red-300 space-y-0.5">
+                        <li v-for="err in tool.validation_errors" :key="err">{{ err }}</li>
+                      </ul>
+                    </div>
                     <textarea
                       v-model="toolEdits[tool.id]"
                       class="w-full h-40 bg-[#f8fafc] dark:bg-black/20 border border-slate-200 dark:border-white/10 rounded-xl text-[11px] font-mono text-[var(--text-primary)] p-3 outline-none focus:border-sky-400 focus:ring-1 focus:ring-sky-400/30 resize-y transition-shadow"
                       spellcheck="false"
                     ></textarea>
                     <div class="flex justify-end gap-2 mt-3">
+                      <button
+                        v-if="tool.validation_status === 'invalid' && tool.source_calls?.length"
+                        @click="handleRegenerateTool(tool.id)"
+                        class="rounded-xl border border-sky-200 px-3 py-1.5 text-xs font-bold text-sky-600 transition hover:bg-sky-50 dark:border-sky-500/20 dark:text-sky-400 dark:hover:bg-sky-500/10"
+                      >
+                        重新生成
+                      </button>
                       <button
                         @click="handleDeleteTool(tool.id)"
                         class="rounded-xl border border-red-200 px-3 py-1.5 text-xs font-bold text-red-600 transition hover:bg-red-50 dark:border-red-500/20 dark:text-red-400 dark:hover:bg-red-500/10"
