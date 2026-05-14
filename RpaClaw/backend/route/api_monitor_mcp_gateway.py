@@ -162,6 +162,7 @@ async def api_monitor_mcp_gateway(
                 dict(params.get("arguments") or {}),
                 requirements=requirements,
                 request_headers=request.headers,
+                passthrough_headers=dict(request.headers),
             )
         except CallerAuthError as exc:
             return _json_rpc_result(
