@@ -2,10 +2,11 @@ import json
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from eval_app_client import EvalAppUserSession
+from eval_app_client import EvalAppClient, EvalAppUserSession
 from runner import (
     CaseAssertionError,
     assert_api_assertions,
@@ -13,11 +14,15 @@ from runner import (
     build_browser_instruction,
     build_eval_auth_url,
     extract_final_url,
+    require_reset_token,
     render_console_summary,
     resolve_case_timeout_s,
     read_artifact_text,
     run_case,
 )
+
+
+TEST_RESET_TOKEN = "eval-" + "test-" + "reset-" + "token"
 
 
 class RunnerAssertionTests(unittest.TestCase):
@@ -74,13 +79,10 @@ class RunnerAssertionTests(unittest.TestCase):
             case={"instruction": "当前在工作台页面。请进入合同管理页面。"},
             login_url="http://localhost:5175/login",
             start_url="http://localhost:5175/dashboard",
-            username="buyer",
-            password="buyer123",
         )
 
         self.assertIn("只执行下面的业务任务", text)
         self.assertIn("当前在工作台页面。请进入合同管理页面。", text)
-        self.assertNotIn("buyer123", text)
         self.assertNotIn("http://localhost:5175/login", text)
 
     def test_eval_auth_url_encodes_token(self):
@@ -88,12 +90,48 @@ class RunnerAssertionTests(unittest.TestCase):
 
         self.assertEqual("http://localhost:5175/eval-auth.html?token=token%20with%2Fslash%2Bplus", text)
 
+    def test_runner_rejects_missing_reset_token_before_network_calls(self):
+        with self.assertRaises(CaseAssertionError) as raised:
+            require_reset_token("")
+
+        self.assertEqual("configuration", raised.exception.stage)
+        self.assertIn("RPA_EVAL_RESET_TOKEN", str(raised.exception))
+
+    def test_eval_app_client_requests_eval_token_without_password(self):
+        client = EvalAppClient("http://localhost:8085")
+        calls = []
+
+        def fake_request(method, path, **kwargs):
+            calls.append((method, path, kwargs))
+            if path == "/api/eval/auth-token":
+                return {"access_token": "token", "user": {"username": "buyer"}}
+            raise AssertionError(f"unexpected request: {method} {path}")
+
+        with patch.object(client, "_request", fake_request):
+            session = client.issue_eval_token("buyer", TEST_RESET_TOKEN)
+
+        self.assertEqual("buyer", session.username)
+        self.assertEqual("token", session.token)
+        self.assertEqual(
+            [
+                (
+                    "POST",
+                    "/api/eval/auth-token",
+                    {
+                        "json_body": {"username": "buyer"},
+                        "headers": {"X-RPA-Eval-Reset-Token": TEST_RESET_TOKEN},
+                    },
+                )
+            ],
+            calls,
+        )
+
     def test_run_case_separates_login_setup_from_business_instruction(self):
         args = type(
             "Args",
             (),
             {
-                "reset_token": "rpa-eval-reset",
+                "reset_token": TEST_RESET_TOKEN,
                 "eval_frontend_url": "http://localhost:5175",
                 "case_timeout_s": 180,
             },
@@ -114,6 +152,8 @@ class RunnerAssertionTests(unittest.TestCase):
         result = run_case(case, args, eval_client, rpa_client)
 
         self.assertTrue(result["passed"], result.get("failure_message"))
+        self.assertEqual(("buyer", TEST_RESET_TOKEN), eval_client.issued_eval_token)
+        self.assertFalse(hasattr(eval_client, "login_args"))
         self.assertEqual(
             [
                 ("session-1", "http://localhost:5175/eval-auth.html?token=token"),
@@ -123,7 +163,6 @@ class RunnerAssertionTests(unittest.TestCase):
         )
         self.assertEqual(1, len(rpa_client.instructions))
         self.assertIn("只执行下面的业务任务", rpa_client.instructions[0])
-        self.assertNotIn("buyer123", rpa_client.instructions[0])
 
     def test_case_timeout_uses_yaml_override(self):
         args = type("Args", (), {"case_timeout_s": 180})()
@@ -299,8 +338,8 @@ class FakeRunnerEvalClient:
     def reset(self, reset_token):
         self.reset_token = reset_token
 
-    def login(self, username, password):
-        self.login_args = (username, password)
+    def issue_eval_token(self, username, reset_token):
+        self.issued_eval_token = (username, reset_token)
         return EvalAppUserSession(username=username, token="token", user={"username": username})
 
 

@@ -25,8 +25,10 @@ class TraceSkillCompiler:
         self._compiled_output_keys: Dict[int, str] = {}
         self._param_lookup = self._build_param_lookup(params or {})
         self._param_cursors: Dict[str, int] = {}
-        trace_list = self._normalize_redundant_navigation_traces(
-            self._normalize_download_traces(list(traces))
+        trace_list = self._normalize_redirect_continuation_traces(
+            self._normalize_redundant_navigation_traces(
+                self._normalize_download_traces(list(traces))
+            )
         )
         execute_skill_func = "\n".join(self._render_execute_skill(trace_list))
         return _runner_template(is_local).format(
@@ -105,11 +107,152 @@ class TraceSkillCompiler:
             normalized.append(trace)
         return normalized
 
+    @classmethod
+    def _normalize_redirect_continuation_traces(cls, traces: List[RPAAcceptedTrace]) -> List[RPAAcceptedTrace]:
+        normalized: List[RPAAcceptedTrace] = []
+        index = 0
+        while index < len(traces):
+            trace = traces[index]
+            if not cls._can_absorb_redirect_continuation(trace):
+                normalized.append(trace)
+                index += 1
+                continue
+
+            chain: List[RPAAcceptedTrace] = []
+            cursor = index + 1
+            while cursor < len(traces) and cls._is_redirect_continuation_trace(trace, traces[cursor]):
+                chain.append(traces[cursor])
+                cursor += 1
+
+            if not cls._has_redirect_auth_evidence(trace, chain) or not cls._is_short_redirect_chain(trace, chain):
+                normalized.append(trace)
+                index += 1
+                continue
+
+            final_url = cls._redirect_continuation_final_url(
+                chain,
+                traces[cursor] if cursor < len(traces) else None,
+                trace,
+            )
+            if not final_url:
+                normalized.append(trace)
+                index += 1
+                continue
+
+            merged = trace.model_copy(deep=True)
+            signals = dict(merged.signals or {})
+            post_navigation = dict(signals.get("post_navigation") or {})
+            post_navigation.update(
+                {
+                    "final_url": final_url,
+                    "folded_trace_ids": [item.trace_id for item in chain],
+                    "source": "redirect_continuation",
+                }
+            )
+            callback_url = cls._trace_url(merged)
+            if cls._looks_like_auth_callback_url(callback_url):
+                post_navigation["callback_url"] = callback_url
+            signals["post_navigation"] = post_navigation
+            merged.signals = signals
+            merged.after_page.url = final_url
+            normalized.append(merged)
+            index = cursor
+        return normalized
+
+    @staticmethod
+    def _can_absorb_redirect_continuation(trace: RPAAcceptedTrace) -> bool:
+        return (
+            trace.trace_type == RPATraceType.MANUAL_ACTION
+            and str(trace.action or "") in {"navigate_click", "navigate_press"}
+            and not _trace_signal(trace, "popup")
+            and not _trace_signal(trace, "download")
+        )
+
+    @classmethod
+    def _is_redirect_continuation_trace(
+        cls,
+        source_trace: RPAAcceptedTrace,
+        candidate: RPAAcceptedTrace,
+    ) -> bool:
+        if candidate.trace_type != RPATraceType.NAVIGATION:
+            return False
+        if candidate.locator_candidates:
+            return False
+        source_tab = cls._trace_tab_id(source_trace)
+        candidate_tab = cls._trace_tab_id(candidate)
+        if source_tab and candidate_tab and source_tab != candidate_tab:
+            return False
+        return bool(cls._trace_url(candidate))
+
+    @classmethod
+    def _has_redirect_auth_evidence(cls, source_trace: RPAAcceptedTrace, chain: List[RPAAcceptedTrace]) -> bool:
+        return any(cls._looks_like_auth_callback_url(cls._trace_url(trace)) for trace in [source_trace, *chain])
+
+    @staticmethod
+    def _is_short_redirect_chain(source_trace: RPAAcceptedTrace, chain: List[RPAAcceptedTrace]) -> bool:
+        if not chain:
+            return False
+        source_time = source_trace.ended_at or source_trace.started_at
+        if source_time is None:
+            return False
+        for trace in chain:
+            trace_time = trace.started_at or trace.ended_at
+            if trace_time is None:
+                return False
+            if abs((trace_time - source_time).total_seconds()) > 5:
+                return False
+        return True
+
+    @classmethod
+    def _redirect_continuation_final_url(
+        cls,
+        chain: List[RPAAcceptedTrace],
+        next_trace: Optional[RPAAcceptedTrace],
+        source_trace: RPAAcceptedTrace,
+    ) -> str:
+        if not chain:
+            return ""
+        chain_urls = [cls._trace_url(trace) for trace in chain if cls._trace_url(trace)]
+        if not chain_urls:
+            return ""
+
+        next_url = cls._trace_url(next_trace) if next_trace is not None else ""
+        if next_url:
+            normalized_next = cls._normalized_url(next_url)
+            for url in reversed(chain_urls):
+                if cls._normalized_url(url) == normalized_next:
+                    return url
+
+        for url in reversed(chain_urls):
+            if not cls._looks_like_auth_callback_url(url):
+                return url
+
+        source_url = cls._trace_url(source_trace)
+        return "" if cls._looks_like_auth_callback_url(source_url) else source_url
+
+    @staticmethod
+    def _trace_url(trace: Optional[RPAAcceptedTrace]) -> str:
+        if trace is None:
+            return ""
+        return str(trace.after_page.url or trace.value or "").strip()
+
+    @staticmethod
+    def _looks_like_auth_callback_url(url: str) -> bool:
+        text = str(url or "").lower()
+        if not text:
+            return False
+        if any(token in text for token in ("code=", "state=", "token=", "ticket=", "samlresponse=")):
+            return True
+        return any(token in text for token in ("/callback", "/oauth", "/saml", "/cas", "login.html?"))
+
     @staticmethod
     def _normalized_url(url: str) -> str:
         return str(url or "").strip().rstrip("/")
 
     def _render_execute_skill(self, traces: List[RPAAcceptedTrace]) -> List[str]:
+        root_tab_id = self._first_trace_tab_id(traces)
+        known_tab_ids = {root_tab_id} if root_tab_id else set()
+        current_tab_id = root_tab_id
         lines = [
             "",
             "def _resolve_result_ref(results, ref):",
@@ -275,19 +418,122 @@ class TraceSkillCompiler:
             "    model_config = runtime_ai.get('model_config') if isinstance(runtime_ai, dict) else None",
             "    return model_config or kwargs.get('_model_config')",
             "",
+            "async def _activate_recorded_page(page, kwargs, tab_id=''):",
+            "    activator = kwargs.get('_activate_recorded_page') if isinstance(kwargs, dict) else None",
+            "    if callable(activator):",
+            "        await activator(page, tab_id)",
+            "",
+            "async def _ensure_recorded_tab(tabs, current_page, kwargs, tab_id, recorded_url='', require_recorded_url=False):",
+            "    if tab_id in tabs:",
+            "        page = tabs[tab_id]",
+            "    else:",
+            "        if require_recorded_url and not recorded_url:",
+            "            raise RuntimeError(f'Recorded tab {tab_id} is missing recorded URL; cannot materialize replay page safely')",
+            "        page = await current_page.context.new_page()",
+            "        tabs[tab_id] = page",
+            "        if recorded_url:",
+            "            await page.goto(recorded_url, wait_until='domcontentloaded')",
+            "    await page.bring_to_front()",
+            "    await _activate_recorded_page(page, kwargs, tab_id)",
+            "    return page",
+            "",
             "async def execute_skill(page, **kwargs):",
             '    """Auto-generated skill from RPA trace recording."""',
             "    _results = {}",
             "    current_page = page",
-            "    tabs = {}",
+            f"    tabs = {{{json.dumps(root_tab_id, ensure_ascii=False)}: page}}" if root_tab_id else "    tabs = {}",
             "    _trace_logger = kwargs.get('_on_log')",
         ]
         used_output_keys: Dict[str, int] = {}
         for index, trace in enumerate(traces):
+            alignment_lines, current_tab_id = self._render_trace_tab_alignment(
+                trace,
+                known_tab_ids,
+                current_tab_id,
+            )
             trace_lines = self._render_trace(index, trace, traces[:index], used_output_keys)
+            if alignment_lines:
+                trace_lines = alignment_lines + trace_lines
             lines.extend(self._wrap_trace_logging(index, trace, trace_lines))
+            current_tab_id = self._record_trace_tab_side_effects(trace, known_tab_ids, current_tab_id)
         lines.append("    return _results")
         return lines
+
+    @staticmethod
+    def _first_trace_tab_id(traces: List[RPAAcceptedTrace]) -> str:
+        for trace in traces:
+            tab_id = TraceSkillCompiler._trace_tab_id(trace)
+            if tab_id:
+                return tab_id
+            tab_signal = _trace_signal(trace, "tab")
+            source_tab_id = str(tab_signal.get("source_tab_id") or "").strip()
+            if source_tab_id:
+                return source_tab_id
+            popup_signal = _trace_signal(trace, "popup")
+            popup_source_tab_id = str(popup_signal.get("source_tab_id") or "").strip()
+            if popup_source_tab_id:
+                return popup_source_tab_id
+        return ""
+
+    @staticmethod
+    def _trace_tab_id(trace: RPAAcceptedTrace) -> str:
+        tab_signal = _trace_signal(trace, "tab")
+        return str(tab_signal.get("tab_id") or "").strip()
+
+    @classmethod
+    def _render_trace_tab_alignment(
+        cls,
+        trace: RPAAcceptedTrace,
+        known_tab_ids: set[str],
+        current_tab_id: str,
+    ) -> tuple[List[str], str]:
+        tab_id = cls._trace_tab_id(trace)
+        if not tab_id or tab_id == current_tab_id:
+            return [], current_tab_id
+
+        tab_id_literal = json.dumps(tab_id, ensure_ascii=False)
+        if tab_id in known_tab_ids:
+            return [
+                "",
+                f"    current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, {tab_id_literal})",
+            ], tab_id
+
+        known_tab_ids.add(tab_id)
+        return [
+            "",
+            f"    # Materialize recorded tab {tab_id}; opener/popup evidence was not available.",
+            f"    current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, {tab_id_literal})",
+        ], tab_id
+
+    @staticmethod
+    def _record_trace_tab_side_effects(
+        trace: RPAAcceptedTrace,
+        known_tab_ids: set[str],
+        current_tab_id: str,
+    ) -> str:
+        popup_signal = _trace_signal(trace, "popup")
+        popup_target_tab_id = str(popup_signal.get("target_tab_id") or "").strip()
+        if popup_target_tab_id:
+            known_tab_ids.add(popup_target_tab_id)
+            current_tab_id = popup_target_tab_id
+
+        action = str(trace.action or "")
+        tab_signal = _trace_signal(trace, "tab")
+        if action == "switch_tab":
+            target_tab_id = str(tab_signal.get("target_tab_id") or "").strip()
+            if target_tab_id:
+                known_tab_ids.add(target_tab_id)
+                current_tab_id = target_tab_id
+        elif action == "close_tab":
+            closing_tab_id = str(tab_signal.get("tab_id") or tab_signal.get("source_tab_id") or "").strip()
+            if closing_tab_id:
+                known_tab_ids.discard(closing_tab_id)
+            fallback_tab_id = str(tab_signal.get("target_tab_id") or "").strip()
+            if fallback_tab_id:
+                known_tab_ids.add(fallback_tab_id)
+                current_tab_id = fallback_tab_id
+
+        return current_tab_id
 
     def _wrap_trace_logging(
         self,
@@ -381,6 +627,10 @@ class TraceSkillCompiler:
             else:
                 lines.append(f"        await {expr}.press({str(trace.value or '')!r})")
             lines.append("    await current_page.wait_for_load_state('domcontentloaded')")
+            post_navigation = _trace_signal(trace, "post_navigation")
+            final_url = str(post_navigation.get("final_url") or "").strip()
+            if final_url:
+                lines.append(f"    await current_page.wait_for_url({final_url!r}, timeout=60000)")
             return lines
         if action == "switch_tab":
             lines.extend(self._render_switch_tab_trace(trace))
@@ -441,8 +691,12 @@ class TraceSkillCompiler:
         lines: List[str] = []
         if source_tab_id:
             lines.append(f"    tabs.setdefault({json.dumps(source_tab_id, ensure_ascii=False)}, current_page)")
-        lines.append(f"    current_page = tabs[{json.dumps(target_tab_id, ensure_ascii=False)}]")
-        lines.append("    await current_page.bring_to_front()")
+        target_tab_id_literal = json.dumps(target_tab_id, ensure_ascii=False)
+        recorded_url_literal = json.dumps(str(trace.after_page.url or "").strip(), ensure_ascii=False)
+        lines.append(
+            "    current_page = await _ensure_recorded_tab("
+            f"tabs, current_page, kwargs, {target_tab_id_literal}, {recorded_url_literal}, True)"
+        )
         return lines
 
     @staticmethod
@@ -463,8 +717,17 @@ class TraceSkillCompiler:
             lines.append("    closing_page = current_page")
         lines.append("    await closing_page.close()")
         if fallback_tab_id:
-            lines.append(f"    current_page = tabs[{json.dumps(fallback_tab_id, ensure_ascii=False)}]")
-            lines.append("    await current_page.bring_to_front()")
+            fallback_tab_id_literal = json.dumps(fallback_tab_id, ensure_ascii=False)
+            fallback_url = str(
+                tab_signal.get("target_url")
+                or tab_signal.get("target_tab_url")
+                or ""
+            ).strip()
+            fallback_url_literal = json.dumps(fallback_url, ensure_ascii=False)
+            lines.append(
+                "    current_page = await _ensure_recorded_tab("
+                f"tabs, current_page, kwargs, {fallback_tab_id_literal}, {fallback_url_literal}, True)"
+            )
         return lines
 
     @staticmethod
@@ -496,6 +759,7 @@ class TraceSkillCompiler:
             lines.append(f"{popup_indent}new_page = await popup_info.value")
             lines.append(f"{popup_indent}tabs[{json.dumps(target_tab_id, ensure_ascii=False)}] = new_page")
             lines.append(f"{popup_indent}current_page = new_page")
+            lines.append(f"{popup_indent}await _activate_recorded_page(current_page, kwargs, {json.dumps(target_tab_id, ensure_ascii=False)})")
 
         if download_signal:
             download_name = str(download_signal.get("filename") or value or "file")

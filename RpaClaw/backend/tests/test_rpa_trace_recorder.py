@@ -21,6 +21,22 @@ def test_manual_navigation_step_becomes_navigation_trace():
     assert trace.after_page.url == "https://github.com/trending"
 
 
+def test_manual_navigation_step_preserves_tab_id_signal():
+    trace = manual_step_to_trace(
+        {
+            "id": "step-nav-tab",
+            "action": "navigate",
+            "source": "record",
+            "description": "Open second tab URL",
+            "url": "https://www.browseract.com/",
+            "tab_id": "tab-second",
+        }
+    )
+
+    assert trace.trace_type == "navigation"
+    assert trace.signals["tab"] == {"tab_id": "tab-second"}
+
+
 def test_manual_fill_step_records_value_and_locator_candidates():
     trace = manual_step_to_trace(
         {

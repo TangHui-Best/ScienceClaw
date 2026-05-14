@@ -3,7 +3,6 @@ name: 从已批准采购申请生成新订单
 tags: [purchase_orders]
 user:
   username: buyer
-  password: buyer123
 start_path: /purchase-orders
 timeout_s: 120
 instruction: >

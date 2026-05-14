@@ -3,7 +3,6 @@ name: 生成并下载异步汇总报表
 tags: [reports, async]
 user:
   username: buyer
-  password: buyer123
 start_path: /reports
 timeout_s: 150
 instruction: >

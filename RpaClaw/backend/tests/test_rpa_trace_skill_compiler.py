@@ -1,3 +1,6 @@
+import asyncio
+from datetime import datetime, timedelta
+
 from backend.rpa.trace_models import (
     RPAAcceptedTrace,
     RPAAIExecution,
@@ -16,6 +19,44 @@ def _execute_body(script: str) -> str:
     return script[start:]
 
 
+def _load_execute_skill(script: str):
+    end = script.index("\ndef _parse_cli_value")
+    namespace = {"__name__": "compiled_skill_test"}
+    exec(script[:end], namespace)
+    return namespace["execute_skill"]
+
+
+class _FakeTracePage:
+    def __init__(self, name: str = "page", url: str = "about:blank") -> None:
+        self.name = name
+        self.url = url
+        self.context = _FakeTraceContext()
+        self.brought_to_front = 0
+        self.closed = False
+        self.goto_calls = []
+
+    async def bring_to_front(self) -> None:
+        self.brought_to_front += 1
+
+    async def close(self) -> None:
+        self.closed = True
+
+    async def goto(self, url: str, wait_until: str = "") -> None:
+        self.goto_calls.append((url, wait_until))
+        self.url = url
+
+
+class _FakeTraceContext:
+    def __init__(self) -> None:
+        self.created_pages = []
+
+    async def new_page(self):
+        page = _FakeTracePage(f"page-{len(self.created_pages) + 1}")
+        page.context = self
+        self.created_pages.append(page)
+        return page
+
+
 def test_compiler_renders_navigation_trace():
     script = TraceSkillCompiler().generate_script(
         [
@@ -29,6 +70,107 @@ def test_compiler_renders_navigation_trace():
 
     assert "async def execute_skill" in script
     assert "https://github.com/trending" in script
+
+
+def test_navigation_traces_with_same_tab_id_stay_on_one_page():
+    traces = [
+        RPAAcceptedTrace(
+            trace_id="nav-a",
+            trace_type=RPATraceType.NAVIGATION,
+            after_page=RPAPageState(url="https://github.com/vercel-labs/agent-browser"),
+            signals={"tab": {"tab_id": "tab-root"}},
+        ),
+        RPAAcceptedTrace(
+            trace_id="nav-b",
+            trace_type=RPATraceType.NAVIGATION,
+            after_page=RPAPageState(url="https://www.browseract.com/"),
+            signals={"tab": {"tab_id": "tab-root"}},
+        ),
+    ]
+
+    script = TraceSkillCompiler().generate_script(traces, is_local=True)
+    body = _execute_body(script)
+
+    assert 'tabs = {"tab-root": page}' in body
+    assert "await current_page.context.new_page()" not in body
+    assert body.count("await current_page.goto(_target_url, wait_until='domcontentloaded')") == 2
+
+
+def test_navigation_trace_with_new_tab_id_materializes_page_before_goto():
+    traces = [
+        RPAAcceptedTrace(
+            trace_id="nav-root",
+            trace_type=RPATraceType.NAVIGATION,
+            after_page=RPAPageState(url="https://github.com/vercel-labs/agent-browser"),
+            signals={"tab": {"tab_id": "tab-root"}},
+        ),
+        RPAAcceptedTrace(
+            trace_id="nav-second",
+            trace_type=RPATraceType.NAVIGATION,
+            after_page=RPAPageState(url="https://www.browseract.com/"),
+            signals={"tab": {"tab_id": "tab-second"}},
+        ),
+    ]
+
+    script = TraceSkillCompiler().generate_script(traces, is_local=True)
+    body = _execute_body(script)
+
+    new_page = "page = await current_page.context.new_page()"
+    store_tab = 'tabs[tab_id] = page'
+    ensure_tab = 'current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, "tab-second")'
+    second_url = "_target_url = 'https://www.browseract.com/'"
+    assert 'tabs = {"tab-root": page}' in body
+    assert new_page in script
+    assert store_tab in script
+    assert ensure_tab in body
+    assert body.index(ensure_tab) < body.index(second_url)
+
+
+def test_navigation_trace_with_new_tab_id_activates_materialized_page_for_preview():
+    traces = [
+        RPAAcceptedTrace(
+            trace_id="nav-root",
+            trace_type=RPATraceType.NAVIGATION,
+            after_page=RPAPageState(url="https://github.com/vercel-labs/agent-browser"),
+            signals={"tab": {"tab_id": "tab-root"}},
+        ),
+        RPAAcceptedTrace(
+            trace_id="nav-second",
+            trace_type=RPATraceType.NAVIGATION,
+            after_page=RPAPageState(url="https://www.browseract.com/"),
+            signals={"tab": {"tab_id": "tab-second"}},
+        ),
+    ]
+
+    script = TraceSkillCompiler().generate_script(traces, is_local=True)
+    body = _execute_body(script)
+
+    assert "async def _activate_recorded_page(page, kwargs, tab_id=''):" in script
+    activation = '_ensure_recorded_tab(tabs, current_page, kwargs, "tab-second")'
+    second_url = "_target_url = 'https://www.browseract.com/'"
+    assert activation in body
+    assert body.index(activation) < body.index(second_url)
+
+
+def test_navigation_url_difference_without_tab_fact_does_not_create_new_page():
+    traces = [
+        RPAAcceptedTrace(
+            trace_id="nav-a",
+            trace_type=RPATraceType.NAVIGATION,
+            after_page=RPAPageState(url="https://github.com/vercel-labs/agent-browser"),
+        ),
+        RPAAcceptedTrace(
+            trace_id="nav-b",
+            trace_type=RPATraceType.NAVIGATION,
+            after_page=RPAPageState(url="https://www.browseract.com/"),
+        ),
+    ]
+
+    script = TraceSkillCompiler().generate_script(traces, is_local=True)
+    body = _execute_body(script)
+
+    assert "await current_page.context.new_page()" not in body
+    assert body.count("await current_page.goto(_target_url, wait_until='domcontentloaded')") == 2
 
 
 def test_compiler_does_not_emit_github_helpers_for_generic_web_trace():
@@ -552,7 +694,7 @@ def test_manual_popup_click_registers_source_tab_before_switching_to_new_page():
     assert source_registration in body
     assert body.index(source_registration) < body.index(popup_wait)
     assert 'tabs["tab-export"] = new_page' in body
-    assert 'current_page = tabs["tab-root"]' in body
+    assert 'current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, "tab-root", "", True)' in body
 
 
 def test_manual_switch_tab_trace_compiles_to_page_context_switch():
@@ -569,8 +711,54 @@ def test_manual_switch_tab_trace_compiles_to_page_context_switch():
 
     assert "No stable locator was recorded" not in body
     assert 'tabs.setdefault("tab-root", current_page)' in body
-    assert 'current_page = tabs["tab-sales"]' in body
-    assert "await current_page.bring_to_front()" in body
+    assert 'current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, "tab-sales", "", True)' in body
+    assert "await page.bring_to_front()" in script
+
+
+def test_manual_switch_tab_without_known_target_materializes_recorded_url_at_runtime():
+    trace = RPAAcceptedTrace(
+        trace_id="switch-to-sales",
+        trace_type=RPATraceType.MANUAL_ACTION,
+        action="switch_tab",
+        description="切换到标签页 iSales+",
+        after_page=RPAPageState(url="https://example.com/sales"),
+        signals={"tab": {"source_tab_id": "tab-root", "target_tab_id": "tab-sales"}},
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    execute_skill = _load_execute_skill(script)
+    page = _FakeTracePage("root")
+
+    asyncio.run(execute_skill(page))
+
+    assert len(page.context.created_pages) == 1
+    created_page = page.context.created_pages[0]
+    assert created_page.goto_calls == [("https://example.com/sales", "domcontentloaded")]
+    assert created_page.brought_to_front == 1
+
+
+def test_manual_switch_tab_without_known_target_or_recorded_url_fails_clearly():
+    trace = RPAAcceptedTrace(
+        trace_id="switch-to-sales",
+        trace_type=RPATraceType.MANUAL_ACTION,
+        action="switch_tab",
+        description="切换到标签页 iSales+",
+        signals={"tab": {"source_tab_id": "tab-root", "target_tab_id": "tab-sales"}},
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    execute_skill = _load_execute_skill(script)
+    page = _FakeTracePage("root")
+
+    try:
+        asyncio.run(execute_skill(page))
+    except RuntimeError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("missing recorded tab URL should fail")
+
+    assert "tab-sales" in message
+    assert "recorded URL" in message
 
 
 def test_manual_close_tab_trace_compiles_to_page_close_and_fallback_switch():
@@ -589,7 +777,66 @@ def test_manual_close_tab_trace_compiles_to_page_close_and_fallback_switch():
     assert 'tabs.setdefault("tab-sales", current_page)' in body
     assert 'closing_page = tabs.pop("tab-sales", current_page)' in body
     assert "await closing_page.close()" in body
-    assert 'current_page = tabs["tab-root"]' in body
+    assert 'current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, "tab-root", "", True)' in body
+
+
+def test_manual_close_tab_without_known_fallback_url_does_not_use_closing_page_url():
+    trace = RPAAcceptedTrace(
+        trace_id="close-sales",
+        trace_type=RPATraceType.MANUAL_ACTION,
+        action="close_tab",
+        description="关闭标签页 iSales+ 并切换到其他标签页",
+        after_page=RPAPageState(url="https://example.com/sales"),
+        signals={"tab": {"tab_id": "tab-sales", "target_tab_id": "tab-root"}},
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    execute_skill = _load_execute_skill(script)
+    page = _FakeTracePage("sales")
+
+    try:
+        asyncio.run(execute_skill(page))
+    except RuntimeError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("missing fallback tab URL should fail")
+
+    assert page.closed is True
+    assert "tab-root" in message
+    assert "recorded URL" in message
+    assert all(
+        ("https://example.com/sales", "domcontentloaded") not in created.goto_calls
+        for created in page.context.created_pages
+    )
+
+
+def test_manual_close_tab_with_recorded_fallback_url_materializes_fallback_at_runtime():
+    trace = RPAAcceptedTrace(
+        trace_id="close-sales",
+        trace_type=RPATraceType.MANUAL_ACTION,
+        action="close_tab",
+        description="关闭标签页 iSales+ 并切换到其他标签页",
+        after_page=RPAPageState(url="https://example.com/sales"),
+        signals={
+            "tab": {
+                "tab_id": "tab-sales",
+                "target_tab_id": "tab-root",
+                "target_url": "https://example.com/root",
+            }
+        },
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    execute_skill = _load_execute_skill(script)
+    page = _FakeTracePage("sales")
+
+    asyncio.run(execute_skill(page))
+
+    assert page.closed is True
+    assert len(page.context.created_pages) == 1
+    created_page = page.context.created_pages[0]
+    assert created_page.goto_calls == [("https://example.com/root", "domcontentloaded")]
+    assert created_page.brought_to_front == 1
 
 
 def test_manual_download_click_compiles_to_expect_download():
@@ -862,6 +1109,129 @@ def test_manual_navigate_click_preserves_click_navigation_semantics():
     assert "expect_navigation" in body
     assert "get_by_role('button', name='登录', exact=True).click()" in body
     assert "goto(_target_url" not in body
+
+
+def test_manual_sso_redirect_chain_folds_into_post_click_url_wait():
+    base_time = datetime(2026, 5, 12, 17, 43, 15)
+    tab_signal = {"tab": {"tab_id": "tab-root"}}
+    traces = [
+        RPAAcceptedTrace(
+            trace_id="sso-click",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            action="navigate_click",
+            description='点击 button("使用 SSO 登录") 并跳转页面',
+            after_page=RPAPageState(
+                url="https://oseasy.his.huawei.com/login.html?code=abc123&state=nonce",
+            ),
+            locator_candidates=[
+                {"locator": {"method": "role", "role": "button", "name": "使用 SSO 登录"}, "selected": True},
+            ],
+            signals=tab_signal,
+            started_at=base_time,
+            ended_at=base_time,
+        ),
+        RPAAcceptedTrace(
+            trace_id="redirect-root",
+            trace_type=RPATraceType.NAVIGATION,
+            description="导航到 https://oseasy.his.huawei.com/",
+            after_page=RPAPageState(url="https://oseasy.his.huawei.com/"),
+            signals=tab_signal,
+            started_at=base_time + timedelta(milliseconds=500),
+            ended_at=base_time + timedelta(milliseconds=500),
+        ),
+        RPAAcceptedTrace(
+            trace_id="redirect-hash-root",
+            trace_type=RPATraceType.NAVIGATION,
+            description="导航到 https://oseasy.his.huawei.com/#/",
+            after_page=RPAPageState(url="https://oseasy.his.huawei.com/#/"),
+            signals=tab_signal,
+            started_at=base_time + timedelta(milliseconds=800),
+            ended_at=base_time + timedelta(milliseconds=800),
+        ),
+        RPAAcceptedTrace(
+            trace_id="redirect-final",
+            trace_type=RPATraceType.NAVIGATION,
+            description="导航到 https://oseasy.his.huawei.com/#/ha/cluster",
+            after_page=RPAPageState(url="https://oseasy.his.huawei.com/#/ha/cluster"),
+            signals=tab_signal,
+            started_at=base_time + timedelta(milliseconds=1000),
+            ended_at=base_time + timedelta(milliseconds=1000),
+        ),
+        RPAAcceptedTrace(
+            trace_id="next-menu-click",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            action="click",
+            description='点击 menuitem("虚拟机")',
+            after_page=RPAPageState(url="https://oseasy.his.huawei.com/#/ha/cluster"),
+            locator_candidates=[
+                {"locator": {"method": "role", "role": "menuitem", "name": "虚拟机"}, "selected": True},
+            ],
+            signals={**tab_signal, "menu_context": {"is_menu_item": True}},
+            started_at=base_time + timedelta(seconds=5),
+            ended_at=base_time + timedelta(seconds=5),
+        ),
+    ]
+
+    script = TraceSkillCompiler().generate_script(traces, is_local=True)
+    body = _execute_body(script)
+
+    assert "get_by_role('button', name='使用 SSO 登录', exact=True).click()" in body
+    assert "wait_for_url('https://oseasy.his.huawei.com/#/ha/cluster'" in body
+    assert "login.html?code=" not in body
+    assert "#/#/ha/cluster" not in body
+    assert "get_by_role('menuitem', name='虚拟机', exact=True).click()" in body
+    assert body.count("await current_page.goto(_target_url, wait_until='domcontentloaded')") == 0
+
+
+def test_non_auth_navigation_after_click_is_not_folded_into_post_click_wait():
+    base_time = datetime(2026, 5, 12, 17, 43, 15)
+    tab_signal = {"tab": {"tab_id": "tab-root"}}
+    traces = [
+        RPAAcceptedTrace(
+            trace_id="settings-click",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            action="navigate_click",
+            description='点击 link("Settings") 并跳转页面',
+            after_page=RPAPageState(url="https://example.com/settings"),
+            locator_candidates=[
+                {"locator": {"method": "role", "role": "link", "name": "Settings"}, "selected": True},
+            ],
+            signals=tab_signal,
+            started_at=base_time,
+            ended_at=base_time,
+        ),
+        RPAAcceptedTrace(
+            trace_id="manual-address-navigation",
+            trace_type=RPATraceType.NAVIGATION,
+            description="导航到 https://example.com/reports",
+            after_page=RPAPageState(url="https://example.com/reports"),
+            signals=tab_signal,
+            started_at=base_time + timedelta(seconds=10),
+            ended_at=base_time + timedelta(seconds=10),
+        ),
+    ]
+
+    script = TraceSkillCompiler().generate_script(traces, is_local=True)
+    body = _execute_body(script)
+
+    assert "wait_for_url('https://example.com/reports'" not in body
+    assert "_target_url = 'https://example.com/reports'" in body
+    assert body.count("await current_page.goto(_target_url, wait_until='domcontentloaded')") == 1
+
+
+def test_standalone_hash_route_navigation_uses_absolute_recorded_url():
+    trace = RPAAcceptedTrace(
+        trace_id="hash-route",
+        trace_type=RPATraceType.NAVIGATION,
+        description="导航到 https://oseasy.his.huawei.com/#/ha/cluster",
+        after_page=RPAPageState(url="https://oseasy.his.huawei.com/#/ha/cluster"),
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    body = _execute_body(script)
+
+    assert "_target_url = 'https://oseasy.his.huawei.com/#/ha/cluster'" in body
+    assert "#/#/ha/cluster" not in body
 
 
 def test_manual_fill_without_valid_locator_raises_clear_runtime_error():

@@ -523,6 +523,18 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(page.add_init_script_calls), 1)
         self.assertIn(tab_id, page.add_init_script_calls[0]["script"])
 
+    async def test_register_page_is_idempotent_for_same_page(self):
+        page = _FakePage("https://example.com", "Example")
+
+        first_tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+        second_tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+        tabs = self.manager.list_tabs(self.session.id)
+
+        self.assertEqual(second_tab_id, first_tab_id)
+        self.assertEqual(len(tabs), 1)
+        self.assertIs(self.manager.get_active_page(self.session.id), page)
+        self.assertEqual(len(page.add_init_script_calls), 1)
+
     async def test_register_page_injects_action_runtime_before_capture_script(self):
         context = _FakeContext()
         page = _FakePage("https://example.com", "Example", context=context)
