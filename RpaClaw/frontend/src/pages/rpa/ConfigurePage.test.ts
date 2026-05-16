@@ -319,7 +319,7 @@ describe('ConfigurePage script preview entry', () => {
     app.unmount();
   });
 
-  it('promotes diagnostic locator candidates by related trace id', async () => {
+  it('resolves diagnostic locator candidates by diagnostic id', async () => {
     mockCommonRequests({
       timeline: [
         {
@@ -346,9 +346,10 @@ describe('ConfigurePage script preview entry', () => {
     promoteButton?.click();
     await flushAsyncUpdates();
 
-    expect(post).toHaveBeenCalledWith('/rpa/session/session-1/trace/trace-fill-query/locator', {
+    expect(post).toHaveBeenCalledWith('/rpa/session/session-1/diagnostic/diagnostic-fill-query/resolve-locator', {
       candidate_index: 0,
     });
+    expect(post.mock.calls.some(([url]) => String(url).includes('/trace/'))).toBe(false);
     expect(post.mock.calls.some(([url]) => String(url).includes('/step/'))).toBe(false);
 
     app.unmount();
