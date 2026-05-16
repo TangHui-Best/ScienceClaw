@@ -355,6 +355,7 @@ def test_generate_session_script_uses_trace_tab_fields_not_step_tab_fields():
             trace_type=RPATraceType.MANUAL_ACTION,
             source="manual",
             action="switch_tab",
+            after_page=RPAPageState(url="https://isales.example.local/dashboard"),
             description="切换到标签页 iSales+",
             signals={"tab": {"tab_id": "tab-root", "source_tab_id": "tab-root", "target_tab_id": "tab-sales"}},
         )
@@ -364,7 +365,10 @@ def test_generate_session_script_uses_trace_tab_fields_not_step_tab_fields():
 
     assert "No stable locator was recorded" not in script
     assert 'tabs.setdefault("tab-root", current_page)' in script
-    assert 'current_page = tabs["tab-sales"]' in script
+    assert (
+        'current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, "tab-sales", '
+        '"https://isales.example.local/dashboard", True)'
+    ) in script
     assert "DO_NOT_USE_LEGACY" not in script
 
 
@@ -390,8 +394,10 @@ def test_generate_session_script_preserves_trace_tab_ids_for_navigation_pages():
     script = ROUTE_MODULE._generate_session_script(session, {}, test_mode=True)
 
     assert 'tabs = {"tab-root": page}' in script
-    assert "current_page = await current_page.context.new_page()" in script
-    assert 'tabs["tab-second"] = current_page' in script
+    assert (
+        'current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, "tab-second")'
+        in script
+    )
     assert "_target_url = 'https://www.browseract.com/'" in script
 
 
