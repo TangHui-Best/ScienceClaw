@@ -5,13 +5,15 @@ title: RPA Trace Source Convergence
 status: active
 feature_ids: [F001]
 created: 2026-05-13
-updated: 2026-05-13
+updated: 2026-05-16
 specs:
   - docs/superpowers/specs/2026-04-28-rpa-trace-first-full-migration-design.md
 plans:
   - docs/superpowers/plans/2026-04-28-rpa-trace-first-full-migration.md
+  - docs/superpowers/plans/2026-05-16-rpa-trace-source-final-convergence.md
 decisions:
   - docs/decisions/ADR-001-rpa-trace-is-single-accepted-timeline.md
+  - docs/decisions/ADR-002-trace-evidence-driven-compiler-strategy.md
 evidence:
   - docs/evidence/EV-001-rpa-trace-source-convergence.md
 ---
@@ -53,6 +55,18 @@ RPA 录制、配置、生成、测试、保存和 MCP/export 的 accepted timeli
 
 Active. Harness anchors have been created before implementation. Read-only explorer reviews found backend, frontend, and test dependencies that still positively assert legacy source behavior; implementation must update those tests so they prove removal rather than preserve compatibility.
 
+2026-05-15 update: trace-source convergence also needs an evidence-driven compiler gate. Trace is the single accepted timeline carrier, but compiler strategy must still distinguish navigation evidence, structured snapshot evidence, runtime semantic evidence, embedded AI code, dataflow, and output-only evidence. Output labels alone must not become replay locators.
+
 ## Next Step
 
-Integrate subagent dependency inventories into the implementation plan, then start Task 1 with TDD and per-task subagent review.
+Continue the active migration plan with a focused compiler gate: prevent weak/output-only extraction traces from compiling into invented deterministic field locators, preserve positive structured snapshot extraction, and record verification in EV-001 before broader generator retirement work.
+
+2026-05-16 update: final convergence should proceed from external contracts inward. The next implementation route is `docs/superpowers/plans/2026-05-16-rpa-trace-source-final-convergence.md`: first stop public session responses from leaking legacy facts, then make generate/test/save compile inputs trace-only, then remove legacy saved metadata and MCP/export dependencies, then retire step-index APIs, and only after those gates decide whether manager-internal `RPAStep` state is removed or quarantined as a private DTO.
+
+2026-05-16 progress update: session API projection, generate/test/save compile inputs, saved trace metadata, trace-source skill export, MCP trace projection, and MCP param source metadata now converge on trace-backed facts. Evidence is recorded in `docs/evidence/EV-001-rpa-trace-source-convergence.md` under "Task 2-4K". Remaining work is public step-index API removal/isolation and manager-internal `RPAStep` quarantine/removal.
+
+2026-05-16 Task 5 update: public step-index routes and raw steps websocket have been removed from `RpaClaw/backend/route/rpa.py`, and `manual_step` timeline deletion is no longer a new-path API. Evidence is recorded under "Task 5K". Remaining work is Task 6: decide whether to fully remove manager-internal `RPAStep` / `recorded_actions` / `recording_diagnostics` or quarantine them as private transitional recording DTOs.
+
+2026-05-16 Task 6 update: manager-internal `RPAStep`, `recorded_actions`, and `recording_diagnostics` are quarantined rather than hard-deleted in this pass. They remain private transitional browser-event normalization DTOs inside `RpaClaw/backend/rpa/manager.py`; public API responses, generate/test/save, saved metadata, MCP/export, and public step-index routes no longer use them as new-path facts. `stop_rpa_session()` now also uses the projected session response.
+
+2026-05-16 Task 7L update: weak embedded AI extraction code that only produced empty output is no longer frozen as deterministic replay unless the trace explicitly carries an allow-empty output contract. This addresses the latest star-count regression as a generic evidence-quality issue rather than a GitHub-specific rule or a global "empty means failure" validator. Evidence is recorded under "Task 7L".

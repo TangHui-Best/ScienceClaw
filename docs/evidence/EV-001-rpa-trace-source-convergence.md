@@ -5,7 +5,7 @@ title: RPA Trace Source Convergence Evidence
 status: active
 feature_ids: [F001]
 created: 2026-05-13
-updated: 2026-05-13
+updated: 2026-05-15
 evidence_level: exhaustive
 ---
 
@@ -364,6 +364,278 @@ Implementation and review records will be appended per task:
   - The new backend regression test still needs to be run in the project backend environment with `RpaClaw/backend/requirements.txt` installed.
 
 ## Required Final Verification
+
+### 2026-05-16 Final Convergence Strategy
+
+- Trigger:
+  - Read-only removal grep found that frontend RPA pages are mostly trace-projection based, but backend production code still treats legacy fields as public or semi-public facts in session response, compile input selection, saved metadata, MCP/export projection, and step-index routes.
+- Strategy:
+  - New plan created: `docs/superpowers/plans/2026-05-16-rpa-trace-source-final-convergence.md`.
+  - The plan intentionally converges from external contracts inward: API response projection, generate/test/save compile inputs, saved skill metadata, MCP/export projection, public step API removal, then manager-internal DTO shrink/quarantine.
+  - The plan rejects a one-shot deletion of all Step/Action strings because `RPAStep` still carries manual browser-event normalization risk. The accepted boundary is stricter and safer: transitional step-like DTOs may exist only inside manager internals and must not feed public APIs, compiler inputs, saved metadata, or MCP/export.
+- Initial grep evidence:
+  - Command: `rg -n "session\\.steps|recorded_actions|recording_diagnostics|legacy_steps|failed_step_index|/step/|source_step_index" RpaClaw/backend/rpa RpaClaw/backend/route RpaClaw/frontend/src -S`
+  - Result: production hits remain in `RpaClaw/backend/route/rpa.py`, `RpaClaw/backend/rpa/manager.py`, `RpaClaw/backend/rpa/mcp_step_projection.py`, `RpaClaw/backend/rpa/skill_exporter.py`, `RpaClaw/backend/rpa/mcp_converter.py`, `RpaClaw/backend/rpa/mcp_semantic_inferer.py`, and `RpaClaw/backend/rpa/executor.py`. Frontend hits are primarily poison tests or display naming after prior UI cleanup.
+- Current verdict:
+  - F001 remains active.
+  - Completion claim allowed: no.
+  - Next implementation task: Task 1 from the 2026-05-16 plan, "Session API Contract Stops Leaking Legacy Facts".
+
+### Task 1K Session API Contract Stops Leaking Legacy Facts
+
+- Plan:
+  - `docs/superpowers/plans/2026-05-16-rpa-trace-source-final-convergence.md`, Task 1.
+- Implementation:
+  - Added `_build_session_response(session)` in `RpaClaw/backend/route/rpa.py`.
+  - Changed `GET /rpa/session/{session_id}` to return the projected session response plus trace timeline instead of returning the raw `RPASession`.
+  - The projection removes `steps`, `recorded_actions`, `recording_diagnostics`, and `legacy_steps`, and adds `trace_count` / `diagnostic_count`.
+  - Added poison route coverage and a helper-level `legacy_steps` projection test in `RpaClaw/backend/tests/test_rpa_trace_timeline.py`.
+- Verification:
+  - Worker RED: `$env:PYTHONPATH="RpaClaw"; python -m pytest RpaClaw/backend/tests/test_rpa_trace_timeline.py -q`
+  - Worker RED result: `1 failed, 6 passed`; failure was the expected `steps` leak in the raw session response.
+  - Worker GREEN: same command, result `7 passed, 25 warnings`.
+  - Controller focused rerun: `$env:PYTHONPATH="RpaClaw"; python -m pytest RpaClaw/backend/tests/test_rpa_trace_timeline.py RpaClaw/backend/tests/test_rpa_trace_mutation_routes.py -q`
+  - Controller focused result after `legacy_steps` fix: `16 passed, 25 warnings`.
+- Review:
+  - Implementer: Carver.
+  - Spec reviewer Newton first result: FAIL because `legacy_steps` was not deny-listed or tested.
+  - Fix: added `legacy_steps` to `_build_session_response()` deny-list and added direct helper coverage.
+  - Spec re-review Kuhn: PASS.
+  - Code-quality reviewer Feynman: APPROVED.
+- Residual risk:
+  - `stop_rpa_session()` still returns the raw session object and should be handled in a later API-contract cleanup if that endpoint is treated as a frontend/public session contract.
+  - Compile/save/MCP/export legacy dependencies remain and are covered by later tasks in the 2026-05-16 plan.
+
+### Task 2-4K Generate/Test/Save, Skill Metadata, And MCP Projection Are Trace-backed
+
+- Plan:
+  - `docs/superpowers/plans/2026-05-16-rpa-trace-source-final-convergence.md`, Tasks 2, 3, and the trace-backed projection portion of Task 4.
+- Implementation:
+  - `RpaClaw/backend/route/rpa.py`
+    - Removed the `PlaywrightGenerator` route fallback.
+    - `_session_traces_for_compile(session)` now orders and returns only `session.traces`.
+    - `_generate_session_script()` always calls `TraceSkillCompiler.generate_script(...)`.
+    - `generate`, `test`, and `save` reject empty trace inputs before script generation, executor use, or export.
+    - `_build_session_recording_meta(session)` no longer derives trace facts from `session.steps` and no longer exports `legacy_steps`, `recorded_actions`, or `recording_diagnostics`.
+  - `RpaClaw/backend/rpa/trace_recorder.py`
+    - `manual_step_to_trace()` preserves `signals.recording.sequence` and `signals.recording.event_timestamp_ms`, so trace ordering does not need to read step state.
+  - `RpaClaw/backend/rpa/mcp_step_projection.py`
+    - `session_to_mcp_steps(session)` projects only accepted traces and no longer reads `session.steps` or `recorded_actions`.
+  - `RpaClaw/backend/rpa/skill_exporter.py`
+    - Trace-source `skill.meta.json` strips legacy recording facts and omits top-level `steps`.
+  - `RpaClaw/backend/rpa/mcp_converter.py` and `RpaClaw/backend/rpa/mcp_semantic_inferer.py`
+    - Inferred MCP params now carry `source_trace_id` / `source_trace_output_key` instead of `source_step_index` / `source_step_id`.
+- Regression tests:
+  - Added/updated poison tests in:
+    - `RpaClaw/backend/tests/test_rpa_trace_mutation_routes.py`
+    - `RpaClaw/backend/tests/test_rpa_route_trace.py`
+    - `RpaClaw/backend/tests/test_rpa_trace_recorder.py`
+    - `RpaClaw/backend/tests/test_skill_exporter.py`
+    - `RpaClaw/backend/tests/test_rpa_mcp_route.py`
+    - `RpaClaw/backend/tests/test_rpa_mcp_converter.py`
+  - `RpaClaw/backend/tests/test_rpa_route_trace.py` now stubs optional LangChain/DeepAgents imports so the route trace tests are collectible in this local environment.
+- Verification:
+  - RED example:
+    - Command: `$env:PYTHONPATH="RpaClaw"; python -m pytest RpaClaw/backend/tests/test_rpa_trace_mutation_routes.py::test_save_skill_exports_trace_metadata_without_legacy_source_facts -q`
+    - Result before implementation: `1 failed`; failure showed `recording_meta` still contained `legacy_steps`.
+  - Focused route/export checks:
+    - Command: `$env:PYTHONPATH="RpaClaw"; python -m pytest RpaClaw/backend/tests/test_rpa_route_trace.py -q`
+    - Result: `40 passed, 25 warnings`.
+    - Command: `$env:PYTHONPATH="RpaClaw"; python -m pytest RpaClaw/backend/tests/test_rpa_mcp_converter.py -q`
+    - Result: `10 passed`.
+  - Combined backend convergence set:
+    - Command: `$env:PYTHONPATH="RpaClaw"; python -m pytest RpaClaw/backend/tests/test_rpa_route_trace.py RpaClaw/backend/tests/test_rpa_trace_mutation_routes.py RpaClaw/backend/tests/test_rpa_trace_recorder.py RpaClaw/backend/tests/test_rpa_manager.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py RpaClaw/backend/tests/test_skill_exporter.py RpaClaw/backend/tests/test_rpa_mcp_route.py RpaClaw/backend/tests/test_rpa_mcp_converter.py -q`
+    - Result: `253 passed, 185 warnings`.
+- Review:
+  - Spec/quality reviewer Confucius: PASS for Tasks 2-4 boundary.
+  - Reviewer confirmed compile traces are `session.traces` only, route generation uses trace compiler, save/test/generate reject empty traces, metadata excludes legacy source facts, MCP projection reads only traces, and trace-source export strips legacy recording facts.
+- Residual risk:
+  - Public step-index routes still exist in `RpaClaw/backend/route/rpa.py` and are Task 5.
+  - `RpaClaw/backend/rpa/executor.py` still uses internal/local `failed_step_index` variable names and a "Step N failed" log while returning `failed_trace_index`; this is naming cleanup for a later residual pass unless it leaks to a public contract.
+  - `RpaClaw/backend/rpa/mcp_converter.py` still imports `PlaywrightGenerator` for legacy non-trace preview normalization and utility helpers; trace-backed inputs bypass that normalization.
+  - Manager-internal `RPAStep`, `recorded_actions`, and `recording_diagnostics` still exist as transitional recording DTOs and are Task 6.
+
+### Task 5K Public Step-index APIs Removed From The New Path
+
+- Plan:
+  - `docs/superpowers/plans/2026-05-16-rpa-trace-source-final-convergence.md`, Task 5.
+- Implementation:
+  - Removed public route definitions from `RpaClaw/backend/route/rpa.py`:
+    - `DELETE /session/{session_id}/step/{step_index}`
+    - `POST /session/{session_id}/step/{step_index}/locator`
+    - `WEBSOCKET /session/{session_id}/steps`
+  - `delete_timeline_item` now accepts trace timeline deletion only through `kind="trace"`; `kind="manual_step"` is rejected.
+  - Removed dead route-level helper code that still described merging `recorded_actions` with `session.steps`.
+- Regression tests:
+  - Added router registration coverage in `RpaClaw/backend/tests/test_rpa_trace_mutation_routes.py` proving no public `/step/` or `/steps` endpoints are registered.
+  - Updated `RpaClaw/backend/tests/test_rpa_route_trace.py` so `manual_step` timeline deletion is rejected instead of treated as a generation-input mutation.
+- Verification:
+  - RED examples:
+    - `$env:PYTHONPATH="RpaClaw"; python -m pytest RpaClaw/backend/tests/test_rpa_trace_mutation_routes.py::test_router_does_not_register_public_step_index_endpoints -q`
+    - Result before implementation: `1 failed`; router still registered `/step/`.
+    - `$env:PYTHONPATH="RpaClaw"; python -m pytest RpaClaw/backend/tests/test_rpa_route_trace.py::test_delete_timeline_rejects_manual_step_kind -q`
+    - Result before implementation: `1 failed`; `manual_step` did not raise.
+  - GREEN focused checks:
+    - Same two commands after implementation: both `1 passed`.
+  - Backend convergence set:
+    - Command: `$env:PYTHONPATH="RpaClaw"; python -m pytest RpaClaw/backend/tests/test_rpa_route_trace.py RpaClaw/backend/tests/test_rpa_trace_mutation_routes.py RpaClaw/backend/tests/test_rpa_trace_recorder.py RpaClaw/backend/tests/test_rpa_manager.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py RpaClaw/backend/tests/test_skill_exporter.py RpaClaw/backend/tests/test_rpa_mcp_route.py RpaClaw/backend/tests/test_rpa_mcp_converter.py -q`
+    - Result: `254 passed, 183 warnings`.
+  - Frontend RPA/MCP route-call checks:
+    - Command: `npm.cmd --prefix RpaClaw/frontend test -- ConfigurePage RecorderPage TestPage McpToolEditorPage.view`
+    - Result: `4 passed` test files, `19 passed` tests.
+  - Grep:
+    - Command: `rg -n "/step/|/steps" RpaClaw/frontend/src/pages/rpa RpaClaw/frontend/src/pages/tools RpaClaw/backend/route/rpa.py -S`
+    - Result: no production hits; remaining hits are tests asserting `/step/` is not called.
+- Review:
+  - Independent reviewer Russell: PASS.
+- Residual risk:
+  - `RpaClaw/backend/route/rpa.py` still passes `session.steps` to explicitly requested `legacy_react` / `legacy_chat` modes. That is isolated legacy mode behavior, not the default trace-first recording path.
+  - Manager-internal `delete_step`, `select_step_locator_candidate`, `recorded_actions`, and `recording_diagnostics` remain for Task 6 quarantine/removal.
+
+### Task 6K Manager DTO Quarantine Decision
+
+- Plan:
+  - `docs/superpowers/plans/2026-05-16-rpa-trace-source-final-convergence.md`, Task 6.
+- Decision:
+  - Do not hard-delete manager-internal `RPAStep`, `recorded_actions`, and `recording_diagnostics` in this pass.
+  - They remain as transitional, private manual browser-event normalization DTOs inside `RpaClaw/backend/rpa/manager.py`.
+  - Reason: manual event ordering, fill merge/debounce, diagnostic candidate resolution, and manual-trace construction still depend on this state. Removing it now would turn a source-convergence task into a broader recorder rewrite with higher regression risk.
+- Additional quarantine fix:
+  - `stop_rpa_session()` now returns `_build_session_response(session)` instead of the raw `RPASession`.
+  - Added a poison test proving stop response no longer exposes `steps`, `recorded_actions`, `recording_diagnostics`, or `legacy_steps`.
+- Current allowed production residuals:
+  - `RpaClaw/backend/rpa/manager.py`: private transitional recording DTO state and helpers.
+  - `RpaClaw/backend/route/rpa.py`: `session.steps` is passed only to explicitly requested `legacy_react` / `legacy_chat` modes.
+  - `RpaClaw/backend/rpa/executor.py`: local variable/log naming still says `failed_step_index` / `Step N failed`, while public route response drops `failed_step_index` and uses trace retry context.
+  - `RpaClaw/backend/rpa/skill_exporter.py`: non-trace direct-export fallback still supports legacy `steps`; trace-source exports strip legacy facts.
+- Verification:
+  - RED example:
+    - Command: `$env:PYTHONPATH="RpaClaw"; python -m pytest RpaClaw/backend/tests/test_rpa_trace_timeline.py::test_stop_rpa_session_response_hides_legacy_sources -q`
+    - Result before implementation: `1 failed`; stop response exposed `steps`.
+  - GREEN focused result:
+    - Same command after implementation: `1 passed`.
+  - Backend final convergence set:
+    - Command: `$env:PYTHONPATH="RpaClaw"; python -m pytest RpaClaw/backend/tests/test_rpa_trace_timeline.py RpaClaw/backend/tests/test_rpa_route_trace.py RpaClaw/backend/tests/test_rpa_trace_mutation_routes.py RpaClaw/backend/tests/test_rpa_trace_recorder.py RpaClaw/backend/tests/test_rpa_manager.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py RpaClaw/backend/tests/test_skill_exporter.py RpaClaw/backend/tests/test_rpa_mcp_route.py RpaClaw/backend/tests/test_rpa_mcp_converter.py -q`
+    - Result: `263 passed, 183 warnings`.
+  - Frontend route-call convergence set:
+    - Command: `npm.cmd --prefix RpaClaw/frontend test -- ConfigurePage RecorderPage TestPage McpToolEditorPage.view`
+    - Result: `4 passed` test files, `19 passed` tests.
+- Final status:
+  - External trace-source convergence for API response, generate/test/save, saved metadata, MCP/export projection, and public step-index routes is implemented and verified.
+  - Full F001 release readiness still requires optional broader frontend build/type-check and manual smoke from the plan's final gate.
+
+### Task 9A Evidence-driven Trace Compilation Gate
+
+- Trigger:
+  - User compared same-scene generated scripts from trace-first and trace-source and found that a GitHub star-count extraction could compile into an internal `aui-form-item` style field lookup.
+  - Architecture analysis found the root cause class: trace convergence was being confused with one-size-fits-all deterministic compilation.
+- Decision:
+  - ADR-002 records that trace is the accepted timeline carrier, while compiler strategy must be chosen from explicit evidence profile.
+  - Output labels alone are not replay locators.
+- Required regression protection:
+  - Positive: structured `signals.extract_snapshot.fields` with field evidence still compiles to deterministic snapshot extraction.
+  - Negative: empty/weak `extract_snapshot.fields` plus `trace.output` such as `{"Star count": "48.2k"}` must not generate `aui-form-item` XPath code and should fall back to runtime AI or embedded AI code.
+  - Navigation: click traces with navigation evidence must compile with navigation waiting rather than fixed timeout.
+- Status:
+  - Implemented on 2026-05-15.
+- Implementation:
+  - `TraceSkillCompiler` now renders deterministic snapshot extraction only when `signals.extract_snapshot.fields` has usable structured fields.
+  - Removed the fallback that turned `trace.output` labels into snapshot/detail field locators.
+  - Weak or empty `extract_snapshot` signals now fall through to runtime AI or embedded AI code, depending on the remaining trace evidence.
+  - `trace_requires_runtime_ai_replay()` now treats weak snapshot traces as runtime-AI candidates instead of assuming snapshot extraction is deterministic.
+- Tests:
+  - Added a negative GitHub-shaped star-count regression: `output={"Star count": "48.2k"}` with empty `extract_snapshot.fields` must not generate `aui-form-item` XPath extraction and must not hard-code observed output.
+  - Updated the previous output-label fallback test so output keys alone are evidence, not replay locators.
+  - Preserved positive structured snapshot extraction coverage where fields contain real field evidence.
+- Verification:
+  - Worker RED/GREEN focused command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q -k "snapshot or star or navigation_signal"`
+  - Worker focused result: `7 passed, 57 deselected`.
+  - Worker safety command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q`
+  - Worker safety result: `64 passed`.
+  - Controller focused rerun result: `7 passed, 57 deselected`.
+  - Controller full compiler rerun result: `64 passed`.
+  - Diff check command: `git diff --check -- RpaClaw/backend/rpa/trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py docs/decisions/ADR-002-trace-evidence-driven-compiler-strategy.md docs/features/F001-rpa-trace-source-convergence.md docs/evidence/EV-001-rpa-trace-source-convergence.md docs/superpowers/plans/2026-04-28-rpa-trace-first-full-migration.md`
+  - Diff check result: passed; only existing LF/CRLF normalization warnings from Git.
+- Review:
+  - Implementer: Carson.
+  - Spec-compliance reviewer: Singer, PASS.
+  - Code-quality reviewer: Sagan, APPROVED.
+- Residual risk:
+  - Negative tests assert generated-script strings, which is acceptable for this compiler slice but should not become the only long-term replay proof.
+  - Weak snapshot traces with non-empty embedded `ai_execution.code` are not separately covered in this slice; current intended behavior is to preserve embedded code when runtime-AI preservation is not triggered.
+
+## Task 7K - Navigating link replay with dynamic counter text
+
+- User report:
+  - A directly clicked GitHub repository replay failed on `get_by_role('link', name='Issues', exact=True)`.
+  - The recording intentionally preserved the concrete repo (`tinyhumansai / openhuman`) because the user clicked it manually; this fix must not reinterpret direct clicks as semantic project selection.
+- Root cause:
+  - GitHub repository navigation tabs expose accessible text such as `Issues\n112` and `Pull requests\n28`.
+  - The compiler defaulted manual `role=link` locators to `exact=True`, so a recorded name like `Issues` could fail even though the intended link was visible.
+- Decision:
+  - Keep exact defaults for ordinary manual locators.
+  - Only relax `exact` for manual `navigate_click` / `navigate_press` traces whose target locator is `role=link`.
+  - Do not broaden direct-click traces into runtime AI or semantic project selection.
+- Implementation:
+  - `TraceSkillCompiler._preferred_locator_for_trace()` now applies exact defaults first, then removes `exact` only for navigating role-link locators.
+  - Nested/nth locators are handled recursively so the relaxation stays attached to the link target.
+- Tests:
+  - Added compiler regression that `click link("Issues")` with navigation evidence compiles to `get_by_role('link', name='Issues').click()` while ordinary manual link clicks still default to `exact=True`.
+  - Added Playwright E2E replay with link markup `Issues <span>112</span>` and asserted final URL reaches `/issues`.
+- Verification:
+  - Focused compiler command: `$env:PYTHONPATH='RpaClaw'; pytest -q RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -k "manual_navigate_link_locator_does_not_default_to_exact or manual_link_locator_defaults_to_exact_when_unspecified or manual_navigation_signal_click_compiles_to_expect_navigation"`
+  - Focused compiler result: `3 passed, 62 deselected`.
+  - Focused E2E command: `$env:PYTHONPATH='RpaClaw'; pytest -q RpaClaw/backend/tests/test_rpa_trace_e2e.py -k "navigating_link_tolerates_dynamic_counter_text"`
+  - Focused E2E result: `1 passed, 10 deselected`.
+  - Full compiler command: `$env:PYTHONPATH='RpaClaw'; pytest -q RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py`
+  - Full compiler result: `65 passed`.
+  - Trace regression command: `$env:PYTHONPATH='RpaClaw'; pytest -q RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_trace_e2e.py RpaClaw/backend/tests/test_rpa_trace_recorder.py RpaClaw/backend/tests/test_rpa_trace_timeline.py RpaClaw/backend/tests/test_rpa_route_trace.py`
+  - Trace regression result: `136 passed, 23 warnings`.
+  - Diff check command: `git diff --check -- RpaClaw/backend/rpa/trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_trace_e2e.py`
+  - Diff check result: passed; only LF/CRLF normalization warnings from Git.
+- Residual risk:
+  - The fix intentionally does not solve semantic selection. If the user describes "open the most relevant trending repo" in natural language, that remains the runtime AI / semantic trace path.
+  - If a site has several visible navigating links whose accessible names contain the same recorded prefix, future work should prefer recorded href or locator candidates rather than globally relaxing link matching further.
+
+## Task 7L - Empty embedded extraction evidence must not be frozen as deterministic replay
+
+- User report:
+  - After the navigating-link fix, a generated script could still return an empty star count.
+  - The failing trace generated recording-time Python that selected `page.locator('a[href$="stargazers"]').first`; on the recorded page the first matching link can be an empty README badge link, while the visible repository statistic appears later.
+  - The user explicitly rejected a blanket "empty value is failure" rule because empty outputs can be valid business results.
+- Trace-first comparison:
+  - A previous debug run under `data/rpa_recording_snapshots/03183a10-b588-4b3e-b9fd-5780da0fe1ae` generated the more specific `a[href="/tinyhumansai/openhuman/stargazers"]` locator and returned `9k stars`.
+  - The newer failing debug run under `data/rpa_recording_snapshots/74b0c609-d5cd-4b7e-a831-2808cee5c2f1` generated broad `.first` selector code and recorded `{"star_count": ""}`.
+  - The raw snapshots contained visible `Star 9k` / `Star 9.1k` facts in both runs, so the failure is not a GitHub-specific missing-data problem; it is a weak candidate-selection / weak evidence-freezing problem.
+- Root cause:
+  - The compiler preserved recording-time embedded AI Python whenever `trace.ai_execution.code` existed and runtime-AI preservation was not otherwise required.
+  - An embedded extraction code block that produced only empty output, with no explicit empty-output contract, had not proven itself as stable deterministic replay evidence.
+- Decision:
+  - Do not add a global non-empty validator.
+  - Do not add a GitHub/star-count template.
+  - Treat empty embedded extraction output as weak compiler evidence unless the trace explicitly records that the user allowed empty output.
+  - Keep explicitly allowed empty outputs valid and deterministic when the trace carries `signals.output_contract.allow_empty=true`.
+- Implementation:
+  - `RecordingRuntimeAgent._accepted_trace()` now records `signals.output_contract.allow_empty=true` only when the planner explicitly sets `allow_empty_output`.
+  - `TraceSkillCompiler` now routes embedded AI extraction traces with observed empty output and no allow-empty contract through runtime semantic replay instead of freezing the embedded Python code.
+  - The recording planner prompt now includes a generic instruction for count/stat/value extraction: do not default to broad multi-match locators plus `.first`; inspect visible candidates and prefer text-shape matches.
+- Tests:
+  - Added compiler regression that an empty embedded extraction trace with broad `stargazers`-style code compiles to `_execute_runtime_ai_instruction(...)`, without preserving the weak selector.
+  - Added compiler regression that explicitly allowed empty output still preserves embedded deterministic code.
+  - Added recording runtime regressions for persisting and omitting the allow-empty output contract.
+- Verification:
+  - Focused compiler command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q -k "empty_embedded_extract or star_count_output_label"`
+  - Focused compiler result: `3 passed, 64 deselected`.
+  - Focused recording runtime command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py -q -k "empty_extract_when_plan_explicitly_allows_empty or does_not_mark_empty_output_allowed_by_default"`
+  - Focused recording runtime result: `2 passed, 58 deselected`.
+  - Full compiler command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q`
+  - Full compiler result: `67 passed`.
+  - Trace E2E command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_trace_e2e.py -q`
+  - Trace E2E result: `11 passed`.
+  - Full recording runtime command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py -q`
+  - Full recording runtime result: `56 passed, 4 failed`; the failures are existing environment dependency import failures for `langchain_openai` in default-planner tests, not failures in the new allow-empty contract path.
+- Residual risk:
+  - Runtime semantic replay still depends on the recording runtime planner selecting better candidates. The prompt now discourages broad `.first` extraction, but the longer-term architectural fix is still a stronger candidate/action evidence layer between raw snapshot facts and planner code generation.
 
 Backend:
 

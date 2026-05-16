@@ -65,6 +65,9 @@ Default local/desktop mode opens as the bootstrap admin without login. Set `AUTH
 - **军规 9：不要加“拦住但不解决”的校验。**
   空提取、弱 selector、页面慢加载等稳定性校验如果只能阻止成功或提前报错，却不能提供更接近 root cause 的修复路径，就不应进入录制主路径。此类校验应作为诊断证据或后置分析，不能替代修复 snapshot、planner 或编译阶段的数据流问题。
 
+- **军规 10：不要盲目把空值视为失败。**
+  空字符串、空列表、空表格或缺省字段在很多业务场景中可能是合法结果，不能为了修复某个空提取案例就新增“空值不是成功”的泛化硬拦截。遇到空提取应先定位 root cause（如 selector 过宽、候选排序错误、snapshot 缺失、planner 误判或编译策略不匹配），将空值作为诊断 evidence 或进入 repair，而不是用全局非空校验替代真正修复。
+
 ## RPA Implementation Boundaries
 
 - 录制阶段自然语言步骤由 `RecordingRuntimeAgent` 执行，只处理当前用户指令，不重新规划整套 SOP。
