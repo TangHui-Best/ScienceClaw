@@ -11,7 +11,7 @@ from backend.rpa.trace_models import (
     RPATargetField,
     RPATraceType,
 )
-from backend.rpa.trace_skill_compiler import TraceSkillCompiler
+from backend.rpa.trace_skill_compiler import TraceSkillCompiler, traces_require_runtime_ai_replay
 
 
 def _execute_body(script: str) -> str:
@@ -268,7 +268,7 @@ def test_compiler_renders_snapshot_detail_extract_in_frame_scope():
     assert "current_page.locator('[data-prop=\"amount\"]')" not in body
 
 
-def test_compiler_renders_snapshot_extract_from_output_labels_when_field_evidence_missing():
+def test_compiler_falls_back_from_snapshot_extract_when_field_evidence_missing():
     script = TraceSkillCompiler().generate_script(
         [
             RPAAcceptedTrace(
@@ -286,11 +286,89 @@ def test_compiler_renders_snapshot_extract_from_output_labels_when_field_evidenc
 
     body = _execute_body(script)
 
-    assert "_result = {}" in body
-    assert "ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' aui-form-item ')]" in body
-    assert "_results['purchase_info'] = _result" in body
+    assert "_execute_runtime_ai_instruction(" in body
+    assert "aui-form-item" not in body
+    assert "ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' aui-form-item ')]" not in body
     assert "100.00" not in body
     assert "USD" not in body
+
+
+def test_compiler_does_not_turn_star_count_output_label_into_snapshot_locator():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        source="ai",
+        description="获取star数",
+        user_instruction="获取star数",
+        output_key="star_count",
+        output={"Star count": "48.2k"},
+        ai_execution=RPAAIExecution(language="snapshot", code="", output={"Star count": "48.2k"}),
+        signals={"extract_snapshot": {"source": "detail_views", "fields": []}},
+    )
+
+    script = TraceSkillCompiler().generate_script(
+        [trace],
+        is_local=True,
+    )
+
+    body = _execute_body(script)
+
+    assert traces_require_runtime_ai_replay([trace]) is True
+    assert "_execute_runtime_ai_instruction(" in body
+    assert "aui-form-item" not in body
+    assert "xpath=//*[normalize-space()='Star count']" not in body
+    assert "Star count" not in body
+    assert "48.2k" not in body
+
+
+def test_compiler_replays_empty_embedded_extract_through_runtime_ai_without_allow_empty_contract():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        source="ai",
+        user_instruction="extract the star count from the current page",
+        description="Extract star count",
+        output_key="star_count",
+        output={"star_count": ""},
+        ai_execution=RPAAIExecution(
+            language="python",
+            code=(
+                "async def run(page, results):\n"
+                "    link = page.locator('a[href$=\"stargazers\"]').first\n"
+                "    return {'star_count': (await link.inner_text()).strip()}"
+            ),
+            output={"star_count": ""},
+        ),
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    body = _execute_body(script)
+
+    assert traces_require_runtime_ai_replay([trace]) is True
+    assert "_execute_runtime_ai_instruction(" in body
+    assert 'href$="stargazers"' not in body
+
+
+def test_compiler_preserves_empty_embedded_extract_when_trace_allows_empty_output():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        source="ai",
+        user_instruction="collect optional notifications",
+        description="Collect optional notifications",
+        output_key="notifications",
+        output={"notifications": []},
+        ai_execution=RPAAIExecution(
+            language="python",
+            code="async def run(page, results):\n    return {'notifications': []}",
+            output={"notifications": []},
+        ),
+        signals={"output_contract": {"allow_empty": True}},
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    body = _execute_body(script)
+
+    assert traces_require_runtime_ai_replay([trace]) is False
+    assert "_execute_runtime_ai_instruction(" not in body
+    assert "return {'notifications': []}" in body
 
 
 def test_compiler_wraps_each_trace_with_trace_level_logging():
@@ -1379,6 +1457,25 @@ def test_manual_link_locator_defaults_to_exact_when_unspecified():
     body = _execute_body(script)
 
     assert "get_by_role('link', name='Pull requests', exact=True).click()" in body
+
+
+def test_manual_navigate_link_locator_does_not_default_to_exact():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.MANUAL_ACTION,
+        action="click",
+        description='click link("Issues")',
+        locator_candidates=[
+            {"locator": {"method": "role", "role": "link", "name": "Issues"}, "selected": True},
+        ],
+        signals={"navigation": {"url": "https://github.com/owner/repo/issues"}},
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    body = _execute_body(script)
+
+    assert "async with current_page.expect_navigation(wait_until='domcontentloaded'):" in body
+    assert "get_by_role('link', name='Issues').click()" in body
+    assert "get_by_role('link', name='Issues', exact=True).click()" not in body
 
 
 def test_semantic_project_selection_compiles_to_runtime_ai_not_recorded_click():

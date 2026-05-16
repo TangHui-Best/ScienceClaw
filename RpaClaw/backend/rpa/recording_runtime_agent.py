@@ -86,6 +86,9 @@ Rules:
 - Do not leave the browser on API, JSON, raw, or other machine endpoints after an extract-only command.
 - For extract-only commands, prefer user-facing pages and restore the most recent user-facing page after any temporary helper navigation.
 - For extract-only commands, prefer snapshot.expanded_regions and snapshot.sampled_regions before broad DOM scans.
+- For count/stat/value extraction, do not accept a broad multi-match locator plus `.first` as the default strategy.
+  Inspect visible candidates, prefer candidates whose text shape matches the requested value, and only return empty data
+  when the user explicitly allows empty output.
 - Use the region title, heading, or catalogue summary as context when it matches the requested area.
 - If an expanded region is a label_value_group and the user asks for field names or values, keep extraction focused on that region or supporting locator evidence instead of scanning every table.
 - Avoid treating tables as the default fallback for field extraction when a more relevant label_value_group is present.
@@ -414,6 +417,9 @@ class RecordingRuntimeAgent:
         output_key = _normalize_result_key(plan.get("output_key"))
         locator_stability = _build_locator_stability_metadata(plan, snapshot or {})
         signals = _merge_runtime_ai_signal(dict(result.get("signals") or {}), plan)
+        if _normalize_bool(plan.get("allow_empty_output")):
+            output_contract = signals.get("output_contract") if isinstance(signals.get("output_contract"), dict) else {}
+            signals["output_contract"] = {**output_contract, "allow_empty": True}
         return RPAAcceptedTrace(
             trace_type=RPATraceType.AI_OPERATION,
             source="ai",
