@@ -54,6 +54,15 @@ def _tab_signal(step: Dict[str, Any]) -> Dict[str, Any]:
     return signal
 
 
+def _recording_signal(step: Dict[str, Any]) -> Dict[str, Any]:
+    signal: Dict[str, Any] = {}
+    for key in ("sequence", "event_timestamp_ms"):
+        value = _step_get(step, key)
+        if value is not None:
+            signal[key] = value
+    return signal
+
+
 def _page_state_from_step(step: Dict[str, Any], *, prefer_after: bool = True) -> RPAPageState:
     url = _step_get(step, "url", "") or _step_get(step, "page_url", "") or ""
     title = _step_get(step, "title", "") or _step_get(step, "page_title", "") or ""
@@ -80,6 +89,10 @@ def manual_step_to_trace(step: Dict[str, Any]) -> RPAAcceptedTrace:
     if tab_signal:
         existing_tab_signal = signals.get("tab") if isinstance(signals.get("tab"), dict) else {}
         signals["tab"] = {**existing_tab_signal, **tab_signal}
+    recording_signal = _recording_signal(step)
+    if recording_signal:
+        existing_recording_signal = signals.get("recording") if isinstance(signals.get("recording"), dict) else {}
+        signals["recording"] = {**existing_recording_signal, **recording_signal}
 
     return RPAAcceptedTrace(
         trace_id=trace_id,

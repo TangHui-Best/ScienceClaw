@@ -1,8 +1,94 @@
 import importlib
 import json
+import sys
+import types
 from datetime import datetime
 
 import pytest
+
+
+def _install_langchain_stubs():
+    langchain_openai = types.ModuleType("langchain_openai")
+
+    class ChatOpenAI:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    langchain_openai.ChatOpenAI = ChatOpenAI
+    sys.modules.setdefault("langchain_openai", langchain_openai)
+
+    chat_models = types.ModuleType("langchain_openai.chat_models")
+    chat_models_base = types.ModuleType("langchain_openai.chat_models.base")
+    chat_models_base._convert_dict_to_message = lambda value, *args, **kwargs: value
+    chat_models_base._convert_message_to_dict = lambda value, *args, **kwargs: {}
+    chat_models_base._convert_delta_to_message_chunk = (
+        lambda value, default_class: default_class()
+    )
+    sys.modules.setdefault("langchain_openai.chat_models", chat_models)
+    sys.modules.setdefault("langchain_openai.chat_models.base", chat_models_base)
+
+    langchain_core = types.ModuleType("langchain_core")
+    language_models = types.ModuleType("langchain_core.language_models")
+
+    class BaseChatModel:
+        pass
+
+    language_models.BaseChatModel = BaseChatModel
+    messages = types.ModuleType("langchain_core.messages")
+
+    class BaseMessage:
+        pass
+
+    class AIMessage(BaseMessage):
+        def __init__(self, *args, **kwargs):
+            self.additional_kwargs = kwargs.get("additional_kwargs", {})
+
+    class AIMessageChunk(BaseMessage):
+        pass
+
+    class HumanMessage(BaseMessage):
+        pass
+
+    class SystemMessage(BaseMessage):
+        pass
+
+    class ToolMessage(BaseMessage):
+        pass
+
+    messages.AIMessage = AIMessage
+    messages.AIMessageChunk = AIMessageChunk
+    messages.BaseMessage = BaseMessage
+    messages.HumanMessage = HumanMessage
+    messages.SystemMessage = SystemMessage
+    messages.ToolMessage = ToolMessage
+    sys.modules.setdefault("langchain_core", langchain_core)
+    sys.modules.setdefault("langchain_core.language_models", language_models)
+    sys.modules.setdefault("langchain_core.messages", messages)
+
+
+_install_langchain_stubs()
+
+chat_stub = types.ModuleType("backend.route.chat")
+from backend.config import settings as _chat_settings
+
+
+async def _chat_resolve_default_model_config(user_id=None):
+    return None
+
+
+async def _chat_resolve_any_model_config():
+    config = await chat_stub.resolve_default_model_config()
+    if config:
+        return config
+    if getattr(chat_stub.settings, "model_ds_api_key", ""):
+        return {"_use_default": True}
+    return {"_use_default": True}
+
+
+chat_stub.settings = _chat_settings
+chat_stub.resolve_default_model_config = _chat_resolve_default_model_config
+chat_stub._resolve_any_model_config = _chat_resolve_any_model_config
+sys.modules.setdefault("backend.route.chat", chat_stub)
 
 CHAT_MODULE = importlib.import_module("backend.route.chat")
 from backend.rpa.manager import RPASession, RPAStep
@@ -179,50 +265,66 @@ def test_generate_session_script_does_not_emit_empty_snapshot_extract_when_field
 
     script = ROUTE_MODULE._generate_session_script(session, {}, test_mode=True)
 
-    assert "_results['purchase_info'] = _result" in script
-    assert "预计总金额 (含税）" in script
+    assert "_results['purchase_info'] = _result" not in script
     assert "100.00" not in script
 
 
-def test_generate_session_script_uses_recorded_actions_when_present():
+def test_generate_session_script_ignores_recorded_actions_without_traces():
     session = RPASession(id="s2", user_id="u2", sandbox_session_id="sandbox")
     session.recorded_actions.append(
         ManualRecordedAction(
             step_id="step-search",
             action_kind=ManualActionKind.CLICK,
-            description='点击 button("Search")',
-            target={"method": "role", "role": "button", "name": "Search"},
+            description="DO_NOT_USE_LEGACY",
+            target={"method": "role", "role": "button", "name": "DO_NOT_USE_LEGACY"},
             validation={"status": "ok"},
         )
     )
 
     script = ROUTE_MODULE._generate_session_script(session, {}, test_mode=True)
 
-    assert "get_by_role('button'" in script or 'get_by_role("button"' in script
-    assert 'name="Search"' in script or "name='Search'" in script or "name=\"Search\"" in script
+    assert "DO_NOT_USE_LEGACY" not in script
+    assert "get_by_role('button'" not in script
+    assert 'get_by_role("button"' not in script
 
 
-def test_generate_session_script_preserves_step_signals_on_recorded_actions():
+def test_generate_session_script_uses_trace_signals_and_ignores_legacy_step_signals():
     session = RPASession(id="s-popup", user_id="u-popup", sandbox_session_id="sandbox")
     session.steps.append(
         RPAStep(
             id="step-export",
             action="click",
-            target='{"method": "text", "value": "Export all"}',
-            description='click text("Export all")',
-            signals={"popup": {"source_tab_id": "tab-main", "target_tab_id": "tab-export"}},
-            tab_id="tab-main",
-            source_tab_id="tab-main",
-            target_tab_id="tab-export",
+            target='{"method": "text", "value": "DO_NOT_USE_LEGACY"}',
+            description="DO_NOT_USE_LEGACY",
+            signals={"popup": {"source_tab_id": "legacy-main", "target_tab_id": "legacy-export"}},
+            tab_id="legacy-main",
+            source_tab_id="legacy-main",
+            target_tab_id="legacy-export",
         )
     )
     session.recorded_actions.append(
         ManualRecordedAction(
             step_id="step-export",
             action_kind=ManualActionKind.CLICK,
-            description='click text("Export all")',
-            target={"method": "text", "value": "Export all"},
+            description="DO_NOT_USE_LEGACY",
+            target={"method": "text", "value": "DO_NOT_USE_LEGACY"},
             validation={"status": "ok"},
+        )
+    )
+    session.traces.append(
+        RPAAcceptedTrace(
+            trace_id="trace-export",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            source="manual",
+            action="click",
+            description='click text("Export all")',
+            locator_candidates=[
+                {"locator": {"method": "text", "value": "Export all"}, "selected": True}
+            ],
+            signals={
+                "popup": {"source_tab_id": "tab-main", "target_tab_id": "tab-export"},
+                "tab": {"tab_id": "tab-main"},
+            },
         )
     )
 
@@ -231,19 +333,20 @@ def test_generate_session_script_preserves_step_signals_on_recorded_actions():
     assert "expect_popup() as popup_info" in script
     assert 'tabs["tab-export"] = new_page' in script
     assert "current_page = new_page" in script
+    assert "DO_NOT_USE_LEGACY" not in script
 
 
-def test_generate_session_script_merges_step_tab_fields_into_existing_trace():
+def test_generate_session_script_uses_trace_tab_fields_not_step_tab_fields():
     session = RPASession(id="s-switch", user_id="u-switch", sandbox_session_id="sandbox")
     session.steps.append(
         RPAStep(
             id="step-switch",
             action="switch_tab",
             target="",
-            description="切换到标签页 iSales+",
-            tab_id="tab-root",
-            source_tab_id="tab-root",
-            target_tab_id="tab-sales",
+            description="DO_NOT_USE_LEGACY",
+            tab_id="legacy-root",
+            source_tab_id="legacy-root",
+            target_tab_id="legacy-sales",
         )
     )
     session.traces.append(
@@ -253,6 +356,7 @@ def test_generate_session_script_merges_step_tab_fields_into_existing_trace():
             source="manual",
             action="switch_tab",
             description="切换到标签页 iSales+",
+            signals={"tab": {"tab_id": "tab-root", "source_tab_id": "tab-root", "target_tab_id": "tab-sales"}},
         )
     )
 
@@ -261,6 +365,7 @@ def test_generate_session_script_merges_step_tab_fields_into_existing_trace():
     assert "No stable locator was recorded" not in script
     assert 'tabs.setdefault("tab-root", current_page)' in script
     assert 'current_page = tabs["tab-sales"]' in script
+    assert "DO_NOT_USE_LEGACY" not in script
 
 
 def test_generate_session_script_preserves_trace_tab_ids_for_navigation_pages():
@@ -290,29 +395,49 @@ def test_generate_session_script_preserves_trace_tab_ids_for_navigation_pages():
     assert "_target_url = 'https://www.browseract.com/'" in script
 
 
-def test_generate_session_script_preserves_frame_path_on_recorded_actions():
+def test_generate_session_script_uses_trace_frame_path_and_ignores_recorded_actions():
     session = RPASession(id="s-frame", user_id="u-frame", sandbox_session_id="sandbox")
     session.recorded_actions.append(
         ManualRecordedAction(
             step_id="step-notes",
             action_kind=ManualActionKind.CLICK,
-            description='点击 link("菜鸟笔记") 并在新标签页打开',
-            target={"method": "role", "role": "link", "name": "菜鸟笔记"},
+            description="DO_NOT_USE_LEGACY",
+            target={"method": "role", "role": "link", "name": "DO_NOT_USE_LEGACY"},
             validation={"status": "ok"},
-            frame_path=["iframe[title='运行结果预览']", "iframe"],
+            frame_path=["iframe[title='DO_NOT_USE_LEGACY']"],
         )
     )
     session.steps.append(
         RPAStep(
             id="step-notes",
             action="click",
-            target='{"method": "role", "role": "link", "name": "菜鸟笔记"}',
+            target='{"method": "role", "role": "link", "name": "DO_NOT_USE_LEGACY"}',
+            description="DO_NOT_USE_LEGACY",
+            frame_path=["iframe[title='DO_NOT_USE_LEGACY']"],
+            signals={"popup": {"source_tab_id": "legacy-main", "target_tab_id": "legacy-note"}},
+            tab_id="legacy-main",
+            source_tab_id="legacy-main",
+            target_tab_id="legacy-note",
+        )
+    )
+    session.traces.append(
+        RPAAcceptedTrace(
+            trace_id="trace-notes",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            source="manual",
+            action="click",
             description='点击 link("菜鸟笔记") 并在新标签页打开',
             frame_path=["iframe[title='运行结果预览']", "iframe"],
-            signals={"popup": {"source_tab_id": "tab-main", "target_tab_id": "tab-note"}},
-            tab_id="tab-main",
-            source_tab_id="tab-main",
-            target_tab_id="tab-note",
+            locator_candidates=[
+                {
+                    "locator": {"method": "role", "role": "link", "name": "菜鸟笔记"},
+                    "selected": True,
+                }
+            ],
+            signals={
+                "popup": {"source_tab_id": "tab-main", "target_tab_id": "tab-note"},
+                "tab": {"tab_id": "tab-main"},
+            },
         )
     )
 
@@ -322,16 +447,17 @@ def test_generate_session_script_preserves_frame_path_on_recorded_actions():
     assert 'frame_scope = frame_scope.frame_locator("iframe")' in script
     assert "await frame_scope.get_by_role('link', name='菜鸟笔记', exact=True).click()" in script or 'await frame_scope.get_by_role("link", name="菜鸟笔记", exact=True).click()' in script
     assert "expect_popup() as popup_info" in script
+    assert "DO_NOT_USE_LEGACY" not in script
 
 
-def test_generate_session_script_keeps_ai_traces_when_recorded_actions_replace_manual_traces():
+def test_generate_session_script_keeps_session_traces_and_ignores_recorded_actions_poison():
     session = RPASession(id="s3", user_id="u3", sandbox_session_id="sandbox")
     session.recorded_actions.append(
         ManualRecordedAction(
             step_id="step-search",
             action_kind=ManualActionKind.CLICK,
-            description='click button("Search")',
-            target={"method": "role", "role": "button", "name": "Search"},
+            description="DO_NOT_USE_LEGACY",
+            target={"method": "role", "role": "button", "name": "DO_NOT_USE_LEGACY"},
             validation={"status": "ok"},
         )
     )
@@ -361,7 +487,9 @@ def test_generate_session_script_keeps_ai_traces_when_recorded_actions_replace_m
     script = ROUTE_MODULE._generate_session_script(session, {}, test_mode=True)
 
     assert "selected_repo" in script
-    assert "get_by_role('button'" in script or 'get_by_role(\"button\"' in script
+    assert "DO_NOT_USE_LEGACY" not in script
+    assert "get_by_role('button'" not in script
+    assert 'get_by_role("button"' not in script
 
 
 def test_session_traces_for_compile_preserves_manual_ai_manual_order():
@@ -406,13 +534,32 @@ def test_session_traces_for_compile_preserves_manual_ai_manual_order():
     )
     session.traces.append(
         RPAAcceptedTrace(
+            trace_id="trace-first",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            source="manual",
+            action="click",
+            description="First manual action",
+            signals={"recording": {"event_timestamp_ms": 1000}},
+        )
+    )
+    session.traces.append(
+        RPAAcceptedTrace(
             trace_id="trace-ai-middle",
             trace_type=RPATraceType.AI_OPERATION,
             source="ai",
             description="AI middle action",
-            started_at=datetime.fromtimestamp(2),
-            ended_at=datetime.fromtimestamp(2),
+            signals={"recording": {"event_timestamp_ms": 2000}},
             ai_execution=RPAAIExecution(code="async def run(page, results):\n    return {}"),
+        )
+    )
+    session.traces.append(
+        RPAAcceptedTrace(
+            trace_id="trace-second",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            source="manual",
+            action="click",
+            description="Second manual action",
+            signals={"recording": {"event_timestamp_ms": 3000}},
         )
     )
 
@@ -423,20 +570,47 @@ def test_session_traces_for_compile_preserves_manual_ai_manual_order():
         "AI middle action",
         "Second manual action",
     ]
-    assert [step["description"] for step in ROUTE_MODULE.session_to_mcp_steps(session)] == [
-        "First manual action",
-        "AI middle action",
-        "Second manual action",
-    ]
 
 
-def test_build_session_recording_meta_preserves_step_fields_in_trace_and_legacy_steps():
+def test_build_session_recording_meta_preserves_trace_fields_with_legacy_poison():
     session = RPASession(id="route-meta-trace", user_id="u1", sandbox_session_id="sandbox")
     session.steps.append(
         RPAStep(
             id="step-export",
             action="click",
-            target='{"method": "text", "value": "Export all"}',
+            target='{"method": "text", "value": "DO_NOT_USE_LEGACY"}',
+            description="DO_NOT_USE_LEGACY",
+            locator_candidates=[
+                {
+                    "kind": "text",
+                    "locator": {"method": "text", "value": "DO_NOT_USE_LEGACY"},
+                    "selected": True,
+                }
+            ],
+            validation={"status": "ok"},
+            signals={"popup": {"source_tab_id": "legacy-main", "target_tab_id": "legacy-export"}},
+            tab_id="legacy-main",
+            source_tab_id="legacy-main",
+            target_tab_id="legacy-export",
+            sequence=7,
+            event_timestamp_ms=12345,
+        )
+    )
+    session.recorded_actions.append(
+        ManualRecordedAction(
+            step_id="step-export",
+            action_kind=ManualActionKind.CLICK,
+            description="DO_NOT_USE_LEGACY",
+            target={"method": "text", "value": "DO_NOT_USE_LEGACY"},
+            validation={"status": "ok"},
+        )
+    )
+    session.traces.append(
+        RPAAcceptedTrace(
+            trace_id="trace-step-export",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            source="manual",
+            action="click",
             description='click text("Export all")',
             locator_candidates=[
                 {
@@ -446,37 +620,26 @@ def test_build_session_recording_meta_preserves_step_fields_in_trace_and_legacy_
                 }
             ],
             validation={"status": "ok"},
-            signals={"popup": {"source_tab_id": "tab-main", "target_tab_id": "tab-export"}},
-            tab_id="tab-main",
-            source_tab_id="tab-main",
-            target_tab_id="tab-export",
-            sequence=7,
-            event_timestamp_ms=12345,
-        )
-    )
-    session.recorded_actions.append(
-        ManualRecordedAction(
-            step_id="step-export",
-            action_kind=ManualActionKind.CLICK,
-            description='click text("Export all")',
-            target={"method": "text", "value": "Export all"},
-            validation={"status": "ok"},
+            signals={
+                "popup": {"source_tab_id": "tab-main", "target_tab_id": "tab-export"},
+                "tab": {"tab_id": "tab-main"},
+            },
         )
     )
 
     meta = ROUTE_MODULE._build_session_recording_meta(session)
 
     assert meta["recording_source"] == "trace"
-    assert meta["legacy_steps"][0]["sequence"] == 7
     trace = meta["traces"][0]
     assert trace["trace_id"] == "trace-step-export"
     assert trace["locator_candidates"][0]["locator"]["value"] == "Export all"
     assert trace["signals"]["popup"]["target_tab_id"] == "tab-export"
     assert trace["signals"]["tab"]["tab_id"] == "tab-main"
     assert trace["validation"]["status"] == "ok"
+    assert "DO_NOT_USE_LEGACY" not in json.dumps(meta["traces"], ensure_ascii=False)
 
 
-def test_build_session_recording_meta_derives_traces_for_legacy_step_only_session():
+def test_build_session_recording_meta_does_not_derive_traces_from_legacy_step_only_session():
     session = RPASession(id="route-meta-legacy", user_id="u1", sandbox_session_id="sandbox")
     session.steps.append(
         RPAStep(
@@ -491,12 +654,11 @@ def test_build_session_recording_meta_derives_traces_for_legacy_step_only_sessio
 
     meta = ROUTE_MODULE._build_session_recording_meta(session)
 
-    assert meta["recording_source"] == "legacy_step"
-    assert meta["legacy_steps"][0]["id"] == "step-open"
-    assert meta["traces"][0]["trace_id"] == "trace-step-open"
-    assert meta["traces"][0]["action"] == "goto"
-    assert meta["traces"][0]["after_page"]["url"] == "https://example.com/dashboard"
-    assert meta["traces"][0]["signals"]["recording"]["sequence"] == 1
+    assert meta["recording_source"] == "none"
+    assert meta["traces"] == []
+    assert "legacy_steps" not in meta
+    assert "recorded_actions" not in meta
+    assert "recording_diagnostics" not in meta
 
 
 def test_build_session_recording_meta_marks_runtime_ai_requirement_for_semantic_trace():
@@ -630,15 +792,24 @@ async def test_chat_agent_done_reports_run_trace_count_not_session_total(monkeyp
             ROUTE_MODULE.ChatRequest(message="获取start数"),
             user,
         )
+        events = []
         chunks = []
         async for chunk in response.body_iterator:
-            chunks.append(chunk.decode("utf-8") if isinstance(chunk, bytes) else str(chunk))
+            if isinstance(chunk, dict):
+                events.append(chunk)
+            else:
+                chunks.append(chunk.decode("utf-8") if isinstance(chunk, bytes) else str(chunk))
         body = "".join(chunks)
         done_payloads = [
             json.loads(line.removeprefix("data:").strip())
             for line in body.splitlines()
             if line.startswith("data:") and "trace_count" in line
         ]
+        done_payloads.extend(
+            json.loads(event["data"])
+            for event in events
+            if event.get("event") == "agent_done"
+        )
 
         assert done_payloads[-1]["trace_count"] == 1
         assert done_payloads[-1]["session_trace_count"] == 4
@@ -688,7 +859,7 @@ async def test_save_skill_exports_trace_first_recording_meta(monkeypatch):
         assert response == {"status": "success", "skill_name": "saved_trace"}
         assert captured["recording_meta"]["recording_source"] == "trace"
         assert captured["recording_meta"]["traces"][0]["trace_id"] == "trace-ai-1"
-        assert captured["recording_meta"]["legacy_steps"][0]["id"] == "legacy-step"
+        assert "legacy_steps" not in captured["recording_meta"]
         assert captured["steps"][0]["id"] == "trace-ai-1"
         assert captured["steps"][0]["result_key"] == "result"
     finally:
@@ -696,7 +867,7 @@ async def test_save_skill_exports_trace_first_recording_meta(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_generate_script_blocks_when_recording_diagnostics_exist():
+async def test_generate_script_rejects_empty_traces_before_legacy_recording_diagnostics():
     manager = ROUTE_MODULE.rpa_manager
     session = RPASession(id="route-diagnostic-generate", user_id="u1", sandbox_session_id="sandbox")
     session.recording_diagnostics.append(
@@ -712,7 +883,7 @@ async def test_generate_script_blocks_when_recording_diagnostics_exist():
         with pytest.raises(ROUTE_MODULE.HTTPException) as exc_info:
             await ROUTE_MODULE.generate_script(session.id, ROUTE_MODULE.GenerateRequest(), user)
         assert exc_info.value.status_code == 400
-        assert "diagnostic" in exc_info.value.detail
+        assert "No trace" in exc_info.value.detail
     finally:
         manager.sessions.pop(session.id, None)
 
@@ -826,12 +997,27 @@ async def test_generate_script_waits_for_pending_events(monkeypatch):
     async def fake_wait_for_pending_events(target_session_id: str, timeout_ms: int = 1500):
         assert target_session_id == session.id
         called["waited"] = True
+        session.traces.append(
+            RPAAcceptedTrace(
+                trace_id="trace-search",
+                trace_type=RPATraceType.MANUAL_ACTION,
+                source="manual",
+                action="click",
+                description='点击 button("Search")',
+                locator_candidates=[
+                    {
+                        "locator": {"method": "role", "role": "button", "name": "Search"},
+                        "selected": True,
+                    }
+                ],
+            )
+        )
         session.recorded_actions.append(
             ManualRecordedAction(
                 step_id="step-search",
                 action_kind=ManualActionKind.CLICK,
-                description='点击 button("Search")',
-                target={"method": "role", "role": "button", "name": "Search"},
+                description="DO_NOT_USE_LEGACY",
+                target={"method": "role", "role": "button", "name": "DO_NOT_USE_LEGACY"},
                 validation={"status": "ok"},
             )
         )
@@ -844,6 +1030,7 @@ async def test_generate_script_waits_for_pending_events(monkeypatch):
         response = await ROUTE_MODULE.generate_script(session.id, ROUTE_MODULE.GenerateRequest(), user)
         assert called["waited"] is True
         assert "Search" in response["script"]
+        assert "DO_NOT_USE_LEGACY" not in response["script"]
     finally:
         manager.sessions.pop(session.id, None)
 
@@ -864,7 +1051,7 @@ async def test_generate_script_rejects_non_owner():
 
 
 @pytest.mark.asyncio
-async def test_delete_timeline_manual_step_removes_generate_input():
+async def test_delete_timeline_rejects_manual_step_kind():
     manager = ROUTE_MODULE.rpa_manager
     session = RPASession(id="route-delete-manual-step", user_id="u1", sandbox_session_id="sandbox")
     session.steps.append(
@@ -908,17 +1095,19 @@ async def test_delete_timeline_manual_step_removes_generate_input():
 
     try:
         user = type("User", (), {"id": "u1"})()
-        response = await ROUTE_MODULE.delete_timeline_item(
-            session.id,
-            ROUTE_MODULE.DeleteTimelineItemRequest(kind="manual_step", step_id="step-search"),
-            user,
-        )
+        with pytest.raises(ROUTE_MODULE.HTTPException) as exc_info:
+            await ROUTE_MODULE.delete_timeline_item(
+                session.id,
+                ROUTE_MODULE.DeleteTimelineItemRequest(kind="manual_step", step_id="step-search"),
+                user,
+            )
         script = ROUTE_MODULE._generate_session_script(session, {}, test_mode=True)
 
-        assert response["status"] == "success"
-        assert "Search" not in script
+        assert exc_info.value.status_code == 400
+        assert "Invalid timeline item kind" in exc_info.value.detail
+        assert "Search" in script
         assert "page_title" in script
-        assert [trace.trace_id for trace in session.traces] == ["trace-ai-keep"]
+        assert [trace.trace_id for trace in session.traces] == ["trace-step-search", "trace-ai-keep"]
     finally:
         manager.sessions.pop(session.id, None)
 
@@ -989,14 +1178,13 @@ async def test_delete_timeline_manual_trace_removes_legacy_step_fallback():
         script = ROUTE_MODULE._generate_session_script(session, {}, test_mode=True)
 
         assert session.traces == []
-        assert session.steps == []
         assert "Search" not in script
     finally:
         manager.sessions.pop(session.id, None)
 
 
 @pytest.mark.asyncio
-async def test_test_script_blocks_when_recording_diagnostics_exist():
+async def test_test_script_rejects_empty_traces_before_legacy_recording_diagnostics():
     manager = ROUTE_MODULE.rpa_manager
     session = RPASession(id="route-diagnostic-test", user_id="u1", sandbox_session_id="sandbox")
     session.recording_diagnostics.append(
@@ -1012,7 +1200,7 @@ async def test_test_script_blocks_when_recording_diagnostics_exist():
         with pytest.raises(ROUTE_MODULE.HTTPException) as exc_info:
             await ROUTE_MODULE.test_script(session.id, ROUTE_MODULE.GenerateRequest(), user)
         assert exc_info.value.status_code == 400
-        assert "diagnostic" in exc_info.value.detail
+        assert "No trace" in exc_info.value.detail
     finally:
         manager.sessions.pop(session.id, None)
 
@@ -1159,6 +1347,14 @@ async def test_apply_recording_agent_result_persists_trace_and_runtime_output():
 async def test_test_script_passes_route_timeout_to_executor(monkeypatch):
     manager = ROUTE_MODULE.rpa_manager
     session = RPASession(id="route-timeout-test", user_id="u1", sandbox_session_id="sandbox")
+    session.traces.append(
+        RPAAcceptedTrace(
+            trace_id="trace-timeout",
+            trace_type=RPATraceType.AI_OPERATION,
+            source="ai",
+            description="Trace timeout",
+        )
+    )
     manager.sessions[session.id] = session
 
     captured: dict = {}

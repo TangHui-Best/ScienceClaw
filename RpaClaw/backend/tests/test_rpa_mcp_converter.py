@@ -357,6 +357,11 @@ def test_preview_infers_candidate_params_like_skill_configure_page():
             "target": '{"method":"label","value":"Title"}',
             "value": "Quarterly report",
             "url": "https://example.com/editor",
+            "rpa_trace": {
+                "trace_id": "trace-fill-title",
+                "trace_type": "manual_action",
+                "output_key": "title",
+            },
         },
         {
             "id": "upload-file",
@@ -379,8 +384,9 @@ def test_preview_infers_candidate_params_like_skill_configure_page():
     )
 
     assert set(preview.params.keys()) == {"title"}
-    assert preview.params["title"]["source_step_index"] == 0
-    assert preview.params["title"]["source_step_id"] == "fill-title"
+    assert preview.params["title"]["source_trace_id"] == "trace-fill-title"
+    assert preview.params["title"]["source_trace_output_key"] == "title"
+    assert "source_step_index" not in preview.model_dump_json()
     assert "file" not in preview.input_schema["properties"]
 
 

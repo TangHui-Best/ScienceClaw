@@ -131,7 +131,7 @@ class TestSkillExporter(unittest.IsolatedAsyncioTestCase):
             meta = json.loads((skill_dir / "skill.meta.json").read_text(encoding="utf-8"))
             self.assertEqual(meta["steps"][0]["timestamp"], "2026-04-24T12:00:00")
 
-    async def test_export_skill_writes_mcp_projection_without_replacing_legacy_steps(self):
+    async def test_export_skill_writes_trace_mcp_projection_without_legacy_source_facts(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             exporter = SkillExporter()
             legacy_steps = [
@@ -155,12 +155,15 @@ class TestSkillExporter(unittest.IsolatedAsyncioTestCase):
             recording_meta = {
                 "recording_source": "trace",
                 "traces": [projected_steps[0]["rpa_trace"]],
-                "recorded_actions": [],
-                "legacy_steps": legacy_steps,
                 "runtime_results": {},
                 "runtime_requirements": {"runtime_ai": True},
                 "trace_diagnostics": [],
-                "recording_diagnostics": [],
+            }
+            recording_meta_with_poison = {
+                **recording_meta,
+                "recorded_actions": [{"description": "DO_NOT_USE_LEGACY"}],
+                "legacy_steps": legacy_steps,
+                "recording_diagnostics": [{"message": "DO_NOT_USE_LEGACY"}],
             }
 
             original_backend = settings.storage_backend
@@ -174,7 +177,7 @@ class TestSkillExporter(unittest.IsolatedAsyncioTestCase):
                     description="Trace projector",
                     script="print('ok')\n",
                     params={},
-                    recording_meta=recording_meta,
+                    recording_meta=recording_meta_with_poison,
                     steps=projected_steps,
                 )
             finally:
@@ -183,9 +186,10 @@ class TestSkillExporter(unittest.IsolatedAsyncioTestCase):
 
             skill_dir = Path(temp_dir) / "trace_projector"
             meta = json.loads((skill_dir / "skill.meta.json").read_text(encoding="utf-8"))
-            self.assertEqual(meta["steps"], legacy_steps)
+            self.assertNotIn("steps", meta)
             self.assertEqual(meta["mcp_steps"], projected_steps)
-            self.assertEqual(meta["recording"]["legacy_steps"], legacy_steps)
+            self.assertEqual(meta["recording"], recording_meta)
+            self.assertNotIn("DO_NOT_USE_LEGACY", json.dumps(meta, ensure_ascii=False))
             self.assertEqual(meta["runtime_requirements"], {"runtime_ai": True})
 
 

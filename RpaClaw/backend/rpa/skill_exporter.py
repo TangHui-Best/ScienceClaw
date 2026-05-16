@@ -29,6 +29,16 @@ class SkillExporter:
         )
 
     @staticmethod
+    def _normalize_recording_meta(recording_meta: Dict[str, Any]) -> Dict[str, Any]:
+        if recording_meta.get("recording_source") != "trace":
+            return dict(recording_meta)
+        return {
+            key: value
+            for key, value in recording_meta.items()
+            if key not in {"legacy_steps", "recorded_actions", "recording_diagnostics"}
+        }
+
+    @staticmethod
     def _build_skill_meta(
         skill_name: str,
         description: str,
@@ -36,9 +46,15 @@ class SkillExporter:
         recording_meta: Dict[str, Any],
         projected_steps: list[Dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
+        recording_meta = SkillExporter._normalize_recording_meta(recording_meta)
+        recording_source = recording_meta.get("recording_source", "trace")
+        is_trace_recording = recording_source == "trace"
         legacy_steps = recording_meta.get("legacy_steps", [])
-        mcp_steps = projected_steps if projected_steps is not None else recording_meta.get("mcp_steps", legacy_steps)
-        return {
+        mcp_steps = projected_steps if projected_steps is not None else recording_meta.get(
+            "mcp_steps",
+            [] if is_trace_recording else legacy_steps,
+        )
+        meta = {
             "version": 2,
             "kind": "rpa-recording",
             "name": skill_name,
@@ -50,12 +66,14 @@ class SkillExporter:
                 "runtime_requirements",
                 {"runtime_ai": False},
             ),
-            "recording_source": recording_meta.get("recording_source", "trace"),
+            "recording_source": recording_source,
             "recording": recording_meta,
-            "steps": legacy_steps,
             "mcp_steps": mcp_steps,
             "artifacts": ["SKILL.md", "params.json", "skill.py"],
         }
+        if not is_trace_recording:
+            meta["steps"] = legacy_steps
+        return meta
 
     async def export_skill(
         self,

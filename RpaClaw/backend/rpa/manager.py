@@ -893,7 +893,7 @@ class RPASessionManager:
                         "index": int(nth_match.group(1)),
                     }
                 else:
-                    first_match = re.match(r'\.first\b', remaining)
+                    first_match = re.match(r'\.first(?:\(\))?', remaining)
                     if first_match:
                         matched_text = first_match.group(0)
                         current = {
@@ -1229,32 +1229,7 @@ class RPASessionManager:
 
         trace = next((item for item in session.traces if item.trace_id == trace_id), None)
         if trace is None:
-            diagnostic = next(
-                (
-                    item
-                    for item in session.trace_diagnostics
-                    if item.source == "manual_recording" and item.trace_id == trace_id
-                ),
-                None,
-            )
-            if diagnostic is None:
-                raise ValueError("Invalid trace id")
-            related_step_id = str((diagnostic.raw or {}).get("related_step_id") or "")
-            step_index = next(
-                (
-                    index
-                    for index, step in enumerate(session.steps)
-                    if step.id == related_step_id
-                ),
-                None,
-            )
-            if step_index is None:
-                raise ValueError("Invalid trace id")
-            await self.select_step_locator_candidate(session_id, step_index, candidate_index)
-            trace = next((item for item in session.traces if item.trace_id == trace_id), None)
-            if trace is None:
-                raise ValueError("Invalid trace id")
-            return trace
+            raise ValueError("Invalid trace id")
         if candidate_index < 0 or candidate_index >= len(trace.locator_candidates):
             raise ValueError("Invalid locator candidate index")
 
@@ -1278,6 +1253,44 @@ class RPASessionManager:
             trace.dataflow.target_field.locator_candidates = [
                 dict(candidate) for candidate in trace.locator_candidates
             ]
+        return trace
+
+    async def resolve_trace_diagnostic_locator_candidate(
+        self,
+        session_id: str,
+        diagnostic_id: str,
+        candidate_index: int,
+    ) -> RPAAcceptedTrace:
+        session = self.sessions.get(session_id)
+        if not session or not diagnostic_id:
+            raise ValueError("Invalid diagnostic id")
+
+        diagnostic = next(
+            (item for item in session.trace_diagnostics if item.diagnostic_id == diagnostic_id),
+            None,
+        )
+        if diagnostic is None:
+            raise ValueError("Invalid diagnostic id")
+        if diagnostic.source != "manual_recording" or not isinstance(diagnostic.raw, dict):
+            raise ValueError("Diagnostic cannot be resolved by locator")
+
+        related_step_id = str(diagnostic.raw.get("related_step_id") or "")
+        step_index = next(
+            (
+                index
+                for index, step in enumerate(session.steps)
+                if step.id == related_step_id
+            ),
+            None,
+        )
+        if step_index is None:
+            raise ValueError("Diagnostic backing step not found")
+
+        await self.select_step_locator_candidate(session_id, step_index, candidate_index)
+        trace_id = diagnostic.trace_id or f"trace-{related_step_id}"
+        trace = next((item for item in session.traces if item.trace_id == trace_id), None)
+        if trace is None:
+            raise ValueError("Diagnostic did not resolve to trace")
         return trace
 
     def pause_recording(self, session_id: str):

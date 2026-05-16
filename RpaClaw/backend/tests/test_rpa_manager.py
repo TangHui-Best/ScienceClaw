@@ -434,9 +434,14 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
                 "validation": {"status": "ok"},
             },
         )
-        trace_id = self.session.trace_diagnostics[0].trace_id
+        diagnostic = self.session.trace_diagnostics[0]
+        trace_id = diagnostic.trace_id
 
-        trace = await self.manager.select_trace_locator_candidate(self.session.id, trace_id, 1)
+        trace = await self.manager.resolve_trace_diagnostic_locator_candidate(
+            self.session.id,
+            diagnostic.diagnostic_id,
+            1,
+        )
 
         self.assertEqual(trace.trace_id, trace_id)
         self.assertEqual(len(trace.locator_candidates), 1)
@@ -457,13 +462,13 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
                 "locator_candidates": [
                     {
                         "kind": "role",
-                        "playwright_locator": "page.get_by_role('textbox', name='请输入').first",
+                        "playwright_locator": 'page.locator(".unknown")',
                         "selected": True,
                         "strict_match_count": 0,
                     },
                     {
-                        "kind": "placeholder",
-                        "playwright_locator": "page.get_by_placeholder('请输入').first",
+                        "kind": "role",
+                        "playwright_locator": "page.get_by_role('textbox', name='请输入').first",
                         "selected": False,
                         "strict_match_count": 0,
                     },
@@ -471,9 +476,14 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
                 "validation": {"status": "fallback"},
             },
         )
-        trace_id = self.session.trace_diagnostics[0].trace_id
+        diagnostic = self.session.trace_diagnostics[0]
+        trace_id = diagnostic.trace_id
 
-        trace = await self.manager.select_trace_locator_candidate(self.session.id, trace_id, 0)
+        trace = await self.manager.resolve_trace_diagnostic_locator_candidate(
+            self.session.id,
+            diagnostic.diagnostic_id,
+            1,
+        )
 
         self.assertEqual(trace.trace_id, trace_id)
         self.assertEqual(trace.locator_candidates[0]["locator"], {
@@ -983,6 +993,45 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(step.locator_candidates[1]["selected"])
         self.assertEqual(step.validation["status"], "ok")
         self.assertEqual(step.validation["details"], "strict unique Playwright text match")
+
+    async def test_handle_event_accepts_named_role_first_playwright_candidate(self):
+        page = _FakePage("https://example.com", "Example")
+        tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "fill",
+                "tab_id": tab_id,
+                "tag": "INPUT",
+                "timestamp": 1234567894,
+                "value": "JE",
+                "locator_candidates": [
+                    {
+                        "kind": "role",
+                        "score": 0,
+                        "strict_match_count": 1,
+                        "visible_match_count": 1,
+                        "selected": True,
+                        "playwright_locator": 'page.get_by_role("textbox", name="请输入").first',
+                        "reason": "selected Playwright candidate is strict unique",
+                    },
+                ],
+                "validation": {"status": "ok", "details": "selected Playwright candidate is strict unique"},
+            },
+        )
+
+        step = self.session.steps[-1]
+        self.assertEqual(
+            json.loads(step.target),
+            {
+                "method": "nth",
+                "locator": {"method": "role", "role": "textbox", "name": "请输入"},
+                "index": 0,
+            },
+        )
+        self.assertEqual(len(self.session.recording_diagnostics), 0)
+        self.assertEqual(len(self.session.traces), 1)
 
     async def test_popup_download_attaches_signals_to_original_click_step(self):
         source_page = _FakePage("https://example.com", "Example")
@@ -1936,6 +1985,18 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([step.sequence for step in self.session.steps], [10, 20])
         self.assertIn("First", self.session.steps[0].description)
         self.assertIn("Second", self.session.steps[1].description)
+        traces_by_action_name = {
+            trace.locator_candidates[0]["locator"]["name"]: trace
+            for trace in self.session.traces
+        }
+        self.assertEqual(
+            traces_by_action_name["First"].signals["recording"],
+            {"sequence": 10, "event_timestamp_ms": 1234567890},
+        )
+        self.assertEqual(
+            traces_by_action_name["Second"].signals["recording"],
+            {"sequence": 20, "event_timestamp_ms": 1234567891},
+        )
 
     async def test_handle_event_prefers_event_timestamp_over_cross_tab_sequence_reset(self):
         first_page = _FakePage("https://example.com", "Example")

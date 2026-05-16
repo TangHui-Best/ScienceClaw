@@ -37,6 +37,27 @@ def test_manual_navigation_step_preserves_tab_id_signal():
     assert trace.signals["tab"] == {"tab_id": "tab-second"}
 
 
+def test_manual_step_to_trace_preserves_recording_order_signal():
+    trace = manual_step_to_trace(
+        {
+            "id": "step-ordered",
+            "action": "click",
+            "source": "record",
+            "description": "Click ordered button",
+            "target": '{"method":"role","role":"button","name":"Save"}',
+            "sequence": 17,
+            "event_timestamp_ms": 1234567890,
+            "signals": {"tab": {"tab_id": "tab-main"}},
+        }
+    )
+
+    assert trace.signals["recording"] == {
+        "sequence": 17,
+        "event_timestamp_ms": 1234567890,
+    }
+    assert trace.signals["tab"] == {"tab_id": "tab-main"}
+
+
 def test_manual_fill_step_records_value_and_locator_candidates():
     trace = manual_step_to_trace(
         {

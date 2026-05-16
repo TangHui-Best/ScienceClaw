@@ -292,14 +292,15 @@ class RpaMcpConverter:
             name = self._unique_param_name(base_name, used_names)
             used_names.add(name)
             known_values.add(original_value)
+            rpa_trace = step.get("rpa_trace") if isinstance(step.get("rpa_trace"), dict) else {}
             inferred[name] = {
                 "original_value": original_value,
                 "type": self._infer_param_type(original_value),
                 "description": str(step.get("description") or name),
                 "required": False,
                 "sensitive": False,
-                "source_step_index": step_index,
-                "source_step_id": str(step.get("id") or ""),
+                "source_trace_id": str(rpa_trace.get("trace_id") or step.get("id") or ""),
+                "source_trace_output_key": str(rpa_trace.get("output_key") or ""),
             }
 
         return inferred
