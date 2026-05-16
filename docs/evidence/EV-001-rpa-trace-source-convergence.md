@@ -5,7 +5,7 @@ title: RPA Trace Source Convergence Evidence
 status: active
 feature_ids: [F001]
 created: 2026-05-13
-updated: 2026-05-15
+updated: 2026-05-16
 evidence_level: exhaustive
 ---
 
@@ -636,6 +636,27 @@ Implementation and review records will be appended per task:
   - Full recording runtime result: `56 passed, 4 failed`; the failures are existing environment dependency import failures for `langchain_openai` in default-planner tests, not failures in the new allow-empty contract path.
 - Residual risk:
   - Runtime semantic replay still depends on the recording runtime planner selecting better candidates. The prompt now discourages broad `.first` extraction, but the longer-term architectural fix is still a stronger candidate/action evidence layer between raw snapshot facts and planner code generation.
+
+## 2026-05-16 Upstream Master Integration Branch
+
+- Branch:
+  - Source branch prepared from latest `upstream/master`: `codex/rpa-trace-source-to-master`.
+  - Cherry-picked trace-source commits: `f599dde`, `4d7fc64`, `7f9cd33`, `700716d`, `e7deb5c`, `87d1084`, `6441cb6`, `88dda0c`, `01eebf4`, `0e1ee72`, `a5a6fb5`.
+  - Additional integration commit: `test: align trace tab replay assertions`, aligning route-level tab replay assertions with the `_ensure_recorded_tab()` compiler contract already present on `upstream/master` through PR #52.
+- Verification:
+  - Diff hygiene command: `git diff --check upstream/master..HEAD`
+  - Diff hygiene result: passed.
+  - Backend trace convergence command: `$env:PYTHONPATH="RpaClaw"; python -m pytest RpaClaw/backend/tests/test_rpa_manager.py RpaClaw/backend/tests/test_rpa_route_trace.py RpaClaw/backend/tests/test_rpa_trace_mutation_routes.py RpaClaw/backend/tests/test_rpa_trace_recorder.py RpaClaw/backend/tests/test_rpa_trace_timeline.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_trace_e2e.py RpaClaw/backend/tests/test_skill_exporter.py RpaClaw/backend/tests/test_rpa_mcp_route.py RpaClaw/backend/tests/test_rpa_mcp_converter.py -q`
+  - Backend trace convergence result: `282 passed, 183 warnings`.
+  - Frontend focused command: `npm.cmd --prefix RpaClaw/frontend test -- ConfigurePage RecorderPage TestPage McpToolEditorPage.view rpaConfigureTimeline rpaAssistantRun`
+  - Frontend focused result: `6 passed` test files, `30 passed` tests.
+  - Frontend build command: `npm.cmd --prefix RpaClaw/frontend run build`
+  - Frontend build result: passed with existing duplicate-key, CSS, Browserslist, and chunk-size warnings.
+  - Frontend type-check command: `npm.cmd --prefix RpaClaw/frontend run type-check`
+  - Frontend type-check result: failed on existing global TypeScript errors in files such as `ActivityPanel.vue`, `ChatMessage.vue`, `SessionItem.vue`, locale files, and `desktopWindow.ts`; no reported error pointed to the RPA files touched by this integration.
+- Publish status:
+  - Pushed to `origin/codex/rpa-trace-source-to-master`.
+  - PR creation from this environment is blocked because GitHub CLI `gh` is not installed.
 
 Backend:
 
