@@ -19,6 +19,10 @@ from .playwright_security import get_context_kwargs
 from .trace_models import RPAAcceptedTrace, RPATraceDiagnostic, RPARuntimeResults
 from .trace_recorder import infer_dataflow_for_ai_fill, infer_dataflow_for_fill, manual_step_to_trace
 from .harness.capture import HarnessCaptureSessionState
+from .harness.capture import capture_step_checkpoint
+from .harness.config import harness_assets_dir
+from .harness.store import HarnessAssetStore
+from backend.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -263,6 +267,38 @@ class RPASessionManager:
             return None
         state.mark_step_selected(step_index)
         return state
+
+    async def capture_harness_step_checkpoint(
+        self,
+        session_id: str,
+        *,
+        step_index: int,
+        step_id: str,
+        step_intent: str,
+        recording_mode: str,
+        before_page,
+        after_page,
+        trace_events: list[dict],
+        runtime_status: str,
+        error: Optional[str] = None,
+    ):
+        state = self._harness_capture_sessions.get(session_id)
+        if state is None:
+            return None
+        store = HarnessAssetStore(harness_assets_dir(settings))
+        return await capture_step_checkpoint(
+            state,
+            store,
+            step_index=step_index,
+            step_id=step_id,
+            step_intent=step_intent,
+            recording_mode=recording_mode,
+            before_page=before_page,
+            after_page=after_page,
+            trace_events=trace_events,
+            runtime_status=runtime_status,
+            error=error,
+        )
 
     async def create_session(self, user_id: str, sandbox_session_id: str) -> RPASession:
         session_id = str(uuid.uuid4())
