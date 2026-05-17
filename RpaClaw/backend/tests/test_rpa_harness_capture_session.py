@@ -70,6 +70,36 @@ def test_capture_session_deduplicates_selected_steps():
     assert state.selected_step_indexes == [2]
 
 
+def test_selected_capture_can_mark_next_natural_language_step_without_fixed_index():
+    manager = _manager_with_session()
+
+    manager.start_harness_capture(
+        "session-1",
+        capture_scope="selected_steps",
+        enabled=True,
+    )
+    state = manager.mark_harness_next_natural_language_step_selected("session-1")
+
+    assert state is not None
+    assert state.pending_natural_language_step_captures == 1
+    assert state.should_capture_step(9) is True
+
+
+def test_selected_next_natural_language_mark_is_idempotent():
+    manager = _manager_with_session()
+
+    manager.start_harness_capture(
+        "session-1",
+        capture_scope="selected_steps",
+        enabled=True,
+    )
+    manager.mark_harness_next_natural_language_step_selected("session-1")
+    state = manager.mark_harness_next_natural_language_step_selected("session-1")
+
+    assert state is not None
+    assert state.pending_natural_language_step_captures == 1
+
+
 def test_full_sop_capture_does_not_store_selected_step_marks():
     manager = _manager_with_session()
 
@@ -82,4 +112,3 @@ def test_full_sop_capture_does_not_store_selected_step_marks():
 
     assert state is not None
     assert state.selected_step_indexes == []
-

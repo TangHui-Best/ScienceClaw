@@ -13,6 +13,16 @@ vi.mock('vue-router', () => ({
   useRouter: () => ({ push }),
 }));
 
+vi.mock('vue-i18n', () => ({
+  useI18n: () => ({
+    t: (key: string, params?: Record<string, unknown>) => {
+      if (params?.count !== undefined) return `${key} ${params.count}`;
+      if (params?.index !== undefined) return `${key} ${params.index}`;
+      return key;
+    },
+  }),
+}));
+
 vi.mock('@/api/client', () => ({
   apiClient: {
     get: (...args: unknown[]) => get(...args),
@@ -118,6 +128,22 @@ const mockStartSession = () => {
         data: {
           status: 'success',
           session: { id: 'session-1' },
+        },
+      });
+    }
+    if (url === '/rpa/session/session-1/harness-capture/start') {
+      return Promise.resolve({
+        data: {
+          status: 'success',
+          capture: { capture_scope: 'full_sop', selected_step_indexes: [] },
+        },
+      });
+    }
+    if (url === '/rpa/session/session-1/harness-capture/next-natural-language-step/select') {
+      return Promise.resolve({
+        data: {
+          status: 'success',
+          capture: { capture_scope: 'selected_steps', selected_step_indexes: [], pending_natural_language_step_captures: 1 },
         },
       });
     }
@@ -329,6 +355,81 @@ describe('RecorderPage trace timeline convergence', () => {
     expect(root.textContent).toContain('本次记录 0 个可回放步骤');
     expect(root.textContent).not.toContain('本次记录 2 个可回放步骤');
     expect(root.textContent).not.toContain('999');
+
+    app.unmount();
+  });
+
+  it('hides harness capture controls when backend config disables capture', async () => {
+    get.mockImplementation((url: string) => {
+      if (url === '/rpa/harness/config') {
+        return Promise.resolve({ data: { status: 'success', capture_enabled: false } });
+      }
+      return Promise.resolve({ data: { session: { traces: [] } } });
+    });
+
+    const { app, root } = await mountRecorderPage();
+    await flushAsyncUpdates();
+
+    expect(root.querySelector('[data-testid="harness-capture-panel"]')).toBeNull();
+    expect(post.mock.calls.some(([url]) => String(url).includes('/harness-capture/start'))).toBe(false);
+
+    app.unmount();
+  });
+
+  it('starts full sop harness capture only after an explicit click', async () => {
+    get.mockImplementation((url: string) => {
+      if (url === '/rpa/harness/config') {
+        return Promise.resolve({ data: { status: 'success', capture_enabled: true } });
+      }
+      return Promise.resolve({ data: { session: { traces: [] } } });
+    });
+
+    const { app, root } = await mountRecorderPage();
+    await flushAsyncUpdates();
+
+    expect(root.querySelector('[data-testid="harness-capture-panel"]')).not.toBeNull();
+    expect(post.mock.calls.some(([url]) => String(url).includes('/harness-capture/start'))).toBe(false);
+
+    root.querySelector<HTMLButtonElement>('[data-testid="harness-start-full-sop"]')?.click();
+    await flushAsyncUpdates();
+
+    expect(post).toHaveBeenCalledWith('/rpa/session/session-1/harness-capture/start', {
+      capture_scope: 'full_sop',
+    });
+
+    app.unmount();
+  });
+
+  it('marks the next natural-language step without preselecting a trace index', async () => {
+    get.mockImplementation((url: string) => {
+      if (url === '/rpa/harness/config') {
+        return Promise.resolve({ data: { status: 'success', capture_enabled: true } });
+      }
+      return Promise.resolve({
+        data: {
+          session: {
+            traces: [
+              { trace_id: 'trace-one', trace_type: 'manual_action', action: 'click' },
+              { trace_id: 'trace-two', trace_type: 'manual_action', action: 'fill' },
+            ],
+          },
+        },
+      });
+    });
+
+    const { app, root } = await mountRecorderPage();
+    await vi.advanceTimersByTimeAsync(3000);
+    await flushAsyncUpdates();
+
+    root.querySelector<HTMLButtonElement>('[data-testid="harness-mark-next-step"]')?.click();
+    await flushAsyncUpdates();
+    await flushAsyncUpdates();
+
+    expect(post).toHaveBeenCalledWith('/rpa/session/session-1/harness-capture/start', {
+      capture_scope: 'selected_steps',
+    });
+    expect(post).toHaveBeenCalledWith('/rpa/session/session-1/harness-capture/next-natural-language-step/select');
+    expect(post.mock.calls.some(([url]) => String(url).includes('/harness-capture/steps/'))).toBe(false);
 
     app.unmount();
   });

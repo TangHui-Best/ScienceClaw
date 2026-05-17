@@ -46,6 +46,7 @@ Each Feature must be committed and pushed before the next Feature starts.
 6. Feature 5: snapshot regression runner.
 7. Feature 6: compiler regression runner.
 8. Feature 7: real trace-first AI recording checkpoint integration.
+9. Feature 8: RecorderPage opt-in capture controls.
 
 ## File Map
 
@@ -63,6 +64,8 @@ Likely created files:
 - `RpaClaw/backend/rpa/harness/run_compiler_regression.py`: CLI entrypoint.
 - `RpaClaw/backend/tests/test_rpa_harness_*.py`: focused backend tests.
 - `RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py`: real natural-language recording capture integration tests.
+- `RpaClaw/frontend/src/pages/rpa/RecorderPage.vue`: config-gated capture controls.
+- `RpaClaw/frontend/src/pages/rpa/RecorderPage.test.ts`: RecorderPage capture entry tests.
 
 Likely modified files:
 
@@ -494,6 +497,52 @@ git commit -m "feat: capture ai recording steps as harness assets"
 git push
 ```
 
+## Feature 8: RecorderPage Opt-In Capture Controls
+
+**Files:**
+
+- Modify: `RpaClaw/backend/rpa/harness/capture.py`
+- Modify: `RpaClaw/backend/rpa/manager.py`
+- Modify: `RpaClaw/backend/route/rpa.py`
+- Modify: `RpaClaw/backend/tests/test_rpa_harness_capture_session.py`
+- Modify: `RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py`
+- Modify: `RpaClaw/frontend/src/pages/rpa/RecorderPage.vue`
+- Modify: `RpaClaw/frontend/src/pages/rpa/RecorderPage.test.ts`
+- Modify: `RpaClaw/frontend/src/locales/en.ts`
+- Modify: `RpaClaw/frontend/src/locales/zh.ts`
+
+- [x] **Step 1: Load Harness availability without auto-starting capture**
+
+RecorderPage calls `GET /rpa/harness/config`. If capture is disabled or config loading fails,
+the Harness panel is absent and no capture start/select endpoint is called.
+
+- [x] **Step 2: Add explicit Full SOP capture start**
+
+The Full SOP button calls `POST /rpa/session/{session_id}/harness-capture/start` with
+`capture_scope="full_sop"`. Nothing starts until the user clicks.
+
+- [x] **Step 3: Add Selected Step as next-natural-language capture**
+
+Selected Step must bind to the next natural-language recording command, not to a
+front-end guessed trace index. The UI calls
+`POST /rpa/session/{session_id}/harness-capture/next-natural-language-step/select`;
+the backend resolves the actual checkpoint index when the next NL chat command runs.
+
+- [x] **Step 4: Verify manual interleaving does not drift selected capture**
+
+Backend tests cover: select next NL step, then append a manual trace before the NL command.
+The checkpoint is written to the actual NL command index and the pending selector is consumed.
+
+- [ ] **Step 5: Commit and push**
+
+```powershell
+$env:PYTHONPATH="RpaClaw"; python -m pytest RpaClaw/backend/tests/test_rpa_harness_capture_session.py RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py -q --basetemp .pytest-harness-tmp
+npm.cmd run test -- RecorderPage.test.ts
+git add ...
+git commit -m "feat: add rpa harness capture controls"
+git push
+```
+
 ## Vision Guardian Checkpoints
 
 An independent Vision Guardian must review:
@@ -502,6 +551,7 @@ An independent Vision Guardian must review:
 - After Feature 3: capture is step-checkpoint asset capture, not generic diagnostics.
 - After Feature 6: regression runners can answer blast-radius questions over assets.
 - After Feature 7: real AI recording capture still has zero disabled-path impact and records semantic expected signals from accepted trace evidence.
+- After Feature 8: RecorderPage capture entry remains opt-in, invisible when disabled, and Selected Step binds to the next NL command rather than a guessed trace index.
 
 ## Closeout Checklist For Each Feature
 

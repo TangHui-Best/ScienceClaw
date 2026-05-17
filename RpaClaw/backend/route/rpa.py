@@ -642,6 +642,22 @@ async def select_harness_capture_step(
     return {"status": "success", "capture": state.model_dump(mode="json")}
 
 
+@router.post("/session/{session_id}/harness-capture/next-natural-language-step/select")
+async def select_next_natural_language_harness_capture_step(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_harness_capture_enabled()
+    session = await rpa_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    _ensure_session_owner(session, current_user)
+    state = rpa_manager.mark_harness_next_natural_language_step_selected(session_id)
+    if state is None:
+        raise HTTPException(status_code=400, detail="Harness capture has not started")
+    return {"status": "success", "capture": state.model_dump(mode="json")}
+
+
 @router.delete("/session/{session_id}/timeline-item")
 async def delete_timeline_item(
     session_id: str,

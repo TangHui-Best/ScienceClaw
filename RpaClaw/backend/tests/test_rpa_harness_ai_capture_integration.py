@@ -289,3 +289,75 @@ async def test_ai_chat_capture_failed_step_writes_failure_evidence(monkeypatch, 
     finally:
         manager._harness_capture_sessions.pop(session.id, None)
         manager.sessions.pop(session.id, None)
+
+
+@pytest.mark.asyncio
+async def test_selected_next_ai_step_survives_manual_trace_interleaving(monkeypatch, tmp_path: Path):
+    manager = ROUTE_MODULE.rpa_manager
+    session = RPASession(id="harness-ai-chat-selected-next", user_id="u1", sandbox_session_id="sandbox")
+    session.traces.append(
+        RPAAcceptedTrace(
+            trace_id="trace-manual-before-selection",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            source="manual",
+            action="click",
+            description="Existing manual trace",
+        )
+    )
+    manager.sessions[session.id] = session
+    page = _MutableFakePage()
+
+    monkeypatch.setattr(ROUTE_MODULE.settings, "rpa_harness_capture_enabled", True)
+    monkeypatch.setattr(ROUTE_MODULE.settings, "rpa_harness_assets_dir", str(tmp_path))
+    manager.start_harness_capture(session.id, capture_scope="selected_steps", enabled=True)
+    manager.mark_harness_next_natural_language_step_selected(session.id)
+    session.traces.append(
+        RPAAcceptedTrace(
+            trace_id="trace-manual-after-selection",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            source="manual",
+            action="fill",
+            description="Manual trace after selecting next AI step",
+        )
+    )
+
+    class FakeRecordingRuntimeAgent:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def run(self, **kwargs):
+            page.move_to_project()
+            trace = RPAAcceptedTrace(
+                trace_id="trace-ai-after-manual",
+                trace_type=RPATraceType.AI_OPERATION,
+                source="ai",
+                user_instruction="Click ScienceClaw",
+                description="Click ScienceClaw",
+                before_page=RPAPageState(url="https://example.test/search", title="Search"),
+                after_page=RPAPageState(url=page.url, title=await page.title()),
+                ai_execution=RPAAIExecution(code="async def run(page, results):\n    return {'ok': True}"),
+                signals={"target_evidence": {"role": "link", "text": "ScienceClaw"}},
+            )
+            return RecordingAgentResult(success=True, trace=trace, message="Recording command completed.")
+
+    monkeypatch.setattr(ROUTE_MODULE, "RecordingRuntimeAgent", FakeRecordingRuntimeAgent)
+    monkeypatch.setattr(manager, "get_page", lambda target_session_id: page if target_session_id == session.id else None)
+
+    try:
+        response = await ROUTE_MODULE.chat_with_assistant(
+            session.id,
+            ROUTE_MODULE.ChatRequest(message="Click ScienceClaw"),
+            type("User", (), {"id": "u1"})(),
+        )
+        await _drain_sse(response)
+
+        capture_state = manager.get_harness_capture_session(session.id)
+        step_dir = tmp_path / capture_state.capture_id / "steps" / "003"
+        assert (step_dir / "checkpoint.json").exists()
+        assert not (tmp_path / capture_state.capture_id / "steps" / "002" / "checkpoint.json").exists()
+        checkpoint = json.loads((step_dir / "checkpoint.json").read_text(encoding="utf-8"))
+        assert checkpoint["step_id"] == "trace-ai-after-manual"
+        assert capture_state.pending_natural_language_step_captures == 0
+    finally:
+        manager._harness_capture_sessions.pop(session.id, None)
+        manager.sessions.pop(session.id, None)

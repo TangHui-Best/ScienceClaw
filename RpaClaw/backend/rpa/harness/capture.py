@@ -25,6 +25,7 @@ class HarnessCaptureSessionState(BaseModel):
     session_id: str
     capture_scope: CaptureScope
     selected_step_indexes: list[int] = Field(default_factory=list)
+    pending_natural_language_step_captures: int = 0
     started_at: datetime = Field(default_factory=datetime.now)
     status: Literal["active", "stopped"] = "active"
 
@@ -35,10 +36,21 @@ class HarnessCaptureSessionState(BaseModel):
             self.selected_step_indexes.append(step_index)
             self.selected_step_indexes.sort()
 
+    def mark_next_natural_language_step_selected(self) -> None:
+        if self.capture_scope != "selected_steps":
+            return
+        self.pending_natural_language_step_captures = 1
+
+    def consume_natural_language_step_selection(self, step_index: int) -> None:
+        if step_index in self.selected_step_indexes:
+            return
+        if self.pending_natural_language_step_captures > 0:
+            self.pending_natural_language_step_captures -= 1
+
     def should_capture_step(self, step_index: int) -> bool:
         if self.capture_scope == "full_sop":
             return True
-        return step_index in self.selected_step_indexes
+        return step_index in self.selected_step_indexes or self.pending_natural_language_step_captures > 0
 
 
 class HarnessCapturedPageState(BaseModel):

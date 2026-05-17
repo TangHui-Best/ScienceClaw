@@ -268,6 +268,16 @@ class RPASessionManager:
         state.mark_step_selected(step_index)
         return state
 
+    def mark_harness_next_natural_language_step_selected(
+        self,
+        session_id: str,
+    ) -> Optional[HarnessCaptureSessionState]:
+        state = self._harness_capture_sessions.get(session_id)
+        if state is None:
+            return None
+        state.mark_next_natural_language_step_selected()
+        return state
+
     async def prepare_harness_step_capture(
         self,
         session_id: str,
@@ -304,7 +314,7 @@ class RPASessionManager:
         if state is None:
             return None
         store = HarnessAssetStore(harness_assets_dir(settings))
-        return await capture_step_checkpoint(
+        checkpoint = await capture_step_checkpoint(
             state,
             store,
             step_index=step_index,
@@ -319,6 +329,9 @@ class RPASessionManager:
             runtime_status=runtime_status,
             error=error,
         )
+        if checkpoint is not None and recording_mode == "natural_language":
+            state.consume_natural_language_step_selection(step_index)
+        return checkpoint
 
     async def create_session(self, user_id: str, sandbox_session_id: str) -> RPASession:
         session_id = str(uuid.uuid4())
