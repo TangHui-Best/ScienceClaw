@@ -18,6 +18,7 @@ from .manual_recording_normalizer import build_manual_recording_outcome
 from .playwright_security import get_context_kwargs
 from .trace_models import RPAAcceptedTrace, RPATraceDiagnostic, RPARuntimeResults
 from .trace_recorder import infer_dataflow_for_ai_fill, infer_dataflow_for_fill, manual_step_to_trace
+from .harness.capture import HarnessCaptureSessionState
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +133,7 @@ class RPASessionManager:
         self._pending_hover_candidates: Dict[str, List[Dict[str, Any]]] = {}
         self._pending_event_counts: Dict[str, int] = {}
         self._pending_event_idle: Dict[str, asyncio.Event] = {}
+        self._harness_capture_sessions: Dict[str, HarnessCaptureSessionState] = {}
 
     def touch_session(self, session_id: str) -> None:
         session = self.sessions.get(session_id)
@@ -222,11 +224,45 @@ class RPASessionManager:
         self._bridged_context_ids.pop(session_id, None)
         self._pending_event_counts.pop(session_id, None)
         self._pending_event_idle.pop(session_id, None)
+        self._harness_capture_sessions.pop(session_id, None)
 
         session = self.sessions.get(session_id)
         if session:
             session.active_tab_id = None
         self._pending_hover_candidates.pop(session_id, None)
+
+    def get_harness_capture_session(self, session_id: str) -> Optional[HarnessCaptureSessionState]:
+        return self._harness_capture_sessions.get(session_id)
+
+    def start_harness_capture(
+        self,
+        session_id: str,
+        *,
+        capture_scope: str,
+        enabled: bool,
+    ) -> Optional[HarnessCaptureSessionState]:
+        if not enabled:
+            return None
+        if session_id not in self.sessions:
+            raise ValueError(f"Session {session_id} not found")
+        state = HarnessCaptureSessionState(
+            session_id=session_id,
+            capture_scope=capture_scope,
+        )
+        self._harness_capture_sessions[session_id] = state
+        return state
+
+    def mark_harness_step_selected(
+        self,
+        session_id: str,
+        *,
+        step_index: int,
+    ) -> Optional[HarnessCaptureSessionState]:
+        state = self._harness_capture_sessions.get(session_id)
+        if state is None:
+            return None
+        state.mark_step_selected(step_index)
+        return state
 
     async def create_session(self, user_id: str, sandbox_session_id: str) -> RPASession:
         session_id = str(uuid.uuid4())

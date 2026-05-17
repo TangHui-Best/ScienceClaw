@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
-from typing import Dict, Any
+from typing import Dict, Any, Literal
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends, Request
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
@@ -34,6 +34,7 @@ from backend.models import get_model_config, resolve_default_model_config
 from backend.storage import get_repository
 from backend.credential.vault import inject_credentials
 from backend.rpa.runtime_context import inject_runtime_context_kwargs, runtime_requirements_from_traces
+from backend.rpa.harness.config import harness_capture_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,10 @@ trace_compiler = TraceSkillCompiler()
 
 class StartSessionRequest(BaseModel):
     sandbox_session_id: str
+
+
+class StartHarnessCaptureRequest(BaseModel):
+    capture_scope: Literal["full_sop", "selected_steps"]
 
 
 class GenerateRequest(BaseModel):
@@ -275,6 +280,11 @@ def _ensure_no_unresolved_manual_diagnostics(session) -> None:
 def _ensure_session_owner(session, current_user: User) -> None:
     if session.user_id != str(current_user.id):
         raise HTTPException(status_code=403, detail="Not authorized")
+
+
+def _ensure_harness_capture_enabled() -> None:
+    if not harness_capture_enabled(settings):
+        raise HTTPException(status_code=404, detail="RPA Harness capture is disabled")
 
 
 async def _apply_recording_agent_result(session_id: str, result: RecordingAgentResult) -> None:
@@ -584,6 +594,52 @@ async def stop_rpa_session(
     rpa_manager.touch_session(session_id)
     await rpa_manager.stop_session(session_id)
     return {"status": "success", "session": _build_session_response(session)}
+
+
+@router.get("/harness/config")
+async def get_rpa_harness_config(
+    current_user: User = Depends(get_current_user),
+):
+    return {
+        "status": "success",
+        "capture_enabled": harness_capture_enabled(settings),
+    }
+
+
+@router.post("/session/{session_id}/harness-capture/start")
+async def start_harness_capture(
+    session_id: str,
+    request: StartHarnessCaptureRequest,
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_harness_capture_enabled()
+    session = await rpa_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    _ensure_session_owner(session, current_user)
+    state = rpa_manager.start_harness_capture(
+        session_id,
+        capture_scope=request.capture_scope,
+        enabled=True,
+    )
+    return {"status": "success", "capture": state.model_dump(mode="json") if state else None}
+
+
+@router.post("/session/{session_id}/harness-capture/steps/{step_index}/select")
+async def select_harness_capture_step(
+    session_id: str,
+    step_index: int,
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_harness_capture_enabled()
+    session = await rpa_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    _ensure_session_owner(session, current_user)
+    state = rpa_manager.mark_harness_step_selected(session_id, step_index=step_index)
+    if state is None:
+        raise HTTPException(status_code=400, detail="Harness capture has not started")
+    return {"status": "success", "capture": state.model_dump(mode="json")}
 
 
 @router.delete("/session/{session_id}/timeline-item")
