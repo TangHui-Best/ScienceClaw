@@ -433,4 +433,42 @@ describe('RecorderPage trace timeline convergence', () => {
 
     app.unmount();
   });
+
+  it('clears the pending next natural-language capture when the streamed step returns capture state', async () => {
+    get.mockImplementation((url: string) => {
+      if (url === '/rpa/harness/config') {
+        return Promise.resolve({ data: { status: 'success', capture_enabled: true } });
+      }
+      return Promise.resolve({ data: { session: { traces: [] } } });
+    });
+
+    const { app, root } = await mountRecorderPage();
+    await flushAsyncUpdates();
+
+    root.querySelector<HTMLButtonElement>('[data-testid="harness-mark-next-step"]')?.click();
+    await flushAsyncUpdates();
+    await flushAsyncUpdates();
+
+    expect(root.textContent).toContain('Harness Next NL Step pending');
+    expect(root.querySelector<HTMLButtonElement>('[data-testid="harness-start-full-sop"]')?.disabled).toBe(true);
+
+    const textarea = root.querySelector<HTMLTextAreaElement>('textarea');
+    expect(textarea).not.toBeNull();
+    textarea!.value = 'Extract star count';
+    textarea!.dispatchEvent(new Event('input'));
+    await flushAsyncUpdates();
+    mockChatSse([
+      'event: agent_step_done\ndata: {"success":true,"output":{"star_count":"1k"},"capture":{"capture_scope":"selected_steps","selected_step_indexes":[],"pending_natural_language_step_captures":0}}\n\n',
+      'event: agent_done\ndata: {"message":"done","trace_count":1,"capture":{"capture_scope":"selected_steps","selected_step_indexes":[],"pending_natural_language_step_captures":0}}\n\n',
+    ]);
+
+    root.querySelector<HTMLButtonElement>('button.flex.h-8.w-8')?.click();
+    await flushAsyncUpdates();
+
+    expect(root.textContent).not.toContain('Harness Next NL Step pending');
+    expect(root.textContent).toContain('Harness Selected Step active');
+    expect(root.querySelector<HTMLButtonElement>('[data-testid="harness-start-full-sop"]')?.disabled).toBe(false);
+
+    app.unmount();
+  });
 });

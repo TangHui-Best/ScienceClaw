@@ -294,6 +294,12 @@ const applyHarnessCaptureState = (capture: any, fallbackScope: 'full_sop' | 'sel
   harnessNextNaturalLanguageStepMarked.value = harnessPendingNaturalLanguageSteps.value > 0;
 };
 
+const applyHarnessCaptureEventState = (data: any) => {
+  if (!data?.capture) return;
+  const fallbackScope = harnessCaptureMode.value === 'full_sop' ? 'full_sop' : 'selected_steps';
+  applyHarnessCaptureState(data.capture, fallbackScope);
+};
+
 const startHarnessCapture = async (captureScope: 'full_sop' | 'selected_steps') => {
   if (!sessionId.value || !harnessCaptureAvailable.value || harnessCaptureBusy.value) return null;
   harnessCaptureBusy.value = true;
@@ -925,6 +931,7 @@ const sendMessage = async () => {
                 data,
               );
             }
+            applyHarnessCaptureEventState(data);
             if (eventType === 'message_chunk') {
               chatMessages.value[msgIdx].text += data.text || '';
             } else if (eventType === 'script') {

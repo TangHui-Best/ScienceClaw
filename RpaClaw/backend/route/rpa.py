@@ -287,6 +287,11 @@ def _ensure_harness_capture_enabled() -> None:
         raise HTTPException(status_code=404, detail="RPA Harness capture is disabled")
 
 
+def _build_harness_capture_payload(session_id: str) -> dict[str, Any] | None:
+    state = rpa_manager.get_harness_capture_session(session_id)
+    return state.model_dump(mode="json") if state is not None else None
+
+
 async def _apply_recording_agent_result(session_id: str, result: RecordingAgentResult) -> None:
     for diagnostic in result.diagnostics:
         await rpa_manager.append_trace_diagnostic(session_id, diagnostic)
@@ -1030,6 +1035,7 @@ async def chat_with_assistant(
 
                 if result.trace:
                     code = result.trace.ai_execution.code if result.trace.ai_execution else ""
+                    harness_capture_payload = _build_harness_capture_payload(session_id)
                     yield {
                         "event": "agent_action",
                         "data": json.dumps(
@@ -1049,6 +1055,7 @@ async def chat_with_assistant(
                                 "description": result.trace.description,
                                 "output": result.output,
                                 "trace": result.trace.model_dump(mode="json"),
+                                "capture": harness_capture_payload,
                             },
                             ensure_ascii=False,
                         ),
@@ -1062,6 +1069,7 @@ async def chat_with_assistant(
                                 "message": result.message,
                                 "trace_count": run_trace_count,
                                 "session_trace_count": session_trace_count,
+                                "capture": _build_harness_capture_payload(session_id),
                             },
                             ensure_ascii=False,
                         ),
@@ -1073,6 +1081,7 @@ async def chat_with_assistant(
                             {
                                 "reason": result.message,
                                 "diagnostics": [d.model_dump(mode="json") for d in result.diagnostics],
+                                "capture": _build_harness_capture_payload(session_id),
                             },
                             ensure_ascii=False,
                         ),

@@ -49,6 +49,17 @@ Each Feature must be committed and pushed before the next Feature starts.
 9. Feature 8: RecorderPage opt-in capture controls.
 10. Feature 9: asset catalog and scenario coverage report.
 11. Feature 10: combined regression blast-radius report.
+12. Feature 11: selected-step capture state sync.
+13. Feature 12: scenario manifest and lifecycle persistence.
+14. Feature 13: Full SOP manual trace checkpoint capture.
+15. Feature 14: extraction/dataflow expected-signal enrichment.
+
+Ordering note after self-bootstrap validation: persist the scenario manifest
+before widening Full SOP manual capture, so every captured asset has stable
+scenario metadata as soon as it becomes reusable. Manual checkpoint capture must
+define an explicit before-state boundary instead of inferring it from a later
+trace append. Expected-signal enrichment must preserve empty outputs as valid
+evidence unless the user intent explicitly requires a non-empty value.
 
 ## File Map
 
@@ -658,6 +669,60 @@ git commit -m "feat: add rpa harness blast radius report"
 git push
 ```
 
+## Feature 11: Selected-Step Capture State Sync
+
+**Files:**
+
+- Modify: `RpaClaw/backend/route/rpa.py`
+- Modify: `RpaClaw/frontend/src/pages/rpa/RecorderPage.vue`
+- Test: `RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py`
+- Test: `RpaClaw/frontend/src/pages/rpa/RecorderPage.test.ts`
+
+- [x] **Step 1: Write failing state-sync tests**
+
+Test behaviors:
+
+- After a selected next-natural-language checkpoint is written, the streamed
+  `agent_step_done` event includes latest Harness capture state with
+  `pending_natural_language_step_captures=0`.
+- RecorderPage consumes streamed capture state and clears the pending UI state,
+  so Full SOP is not kept disabled by stale local state.
+
+Run:
+
+```powershell
+$env:PYTHONPATH="RpaClaw"; python -m pytest RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py -q --basetemp .pytest-harness-tmp
+npm.cmd run test -- RecorderPage.test.ts
+```
+
+- [x] **Step 2: Attach capture state to AI recording SSE events**
+
+Include the current capture state in trace-first `agent_step_done`, `agent_done`,
+and `agent_aborted` events. Do not add polling, database state, or a broader
+diagnostic channel.
+
+- [x] **Step 3: Consume streamed capture state in RecorderPage**
+
+When any streamed event contains `capture`, update local Harness capture state
+through the existing state application path.
+
+- [x] **Step 4: Verify Feature 11**
+
+Run:
+
+```powershell
+$env:PYTHONPATH="RpaClaw"; python -m pytest RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py RpaClaw/backend/tests/test_rpa_harness_capture_session.py -q --basetemp .pytest-harness-tmp
+npm.cmd run test -- RecorderPage.test.ts
+```
+
+- [ ] **Step 5: Commit and push**
+
+```powershell
+git add docs/superpowers/plans/2026-05-17-rpa-harness-v0-implementation.md RpaClaw/backend/route/rpa.py RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py RpaClaw/frontend/src/pages/rpa/RecorderPage.vue RpaClaw/frontend/src/pages/rpa/RecorderPage.test.ts
+git commit -m "fix: sync rpa harness capture state"
+git push
+```
+
 ## Vision Guardian Checkpoints
 
 An independent Vision Guardian must review:
@@ -669,6 +734,7 @@ An independent Vision Guardian must review:
 - After Feature 8: RecorderPage capture entry remains opt-in, invisible when disabled, and Selected Step binds to the next NL command rather than a guessed trace index.
 - After Feature 9: catalog remains asset-backed coverage reporting, not a live URL crawler or generic diagnostic inventory.
 - After Feature 10: blast-radius report explains affected assets/scenarios from regression outputs instead of hiding failures behind aggregate counts.
+- After Feature 11: Selected Step Capture completion clears pending UI state from backend capture truth, not a front-end guessed trace index.
 
 ## Closeout Checklist For Each Feature
 

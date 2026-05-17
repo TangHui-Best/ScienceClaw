@@ -349,7 +349,7 @@ async def test_selected_next_ai_step_survives_manual_trace_interleaving(monkeypa
             ROUTE_MODULE.ChatRequest(message="Click ScienceClaw"),
             type("User", (), {"id": "u1"})(),
         )
-        await _drain_sse(response)
+        events = await _drain_sse(response)
 
         capture_state = manager.get_harness_capture_session(session.id)
         step_dir = tmp_path / capture_state.capture_id / "steps" / "003"
@@ -358,6 +358,10 @@ async def test_selected_next_ai_step_survives_manual_trace_interleaving(monkeypa
         checkpoint = json.loads((step_dir / "checkpoint.json").read_text(encoding="utf-8"))
         assert checkpoint["step_id"] == "trace-ai-after-manual"
         assert capture_state.pending_natural_language_step_captures == 0
+        step_done = next(event for event in events if event["event"] == "agent_step_done")
+        step_done_data = json.loads(step_done["data"])
+        assert step_done_data["capture"]["capture_scope"] == "selected_steps"
+        assert step_done_data["capture"]["pending_natural_language_step_captures"] == 0
     finally:
         manager._harness_capture_sessions.pop(session.id, None)
         manager.sessions.pop(session.id, None)
