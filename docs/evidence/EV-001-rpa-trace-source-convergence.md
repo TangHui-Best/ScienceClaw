@@ -5,7 +5,7 @@ title: RPA Trace Source Convergence Evidence
 status: active
 feature_ids: [F001]
 created: 2026-05-13
-updated: 2026-05-16
+updated: 2026-05-17
 evidence_level: exhaustive
 ---
 
@@ -688,16 +688,43 @@ Manual smoke:
 7. Save skill.
 8. Verify timeline, failure retry, saved metadata, and MCP/export are trace-backed.
 
+## 2026-05-17 PR #53 Review Fixes
+
+- Trigger:
+  - PR #53 owner review reported three regressions in the trace-source convergence branch: manual `set_input_files` traces compiled to no-op, UI timeline ordering could diverge from replay ordering for same-millisecond events, and `POST /rpa/session/start` still returned raw `RPASession` legacy fields.
+- Root cause:
+  - `TraceSkillCompiler._render_manual_action_trace()` did not include `set_input_files` even though the recorder and legacy generator supported it.
+  - Trace replay/export/MCP ordering used `event_timestamp_ms + sequence`, but `build_trace_timeline_items()` sorted only by `order_ms + item.id`.
+  - `start_rpa_session()` bypassed `_build_session_response()` and returned the raw session model.
+- Fix:
+  - Added trace compiler rendering for single and multiple `set_input_files` inputs, using structured `signals.set_input_files.files` first and `trace.value` as fallback.
+  - Added shared `backend.rpa.trace_ordering` helpers and reused them from route compile ordering, MCP projection, and timeline projection.
+  - Changed start session response to return the projected session response plus an empty/new trace timeline instead of raw legacy fields.
+- RED verification:
+  - Command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_compiler_renders_manual_set_input_files_trace RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_compiler_renders_multiple_manual_set_input_files_trace RpaClaw/backend/tests/test_rpa_trace_timeline.py::test_trace_timeline_orders_same_millisecond_traces_by_recording_sequence RpaClaw/backend/tests/test_rpa_route_trace.py::test_start_rpa_session_response_hides_legacy_sources -q`
+  - Result before fix: `4 failed`; failures matched missing upload rendering, sequence-blind timeline ordering, and missing `timeline` / raw start response contract.
+- GREEN verification:
+  - Focused command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_compiler_renders_manual_set_input_files_trace RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_compiler_renders_multiple_manual_set_input_files_trace RpaClaw/backend/tests/test_rpa_trace_timeline.py::test_trace_timeline_orders_same_millisecond_traces_by_recording_sequence RpaClaw/backend/tests/test_rpa_route_trace.py::test_start_rpa_session_response_hides_legacy_sources -q`
+  - Focused result: `4 passed, 23 warnings`.
+  - Backend trace convergence command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_manager.py RpaClaw/backend/tests/test_rpa_route_trace.py RpaClaw/backend/tests/test_rpa_trace_mutation_routes.py RpaClaw/backend/tests/test_rpa_trace_recorder.py RpaClaw/backend/tests/test_rpa_trace_timeline.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_trace_e2e.py RpaClaw/backend/tests/test_skill_exporter.py RpaClaw/backend/tests/test_rpa_mcp_route.py RpaClaw/backend/tests/test_rpa_mcp_converter.py -q`
+  - Backend trace convergence result: `286 passed, 183 warnings`.
+  - Diff hygiene command: `git diff --check`
+  - Diff hygiene result: passed with line-ending warnings only.
+- Rejected paths:
+  - Did not fallback from `TraceSkillCompiler` to legacy `PlaywrightGenerator`, because that would reintroduce a second accepted compile source.
+  - Did not patch only the frontend timeline sort, because the accepted timeline ordering invariant belongs in shared backend trace ordering.
+  - Did not remove manager-internal `RPASession.steps` / `recorded_actions` in this patch, because the review issue is public response leakage, not private DTO quarantine.
+
 ## Current Evidence
 
-2026-05-13:
+2026-05-17:
 
-- Created Harness anchors and tightened spec/plan removal gates.
-- No implementation tests have been run yet.
-- `scripts/knowledge_check.py` is not present in this repository, so Harness artifact validation is currently manual.
+- PR #53 review fixes are implemented on `codex/rpa-trace-source-to-master`.
+- Latest backend trace convergence evidence: `286 passed, 183 warnings`.
+- `scripts/knowledge_check.py` and `scripts/harness_closeout_check.py` are not present in this repository, so Harness artifact validation is currently manual.
 
 ## Closeout
 
-Closeout verdict: blocked until implementation, verification, final reviewers, Vision Gate Exit, and Readiness Dashboard are complete.
+Closeout verdict: conditional for the PR #53 review-fix patch; broader F001 remains active until any remaining trace-source follow-ups are explicitly accepted or split out.
 
-Completion claim allowed: no.
+Completion claim allowed: yes for the 2026-05-17 review-fix patch only.

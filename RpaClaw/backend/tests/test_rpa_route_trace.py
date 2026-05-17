@@ -5,6 +5,7 @@ import types
 from datetime import datetime
 
 import pytest
+from fastapi.encoders import jsonable_encoder
 
 
 def _install_langchain_stubs():
@@ -227,6 +228,55 @@ async def test_screencast_websocket_no_auth_resolves_bootstrap_admin(monkeypatch
 
     assert user is not None
     assert user.id == "admin-uuid"
+
+
+@pytest.mark.anyio
+async def test_start_rpa_session_response_hides_legacy_sources(monkeypatch):
+    session = RPASession(
+        id="start-contract-poison",
+        user_id="u1",
+        sandbox_session_id="sandbox",
+    )
+    session.steps.append(RPAStep(id="legacy-step", action="click", description="DO_NOT_USE_LEGACY"))
+    session.recorded_actions.append(
+        ManualRecordedAction(
+            step_id="legacy-step",
+            action_kind=ManualActionKind.CLICK,
+            description="DO_NOT_USE_LEGACY",
+            target={"method": "css", "value": "DO_NOT_USE_LEGACY"},
+        )
+    )
+    session.recording_diagnostics.append(
+        ManualRecordingDiagnostic(
+            related_step_id="legacy-step",
+            related_action_kind=ManualActionKind.CLICK,
+            failure_reason="DO_NOT_USE_LEGACY",
+        )
+    )
+
+    async def fake_create_session(user_id, sandbox_session_id):
+        assert user_id == "u1"
+        assert sandbox_session_id == "sandbox"
+        return session
+
+    monkeypatch.setattr(ROUTE_MODULE.rpa_manager, "create_session", fake_create_session)
+
+    user = type("User", (), {"id": "u1"})()
+    payload = jsonable_encoder(
+        await ROUTE_MODULE.start_rpa_session(
+            ROUTE_MODULE.StartSessionRequest(sandbox_session_id="sandbox"),
+            user,
+        )
+    )
+    session_payload = payload["session"]
+
+    assert payload["status"] == "success"
+    assert payload["timeline"] == []
+    assert "steps" not in session_payload
+    assert "recorded_actions" not in session_payload
+    assert "recording_diagnostics" not in session_payload
+    assert "legacy_steps" not in session_payload
+    assert "DO_NOT_USE_LEGACY" not in json.dumps(payload, ensure_ascii=False)
 
 
 def test_generate_session_script_prefers_traces_over_legacy_steps():

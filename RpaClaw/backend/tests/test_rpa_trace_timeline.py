@@ -125,6 +125,34 @@ def test_trace_timeline_projects_manual_and_ai_traces_in_order():
     assert items[1].deletable is True
 
 
+def test_trace_timeline_orders_same_millisecond_traces_by_recording_sequence():
+    traces = [
+        RPAAcceptedTrace(
+            trace_id="trace-z-sequence-first",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            source="manual",
+            action="click",
+            description="First recorded click",
+            signals={"recording": {"event_timestamp_ms": 1000, "sequence": 1}},
+        ),
+        RPAAcceptedTrace(
+            trace_id="trace-a-sequence-second",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            source="manual",
+            action="click",
+            description="Second recorded click",
+            signals={"recording": {"event_timestamp_ms": 1000, "sequence": 2}},
+        ),
+    ]
+
+    items = build_trace_timeline_items(traces=traces, trace_diagnostics=[])
+
+    assert [item.trace_id for item in items] == [
+        "trace-z-sequence-first",
+        "trace-a-sequence-second",
+    ]
+
+
 def test_trace_timeline_exposes_sensitive_fill_contract_without_raw_trace_dependency():
     trace = RPAAcceptedTrace(
         trace_id="trace-password",

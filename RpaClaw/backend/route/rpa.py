@@ -1,7 +1,6 @@
 import json
 import logging
 import asyncio
-from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 from typing import Dict, Any
@@ -19,6 +18,7 @@ from backend.rpa.skill_exporter import SkillExporter
 from backend.rpa.assistant import RPAAssistant, RPAReActAgent, _active_agents
 from backend.rpa.recording_runtime_agent import RecordingRuntimeAgent, RecordingAgentResult
 from backend.rpa.trace_models import RPAAcceptedTrace
+from backend.rpa.trace_ordering import order_traces_by_recording_time
 from backend.rpa.trace_timeline import build_trace_timeline_items
 from backend.rpa.trace_skill_compiler import TraceSkillCompiler
 from backend.rpa.mcp_step_projection import session_to_mcp_steps
@@ -129,55 +129,8 @@ def _build_session_response(session) -> dict[str, Any]:
     return payload
 
 
-def _trace_order_ms(trace: RPAAcceptedTrace) -> float | None:
-    recording = (trace.signals or {}).get("recording") if isinstance(trace.signals, dict) else None
-    if isinstance(recording, dict):
-        value = recording.get("event_timestamp_ms")
-        if isinstance(value, (int, float)):
-            return float(value)
-
-    started_at = getattr(trace, "started_at", None)
-    if started_at is not None:
-        try:
-            return started_at.timestamp() * 1000
-        except OSError:
-            return (
-                started_at.replace(tzinfo=None) - datetime(1970, 1, 1)
-            ).total_seconds() * 1000
-
-    return None
-
-
-def _trace_order_sequence(trace: RPAAcceptedTrace) -> float | None:
-    recording = (trace.signals or {}).get("recording") if isinstance(trace.signals, dict) else None
-    if isinstance(recording, dict):
-        value = recording.get("sequence")
-        if isinstance(value, (int, float)):
-            return float(value)
-    return None
-
-
 def _order_traces_by_recording_time(traces: list[RPAAcceptedTrace]) -> list[RPAAcceptedTrace]:
-    keyed_traces: list[tuple[int, float, int, float, int, RPAAcceptedTrace]] = []
-    for index, trace in enumerate(traces):
-        order_ms = _trace_order_ms(trace)
-        sequence = _trace_order_sequence(trace)
-        keyed_traces.append((
-            0 if order_ms is not None else 1,
-            order_ms or 0,
-            0 if sequence is not None else 1,
-            sequence or 0,
-            index,
-            trace,
-        ))
-
-    return [
-        trace
-        for _, _, _, _, _, trace in sorted(
-            keyed_traces,
-            key=lambda item: (item[0], item[1], item[2], item[3], item[4]),
-        )
-    ]
+    return order_traces_by_recording_time(traces)
 
 
 def _session_traces_for_compile(session) -> list[RPAAcceptedTrace]:
@@ -421,7 +374,11 @@ async def start_rpa_session(
             user_id=str(current_user.id),
             sandbox_session_id=request.sandbox_session_id,
         )
-        return {"status": "success", "session": session}
+        return {
+            "status": "success",
+            "session": _build_session_response(session),
+            "timeline": _build_session_timeline(session),
+        }
     except Exception as e:
         logger.error(f"Failed to start RPA session: {e}")
         raise HTTPException(status_code=500, detail=str(e))

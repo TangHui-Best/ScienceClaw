@@ -638,7 +638,7 @@ class TraceSkillCompiler:
         if action == "close_tab":
             lines.extend(self._render_close_tab_trace(trace))
             return lines
-        if not locator and action in {"hover", "click", "fill", "press", "check", "uncheck", "select"}:
+        if not locator and action in {"hover", "click", "fill", "press", "check", "uncheck", "select", "set_input_files"}:
             lines.extend(self._invalid_manual_action_lines(action))
             return lines
         if not locator:
@@ -676,6 +676,9 @@ class TraceSkillCompiler:
             lines.append(f"    await {expr}.uncheck()")
         elif action == "select":
             lines.append(f"    await {expr}.select_option({str(trace.value or '')!r})")
+        elif action == "set_input_files":
+            input_files_value = self._build_input_files_value(trace)
+            lines.append(f"    await {expr}.set_input_files({input_files_value})")
         else:
             lines.append(f"    # Unsupported manual action preserved as no-op: {action}")
         return lines
@@ -903,6 +906,15 @@ class TraceSkillCompiler:
         if default_value in (None, ""):
             default_value = value
         return f"kwargs.get({param_name!r}, {default_value!r})"
+
+    def _build_input_files_value(self, trace: RPAAcceptedTrace) -> str:
+        signal = _trace_signal(trace, "set_input_files")
+        raw_files = signal.get("files")
+        files = [str(item) for item in raw_files if str(item)] if isinstance(raw_files, list) else []
+        if len(files) > 1:
+            return repr(files)
+        effective_value = files[0] if files else str(trace.value or "")
+        return self._maybe_parameterize_value(effective_value)
 
     def _render_embedded_ai_code_trace(
         self,

@@ -7,6 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from .trace_models import RPAAcceptedTrace, RPATraceDiagnostic, RPATraceType
+from .trace_ordering import trace_order_key, trace_order_ms
 
 
 class RPATimelineItem(BaseModel):
@@ -38,9 +39,14 @@ def build_trace_timeline_items(
     traces: list[RPAAcceptedTrace],
     trace_diagnostics: list[RPATraceDiagnostic],
 ) -> list[RPATimelineItem]:
-    items = [_trace_to_item(trace) for trace in traces]
-    items.extend(_diagnostic_to_item(diagnostic) for diagnostic in trace_diagnostics)
-    return sorted(items, key=lambda item: (item.order_ms is None, item.order_ms or 0, item.id))
+    keyed_items: list[tuple[tuple[int, float, int, float, int], RPATimelineItem]] = []
+    for index, trace in enumerate(traces):
+        keyed_items.append((trace_order_key(trace, index), _trace_to_item(trace)))
+    offset = len(traces)
+    for index, diagnostic in enumerate(trace_diagnostics):
+        item = _diagnostic_to_item(diagnostic)
+        keyed_items.append((_diagnostic_order_key(diagnostic, offset + index), item))
+    return [item for _, item in sorted(keyed_items, key=lambda entry: entry[0])]
 
 
 def _trace_to_item(trace: RPAAcceptedTrace) -> RPATimelineItem:
@@ -106,12 +112,19 @@ def _diagnostic_to_item(diagnostic: RPATraceDiagnostic) -> RPATimelineItem:
 
 
 def _trace_order_ms(trace: RPAAcceptedTrace) -> float | None:
-    recording = (trace.signals or {}).get("recording") if isinstance(trace.signals, dict) else None
-    if isinstance(recording, dict):
-        value = recording.get("event_timestamp_ms")
-        if isinstance(value, (int, float)):
-            return float(value)
-    return _datetime_ms(getattr(trace, "started_at", None))
+    return trace_order_ms(trace)
+
+
+def _diagnostic_order_key(diagnostic: RPATraceDiagnostic, index: int) -> tuple[int, float, int, float, int]:
+    order_ms = _diagnostic_order_ms(diagnostic)
+    sequence = _diagnostic_order_sequence(diagnostic)
+    return (
+        0 if order_ms is not None else 1,
+        order_ms or 0,
+        0 if sequence is not None else 1,
+        sequence or 0,
+        index,
+    )
 
 
 def _diagnostic_order_ms(diagnostic: RPATraceDiagnostic) -> float | None:
@@ -123,6 +136,17 @@ def _diagnostic_order_ms(diagnostic: RPATraceDiagnostic) -> float | None:
         if isinstance(value, (int, float)):
             return float(value)
     return _datetime_ms(getattr(diagnostic, "timestamp", None))
+
+
+def _diagnostic_order_sequence(diagnostic: RPATraceDiagnostic) -> float | None:
+    raw = diagnostic.raw or {}
+    signals = raw.get("signals") if isinstance(raw, dict) else None
+    recording = signals.get("recording") if isinstance(signals, dict) else None
+    if isinstance(recording, dict):
+        value = recording.get("sequence")
+        if isinstance(value, (int, float)):
+            return float(value)
+    return None
 
 
 def _datetime_ms(value: Any) -> float | None:

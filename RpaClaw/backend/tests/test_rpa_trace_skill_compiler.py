@@ -96,6 +96,73 @@ def test_navigation_traces_with_same_tab_id_stay_on_one_page():
     assert body.count("await current_page.goto(_target_url, wait_until='domcontentloaded')") == 2
 
 
+def test_compiler_renders_manual_set_input_files_trace():
+    script = TraceSkillCompiler().generate_script(
+        [
+            RPAAcceptedTrace(
+                trace_id="trace-upload",
+                trace_type=RPATraceType.MANUAL_ACTION,
+                source="manual",
+                action="set_input_files",
+                description="Upload file",
+                locator_candidates=[
+                    {
+                        "kind": "label",
+                        "locator": {"method": "label", "value": "Upload file"},
+                        "selected": True,
+                    }
+                ],
+                signals={
+                    "set_input_files": {
+                        "files": ["C:/Users/example/report.pdf"],
+                    }
+                },
+                value="C:/Users/example/report.pdf",
+            )
+        ],
+        is_local=True,
+    )
+    body = _execute_body(script)
+
+    assert ".get_by_label(" in body
+    assert "Upload file" in body
+    assert ".set_input_files(" in body
+    assert "C:/Users/example/report.pdf" in body
+    assert "Unsupported manual action preserved as no-op: set_input_files" not in body
+
+
+def test_compiler_renders_multiple_manual_set_input_files_trace():
+    script = TraceSkillCompiler().generate_script(
+        [
+            RPAAcceptedTrace(
+                trace_id="trace-upload-many",
+                trace_type=RPATraceType.MANUAL_ACTION,
+                source="manual",
+                action="set_input_files",
+                description="Upload files",
+                locator_candidates=[
+                    {
+                        "kind": "css",
+                        "locator": {"method": "css", "value": "input[type=file]"},
+                        "selected": True,
+                    }
+                ],
+                signals={
+                    "set_input_files": {
+                        "files": ["C:/tmp/a.txt", "C:/tmp/b.txt"],
+                    }
+                },
+            )
+        ],
+        is_local=True,
+    )
+    body = _execute_body(script)
+
+    assert ".locator(" in body
+    assert "input[type=file]" in body
+    assert ".set_input_files(['C:/tmp/a.txt', 'C:/tmp/b.txt'])" in body
+
+
 def test_navigation_trace_with_new_tab_id_materializes_page_before_goto():
     traces = [
         RPAAcceptedTrace(
