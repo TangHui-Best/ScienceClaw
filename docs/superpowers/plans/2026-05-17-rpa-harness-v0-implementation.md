@@ -613,6 +613,7 @@ git push
 - Test: `RpaClaw/backend/tests/test_rpa_harness_blast_radius.py`
 
 - [ ] **Step 1: Write failing blast-radius tests**
+- [x] **Step 1: Write failing blast-radius tests**
 
 Test behaviors:
 
@@ -621,7 +622,7 @@ Test behaviors:
 - Summarize affected assets, affected steps, page patterns, hosts, and failure categories.
 - Report passes only when both snapshot and compiler statuses pass for a step.
 
-- [ ] **Step 2: Implement aggregation logic**
+- [x] **Step 2: Implement aggregation logic**
 
 Keep the aggregator report-only and offline. It should consume existing runner outputs
 instead of re-running snapshot or compiler logic by default.
@@ -633,7 +634,7 @@ Exit semantics:
 - Archived and superseded assets are catalog/history evidence and should not inflate
   blocking blast-radius counts by default.
 
-- [ ] **Step 3: Add CLI entrypoint**
+- [x] **Step 3: Add CLI entrypoint**
 
 Support:
 
@@ -641,7 +642,7 @@ Support:
 $env:PYTHONPATH="RpaClaw"; python -m backend.rpa.harness.run_blast_radius --snapshot-report snapshot.json --compiler-report compiler.json --catalog catalog.json --output blast-radius.json
 ```
 
-- [ ] **Step 4: Verify Feature 10**
+- [x] **Step 4: Verify Feature 10**
 
 Run:
 

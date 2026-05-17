@@ -291,9 +291,78 @@ Suggested first runner commands:
 ```text
 python -m backend.rpa.harness.run_snapshot_regression --assets data/rpa_harness_assets
 python -m backend.rpa.harness.run_compiler_regression --assets data/rpa_harness_assets
+python -m backend.rpa.harness.run_catalog --assets data/rpa_harness_assets --output catalog.json
+python -m backend.rpa.harness.run_blast_radius --snapshot-report snapshot.json --compiler-report compiler.json --catalog catalog.json --output blast-radius.json
 ```
 
 The exact module path can change during implementation. The important boundary
 is that snapshot and compiler regression are separate runners with separate
 failure reports.
 
+## v0 Catalog And Blast-Radius Reports
+
+The catalog report is a read-only index over local assets. It is not a database,
+not a live URL crawler, and not a second source of truth for scenario metadata.
+
+Minimum catalog JSON shape:
+
+```json
+{
+  "schema_version": "rpa-harness-catalog-v0",
+  "summary": {
+    "capture_count": 1,
+    "step_count": 2,
+    "successful_step_count": 1,
+    "failed_step_count": 1,
+    "asset_statuses": {"active": 1},
+    "sensitivity": {"local-only": 1},
+    "recording_modes": {"natural_language": 1, "manual": 1},
+    "runtime_statuses": {"success": 1, "failed": 1},
+    "page_patterns": ["card-list", "detail-page"],
+    "hosts": ["example.test"],
+    "urls": ["https://example.test/search"]
+  },
+  "captures": [],
+  "steps": [],
+  "warnings": []
+}
+```
+
+The blast-radius report is a thin aggregator over existing runner reports. It
+does not rerun snapshot or compiler logic by default. It joins runner items by
+`asset_id` and `step_index`, then uses the catalog only to enrich each affected
+step with asset lifecycle and coverage metadata.
+
+Minimum blast-radius JSON shape:
+
+```json
+{
+  "schema_version": "rpa-harness-blast-radius-v0",
+  "summary": {
+    "status": "failed",
+    "checked_steps": 3,
+    "passed_steps": 2,
+    "failed_steps": 1,
+    "blocking_failed_steps": 1,
+    "warning_failed_steps": 0,
+    "affected_assets": ["asset-1"],
+    "blocking_affected_assets": ["asset-1"],
+    "warning_affected_assets": [],
+    "affected_page_patterns": ["card-list"],
+    "affected_hosts": ["example.test"]
+  },
+  "affected_steps": [],
+  "failures_by_category": {"compact-snapshot-lost-signal": 1},
+  "warnings": []
+}
+```
+
+Exit semantics:
+
+- `active` and unknown asset statuses are blocking by default.
+- `draft`, `flaky`, `archived`, and `superseded` assets are warning evidence by
+  default; they should not inflate blocking blast-radius counts.
+- A step passes the combined report only when all present runner results for that
+  step pass.
+- Missing snapshot or compiler evidence for a checked step is reported as
+  `incomplete-runner-evidence`; the CLI requires both runner reports.
