@@ -138,6 +138,7 @@ class RPASessionManager:
         self._pending_event_counts: Dict[str, int] = {}
         self._pending_event_idle: Dict[str, asyncio.Event] = {}
         self._harness_capture_sessions: Dict[str, HarnessCaptureSessionState] = {}
+        self._manual_harness_before_states: Dict[str, Dict[str, HarnessCapturedPageState]] = {}
 
     def touch_session(self, session_id: str) -> None:
         session = self.sessions.get(session_id)
@@ -229,6 +230,7 @@ class RPASessionManager:
         self._pending_event_counts.pop(session_id, None)
         self._pending_event_idle.pop(session_id, None)
         self._harness_capture_sessions.pop(session_id, None)
+        self._manual_harness_before_states.pop(session_id, None)
 
         session = self.sessions.get(session_id)
         if session:
@@ -277,6 +279,20 @@ class RPASessionManager:
             return None
         state.mark_next_natural_language_step_selected()
         return state
+
+    async def set_harness_capture_runtime_active(self, session_id: str, active: bool) -> None:
+        script = f"window.__rpa_harness_capture_active = {json.dumps(bool(active))};"
+        context = self._contexts.get(session_id)
+        if context is not None:
+            try:
+                await context.add_init_script(script=script)
+            except Exception as exc:
+                logger.debug("[RPA] Failed to set harness capture init flag: %s", exc)
+        for page in list(self._tabs.get(session_id, {}).values()):
+            try:
+                await page.evaluate(script)
+            except Exception as exc:
+                logger.debug("[RPA] Failed to set harness capture page flag: %s", exc)
 
     async def prepare_harness_step_capture(
         self,
@@ -401,6 +417,12 @@ class RPASessionManager:
 
         if make_active or not self.sessions[session_id].active_tab_id:
             await self.activate_tab(session_id, tab_id, source="auto")
+        state = self._harness_capture_sessions.get(session_id)
+        if settings.rpa_harness_capture_enabled and state is not None and state.capture_scope == "full_sop":
+            try:
+                await page.evaluate("window.__rpa_harness_capture_active = true;")
+            except Exception as exc:
+                logger.debug("[RPA] Failed to set harness capture page flag: %s", exc)
 
         return tab_id
 
@@ -1581,7 +1603,7 @@ class RPASessionManager:
     def _step_data_from_event(evt: Dict[str, Any]) -> Dict[str, Any]:
         locator_info = evt.get("locator", {})
         is_sensitive = evt.get("sensitive", False)
-        return {
+        step_data = {
             "action": evt.get("action", "unknown"),
             "target": json.dumps(locator_info) if locator_info else "",
             "frame_path": evt.get("frame_path", []) or [],
@@ -1601,6 +1623,10 @@ class RPASessionManager:
             "sequence": evt.get("sequence"),
             "event_timestamp_ms": evt.get("timestamp"),
         }
+        harness_before_state = evt.get("harness_before_page_state")
+        if isinstance(harness_before_state, dict):
+            step_data["_harness_before_state"] = dict(harness_before_state)
+        return step_data
 
     def owns_sandbox_session(self, user_id: str, sandbox_session_id: str) -> bool:
         return any(
@@ -1773,6 +1799,7 @@ class RPASessionManager:
             raise ValueError(f"Session {session_id} not found")
 
         session = self.sessions[session_id]
+        harness_before_state = step_data.pop("_harness_before_state", None)
         step = RPAStep(id=str(uuid.uuid4()), **step_data)
         insert_at = len(session.steps)
         for index, existing_step in enumerate(session.steps):
@@ -1796,6 +1823,12 @@ class RPASessionManager:
                 return next_step
 
         session.steps.insert(insert_at, step)
+        if isinstance(harness_before_state, dict):
+            self._manual_harness_before_states.setdefault(session_id, {})[step.id] = HarnessCapturedPageState(
+                url=str(harness_before_state.get("url", "") or ""),
+                title=str(harness_before_state.get("title", "") or ""),
+                html=str(harness_before_state.get("html", "") or ""),
+            )
         self._rebuild_manual_recording_state(session)
         await self._record_manual_trace_for_step(session_id, step)
 
@@ -2019,8 +2052,54 @@ class RPASessionManager:
             session.traces = [existing for existing in session.traces if existing.trace_id != trace.trace_id]
             session.traces.append(trace)
             await self._broadcast_trace(session_id, trace)
+            await self._capture_manual_harness_checkpoint_for_step(session_id, step, trace)
         except Exception as exc:
             logger.debug("[RPA] Failed to record manual trace for step %s: %s", step.id, exc)
+
+    async def _capture_manual_harness_checkpoint_for_step(
+        self,
+        session_id: str,
+        step: RPAStep,
+        trace: RPAAcceptedTrace,
+    ) -> None:
+        if not settings.rpa_harness_capture_enabled:
+            return
+        state = self._harness_capture_sessions.get(session_id)
+        if state is None or state.capture_scope != "full_sop":
+            return
+        if step.action not in {"click", "press", "navigate_click", "navigate_press"}:
+            return
+        before_state = self._manual_harness_before_states.get(session_id, {}).get(step.id)
+        if before_state is None:
+            return
+        page = self.get_page(session_id)
+        if page is None:
+            return
+        wait_for_timeout = getattr(page, "wait_for_timeout", None)
+        if callable(wait_for_timeout):
+            await wait_for_timeout(100)
+        session = self.sessions.get(session_id)
+        if not session:
+            return
+        step_index = next(
+            (
+                index + 1
+                for index, existing_trace in enumerate(session.traces)
+                if existing_trace.trace_id == trace.trace_id
+            ),
+            len(session.traces),
+        )
+        await self.capture_harness_step_checkpoint(
+            session_id,
+            step_index=step_index,
+            step_id=trace.trace_id,
+            step_intent=trace.description or step.description or step.action,
+            recording_mode="manual",
+            before_state=before_state,
+            after_page=page,
+            trace_events=[trace.model_dump(mode="json")],
+            runtime_status="success",
+        )
 
     async def _broadcast_trace(self, session_id: str, trace: RPAAcceptedTrace) -> None:
         if session_id in self.ws_connections:

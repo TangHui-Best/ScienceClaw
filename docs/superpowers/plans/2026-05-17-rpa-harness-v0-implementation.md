@@ -777,6 +777,59 @@ git commit -m "feat: persist rpa harness scenario manifests"
 git push
 ```
 
+## Feature 13: Full SOP Manual Trace Checkpoint Capture
+
+**Files:**
+
+- Modify: `RpaClaw/backend/rpa/vendor/playwright_recorder_capture.js`
+- Modify: `RpaClaw/backend/rpa/manager.py`
+- Modify: `RpaClaw/backend/route/rpa.py`
+- Test: `RpaClaw/backend/tests/test_rpa_manager.py`
+
+- [x] **Step 1: Write failing manual checkpoint tests**
+
+Test behaviors:
+
+- Full SOP capture writes a manual checkpoint only when the browser event
+  carries a real pre-event `harness_before_page_state`.
+- The checkpoint uses that pre-event HTML for `before.html`, current page content
+  for `after.html`, `recording_mode="manual"`, and accepted manual trace evidence.
+- Manual clicks without before HTML continue to record traces but do not write
+  Harness checkpoints.
+- Unsupported manual actions such as `fill` are skipped in v0 even if a test
+  payload includes before HTML.
+- Registered pages receive the runtime capture flag only through the opt-in
+  Harness path.
+
+- [x] **Step 2: Add browser pre-event before-state payload**
+
+When runtime capture is active, the recorder capture script attaches current URL,
+title, and `documentElement.outerHTML` before supported `click` / `press` actions
+are emitted. Do not capture every manual action.
+
+- [x] **Step 3: Capture accepted manual traces only**
+
+Persist manual checkpoints after `manual_step_to_trace` accepts the step. Use the
+event-provided before-state, skip unsupported/missing-before cases, and avoid
+diagnostic/raw failed manual events.
+
+- [x] **Step 4: Verify Feature 13**
+
+Run:
+
+```powershell
+$env:PYTHONPATH="RpaClaw"; python -m pytest RpaClaw/backend/tests/test_rpa_manager.py RpaClaw/backend/tests/test_rpa_harness_checkpoint_capture.py RpaClaw/backend/tests/test_rpa_harness_capture_session.py RpaClaw/backend/tests/test_rpa_harness_catalog.py -q --basetemp .pytest-harness-tmp
+node --check RpaClaw/backend/rpa/vendor/playwright_recorder_capture.js
+```
+
+- [x] **Step 5: Commit and push**
+
+```powershell
+git add docs/superpowers/plans/2026-05-17-rpa-harness-v0-implementation.md RpaClaw/backend/rpa/vendor/playwright_recorder_capture.js RpaClaw/backend/rpa/manager.py RpaClaw/backend/route/rpa.py RpaClaw/backend/tests/test_rpa_manager.py
+git commit -m "feat: capture manual rpa harness checkpoints"
+git push
+```
+
 ## Vision Guardian Checkpoints
 
 An independent Vision Guardian must review:
@@ -790,6 +843,7 @@ An independent Vision Guardian must review:
 - After Feature 10: blast-radius report explains affected assets/scenarios from regression outputs instead of hiding failures behind aggregate counts.
 - After Feature 11: Selected Step Capture completion clears pending UI state from backend capture truth, not a front-end guessed trace index.
 - After Feature 12: scenario manifest remains a thin lifecycle/index layer over captured assets, not manual capture, site-specific rules, or expected-signal inference.
+- After Feature 13: Full SOP manual capture only records checkpoints with real pre-event before HTML, and skips unsupported manual actions instead of inventing evidence.
 
 ## Closeout Checklist For Each Feature
 

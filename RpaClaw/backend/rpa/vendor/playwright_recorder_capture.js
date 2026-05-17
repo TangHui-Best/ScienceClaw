@@ -284,6 +284,13 @@
         var locatorBundle = buildLocatorBundle(el);
         var payload = extra && typeof extra === 'object' ? extra : {};
         payload = annotateActionPayload(action, el, payload);
+        if ((action === 'click' || action === 'press') && window.__rpa_harness_capture_active) {
+            payload.harness_before_page_state = {
+                url: location.href,
+                title: document.title || '',
+                html: document.documentElement ? document.documentElement.outerHTML : ''
+            };
+        }
         emit(Object.assign({
             action: action,
             locator: locatorBundle.primary,

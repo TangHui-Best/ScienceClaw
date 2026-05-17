@@ -627,6 +627,11 @@ async def start_harness_capture(
         capture_scope=request.capture_scope,
         enabled=True,
     )
+    if state is not None:
+        await rpa_manager.set_harness_capture_runtime_active(
+            session_id,
+            active=state.capture_scope == "full_sop",
+        )
     return {"status": "success", "capture": state.model_dump(mode="json") if state else None}
 
 
