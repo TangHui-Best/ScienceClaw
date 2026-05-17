@@ -71,6 +71,77 @@ def test_manual_step_prefers_semantic_target_context_over_absolute_selector():
     assert "must_click_selector" not in draft.action_signals
 
 
+def test_extraction_output_key_and_observed_output_generate_compiler_signals_without_snapshot_locator():
+    draft = build_expected_signal_draft(
+        step_intent="Extract the star count",
+        recording_mode="natural_language",
+        trace_events=[
+            {
+                "trace_type": "ai_operation",
+                "action": "extract",
+                "output_key": "star_count",
+                "output": {"star_count": "123"},
+            }
+        ],
+    )
+
+    assert draft.state_signals["output_key"] == "star_count"
+    assert draft.state_signals["observed_output_shape"] == {"type": "object", "keys": ["star_count"]}
+    assert draft.compiler_signals["must_preserve_output_keys"] == ["star_count"]
+    assert "must_preserve_dataflow_refs" not in draft.compiler_signals
+    assert draft.compiler_signals["must_not_hardcode_observed_values"] == ["123"]
+    assert "must_contain_text" not in draft.snapshot_signals
+
+
+def test_empty_observed_output_is_allowed_evidence_not_global_failure():
+    draft = build_expected_signal_draft(
+        step_intent="Extract optional notifications",
+        recording_mode="natural_language",
+        trace_events=[
+            {
+                "trace_type": "ai_operation",
+                "action": "extract",
+                "output_key": "notifications",
+                "output": {"notifications": ""},
+                "signals": {"output_contract": {"allow_empty": True}},
+            }
+        ],
+    )
+
+    assert draft.state_signals["output_key"] == "notifications"
+    assert draft.state_signals["allow_empty_output"] is True
+    assert draft.compiler_signals["must_preserve_output_keys"] == ["notifications"]
+    assert "must_preserve_dataflow_refs" not in draft.compiler_signals
+    assert "must_not_hardcode_observed_values" not in draft.compiler_signals
+    assert "must_have_non_empty_output" not in draft.state_signals
+
+
+def test_dataflow_fill_expected_signals_preserve_source_ref_without_locator_rules():
+    draft = build_expected_signal_draft(
+        step_intent="Fill the report title from the previous extraction",
+        recording_mode="manual",
+        trace_events=[
+            {
+                "trace_type": "dataflow_fill",
+                "action": "fill",
+                "value": "Quarterly Report",
+                "dataflow": {
+                    "selected_source_ref": "page_title",
+                    "source_ref_candidates": ["page_title"],
+                },
+                "target_evidence": {"label": "Title"},
+            }
+        ],
+    )
+
+    assert draft.compiler_signals["must_preserve_dataflow_refs"] == [
+        "_resolve_result_ref(_results, 'page_title')"
+    ]
+    assert draft.compiler_signals["must_not_hardcode_observed_values"] == ["Quarterly Report"]
+    assert draft.action_signals["target_label_or_placeholder"] == "Title"
+    assert "must_click_selector" not in draft.action_signals
+
+
 @pytest.mark.asyncio
 async def test_capture_writes_expected_signal_draft(tmp_path: Path):
     state = HarnessCaptureSessionState(

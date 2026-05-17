@@ -830,6 +830,56 @@ git commit -m "feat: capture manual rpa harness checkpoints"
 git push
 ```
 
+## Feature 14: Extraction And Dataflow Expected-Signal Enrichment
+
+**Files:**
+
+- Modify: `RpaClaw/backend/rpa/harness/expected_signals.py`
+- Modify: `RpaClaw/backend/rpa/harness/compiler_regression.py`
+- Test: `RpaClaw/backend/tests/test_rpa_harness_expected_signals.py`
+- Test: `RpaClaw/backend/tests/test_rpa_harness_compiler_regression.py`
+
+- [x] **Step 1: Write failing expected-signal tests**
+
+Test behaviors:
+
+- Extraction traces with `output_key` record output shape and require the compiler
+  to preserve the result key.
+- Non-empty observed output values are forbidden as hardcoded compiler output.
+- Empty outputs are recorded as evidence and remain allowed when
+  `signals.output_contract.allow_empty=true`; they do not become a global
+  non-empty success rule.
+- Dataflow traces preserve selected `_results` refs and forbid hardcoding the
+  recorded fill value.
+
+- [x] **Step 2: Split output-key preservation from dataflow refs**
+
+Use `must_preserve_output_keys` for result production and reserve
+`must_preserve_dataflow_refs` for actual downstream `_resolve_result_ref(...)`
+dependencies.
+
+- [x] **Step 3: Teach compiler regression to consume output-key signals**
+
+Report `missing_output_keys` separately from `missing_dataflow_refs`. Runtime AI
+replay that passes the output key into `_execute_runtime_ai_instruction(...)`
+counts as preserving the key.
+
+- [x] **Step 4: Verify Feature 14**
+
+Run:
+
+```powershell
+$env:PYTHONPATH="RpaClaw"; python -m pytest RpaClaw/backend/tests/test_rpa_harness_expected_signals.py RpaClaw/backend/tests/test_rpa_harness_compiler_regression.py RpaClaw/backend/tests/test_rpa_harness_snapshot_regression.py RpaClaw/backend/tests/test_rpa_harness_blast_radius.py RpaClaw/backend/tests/test_rpa_harness_checkpoint_capture.py -q --basetemp .pytest-harness-tmp
+```
+
+- [x] **Step 5: Commit and push**
+
+```powershell
+git add docs/superpowers/plans/2026-05-17-rpa-harness-v0-implementation.md RpaClaw/backend/rpa/harness/expected_signals.py RpaClaw/backend/rpa/harness/compiler_regression.py RpaClaw/backend/tests/test_rpa_harness_expected_signals.py RpaClaw/backend/tests/test_rpa_harness_compiler_regression.py
+git commit -m "feat: enrich rpa harness expected signals"
+git push
+```
+
 ## Vision Guardian Checkpoints
 
 An independent Vision Guardian must review:
@@ -844,6 +894,7 @@ An independent Vision Guardian must review:
 - After Feature 11: Selected Step Capture completion clears pending UI state from backend capture truth, not a front-end guessed trace index.
 - After Feature 12: scenario manifest remains a thin lifecycle/index layer over captured assets, not manual capture, site-specific rules, or expected-signal inference.
 - After Feature 13: Full SOP manual capture only records checkpoints with real pre-event before HTML, and skips unsupported manual actions instead of inventing evidence.
+- After Feature 14: expected signals distinguish output-key preservation, dataflow refs, hardcoded observed values, and empty-output evidence without adding execution rules or site-specific heuristics.
 
 ## Closeout Checklist For Each Feature
 

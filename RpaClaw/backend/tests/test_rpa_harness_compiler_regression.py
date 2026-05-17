@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from backend.rpa.harness.compiler_regression import run_compiler_regression
+from backend.rpa.harness.expected_signals import build_expected_signal_draft
 
 
 def _write_compiler_asset(
@@ -133,4 +134,65 @@ def test_compiler_regression_reports_baseline_script_diff(tmp_path: Path):
     assert item["script_changed"] is True
     assert "--- baseline" in item["script_diff"]
     assert "+++ current" in item["script_diff"]
+
+
+def test_compiler_regression_consumes_enriched_extraction_expected_signals(tmp_path: Path):
+    expected = build_expected_signal_draft(
+        step_intent="Extract star count",
+        recording_mode="natural_language",
+        trace_events=[
+            {
+                "trace_type": "ai_operation",
+                "action": "extract",
+                "output_key": "star_count",
+                "output": {"star_count": "123"},
+            }
+        ],
+    )
+    assets = _write_compiler_asset(
+        tmp_path,
+        expected_compiler_signals=expected.compiler_signals,
+    )
+
+    report = run_compiler_regression(
+        assets,
+        compiler=lambda trace_events, checkpoint: "return {'star_count': '123'}",
+    )
+
+    item = report["assets"][0]
+    assert report["summary"]["failed"] == 1
+    assert item["failure_category"] == "compiler-hardcoded-observed-value"
+    assert item["hardcoded_values"] == ["123"]
+    assert item["missing_output_keys"] == ["star_count"]
+
+
+def test_compiler_regression_accepts_runtime_ai_output_key_argument(tmp_path: Path):
+    expected = build_expected_signal_draft(
+        step_intent="Extract star count",
+        recording_mode="natural_language",
+        trace_events=[
+            {
+                "trace_type": "ai_operation",
+                "action": "extract",
+                "output_key": "star_count",
+                "output": {"star_count": ""},
+                "signals": {"output_contract": {"allow_empty": True}},
+            }
+        ],
+    )
+    assets = _write_compiler_asset(
+        tmp_path,
+        expected_compiler_signals=expected.compiler_signals,
+    )
+
+    report = run_compiler_regression(
+        assets,
+        compiler=lambda trace_events, checkpoint: (
+            "_result = await _execute_runtime_ai_instruction(current_page, _results, kwargs, 'Extract star count', 'star_count')"
+        ),
+    )
+
+    item = report["assets"][0]
+    assert report["summary"]["failed"] == 0
+    assert item["missing_output_keys"] == []
 

@@ -32,6 +32,55 @@ def _first_text(value: Any) -> str:
     return ""
 
 
+def _append_unique(values: list[str], value: str) -> None:
+    if value and value not in values:
+        values.append(value)
+
+
+def _output_shape(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return {"type": "object", "keys": sorted(str(key) for key in value.keys())}
+    if isinstance(value, list):
+        return {"type": "array", "length": len(value)}
+    if value is None:
+        return {"type": "null"}
+    return {"type": type(value).__name__}
+
+
+def _non_empty_observed_strings(value: Any) -> list[str]:
+    strings: list[str] = []
+
+    def visit(node: Any) -> None:
+        if isinstance(node, dict):
+            for item in node.values():
+                visit(item)
+            return
+        if isinstance(node, list):
+            for item in node:
+                visit(item)
+            return
+        if isinstance(node, str):
+            _append_unique(strings, node.strip())
+
+    visit(value)
+    return strings
+
+
+def _output_contract(trace_event: dict[str, Any]) -> dict[str, Any]:
+    signals = trace_event.get("signals")
+    if not isinstance(signals, dict):
+        return {}
+    contract = signals.get("output_contract")
+    return contract if isinstance(contract, dict) else {}
+
+
+def _selected_dataflow_ref(trace_event: dict[str, Any]) -> str:
+    dataflow = trace_event.get("dataflow")
+    if not isinstance(dataflow, dict):
+        return ""
+    return str(dataflow.get("selected_source_ref") or "").strip()
+
+
 def build_expected_signal_draft(
     *,
     step_intent: str,
@@ -68,6 +117,33 @@ def build_expected_signal_draft(
         compiler_signals["input_value_policy"] = "parameterize"
     if recording_mode == "natural_language" and step_intent:
         action_signals["step_intent"] = step_intent
+
+    output_key = str(event.get("output_key") or "").strip()
+    if output_key:
+        state_signals["output_key"] = output_key
+        compiler_signals["must_preserve_output_keys"] = [output_key]
+
+    if "output" in event:
+        output = event.get("output")
+        state_signals["observed_output_shape"] = _output_shape(output)
+        if _output_contract(event).get("allow_empty") is True:
+            state_signals["allow_empty_output"] = True
+        if not bool(event.get("sensitive")):
+            observed_values = _non_empty_observed_strings(output)
+            if observed_values:
+                compiler_signals["must_not_hardcode_observed_values"] = observed_values
+
+    dataflow_ref = _selected_dataflow_ref(event)
+    if dataflow_ref:
+        refs = list(compiler_signals.get("must_preserve_dataflow_refs") or [])
+        _append_unique(refs, f"_resolve_result_ref(_results, {dataflow_ref!r})")
+        compiler_signals["must_preserve_dataflow_refs"] = refs
+        if not bool(event.get("sensitive")):
+            observed_values = list(compiler_signals.get("must_not_hardcode_observed_values") or [])
+            for value in _non_empty_observed_strings(event.get("value")):
+                _append_unique(observed_values, value)
+            if observed_values:
+                compiler_signals["must_not_hardcode_observed_values"] = observed_values
 
     return HarnessExpectedSignals(
         snapshot_signals=snapshot_signals,

@@ -51,13 +51,27 @@ def _script_diff(baseline: str, current: str) -> str:
 
 def _first_failure_category(
     hardcoded_values: list[str],
+    missing_output_keys: list[str],
     missing_dataflow_refs: list[str],
 ) -> str:
     if hardcoded_values:
         return "compiler-hardcoded-observed-value"
+    if missing_output_keys:
+        return "compiler-output-key-lost"
     if missing_dataflow_refs:
         return "compiler-dataflow-lost"
     return ""
+
+
+def _script_preserves_output_key(script: str, key: str) -> bool:
+    single = repr(key)
+    double = json.dumps(key, ensure_ascii=False)
+    return (
+        f"_results[{single}]" in script
+        or f"_results[{double}]" in script
+        or f", {single})" in script
+        or f", {double})" in script
+    )
 
 
 def run_compiler_regression(
@@ -86,6 +100,14 @@ def run_compiler_regression(
             if isinstance(value, str)
         ]
         hardcoded_values = [value for value in forbidden_values if value and value in script]
+        expected_output_keys = [
+            value
+            for value in compiler_signals.get("must_preserve_output_keys", [])
+            if isinstance(value, str)
+        ]
+        missing_output_keys = [
+            value for value in expected_output_keys if value and not _script_preserves_output_key(script, value)
+        ]
         expected_refs = [
             value
             for value in compiler_signals.get("must_preserve_dataflow_refs", [])
@@ -96,7 +118,7 @@ def run_compiler_regression(
         baseline_path = step_dir / "baseline_skill.py"
         baseline = baseline_path.read_text(encoding="utf-8") if baseline_path.exists() else ""
         diff = _script_diff(baseline, script) if baseline else ""
-        failure_category = _first_failure_category(hardcoded_values, missing_dataflow_refs)
+        failure_category = _first_failure_category(hardcoded_values, missing_output_keys, missing_dataflow_refs)
         status = "failed" if failure_category else "passed"
 
         items.append(
@@ -109,6 +131,7 @@ def run_compiler_regression(
                 "status": status,
                 "failure_category": failure_category,
                 "hardcoded_values": hardcoded_values,
+                "missing_output_keys": missing_output_keys,
                 "missing_dataflow_refs": missing_dataflow_refs,
                 "script_changed": bool(diff),
                 "script_diff": diff,
