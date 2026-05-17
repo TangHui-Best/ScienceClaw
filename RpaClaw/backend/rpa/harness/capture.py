@@ -16,6 +16,7 @@ from .models import (
     RecordingMode,
     RuntimeStatus,
 )
+from .expected_signals import build_expected_signal_draft
 from .store import HarnessAssetStore
 
 
@@ -131,6 +132,14 @@ async def capture_step_checkpoint(
             },
         )
 
+    expected = build_expected_signal_draft(
+        step_intent=step_intent,
+        recording_mode=recording_mode,
+        trace_events=trace_events,
+    )
+    expected_path = _relative_step_path(step_index, "expected.json")
+    store.write_json(step_dir / "expected.json", expected.model_dump(mode="json"))
+
     checkpoint = HarnessStepCheckpoint(
         step_index=step_index,
         step_id=step_id,
@@ -143,6 +152,7 @@ async def capture_step_checkpoint(
         after=after,
         runtime_result=HarnessRuntimeResult(status=runtime_status, error=error),
         captured_at=datetime.now(),
+        expected_path=expected_path,
         failure_path=failure_path,
     )
     store.write_json(step_dir / "checkpoint.json", checkpoint.model_dump(mode="json"))
