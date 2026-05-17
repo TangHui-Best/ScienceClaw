@@ -13,6 +13,11 @@ def _target_evidence(trace_event: dict[str, Any]) -> dict[str, Any]:
     evidence = trace_event.get("target_evidence")
     if isinstance(evidence, dict):
         return evidence
+    signals = trace_event.get("signals")
+    if isinstance(signals, dict):
+        evidence = signals.get("target_evidence")
+        if isinstance(evidence, dict):
+            return evidence
     return {}
 
 
@@ -35,7 +40,7 @@ def build_expected_signal_draft(
 ) -> HarnessExpectedSignals:
     event = _first_trace_event(trace_events)
     evidence = _target_evidence(event)
-    action = str(event.get("action") or event.get("type") or "").strip()
+    action = str(event.get("action") or event.get("type") or event.get("trace_type") or "").strip()
     role = str(evidence.get("role") or "").strip()
     text = _first_text(evidence.get("text"))
     label = _first_text(evidence.get("label"))
@@ -70,4 +75,3 @@ def build_expected_signal_draft(
         compiler_signals=compiler_signals,
         state_signals=state_signals,
     )
-

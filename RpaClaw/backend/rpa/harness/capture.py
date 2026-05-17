@@ -41,6 +41,12 @@ class HarnessCaptureSessionState(BaseModel):
         return step_index in self.selected_step_indexes
 
 
+class HarnessCapturedPageState(BaseModel):
+    url: str = ""
+    title: str = ""
+    html: str = ""
+
+
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -74,6 +80,35 @@ async def _capture_page_state(
     )
 
 
+async def capture_current_page_state(page) -> HarnessCapturedPageState:
+    return HarnessCapturedPageState(
+        url=str(getattr(page, "url", "") or ""),
+        title=str(await page.title() or ""),
+        html=str(await page.content() or ""),
+    )
+
+
+def _write_captured_page_state(
+    captured: HarnessCapturedPageState,
+    store: HarnessAssetStore,
+    capture_id: str,
+    step_index: int,
+    filename: str,
+    *,
+    same_as_before: bool = False,
+) -> HarnessPageState:
+    html_path = _relative_step_path(step_index, filename)
+    if not same_as_before:
+        store.write_text(store.capture_dir(capture_id) / html_path, captured.html)
+    return HarnessPageState(
+        url=captured.url,
+        title=captured.title,
+        html_path=html_path,
+        html_sha256=_sha256_text(captured.html),
+        same_as_before=same_as_before,
+    )
+
+
 async def capture_step_checkpoint(
     state: HarnessCaptureSessionState,
     store: HarnessAssetStore,
@@ -82,8 +117,10 @@ async def capture_step_checkpoint(
     step_id: str,
     step_intent: str,
     recording_mode: RecordingMode,
-    before_page,
-    after_page,
+    before_page=None,
+    after_page=None,
+    before_state: HarnessCapturedPageState | None = None,
+    after_state: HarnessCapturedPageState | None = None,
     trace_events: list[dict],
     runtime_status: RuntimeStatus,
     error: str | None = None,
@@ -92,31 +129,27 @@ async def capture_step_checkpoint(
         return None
 
     step_dir = store.step_dir(state.capture_id, step_index)
-    before_html = await before_page.content()
-    before = await _capture_page_state(
-        before_page,
-        store,
-        state.capture_id,
-        step_index,
-        "before.html",
-        html_override=before_html,
-    )
+    if before_state is None:
+        if before_page is None:
+            raise ValueError("harness checkpoint capture requires before_page or before_state")
+        before_state = await capture_current_page_state(before_page)
+    before = _write_captured_page_state(before_state, store, state.capture_id, step_index, "before.html")
 
     store.write_json(step_dir / "trace_events.json", trace_events)
 
     after = None
     if runtime_status == "success":
-        if after_page is None:
-            raise ValueError("successful harness checkpoint capture requires after_page")
-        after_html = await after_page.content()
-        same_as_before = _sha256_text(after_html) == before.html_sha256
-        after = await _capture_page_state(
-            after_page,
+        if after_state is None:
+            if after_page is None:
+                raise ValueError("successful harness checkpoint capture requires after_page or after_state")
+            after_state = await capture_current_page_state(after_page)
+        same_as_before = _sha256_text(after_state.html) == before.html_sha256
+        after = _write_captured_page_state(
+            after_state,
             store,
             state.capture_id,
             step_index,
             "before.html" if same_as_before else "after.html",
-            html_override=after_html,
             same_as_before=same_as_before,
         )
 

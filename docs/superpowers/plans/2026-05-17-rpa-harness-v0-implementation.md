@@ -45,6 +45,7 @@ Each Feature must be committed and pushed before the next Feature starts.
 5. Feature 4: expected signal draft generation.
 6. Feature 5: snapshot regression runner.
 7. Feature 6: compiler regression runner.
+8. Feature 7: real trace-first AI recording checkpoint integration.
 
 ## File Map
 
@@ -61,6 +62,7 @@ Likely created files:
 - `RpaClaw/backend/rpa/harness/run_snapshot_regression.py`: CLI entrypoint.
 - `RpaClaw/backend/rpa/harness/run_compiler_regression.py`: CLI entrypoint.
 - `RpaClaw/backend/tests/test_rpa_harness_*.py`: focused backend tests.
+- `RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py`: real natural-language recording capture integration tests.
 
 Likely modified files:
 
@@ -446,6 +448,52 @@ git commit -m "feat: add rpa harness compiler regression"
 git push
 ```
 
+## Feature 7: Real AI Recording Checkpoint Integration
+
+**Files:**
+
+- Modify: `RpaClaw/backend/route/rpa.py`
+- Modify: `RpaClaw/backend/rpa/manager.py`
+- Modify: `RpaClaw/backend/rpa/harness/capture.py`
+- Modify: `RpaClaw/backend/rpa/harness/expected_signals.py`
+- Test: `RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py`
+
+- [x] **Step 1: Integrate pre-action capture into the trace-first AI branch**
+
+Capture the before page state before `RecordingRuntimeAgent.run()` mutates the page.
+Only wire the real natural-language trace-first branch; do not wire legacy chat/react
+or manual browser-event paths in this Feature.
+
+- [x] **Step 2: Preserve disabled-path zero impact**
+
+When `RPA_HARNESS_CAPTURE_ENABLED=false` or there is no active capture session,
+the route must not call `page.content()`, construct asset stores, or write files.
+This must also hold if an old in-memory capture session exists after the config is
+turned off.
+
+- [x] **Step 3: Persist accepted-trace evidence**
+
+Use the accepted `RPAAcceptedTrace` result as the trace event source. Expected-signal
+drafting must read semantic target evidence from accepted trace signals, including
+`signals.target_evidence`.
+
+- [x] **Step 4: Verify Feature 7**
+
+Run:
+
+```powershell
+$env:PYTHONPATH="RpaClaw"; python -m pytest RpaClaw/backend/tests/test_rpa_harness_expected_signals.py RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py RpaClaw/backend/tests/test_rpa_route_trace.py -q --basetemp .pytest-harness-tmp
+$env:PYTHONPATH="RpaClaw"; python -m pytest RpaClaw/backend/tests/test_rpa_harness_config.py RpaClaw/backend/tests/test_rpa_harness_models.py RpaClaw/backend/tests/test_rpa_harness_capture_session.py RpaClaw/backend/tests/test_rpa_harness_checkpoint_capture.py RpaClaw/backend/tests/test_rpa_harness_expected_signals.py RpaClaw/backend/tests/test_rpa_harness_snapshot_regression.py RpaClaw/backend/tests/test_rpa_harness_compiler_regression.py RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py -q --basetemp .pytest-harness-tmp
+```
+
+- [ ] **Step 5: Commit and push**
+
+```powershell
+git add docs/superpowers/plans/2026-05-17-rpa-harness-v0-implementation.md RpaClaw/backend/route/rpa.py RpaClaw/backend/rpa/manager.py RpaClaw/backend/rpa/harness/capture.py RpaClaw/backend/rpa/harness/expected_signals.py RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py
+git commit -m "feat: capture ai recording steps as harness assets"
+git push
+```
+
 ## Vision Guardian Checkpoints
 
 An independent Vision Guardian must review:
@@ -453,6 +501,7 @@ An independent Vision Guardian must review:
 - After Feature 0: plan still targets asset-backed impact analysis.
 - After Feature 3: capture is step-checkpoint asset capture, not generic diagnostics.
 - After Feature 6: regression runners can answer blast-radius questions over assets.
+- After Feature 7: real AI recording capture still has zero disabled-path impact and records semantic expected signals from accepted trace evidence.
 
 ## Closeout Checklist For Each Feature
 
@@ -464,4 +513,3 @@ Before each commit:
 - Use a change narrative for the commit message.
 - Commit only that Feature's files.
 - Push before starting the next Feature.
-

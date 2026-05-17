@@ -972,6 +972,12 @@ async def chat_with_assistant(
                     }
             else:
                 before_trace_ids = {trace.trace_id for trace in session.traces}
+                harness_step_index = len(session.traces) + 1
+                harness_before_state = await rpa_manager.prepare_harness_step_capture(
+                    session_id,
+                    step_index=harness_step_index,
+                    page=page,
+                )
                 yield {
                     "event": "agent_thought",
                     "data": json.dumps({"text": "Planning one trace-first recording command."}, ensure_ascii=False),
@@ -984,6 +990,22 @@ async def chat_with_assistant(
                     debug_context={"session_id": session_id},
                 )
                 await _apply_recording_agent_result(session_id, result)
+                if harness_before_state is not None:
+                    trace_events = [
+                        result.trace.model_dump(mode="json")
+                    ] if result.trace is not None else []
+                    await rpa_manager.capture_harness_step_checkpoint(
+                        session_id,
+                        step_index=harness_step_index,
+                        step_id=result.trace.trace_id if result.trace else f"ai-step-{harness_step_index}",
+                        step_intent=request.message,
+                        recording_mode="natural_language",
+                        before_state=harness_before_state,
+                        after_page=page if result.success else None,
+                        trace_events=trace_events,
+                        runtime_status="success" if result.success else "failed",
+                        error=None if result.success else result.message,
+                    )
                 run_trace_count = len([
                     trace for trace in session.traces
                     if trace.trace_id not in before_trace_ids

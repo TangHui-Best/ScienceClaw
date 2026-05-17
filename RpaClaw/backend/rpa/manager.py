@@ -18,8 +18,8 @@ from .manual_recording_normalizer import build_manual_recording_outcome
 from .playwright_security import get_context_kwargs
 from .trace_models import RPAAcceptedTrace, RPATraceDiagnostic, RPARuntimeResults
 from .trace_recorder import infer_dataflow_for_ai_fill, infer_dataflow_for_fill, manual_step_to_trace
-from .harness.capture import HarnessCaptureSessionState
-from .harness.capture import capture_step_checkpoint
+from .harness.capture import HarnessCapturedPageState, HarnessCaptureSessionState
+from .harness.capture import capture_current_page_state, capture_step_checkpoint
 from .harness.config import harness_assets_dir
 from .harness.store import HarnessAssetStore
 from backend.config import settings
@@ -268,6 +268,20 @@ class RPASessionManager:
         state.mark_step_selected(step_index)
         return state
 
+    async def prepare_harness_step_capture(
+        self,
+        session_id: str,
+        *,
+        step_index: int,
+        page,
+    ) -> Optional[HarnessCapturedPageState]:
+        if not settings.rpa_harness_capture_enabled:
+            return None
+        state = self._harness_capture_sessions.get(session_id)
+        if state is None or not state.should_capture_step(step_index):
+            return None
+        return await capture_current_page_state(page)
+
     async def capture_harness_step_checkpoint(
         self,
         session_id: str,
@@ -276,12 +290,16 @@ class RPASessionManager:
         step_id: str,
         step_intent: str,
         recording_mode: str,
-        before_page,
-        after_page,
+        before_page=None,
+        after_page=None,
+        before_state: Optional[HarnessCapturedPageState] = None,
+        after_state: Optional[HarnessCapturedPageState] = None,
         trace_events: list[dict],
         runtime_status: str,
         error: Optional[str] = None,
     ):
+        if not settings.rpa_harness_capture_enabled:
+            return None
         state = self._harness_capture_sessions.get(session_id)
         if state is None:
             return None
@@ -295,6 +313,8 @@ class RPASessionManager:
             recording_mode=recording_mode,
             before_page=before_page,
             after_page=after_page,
+            before_state=before_state,
+            after_state=after_state,
             trace_events=trace_events,
             runtime_status=runtime_status,
             error=error,
