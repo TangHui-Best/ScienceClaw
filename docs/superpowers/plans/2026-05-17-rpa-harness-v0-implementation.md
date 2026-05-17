@@ -715,11 +715,65 @@ $env:PYTHONPATH="RpaClaw"; python -m pytest RpaClaw/backend/tests/test_rpa_harne
 npm.cmd run test -- RecorderPage.test.ts
 ```
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```powershell
 git add docs/superpowers/plans/2026-05-17-rpa-harness-v0-implementation.md RpaClaw/backend/route/rpa.py RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py RpaClaw/frontend/src/pages/rpa/RecorderPage.vue RpaClaw/frontend/src/pages/rpa/RecorderPage.test.ts
 git commit -m "fix: sync rpa harness capture state"
+git push
+```
+
+## Feature 12: Scenario Manifest And Lifecycle Persistence
+
+**Files:**
+
+- Modify: `RpaClaw/backend/rpa/harness/capture.py`
+- Test: `RpaClaw/backend/tests/test_rpa_harness_checkpoint_capture.py`
+
+- [x] **Step 1: Write failing manifest persistence tests**
+
+Test behaviors:
+
+- Writing the first captured checkpoint creates `scenario.json` at the capture
+  asset root with `asset_id`, `capture_scope`, source metadata, draft status,
+  local-only sensitivity, and a checkpoint ref.
+- Additional captured checkpoints append sorted `step_checkpoints` instead of
+  replacing the manifest.
+- Existing lifecycle metadata such as `asset_status`, `sensitivity`,
+  `sop_intent`, `source`, and `page_patterns` is preserved.
+- Invalid existing manifests block capture instead of being silently overwritten.
+
+Run:
+
+```powershell
+$env:PYTHONPATH="RpaClaw"; python -m pytest RpaClaw/backend/tests/test_rpa_harness_checkpoint_capture.py -q --basetemp .pytest-harness-tmp
+```
+
+- [x] **Step 2: Persist scenario manifests from checkpoint capture**
+
+Add the smallest manifest write path after a checkpoint is accepted. Do not add
+manual trace capture, expected-signal enrichment, page-pattern inference, or live
+URL validation in this Feature.
+
+- [x] **Step 3: Preserve lifecycle truth**
+
+Load existing manifests before writing step files. If the existing manifest is
+invalid, fail visibly so draft defaults cannot overwrite reviewed lifecycle
+metadata.
+
+- [x] **Step 4: Verify Feature 12**
+
+Run:
+
+```powershell
+$env:PYTHONPATH="RpaClaw"; python -m pytest RpaClaw/backend/tests/test_rpa_harness_checkpoint_capture.py RpaClaw/backend/tests/test_rpa_harness_catalog.py RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py -q --basetemp .pytest-harness-tmp
+```
+
+- [x] **Step 5: Commit and push**
+
+```powershell
+git add docs/superpowers/plans/2026-05-17-rpa-harness-v0-implementation.md RpaClaw/backend/rpa/harness/capture.py RpaClaw/backend/tests/test_rpa_harness_checkpoint_capture.py
+git commit -m "feat: persist rpa harness scenario manifests"
 git push
 ```
 
@@ -735,6 +789,7 @@ An independent Vision Guardian must review:
 - After Feature 9: catalog remains asset-backed coverage reporting, not a live URL crawler or generic diagnostic inventory.
 - After Feature 10: blast-radius report explains affected assets/scenarios from regression outputs instead of hiding failures behind aggregate counts.
 - After Feature 11: Selected Step Capture completion clears pending UI state from backend capture truth, not a front-end guessed trace index.
+- After Feature 12: scenario manifest remains a thin lifecycle/index layer over captured assets, not manual capture, site-specific rules, or expected-signal inference.
 
 ## Closeout Checklist For Each Feature
 

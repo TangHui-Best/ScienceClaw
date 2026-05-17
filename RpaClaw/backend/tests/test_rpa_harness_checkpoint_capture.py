@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from backend.rpa.harness.catalog import build_harness_catalog
 from backend.rpa.harness.capture import (
     HarnessCaptureSessionState,
     capture_step_checkpoint,
@@ -65,6 +66,165 @@ async def test_successful_selected_step_writes_before_and_after_html(tmp_path: P
     assert checkpoint.before.url == "https://example.test/search"
     assert checkpoint.after is not None
     assert checkpoint.after.url == "https://example.test/project/scienceclaw"
+    scenario = json.loads((tmp_path / "hcap-test" / "scenario.json").read_text(encoding="utf-8"))
+    assert scenario["asset_id"] == "hcap-test"
+    assert scenario["capture_scope"] == "selected_steps"
+    assert scenario["asset_status"] == "draft"
+    assert scenario["sensitivity"] == "local-only"
+    assert scenario["source"]["recording_id"] == "session-1"
+    assert scenario["source"]["capture_trigger"] == "selected_steps"
+    assert scenario["step_checkpoints"] == [
+        {"step_index": 2, "checkpoint_path": "steps/002/checkpoint.json"}
+    ]
+    catalog = build_harness_catalog(tmp_path)
+    assert catalog["captures"][0]["capture_scope"] == "selected_steps"
+    assert catalog["captures"][0]["asset_status"] == "draft"
+    assert catalog["captures"][0]["sensitivity"] == "local-only"
+
+
+@pytest.mark.asyncio
+async def test_scenario_manifest_accumulates_captured_step_refs(tmp_path: Path):
+    state = HarnessCaptureSessionState(
+        capture_id="hcap-test",
+        session_id="session-1",
+        capture_scope="full_sop",
+    )
+    store = HarnessAssetStore(tmp_path)
+
+    for step_index in (1, 2):
+        await capture_step_checkpoint(
+            state,
+            store,
+            step_index=step_index,
+            step_id=f"step-{step_index}",
+            step_intent=f"Capture step {step_index}",
+            recording_mode="natural_language",
+            before_page=_FakePage(
+                url=f"https://example.test/{step_index}",
+                title=f"Before {step_index}",
+                html=f"<html><body>Before {step_index}</body></html>",
+            ),
+            after_page=_FakePage(
+                url=f"https://example.test/{step_index}/done",
+                title=f"After {step_index}",
+                html=f"<html><body>After {step_index}</body></html>",
+            ),
+            trace_events=[{"trace_id": f"trace-{step_index}", "action": "click"}],
+            runtime_status="success",
+        )
+
+    scenario = json.loads((tmp_path / "hcap-test" / "scenario.json").read_text(encoding="utf-8"))
+
+    assert scenario["capture_scope"] == "full_sop"
+    assert scenario["step_checkpoints"] == [
+        {"step_index": 1, "checkpoint_path": "steps/001/checkpoint.json"},
+        {"step_index": 2, "checkpoint_path": "steps/002/checkpoint.json"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_invalid_existing_scenario_manifest_blocks_checkpoint_capture(tmp_path: Path):
+    state = HarnessCaptureSessionState(
+        capture_id="hcap-test",
+        session_id="session-1",
+        capture_scope="full_sop",
+    )
+    store = HarnessAssetStore(tmp_path)
+    capture_dir = tmp_path / "hcap-test"
+    capture_dir.mkdir()
+    scenario_path = capture_dir / "scenario.json"
+    scenario_path.write_text("{not-json", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Invalid harness scenario manifest"):
+        await capture_step_checkpoint(
+            state,
+            store,
+            step_index=1,
+            step_id="step-1",
+            step_intent="Capture should not overwrite invalid lifecycle metadata",
+            recording_mode="natural_language",
+            before_page=_FakePage(
+                url="https://example.test/bad",
+                title="Bad",
+                html="<html><body>Bad</body></html>",
+            ),
+            after_page=_FakePage(
+                url="https://example.test/bad/done",
+                title="Bad Done",
+                html="<html><body>Bad Done</body></html>",
+            ),
+            trace_events=[{"trace_id": "trace-1", "action": "click"}],
+            runtime_status="success",
+        )
+
+    assert scenario_path.read_text(encoding="utf-8") == "{not-json"
+    assert not (capture_dir / "steps").exists()
+
+
+@pytest.mark.asyncio
+async def test_scenario_manifest_preserves_existing_lifecycle_metadata(tmp_path: Path):
+    state = HarnessCaptureSessionState(
+        capture_id="hcap-test",
+        session_id="session-1",
+        capture_scope="full_sop",
+    )
+    store = HarnessAssetStore(tmp_path)
+    capture_dir = tmp_path / "hcap-test"
+    capture_dir.mkdir()
+    (capture_dir / "scenario.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "rpa-harness-scenario-v0",
+                "asset_id": "hcap-test",
+                "capture_scope": "full_sop",
+                "sop_intent": "Reviewed SOP",
+                "source": {
+                    "recording_id": "recording-reviewed",
+                    "captured_at": "2026-05-17T10:00:00",
+                    "capture_mode": "harness",
+                    "capture_trigger": "manual-review",
+                },
+                "asset_status": "active",
+                "sensitivity": "repo-safe",
+                "page_patterns": ["reviewed-pattern"],
+                "step_checkpoints": [{"step_index": 1, "checkpoint_path": "steps/001/checkpoint.json"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    await capture_step_checkpoint(
+        state,
+        store,
+        step_index=2,
+        step_id="step-2",
+        step_intent="Capture reviewed step",
+        recording_mode="natural_language",
+        before_page=_FakePage(
+            url="https://example.test/review",
+            title="Review",
+            html="<html><body>Review</body></html>",
+        ),
+        after_page=_FakePage(
+            url="https://example.test/review/done",
+            title="Review Done",
+            html="<html><body>Review Done</body></html>",
+        ),
+        trace_events=[{"trace_id": "trace-2", "action": "click"}],
+        runtime_status="success",
+    )
+
+    scenario = json.loads((capture_dir / "scenario.json").read_text(encoding="utf-8"))
+
+    assert scenario["sop_intent"] == "Reviewed SOP"
+    assert scenario["source"]["recording_id"] == "recording-reviewed"
+    assert scenario["asset_status"] == "active"
+    assert scenario["sensitivity"] == "repo-safe"
+    assert scenario["page_patterns"] == ["reviewed-pattern"]
+    assert scenario["step_checkpoints"] == [
+        {"step_index": 1, "checkpoint_path": "steps/001/checkpoint.json"},
+        {"step_index": 2, "checkpoint_path": "steps/002/checkpoint.json"},
+    ]
 
 
 @pytest.mark.asyncio

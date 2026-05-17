@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime
 from typing import Literal
 from uuid import uuid4
@@ -12,7 +13,10 @@ from .models import (
     HarnessActionEvidence,
     HarnessPageState,
     HarnessRuntimeResult,
+    HarnessScenarioAsset,
+    HarnessScenarioSource,
     HarnessStepCheckpoint,
+    HarnessStepCheckpointRef,
     RecordingMode,
     RuntimeStatus,
 )
@@ -65,6 +69,51 @@ def _sha256_text(value: str) -> str:
 
 def _relative_step_path(step_index: int, filename: str) -> str:
     return f"steps/{step_index:03d}/{filename}"
+
+
+def _load_or_create_scenario_manifest(
+    state: HarnessCaptureSessionState,
+    store: HarnessAssetStore,
+) -> HarnessScenarioAsset:
+    scenario_path = store.capture_dir(state.capture_id) / "scenario.json"
+    if scenario_path.exists():
+        try:
+            return HarnessScenarioAsset.model_validate(json.loads(scenario_path.read_text(encoding="utf-8")))
+        except Exception as exc:
+            raise ValueError(f"Invalid harness scenario manifest: {scenario_path}") from exc
+
+    return HarnessScenarioAsset(
+        asset_id=state.capture_id,
+        capture_scope=state.capture_scope,
+        source=HarnessScenarioSource(
+            recording_id=state.session_id,
+            captured_at=state.started_at.isoformat(),
+            capture_mode="harness",
+            capture_trigger=state.capture_scope,
+        ),
+    )
+
+
+def _write_scenario_manifest(
+    state: HarnessCaptureSessionState,
+    store: HarnessAssetStore,
+    checkpoint: HarnessStepCheckpoint,
+    scenario: HarnessScenarioAsset,
+) -> None:
+    refs: dict[int, HarnessStepCheckpointRef] = {}
+    for item in scenario.step_checkpoints:
+        ref = item if isinstance(item, HarnessStepCheckpointRef) else HarnessStepCheckpointRef.model_validate(item)
+        refs[ref.step_index] = ref
+    refs[checkpoint.step_index] = HarnessStepCheckpointRef(
+        step_index=checkpoint.step_index,
+        checkpoint_path=_relative_step_path(checkpoint.step_index, "checkpoint.json"),
+    )
+    scenario.step_checkpoints = [refs[index] for index in sorted(refs)]
+    scenario.page_patterns = sorted({*scenario.page_patterns, *checkpoint.page_patterns})
+    store.write_json(
+        store.capture_dir(state.capture_id) / "scenario.json",
+        scenario.model_dump(mode="json"),
+    )
 
 
 async def _capture_page_state(
@@ -139,6 +188,7 @@ async def capture_step_checkpoint(
 ) -> HarnessStepCheckpoint | None:
     if not state.should_capture_step(step_index):
         return None
+    scenario = _load_or_create_scenario_manifest(state, store)
 
     step_dir = store.step_dir(state.capture_id, step_index)
     if before_state is None:
@@ -201,4 +251,5 @@ async def capture_step_checkpoint(
         failure_path=failure_path,
     )
     store.write_json(step_dir / "checkpoint.json", checkpoint.model_dump(mode="json"))
+    _write_scenario_manifest(state, store, checkpoint, scenario)
     return checkpoint
