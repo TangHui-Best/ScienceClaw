@@ -47,6 +47,8 @@ Each Feature must be committed and pushed before the next Feature starts.
 7. Feature 6: compiler regression runner.
 8. Feature 7: real trace-first AI recording checkpoint integration.
 9. Feature 8: RecorderPage opt-in capture controls.
+10. Feature 9: asset catalog and scenario coverage report.
+11. Feature 10: combined regression blast-radius report.
 
 ## File Map
 
@@ -62,6 +64,8 @@ Likely created files:
 - `RpaClaw/backend/rpa/harness/compiler_regression.py`: trace compiler regression logic.
 - `RpaClaw/backend/rpa/harness/run_snapshot_regression.py`: CLI entrypoint.
 - `RpaClaw/backend/rpa/harness/run_compiler_regression.py`: CLI entrypoint.
+- `RpaClaw/backend/rpa/harness/catalog.py`: local asset catalog and coverage summary.
+- `RpaClaw/backend/rpa/harness/run_catalog.py`: catalog CLI entrypoint.
 - `RpaClaw/backend/tests/test_rpa_harness_*.py`: focused backend tests.
 - `RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py`: real natural-language recording capture integration tests.
 - `RpaClaw/frontend/src/pages/rpa/RecorderPage.vue`: config-gated capture controls.
@@ -543,6 +547,116 @@ git commit -m "feat: add rpa harness capture controls"
 git push
 ```
 
+## Feature 9: Asset Catalog And Scenario Coverage Report
+
+**Files:**
+
+- Create: `RpaClaw/backend/rpa/harness/catalog.py`
+- Create: `RpaClaw/backend/rpa/harness/run_catalog.py`
+- Test: `RpaClaw/backend/tests/test_rpa_harness_catalog.py`
+
+- [x] **Step 1: Write failing catalog tests**
+
+Test behaviors:
+
+- Catalog summarizes capture count, step count, success/failure count, recording modes,
+  asset statuses, sensitivity states, page pattern tags, source URLs, and URL hosts
+  from local assets.
+- Catalog reads `scenario.json` when present but can still index checkpoint-only capture
+  directories created by early v0 capture.
+- Invalid checkpoint files produce warnings instead of aborting the whole catalog.
+- CLI can write the JSON report to a file.
+
+Run:
+
+```powershell
+$env:PYTHONPATH="RpaClaw"; python -m pytest RpaClaw/backend/tests/test_rpa_harness_catalog.py -q --basetemp .pytest-harness-tmp
+```
+
+Expected: fails until `backend.rpa.harness.catalog` exists.
+
+- [x] **Step 2: Implement catalog logic**
+
+Scan local asset directories offline. Use captured HTML/checkpoint metadata as provenance
+and coverage evidence; do not open live URLs and do not create a database.
+
+- [x] **Step 3: Add CLI entrypoint**
+
+Support:
+
+```powershell
+$env:PYTHONPATH="RpaClaw"; python -m backend.rpa.harness.run_catalog --assets data/rpa_harness_assets --output catalog.json
+```
+
+- [x] **Step 4: Verify Feature 9**
+
+Run:
+
+```powershell
+$env:PYTHONPATH="RpaClaw"; python -m pytest RpaClaw/backend/tests/test_rpa_harness_catalog.py RpaClaw/backend/tests/test_rpa_harness_snapshot_regression.py RpaClaw/backend/tests/test_rpa_harness_compiler_regression.py -q --basetemp .pytest-harness-tmp
+```
+
+- [ ] **Step 5: Commit and push**
+
+```powershell
+git add docs/superpowers/plans/2026-05-17-rpa-harness-v0-implementation.md RpaClaw/backend/rpa/harness/catalog.py RpaClaw/backend/rpa/harness/run_catalog.py RpaClaw/backend/tests/test_rpa_harness_catalog.py
+git commit -m "feat: add rpa harness asset catalog"
+git push
+```
+
+## Feature 10: Combined Regression Blast-Radius Report
+
+**Files:**
+
+- Create: `RpaClaw/backend/rpa/harness/blast_radius.py`
+- Create: `RpaClaw/backend/rpa/harness/run_blast_radius.py`
+- Test: `RpaClaw/backend/tests/test_rpa_harness_blast_radius.py`
+
+- [ ] **Step 1: Write failing blast-radius tests**
+
+Test behaviors:
+
+- Combine snapshot and compiler regression reports by `(asset_id, step_index)`.
+- Include catalog coverage metadata when supplied.
+- Summarize affected assets, affected steps, page patterns, hosts, and failure categories.
+- Report passes only when both snapshot and compiler statuses pass for a step.
+
+- [ ] **Step 2: Implement aggregation logic**
+
+Keep the aggregator report-only and offline. It should consume existing runner outputs
+instead of re-running snapshot or compiler logic by default.
+
+Exit semantics:
+
+- Active assets with failed snapshot or compiler checks make the blast-radius report fail.
+- Draft or flaky assets are warning evidence unless explicitly included as blocking.
+- Archived and superseded assets are catalog/history evidence and should not inflate
+  blocking blast-radius counts by default.
+
+- [ ] **Step 3: Add CLI entrypoint**
+
+Support:
+
+```powershell
+$env:PYTHONPATH="RpaClaw"; python -m backend.rpa.harness.run_blast_radius --snapshot-report snapshot.json --compiler-report compiler.json --catalog catalog.json --output blast-radius.json
+```
+
+- [ ] **Step 4: Verify Feature 10**
+
+Run:
+
+```powershell
+$env:PYTHONPATH="RpaClaw"; python -m pytest RpaClaw/backend/tests/test_rpa_harness_blast_radius.py RpaClaw/backend/tests/test_rpa_harness_catalog.py RpaClaw/backend/tests/test_rpa_harness_snapshot_regression.py RpaClaw/backend/tests/test_rpa_harness_compiler_regression.py -q --basetemp .pytest-harness-tmp
+```
+
+- [ ] **Step 5: Commit and push**
+
+```powershell
+git add docs/superpowers/plans/2026-05-17-rpa-harness-v0-implementation.md RpaClaw/backend/rpa/harness/blast_radius.py RpaClaw/backend/rpa/harness/run_blast_radius.py RpaClaw/backend/tests/test_rpa_harness_blast_radius.py
+git commit -m "feat: add rpa harness blast radius report"
+git push
+```
+
 ## Vision Guardian Checkpoints
 
 An independent Vision Guardian must review:
@@ -552,6 +666,8 @@ An independent Vision Guardian must review:
 - After Feature 6: regression runners can answer blast-radius questions over assets.
 - After Feature 7: real AI recording capture still has zero disabled-path impact and records semantic expected signals from accepted trace evidence.
 - After Feature 8: RecorderPage capture entry remains opt-in, invisible when disabled, and Selected Step binds to the next NL command rather than a guessed trace index.
+- After Feature 9: catalog remains asset-backed coverage reporting, not a live URL crawler or generic diagnostic inventory.
+- After Feature 10: blast-radius report explains affected assets/scenarios from regression outputs instead of hiding failures behind aggregate counts.
 
 ## Closeout Checklist For Each Feature
 
