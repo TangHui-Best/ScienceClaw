@@ -155,14 +155,17 @@ Scanned 167 markdown file(s). Checked 18 knowledge artifact(s). Errors: 0. Warni
 
 ## Closeout Status
 
-- Feature: F007 active; closeout pending implementation commit hash.
+- Feature: F007 completed.
 - Evidence level: exhaustive for this core-chain regression slice.
-- Implementation commit: pending first F007 commit.
-- Reviewer status: self-review at implementation stage; closeout review gate
-  pending after commit hash is recorded.
-- Readiness: implementation verification passed; closeout pending commit hash.
-- Completion claim: not allowed until implementation commit hash is recorded in
-  this Evidence record.
+- Implementation commit:
+  `b2e43daace22c60b3d572fdb493a7116c14bc274`.
+- Reviewer status: self-review allowed after closeout Delegation Gate review
+  decision. Independent review is recommended for future broader asset or E2E
+  replay expansion, but not required for this focused runner/observability
+  slice.
+- Readiness: pass. Focused Harness regression, real governed Chinese summary,
+  and strict Harness knowledge validation are recorded above.
+- Completion claim: allowed after this closeout record is committed and pushed.
 - ADR: not triggered at entry. F007 applies ADR-003 rather than changing the
   golden evaluation decision.
 - Lesson: not triggered at entry.

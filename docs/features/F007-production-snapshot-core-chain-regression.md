@@ -1,7 +1,7 @@
 ---
 id: F007
 doc_kind: feature
-status: active
+status: completed
 created: 2026-05-18
 updated: 2026-05-18
 ---
@@ -42,8 +42,9 @@ assets.
 
 ## Current Status
 
-Active. Implementation and verification have passed; final closeout is waiting
-for the implementation commit hash so Evidence can record it explicitly.
+Completed. Governed offline snapshot regression now uses the production
+DOM/raw/compact snapshot chain and reports snapshot quality/compression
+signals.
 
 ## Links
 
@@ -68,7 +69,7 @@ for the implementation commit hash so Evidence can record it explicitly.
   showing real production compression effects.
 - [x] Focused backend tests, governed summary, and strict Harness knowledge
   checks pass.
-- [ ] EV-007 records verification, commit hash, reviewer status, residual risk,
+- [x] EV-007 records verification, commit hash, reviewer status, residual risk,
   and closeout status before the next Feature slice starts.
 
 ## Patch History
@@ -84,5 +85,5 @@ See [EV-007 Production Snapshot Core-chain Regression Evidence](../evidence/EV-0
 
 ## Next Step
 
-Create the implementation commit, then close out EV-007 with that commit hash.
-Keep F008 as the separate Skill Replay E2E slice.
+F008 should remain the separate Skill Replay E2E slice: compile governed
+scenario assets into Skills and replay them against a controlled page/provider.
