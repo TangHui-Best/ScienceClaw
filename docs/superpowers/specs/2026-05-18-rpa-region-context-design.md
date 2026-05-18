@@ -183,6 +183,8 @@ interface RpaRegionSelectionRequest {
 }
 ```
 
+The frontend stores the pending attachment by `region_id` after server analysis succeeds. The natural-language instruction request should send only the `region_id`, not the full evidence payload. The backend resolves the authoritative region evidence from the session.
+
 ## Backend Design
 
 ### API Shape
@@ -192,6 +194,11 @@ Add a selection analysis endpoint:
 ```text
 POST /api/v1/rpa/session/{session_id}/region/analyze
 ```
+
+Frontend implementation note:
+
+- `apiClient` already prefixes `/api/v1`.
+- Vue code should call `/rpa/session/${sessionId}/region/analyze`, not `/api/v1/rpa/session/...`.
 
 Request:
 
@@ -240,6 +247,28 @@ The region evidence should be stored server-side in the active session until eit
 - The session stops.
 
 The frontend may keep a preview copy, but backend execution should use the authoritative evidence captured from the live page.
+
+### Assistant Instruction Contract
+
+The existing assistant instruction and streaming endpoint should accept an optional `region_id`:
+
+```json
+{
+  "instruction": "提取这个区域里的价格、SKU 和库存",
+  "model_id": "optional-model-id",
+  "region_id": "region-..."
+}
+```
+
+Rules:
+
+- `region_id` is optional. Existing chat-only recording commands must keep working unchanged.
+- If `region_id` is present, the backend resolves it from the active session and passes the resolved `region_context` into `RecordingRuntimeAgent`.
+- If `region_id` is missing from the session, stale, or belongs to another tab/page state, the endpoint should return a compact user-facing error and should not call the planner.
+- The stream should include region attachment metadata in run events so the frontend can render the user message and assistant evidence card consistently after refresh.
+- The stream should not send the full raw DOM evidence unless explicitly needed for debugging. Normal UI payloads should use summaries and counts.
+
+The frontend send path should include `region_id` only when a pending attachment exists. Removing the attachment before send must clear `region_id`.
 
 ### Recording Runtime Agent Input
 
@@ -308,6 +337,25 @@ This keeps the new evidence available to:
 - Compiler generalization.
 - Test failure diagnostics.
 
+### Debug Artifacts
+
+Region-backed recording needs the same evidence discipline as full-page snapshot recording.
+
+For every region-backed assistant run, write debug artifacts alongside the existing recording debug output:
+
+- `raw_region_evidence`: the full factual DOM evidence returned by region analysis, including intersecting elements, bounding boxes, text snippets, locator candidates, and structure summaries.
+- `planner_region_context`: the compacted region evidence actually sent to the planner.
+- `region_context_decision`: the planner/executor outcome that records whether the region was used for extraction, action targeting, or only as supporting evidence.
+
+Debug review order for wrong extraction or wrong action targeting:
+
+1. Check whether the intended target appears in `raw_region_evidence`.
+2. If present in raw evidence but missing from `planner_region_context`, fix region evidence compression.
+3. If present in compact region context but the planner chose the wrong target, fix planner prompting or execution logic.
+4. If absent from raw evidence, fix coordinate conversion, iframe handling, or DOM evidence collection.
+
+This mirrors the existing raw snapshot versus compact snapshot rule and prevents prompt-only fixes for evidence collection failures.
+
 ### Region Evidence Extraction
 
 The backend should execute JavaScript in the selected page/frame to collect facts from DOM elements intersecting the rectangle:
@@ -328,6 +376,27 @@ Important boundary:
 - Classification can be lightweight and heuristic because it only labels evidence for user review and planner context.
 - It must not force an execution strategy or block execution.
 
+### Iframe Handling
+
+Region selection coordinates originate from the top-level screencast viewport. The backend must resolve iframe targets before collecting DOM evidence:
+
+1. Start with the top-level page viewport rect.
+2. Find visible iframes whose bounding boxes intersect the selected rect.
+3. If no iframe intersects, collect evidence from the main frame using the original rect.
+4. If one iframe dominates the selected area, convert the selected rect into frame-local CSS pixels by subtracting the iframe bounding box origin and accounting for iframe client border/scroll offsets when available.
+5. Use the existing server-side `build_frame_path` helper to store the frame path.
+6. Execute the region evidence collector in the resolved Playwright `Frame`.
+7. If multiple iframes materially overlap the region, return a warning and collect evidence from the dominant frame plus a small main-frame summary. Do not silently merge unrelated frames.
+
+Cross-origin iframes are still accessible through Playwright frame evaluation when the browser context has access to the frame. If frame evaluation fails, the endpoint should return an evidence object with:
+
+- `frame_path`
+- iframe element summary from the parent frame
+- warning details
+- empty `intersecting_elements`
+
+The planner may still use the warning as context, but the recorder should not pretend that element-level evidence was collected.
+
 ## Compiler Design
 
 `TraceSkillCompiler` should consume region-backed traces conservatively:
@@ -336,17 +405,43 @@ Important boundary:
 
 Use the selected or dominant locator when it resolves cleanly. Extract visible text or control value. Preserve `output_key`.
 
+V1 support boundary:
+
+- Support one dominant element or one dominant label/value container.
+- Support visible text, input value, selected option text, and simple attribute extraction such as `href` for links when the instruction asks for a link.
+- If the selected region contains multiple unrelated values and the instruction does not name fields, preserve runtime AI or surface a review warning instead of inventing fields.
+
 ### Table Region
 
 Prefer semantic table/grid locators and headers from `table_summary`. Generate row iteration using stable table structure rather than recorded row text.
+
+V1 support boundary:
+
+- Support native `table`, ARIA `grid`, and row/cell structures where headers can be inferred from visible header cells.
+- Support extracting all visible rows for requested or inferred columns.
+- Do not support virtualized offscreen rows in V1 unless the recording evidence contains a clear pagination or scrolling instruction.
+- If headers cannot be inferred, keep the trace as runtime AI or require configure-stage review instead of compiling brittle positional columns.
 
 ### List or Card Sample
 
 If the user selected one sample item, infer the sibling collection from repeated structure evidence. Generate item iteration relative to the repeated container and extract requested fields from each item.
 
+V1 support boundary:
+
+- Support repeated sibling elements under one parent when at least two sibling candidates share tag/class/role structure.
+- Support extracting text, links, timestamps, badges/status text, and simple numeric values from each repeated item.
+- If the selected region is an entire list area, choose a dominant repeated item pattern from inside the region.
+- If no repeated structure is detected, compile as single-region extraction or preserve runtime AI; do not create keyword-driven site templates.
+
 ### Action Target
 
 For click/fill actions, use region-local controls and selected locator candidates to render normal action code. Do not compile raw coordinates as replay logic except as last-resort diagnostic fallback.
+
+V1 support boundary:
+
+- Support click, fill, select option, press, and hover only when a region-local actionable element has a usable locator candidate.
+- If multiple region-local controls match the instruction, prefer planner clarification or preserve runtime AI rather than preselecting by fragile visual order.
+- Do not compile coordinate clicks in V1. Raw coordinates may appear in diagnostics only.
 
 ## Error Handling
 
@@ -355,6 +450,8 @@ For click/fill actions, use region-local controls and selected locator candidate
 - If the region is inside an iframe, include `frame_path` from the server-side frame path builder.
 - If the page navigates before the user sends the message, mark the attachment stale and ask for re-selection.
 - If the user removes the attachment, delete the pending region context from the session.
+- If the user starts a new selection while another pending attachment exists, replace the old pending attachment after successful analysis.
+- If the user sends an empty instruction with a region attachment, keep the attachment and show a composer validation message. A region alone is not an instruction.
 
 ## Testing Strategy
 
@@ -368,6 +465,8 @@ Add tests for:
 - `Esc` cancels selection.
 - Removing the attachment clears the preview and prevents region context from being sent.
 - Sending a message includes `region_id` only when an attachment is present.
+- Sending an empty message with an attachment does not call the assistant endpoint and keeps the attachment.
+- Starting a second successful selection replaces the first pending attachment.
 
 ### Backend Unit Tests
 
@@ -375,9 +474,12 @@ Add tests for:
 
 - Region analysis endpoint validates rect and tab id.
 - Region evidence response includes frame path, summary, inferred kind, and local text.
+- Region analysis converts iframe-intersecting top-level coordinates into frame-local coordinates and records `frame_path`.
 - Assistant streaming endpoint passes stored `region_context` into `RecordingRuntimeAgent`.
+- Assistant streaming endpoint rejects stale or missing `region_id` before planner execution.
 - Successful region-backed extraction writes a trace with `region_context` and `region_selection` signal.
 - Region-backed action writes an action or AI operation trace without forcing `DATA_CAPTURE`.
+- Debug artifacts include `raw_region_evidence`, `planner_region_context`, and `region_context_decision`.
 
 ### Compiler Tests
 
