@@ -167,7 +167,13 @@ compiler_failed=0
 Focused regression:
 
 ```text
-30 passed in 0.60s
+30 passed in 0.50s
+```
+
+Strict Harness knowledge validation:
+
+```text
+Scanned 163 markdown file(s). Checked 14 knowledge artifact(s). Errors: 0. Warnings: 0.
 ```
 
 ## Artifacts
@@ -203,9 +209,13 @@ Focused regression:
 
 - Feature: F005 completed.
 - Evidence level: exhaustive for this asset lifecycle slice.
-- Readiness: pending final strict Harness knowledge check and commit hash
-  backfill.
-- Completion claim: pending final closeout commit.
+- Implementation commit:
+  `0e046106cdce77d559eee710a897dae67a8677a3`.
+- Reviewer status: self-review allowed after Delegation Gate review decision;
+  independent review not required for this tightly scoped metadata curation.
+- Readiness: pass. Strict Harness knowledge check and focused offline
+  regression evidence are recorded above.
+- Completion claim: allowed after this closeout record is committed and pushed.
 - ADR: not triggered. F005 applies ADR-003 rather than changing the decision.
 - Lesson: not triggered. No recurring failure mode was found.
 - Patch Churn Review: not triggered. F005 has no patch history.
