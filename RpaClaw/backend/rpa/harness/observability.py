@@ -19,6 +19,51 @@ def _failure_categories(report: dict[str, Any], section: str) -> dict[str, int]:
     )
 
 
+def _snapshot_quality(report: dict[str, Any]) -> dict[str, Any]:
+    items = [
+        item
+        for item in report.get("snapshot", {}).get("assets", [])
+        if isinstance(item, dict)
+    ]
+    if not items:
+        return {
+            "source": "none",
+            "checked_steps": 0,
+            "raw_signal_present": 0,
+            "compact_signal_present": 0,
+            "raw_signal_missing": 0,
+            "compact_signal_missing": 0,
+            "average_compression_ratio": 0,
+        }
+
+    ratios = [
+        float(item.get("compression_ratio") or 0)
+        for item in items
+        if item.get("compression_ratio") is not None
+    ]
+    sources = _counter_dict([str(item.get("snapshot_source") or "") for item in items])
+    source = next(iter(sources), "unknown")
+    if len(sources) > 1:
+        source = "mixed"
+    return {
+        "source": source,
+        "checked_steps": len(items),
+        "raw_signal_present": len(
+            [item for item in items if item.get("raw_signal_status") == "present"]
+        ),
+        "compact_signal_present": len(
+            [item for item in items if item.get("compact_signal_status") == "present"]
+        ),
+        "raw_signal_missing": len(
+            [item for item in items if item.get("raw_signal_status") == "missing"]
+        ),
+        "compact_signal_missing": len(
+            [item for item in items if item.get("compact_signal_status") == "missing"]
+        ),
+        "average_compression_ratio": round(sum(ratios) / len(ratios), 4) if ratios else 0,
+    }
+
+
 def _coverage_risks(report: dict[str, Any]) -> list[str]:
     summary = report.get("summary", {})
     selected_count = int(summary.get("selected_capture_count") or 0)
@@ -82,6 +127,7 @@ def build_observability_contract(report: dict[str, Any]) -> dict[str, Any]:
             "validation_issue_categories": dict(validation_summary.get("categories") or {}),
             "snapshot_failed": int(summary.get("snapshot_failed") or 0),
             "snapshot_failure_categories": _failure_categories(report, "snapshot"),
+            "snapshot_quality": _snapshot_quality(report),
             "compiler_failed": int(summary.get("compiler_failed") or 0),
             "compiler_failure_categories": _failure_categories(report, "compiler"),
         },
@@ -169,6 +215,7 @@ def render_human_summary(report: dict[str, Any]) -> str:
     qualification = observability["asset_qualification"]
     coverage = observability["coverage"]
     runner_signals = observability["runner_signals"]
+    snapshot_quality = runner_signals["snapshot_quality"]
     blast_radius = observability["blast_radius"]
     confidence = observability["confidence"]
 
@@ -190,6 +237,14 @@ def render_human_summary(report: dict[str, Any]) -> str:
             f"compiler failed={runner_signals['compiler_failed']}"
         ),
         (
+            "Snapshot quality: "
+            f"source={snapshot_quality['source']}, "
+            f"checked steps={snapshot_quality['checked_steps']}, "
+            f"raw signal present={snapshot_quality['raw_signal_present']}, "
+            f"compact signal present={snapshot_quality['compact_signal_present']}, "
+            f"avg compact/raw={snapshot_quality['average_compression_ratio']}"
+        ),
+        (
             "Blast radius: "
             f"affected assets={_format_list(blast_radius['affected_assets'])}; "
             f"affected page patterns={_format_list(blast_radius['affected_page_patterns'])}"
@@ -208,6 +263,7 @@ def render_chinese_summary(report: dict[str, Any]) -> str:
     qualification = observability["asset_qualification"]
     coverage = observability["coverage"]
     runner_signals = observability["runner_signals"]
+    snapshot_quality = runner_signals["snapshot_quality"]
     blast_radius = observability["blast_radius"]
     confidence = observability["confidence"]
 
@@ -227,6 +283,14 @@ def render_chinese_summary(report: dict[str, Any]) -> str:
             f"validation 阻塞={runner_signals['validation_blocking_issue_count']}，"
             f"snapshot 失败={runner_signals['snapshot_failed']}，"
             f"compiler 失败={runner_signals['compiler_failed']}"
+        ),
+        (
+            "Snapshot 质量："
+            f"source={snapshot_quality['source']}，"
+            f"检查步骤={snapshot_quality['checked_steps']}，"
+            f"raw signal 保留={snapshot_quality['raw_signal_present']}，"
+            f"compact signal 保留={snapshot_quality['compact_signal_present']}，"
+            f"平均 compact/raw={snapshot_quality['average_compression_ratio']}"
         ),
         (
             "影响范围："

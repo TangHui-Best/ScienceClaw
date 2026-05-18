@@ -6,11 +6,18 @@ from html import unescape
 from pathlib import Path
 from typing import Any, Callable
 
+from playwright.sync_api import Browser, Page, Playwright, sync_playwright
+
+from ..assistant_runtime import PLAYWRIGHT_RECORDER_RUNTIME_JS
+from ..assistant_snapshot_runtime import SNAPSHOT_V2_JS
+from ..snapshot_compression import compact_recording_snapshot
+
 from .models import HarnessExpectedSignals, HarnessStepCheckpoint
 
 
 SnapshotBuilder = Callable[[str, HarnessStepCheckpoint], dict[str, Any]]
 SnapshotCompactor = Callable[[dict[str, Any], HarnessStepCheckpoint], dict[str, Any]]
+_PRODUCTION_SNAPSHOT_SOURCE = "production-dom-snapshot-v1"
 
 
 def _default_snapshot_builder(html: str, checkpoint: HarnessStepCheckpoint) -> dict[str, Any]:
@@ -26,6 +33,79 @@ def _default_snapshot_compactor(
     _checkpoint: HarnessStepCheckpoint,
 ) -> dict[str, Any]:
     return dict(raw_snapshot)
+
+
+def _production_snapshot_compactor(
+    raw_snapshot: dict[str, Any],
+    checkpoint: HarnessStepCheckpoint,
+) -> dict[str, Any]:
+    compact = compact_recording_snapshot(raw_snapshot, checkpoint.step_intent)
+    compact["_snapshot_source"] = _PRODUCTION_SNAPSHOT_SOURCE
+    return compact
+
+
+class ProductionSnapshotAdapter:
+    """Build production raw snapshots from captured HTML without live navigation."""
+
+    def __init__(self) -> None:
+        self._playwright: Playwright | None = None
+        self._browser: Browser | None = None
+
+    def close(self) -> None:
+        if self._browser is not None:
+            self._browser.close()
+            self._browser = None
+        if self._playwright is not None:
+            self._playwright.stop()
+            self._playwright = None
+
+    def build_raw_snapshot(
+        self,
+        html: str,
+        checkpoint: HarnessStepCheckpoint,
+    ) -> dict[str, Any]:
+        page = self._new_page()
+        try:
+            page.set_content(html, wait_until="domcontentloaded")
+            self._install_recorder_runtime(page)
+            raw = page.evaluate(SNAPSHOT_V2_JS)
+            data = json.loads(raw) if isinstance(raw, str) else raw
+            snapshot = data if isinstance(data, dict) else {}
+            title = page.title() or checkpoint.before.title
+            return {
+                "url": checkpoint.before.url,
+                "title": title,
+                "frames": [
+                    {
+                        "frame_path": [],
+                        "url": checkpoint.before.url,
+                        "frame_hint": "main document",
+                        "elements": list(snapshot.get("actionable_nodes") or []),
+                        "collections": [],
+                    }
+                ],
+                "actionable_nodes": list(snapshot.get("actionable_nodes") or []),
+                "content_nodes": list(snapshot.get("content_nodes") or []),
+                "containers": list(snapshot.get("containers") or []),
+                "table_views": list(snapshot.get("table_views") or []),
+                "detail_views": list(snapshot.get("detail_views") or []),
+                "_snapshot_source": _PRODUCTION_SNAPSHOT_SOURCE,
+            }
+        finally:
+            page.close()
+
+    def _new_page(self) -> Page:
+        if self._playwright is None:
+            self._playwright = sync_playwright().start()
+        if self._browser is None:
+            self._browser = self._playwright.chromium.launch(headless=True)
+        return self._browser.new_page()
+
+    @staticmethod
+    def _install_recorder_runtime(page: Page) -> None:
+        ready = page.evaluate("() => !!globalThis.__rpaPlaywrightRecorder")
+        if not ready:
+            page.evaluate(PLAYWRIGHT_RECORDER_RUNTIME_JS)
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -55,66 +135,144 @@ def _normalize_match_text(value: str) -> str:
 
 
 def _snapshot_failure_category(
+    source_html: str,
     raw_snapshot: dict[str, Any],
     compact_snapshot: dict[str, Any],
     missing_text: list[str],
 ) -> str:
     if not missing_text:
         return ""
+    source_missing = [
+        text
+        for text in missing_text
+        if isinstance(text, str) and not _json_contains_text(source_html, text)
+    ]
+    if source_missing:
+        return "source-html-missing-signal"
     raw_missing = [
         text
         for text in missing_text
         if isinstance(text, str) and not _json_contains_text(raw_snapshot, text)
     ]
     if raw_missing:
-        return "raw-html-missing-signal"
+        return "raw-snapshot-missing-signal"
     return "compact-snapshot-lost-signal"
+
+
+def _signal_status(payload: Any, required_text: list[str]) -> str:
+    if not required_text:
+        return "not_checked"
+    missing = [
+        text
+        for text in required_text
+        if isinstance(text, str) and not _json_contains_text(payload, text)
+    ]
+    return "missing" if missing else "present"
+
+
+def _snapshot_quality(raw_snapshot: dict[str, Any], compact_snapshot: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "source": str(raw_snapshot.get("_snapshot_source") or compact_snapshot.get("_snapshot_source") or "custom"),
+        "raw": {
+            "frame_count": len(raw_snapshot.get("frames") or []),
+            "actionable_node_count": len(raw_snapshot.get("actionable_nodes") or []),
+            "content_node_count": len(raw_snapshot.get("content_nodes") or []),
+            "container_count": len(raw_snapshot.get("containers") or []),
+            "table_view_count": len(raw_snapshot.get("table_views") or []),
+            "detail_view_count": len(raw_snapshot.get("detail_views") or []),
+        },
+        "compact": {
+            "mode": str(compact_snapshot.get("mode") or ""),
+            "expanded_region_count": len(compact_snapshot.get("expanded_regions") or []),
+            "sampled_region_count": len(compact_snapshot.get("sampled_regions") or []),
+            "region_catalogue_count": len(compact_snapshot.get("region_catalogue") or []),
+            "table_view_count": len(compact_snapshot.get("table_views") or []),
+            "detail_view_count": len(compact_snapshot.get("detail_views") or []),
+            "form_view_count": len(compact_snapshot.get("form_views") or []),
+        },
+    }
 
 
 def run_snapshot_regression(
     assets_root: str | Path,
     *,
-    snapshot_builder: SnapshotBuilder = _default_snapshot_builder,
-    snapshot_compactor: SnapshotCompactor = _default_snapshot_compactor,
+    snapshot_builder: SnapshotBuilder | None = None,
+    snapshot_compactor: SnapshotCompactor | None = None,
     asset_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     root = Path(assets_root)
     items: list[dict[str, Any]] = []
+    adapter: ProductionSnapshotAdapter | None = None
+    if snapshot_builder is None:
+        adapter = ProductionSnapshotAdapter()
+        snapshot_builder = adapter.build_raw_snapshot
+        if snapshot_compactor is None:
+            snapshot_compactor = _production_snapshot_compactor
+    elif snapshot_compactor is None:
+        snapshot_compactor = _default_snapshot_compactor
 
-    for checkpoint_path in sorted(root.glob("*/steps/*/checkpoint.json")):
-        asset_id = _asset_id_for_checkpoint(root, checkpoint_path)
-        if asset_ids is not None and asset_id not in asset_ids:
-            continue
-        checkpoint = HarnessStepCheckpoint.model_validate(_load_json(checkpoint_path))
-        capture_dir = checkpoint_path.parents[2]
-        before_html_path = capture_dir / checkpoint.before.html_path
-        html = before_html_path.read_text(encoding="utf-8")
-        expected_payload = _load_json(capture_dir / checkpoint.expected_path)
-        expected = HarnessExpectedSignals.model_validate(expected_payload)
+    try:
+        for checkpoint_path in sorted(root.glob("*/steps/*/checkpoint.json")):
+            asset_id = _asset_id_for_checkpoint(root, checkpoint_path)
+            if asset_ids is not None and asset_id not in asset_ids:
+                continue
+            checkpoint = HarnessStepCheckpoint.model_validate(_load_json(checkpoint_path))
+            capture_dir = checkpoint_path.parents[2]
+            before_html_path = capture_dir / checkpoint.before.html_path
+            html = before_html_path.read_text(encoding="utf-8")
+            expected_payload = _load_json(capture_dir / checkpoint.expected_path)
+            expected = HarnessExpectedSignals.model_validate(expected_payload)
 
-        raw_snapshot = snapshot_builder(html, checkpoint)
-        compact_snapshot = snapshot_compactor(raw_snapshot, checkpoint)
-        required_text = list(expected.snapshot_signals.get("must_contain_text") or [])
-        missing_text = [
-            text
-            for text in required_text
-            if isinstance(text, str) and not _json_contains_text(compact_snapshot, text)
-        ]
-        status = "failed" if missing_text else "passed"
-        failure_category = _snapshot_failure_category(raw_snapshot, compact_snapshot, missing_text)
-        item = {
-            "asset_id": _asset_id_for_checkpoint(root, checkpoint_path),
-            "step_id": checkpoint.step_id,
-            "step_index": checkpoint.step_index,
-            "step_intent": checkpoint.step_intent,
-            "page_patterns": checkpoint.page_patterns,
-            "status": status,
-            "failure_category": failure_category,
-            "missing_text": missing_text,
-            "raw_snapshot_size": len(json.dumps(raw_snapshot, ensure_ascii=False)),
-            "compact_snapshot_size": len(json.dumps(compact_snapshot, ensure_ascii=False)),
-        }
-        items.append(item)
+            raw_snapshot = snapshot_builder(html, checkpoint)
+            compact_snapshot = snapshot_compactor(raw_snapshot, checkpoint)
+            required_text = list(expected.snapshot_signals.get("must_contain_text") or [])
+            missing_text = [
+                text
+                for text in required_text
+                if isinstance(text, str) and not _json_contains_text(compact_snapshot, text)
+            ]
+            source_html_size = len(html)
+            raw_snapshot_size = len(json.dumps(raw_snapshot, ensure_ascii=False))
+            compact_snapshot_size = len(json.dumps(compact_snapshot, ensure_ascii=False))
+            status = "failed" if missing_text else "passed"
+            failure_category = _snapshot_failure_category(
+                html,
+                raw_snapshot,
+                compact_snapshot,
+                missing_text,
+            )
+            item = {
+                "asset_id": _asset_id_for_checkpoint(root, checkpoint_path),
+                "step_id": checkpoint.step_id,
+                "step_index": checkpoint.step_index,
+                "step_intent": checkpoint.step_intent,
+                "page_patterns": checkpoint.page_patterns,
+                "status": status,
+                "failure_category": failure_category,
+                "missing_text": missing_text,
+                "snapshot_source": str(
+                    raw_snapshot.get("_snapshot_source")
+                    or compact_snapshot.get("_snapshot_source")
+                    or "custom"
+                ),
+                "source_html_size": source_html_size,
+                "raw_snapshot_size": raw_snapshot_size,
+                "compact_snapshot_size": compact_snapshot_size,
+                "compression_ratio": round(
+                    compact_snapshot_size / raw_snapshot_size,
+                    4,
+                )
+                if raw_snapshot_size
+                else 0,
+                "source_signal_status": _signal_status(html, required_text),
+                "raw_signal_status": _signal_status(raw_snapshot, required_text),
+                "compact_signal_status": _signal_status(compact_snapshot, required_text),
+                "snapshot_quality": _snapshot_quality(raw_snapshot, compact_snapshot),
+            }
+            items.append(item)
+    finally:
+        if adapter is not None:
+            adapter.close()
 
     failed = len([item for item in items if item["status"] == "failed"])
     return {

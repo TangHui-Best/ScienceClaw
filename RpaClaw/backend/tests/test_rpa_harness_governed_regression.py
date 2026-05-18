@@ -56,8 +56,14 @@ def _write_asset(
         ),
         encoding="utf-8",
     )
-    (step_dir / "before.html").write_text(f"<html><body>{step_text}</body></html>", encoding="utf-8")
-    (step_dir / "after.html").write_text(f"<html><body>{step_text} after</body></html>", encoding="utf-8")
+    (step_dir / "before.html").write_text(
+        f"<html><body><span>{step_text}</span></body></html>",
+        encoding="utf-8",
+    )
+    (step_dir / "after.html").write_text(
+        f"<html><body><span>{step_text} after</span></body></html>",
+        encoding="utf-8",
+    )
     (step_dir / "trace_events.json").write_text("[]", encoding="utf-8")
     (step_dir / "expected.json").write_text(
         json.dumps({"snapshot_signals": {"must_contain_text": [step_text]}}),
@@ -156,6 +162,18 @@ def test_governed_offline_regression_exposes_observability_contract(tmp_path: Pa
     }
     assert observability["runner_signals"]["snapshot_failure_categories"] == {}
     assert observability["runner_signals"]["compiler_failure_categories"] == {}
+    assert observability["runner_signals"]["snapshot_quality"] == {
+        "source": "production-dom-snapshot-v1",
+        "checked_steps": 1,
+        "raw_signal_present": 1,
+        "compact_signal_present": 1,
+        "raw_signal_missing": 0,
+        "compact_signal_missing": 0,
+        "average_compression_ratio": observability["runner_signals"]["snapshot_quality"][
+            "average_compression_ratio"
+        ],
+    }
+    assert observability["runner_signals"]["snapshot_quality"]["average_compression_ratio"] > 0
     assert observability["confidence"]["risks"] == ["single-candidate-asset-baseline"]
 
 
@@ -172,7 +190,7 @@ def test_governed_offline_regression_marks_selected_runner_failures_as_blocking(
     assert report["summary"]["status"] == "failed"
     assert report["summary"]["snapshot_failed"] == 1
     assert report["observability"]["runner_signals"]["snapshot_failure_categories"] == {
-        "raw-html-missing-signal": 1
+        "source-html-missing-signal": 1
     }
     assert report["observability"]["blast_radius"]["affected_page_patterns"] == ["repository-detail"]
     assert report["blast_radius"]["summary"]["blocking_failed_steps"] == 1
@@ -216,6 +234,8 @@ def test_governed_offline_regression_cli_can_emit_human_summary(tmp_path: Path, 
     assert "Evaluated: 1 candidate asset, 1 step" in output
     assert "Coverage: repository-detail" in output
     assert "Signals: validation blocking=0, snapshot failed=0, compiler failed=0" in output
+    assert "Snapshot quality: source=production-dom-snapshot-v1, checked steps=1" in output
+    assert "compact signal present=1" in output
     assert "Confidence risks: single-candidate-asset-baseline" in output
 
 
@@ -232,6 +252,8 @@ def test_governed_offline_regression_cli_can_emit_chinese_summary(tmp_path: Path
     assert "本次评估：1 个 candidate 资产，1 个步骤" in output
     assert "覆盖范围：repository-detail" in output
     assert "执行信号：validation 阻塞=0，snapshot 失败=0，compiler 失败=0" in output
+    assert "Snapshot 质量：source=production-dom-snapshot-v1，检查步骤=1" in output
+    assert "compact signal 保留=1" in output
     assert "可信度边界：single-candidate-asset-baseline" in output
 
 

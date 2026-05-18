@@ -8,6 +8,26 @@ updated: 2026-05-18
 
 ## Active
 
+### F007 Production Snapshot Core-chain Regression
+
+- Feature: `docs/features/F007-production-snapshot-core-chain-regression.md`
+- Evidence: `docs/evidence/EV-007-production-snapshot-core-chain-regression.md`
+- Vision: `docs/rpa/harness/golden-evaluation-vision.md`
+- Decision: `docs/decisions/ADR-003-rpa-golden-evaluation-uses-assets-not-live-agent-chat.md`
+- Status: active.
+- Current state: implementation verification passed; closeout pending
+  implementation commit hash in EV-007.
+- Goal: make governed offline regression snapshot checks use the production
+  DOM/raw/compact snapshot chain and report snapshot quality/compression
+  signals.
+- Non-goals: planner fixes, `TraceSkillCompiler` hard-code fixes, Skill Replay
+  E2E, GitHub-specific Harness rules, and `rpa-eval-app` direct Agent chat.
+
+Next actions:
+
+- Create the implementation commit.
+- Record the implementation commit hash in EV-007 and close F007.
+
 ### Post-F002 RPA Harness Follow-ups
 
 - Source Feature: `docs/features/F002-rpa-harness-v0.md`
