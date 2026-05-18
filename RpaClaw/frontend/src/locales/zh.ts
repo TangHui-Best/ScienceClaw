@@ -994,4 +994,11 @@ export default {
   'Edit saved token flows JSON hint': '编辑已保存的 Token Flow。填入 [] 可清空所有 Token Flow。',
   'Token flows JSON must be an array': 'Token Flow JSON 必须是数组',
   'Invalid JSON': '无效的 JSON',
+  'Select page region': '选择页面区域',
+  'Drag to select page region · Esc to cancel': '拖拽框选页面区域 · Esc 取消',
+  'Selected page region': '已选择页面区域',
+  'Remove selected region': '移除所选区域',
+  'Region analysis failed, please select again': '区域分析失败，请重新框选',
+  'Type what to do with the selected region': '请描述要对所选区域执行什么操作',
+  'Page region evidence': '页面区域证据',
 }

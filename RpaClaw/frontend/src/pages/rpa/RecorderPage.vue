@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
-import { Camera, Terminal, CheckCircle, Radio, Send, Wand2, Bot, Code, Globe, AlertCircle, ChevronDown, ChevronUp, ClipboardCheck, Loader2 } from 'lucide-vue-next';
+import { Camera, Terminal, CheckCircle, Radio, Send, Wand2, Bot, Code, Globe, AlertCircle, ChevronDown, ChevronUp, ClipboardCheck, Loader2, Crop, X } from 'lucide-vue-next';
 import { apiClient } from '@/api/client';
 import { listModels, type ModelConfig } from '@/api/models';
 import ProviderIcon from '@/components/icons/ProviderIcon.vue';
 import RpaFlowGuide from '@/components/rpa/RpaFlowGuide.vue';
 import RpaStepTimeline from '@/components/rpa/RpaStepTimeline.vue';
+import { i18n } from '@/composables/useI18n';
 import { getBackendWsUrl } from '@/utils/sandbox';
 import {
   getFrameSizeFromMetadata,
@@ -198,10 +199,25 @@ const sessionWithTimeline = (payload: any) => ({
   timeline: payload?.session?.timeline ?? payload?.timeline,
 });
 
+interface PendingRegionAttachment {
+  regionId: string;
+  kind?: string;
+  summary?: string;
+  pageTitle?: string;
+  pageUrl?: string;
+  bounds?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+}
+
 interface ChatMessage {
   role: 'user' | 'assistant';
   text: string;
   time: string;
+  regionAttachment?: PendingRegionAttachment;
   script?: string;
   status?: RpaAgentMessageStatus;
   processingLabel?: string;
@@ -223,6 +239,35 @@ const chatScrollRef = ref<HTMLElement | null>(null);
 const models = ref<ModelConfig[]>([]);
 const selectedModelId = ref<string | null>(null);
 const modelDropdownOpen = ref(false);
+const pendingRegion = ref<PendingRegionAttachment | null>(null);
+const regionError = ref('');
+
+const t = (key: string) => String(i18n.global.t(key));
+
+const regionKindLabel = (kind?: string) => {
+  if (kind === 'page_region' || kind === 'region') return t('Page region evidence');
+  return t('Selected page region');
+};
+
+const formatRegionAttachmentSummary = (attachment: PendingRegionAttachment) => {
+  if (attachment.summary?.trim()) return attachment.summary.trim();
+  if (attachment.bounds) {
+    const { width, height } = attachment.bounds;
+    return `${Math.round(width)} x ${Math.round(height)} px`;
+  }
+  return regionKindLabel(attachment.kind);
+};
+
+const setPendingRegion = (attachment: PendingRegionAttachment) => {
+  if (!attachment.regionId) return;
+  pendingRegion.value = { ...attachment };
+  regionError.value = '';
+};
+
+const clearPendingRegion = () => {
+  pendingRegion.value = null;
+  regionError.value = '';
+};
 
 const selectedModel = computed(() => (
   models.value.find((model) => model.id === selectedModelId.value) ?? null
@@ -774,15 +819,29 @@ const handleComposerKeydown = (event: KeyboardEvent) => {
 };
 
 const sendMessage = async () => {
-  if (!newMessage.value.trim() || !sessionId.value || sending.value) return;
+  if (!newMessage.value.trim()) {
+    if (pendingRegion.value) {
+      regionError.value = t('Type what to do with the selected region');
+    }
+    return;
+  }
+  if (!sessionId.value || sending.value) return;
   const userText = newMessage.value.trim();
+  const regionAttachment = pendingRegion.value ? { ...pendingRegion.value } : undefined;
   newMessage.value = '';
+  regionError.value = '';
   sending.value = true;
   agentRunning.value = true;
   const initialProgress = getInitialRpaAgentProgress();
 
   const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  chatMessages.value.push({ role: 'user', text: userText, time: now });
+  chatMessages.value.push({
+    role: 'user',
+    text: userText,
+    time: now,
+    ...(regionAttachment ? { regionAttachment } : {}),
+  });
+  clearPendingRegion();
 
   const assistantMsg: ChatMessage = {
     role: 'assistant',
@@ -800,7 +859,7 @@ const sendMessage = async () => {
     const resp = await fetch(`/api/v1/rpa/session/${sessionId.value}/chat`, {
       method: 'POST',
       headers: buildRpaAssistantRequestHeaders(),
-      body: JSON.stringify(buildRpaAssistantChatPayload(userText, selectedModelId.value)),
+      body: JSON.stringify(buildRpaAssistantChatPayload(userText, selectedModelId.value, regionAttachment?.regionId)),
     });
 
     if (!resp.ok || !resp.body) {
@@ -935,6 +994,13 @@ const sendMessage = async () => {
     sending.value = false;
   }
 };
+
+defineExpose({
+  pendingRegion,
+  regionError,
+  setPendingRegion,
+  clearPendingRegion,
+});
 </script>
 
 <template>
@@ -1090,6 +1156,14 @@ const sendMessage = async () => {
               v-if="msg.role === 'user'"
               class="max-w-[85%] min-w-0 overflow-hidden rounded-2xl rounded-tr-none bg-[#831bd7] p-3 text-xs leading-relaxed text-white shadow-md shadow-purple-100 break-words [overflow-wrap:anywhere]"
             >
+              <div
+                v-if="msg.regionAttachment"
+                class="mb-2 flex min-w-0 items-center gap-1.5 rounded-lg bg-white/15 px-2 py-1 text-[10px] font-semibold text-white/90"
+              >
+                <Crop :size="12" class="shrink-0" />
+                <span class="shrink-0">{{ regionKindLabel(msg.regionAttachment.kind) }}</span>
+                <span class="min-w-0 truncate opacity-85">{{ formatRegionAttachmentSummary(msg.regionAttachment) }}</span>
+              </div>
               <div class="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{{ msg.text }}</div>
             </div>
 
@@ -1220,6 +1294,35 @@ const sendMessage = async () => {
 
         <div class="bg-[#eff1f2] p-4 dark:bg-[#212122]">
           <div class="relative rounded-2xl bg-white p-2 shadow-[0_16px_36px_rgba(25,28,30,0.08)] ring-1 ring-black/[0.04] dark:bg-[#272728] dark:ring-white/10">
+            <div
+              v-if="pendingRegion"
+              class="mb-2 flex min-w-0 items-center justify-between gap-2 rounded-xl bg-[#f6f0ff] px-2.5 py-2 text-[10px] text-[#4f00d0] ring-1 ring-[#831bd7]/10 dark:bg-[#831bd7]/15 dark:text-purple-100 dark:ring-white/10"
+            >
+              <div class="flex min-w-0 items-center gap-2">
+                <div class="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-white/80 text-[#831bd7] dark:bg-black/20 dark:text-purple-100">
+                  <Crop :size="13" />
+                </div>
+                <div class="min-w-0">
+                  <div class="font-bold leading-tight">{{ t('Selected page region') }}</div>
+                  <div class="truncate text-[9px] font-semibold opacity-80">{{ formatRegionAttachmentSummary(pendingRegion) }}</div>
+                </div>
+              </div>
+              <button
+                type="button"
+                class="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-[#831bd7] transition-colors hover:bg-white/70 dark:text-purple-100 dark:hover:bg-white/10"
+                :aria-label="t('Remove selected region')"
+                :title="t('Remove selected region')"
+                @click="clearPendingRegion"
+              >
+                <X :size="13" />
+              </button>
+            </div>
+            <div
+              v-if="regionError"
+              class="mb-2 rounded-lg bg-red-50 px-2.5 py-1.5 text-[10px] font-semibold text-red-600 dark:bg-red-950/30 dark:text-red-200"
+            >
+              {{ regionError }}
+            </div>
             <textarea
               v-model="newMessage"
               @keydown="handleComposerKeydown"
@@ -1229,35 +1332,46 @@ const sendMessage = async () => {
               rows="2"
             ></textarea>
             <div class="flex items-center justify-between gap-2">
-              <div class="relative min-w-0 flex-1">
+              <div class="flex min-w-0 flex-1 items-center gap-2">
                 <button
                   type="button"
-                  class="flex h-7 max-w-full items-center gap-1.5 rounded-lg bg-[#f2f4f6] px-2 text-left text-[10px] font-semibold text-gray-700 transition-colors hover:bg-[#edeef0] disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white/10 dark:text-gray-200 dark:hover:bg-white/[0.14]"
-                  :disabled="models.length === 0 || sending || agentRunning"
-                  @click="modelDropdownOpen = !modelDropdownOpen"
+                  class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#f2f4f6] text-gray-500 transition-colors disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white/10 dark:text-gray-300"
+                  :aria-label="t('Select page region')"
+                  :title="t('Drag to select page region · Esc to cancel')"
+                  disabled
                 >
-                  <ProviderIcon v-if="selectedModel" :provider="selectedModel.provider" class="size-3.5 flex-shrink-0" />
-                  <span class="min-w-0 truncate">{{ selectedModelName }}</span>
-                  <span v-if="selectedModel" class="hidden max-w-12 truncate text-[9px] text-gray-400 sm:inline">{{ selectedModel.provider }}</span>
-                  <ChevronDown :size="12" class="flex-shrink-0 text-gray-400 transition-transform" :class="modelDropdownOpen && 'rotate-180'" />
+                  <Crop :size="13" />
                 </button>
-                <div
-                  v-if="modelDropdownOpen"
-                  class="absolute bottom-full left-0 z-30 mb-2 w-64 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl bg-white/95 p-1 shadow-[0_24px_48px_rgba(25,28,30,0.14)] ring-1 ring-black/[0.06] backdrop-blur dark:bg-[#272728]/95 dark:ring-white/10"
-                >
+                <div class="relative min-w-0 flex-1">
                   <button
-                    v-for="model in models"
-                    :key="model.id"
                     type="button"
-                    class="flex w-full min-w-0 items-center gap-2 rounded-lg px-2 py-2 text-left text-xs transition-colors hover:bg-gray-50 dark:hover:bg-white/10"
-                    :class="selectedModelId === model.id ? 'bg-purple-50 text-[#831bd7] dark:bg-[#831bd7]/20 dark:text-purple-200' : 'text-gray-700 dark:text-gray-200'"
-                    @click="selectAssistantModel(model.id)"
+                    class="flex h-7 max-w-full items-center gap-1.5 rounded-lg bg-[#f2f4f6] px-2 text-left text-[10px] font-semibold text-gray-700 transition-colors hover:bg-[#edeef0] disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white/10 dark:text-gray-200 dark:hover:bg-white/[0.14]"
+                    :disabled="models.length === 0 || sending || agentRunning"
+                    @click="modelDropdownOpen = !modelDropdownOpen"
                   >
-                    <ProviderIcon :provider="model.provider" class="size-4 flex-shrink-0" />
-                    <span class="min-w-0 flex-1 truncate">{{ modelDisplayName(model) }}</span>
-                    <span class="max-w-16 truncate text-[10px] text-gray-400">{{ model.provider }}</span>
-                    <CheckCircle v-if="selectedModelId === model.id" :size="13" class="flex-shrink-0" />
+                    <ProviderIcon v-if="selectedModel" :provider="selectedModel.provider" class="size-3.5 flex-shrink-0" />
+                    <span class="min-w-0 truncate">{{ selectedModelName }}</span>
+                    <span v-if="selectedModel" class="hidden max-w-12 truncate text-[9px] text-gray-400 sm:inline">{{ selectedModel.provider }}</span>
+                    <ChevronDown :size="12" class="flex-shrink-0 text-gray-400 transition-transform" :class="modelDropdownOpen && 'rotate-180'" />
                   </button>
+                  <div
+                    v-if="modelDropdownOpen"
+                    class="absolute bottom-full left-0 z-30 mb-2 w-64 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl bg-white/95 p-1 shadow-[0_24px_48px_rgba(25,28,30,0.14)] ring-1 ring-black/[0.06] backdrop-blur dark:bg-[#272728]/95 dark:ring-white/10"
+                  >
+                    <button
+                      v-for="model in models"
+                      :key="model.id"
+                      type="button"
+                      class="flex w-full min-w-0 items-center gap-2 rounded-lg px-2 py-2 text-left text-xs transition-colors hover:bg-gray-50 dark:hover:bg-white/10"
+                      :class="selectedModelId === model.id ? 'bg-purple-50 text-[#831bd7] dark:bg-[#831bd7]/20 dark:text-purple-200' : 'text-gray-700 dark:text-gray-200'"
+                      @click="selectAssistantModel(model.id)"
+                    >
+                      <ProviderIcon :provider="model.provider" class="size-4 flex-shrink-0" />
+                      <span class="min-w-0 flex-1 truncate">{{ modelDisplayName(model) }}</span>
+                      <span class="max-w-16 truncate text-[10px] text-gray-400">{{ model.provider }}</span>
+                      <CheckCircle v-if="selectedModelId === model.id" :size="13" class="flex-shrink-0" />
+                    </button>
+                  </div>
                 </div>
               </div>
               <button

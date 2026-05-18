@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { createApp, nextTick } from 'vue';
+import { createApp, nextTick, ref } from 'vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const push = vi.fn();
@@ -104,11 +104,18 @@ const mountRecorderPage = async () => {
   const root = document.createElement('div');
   document.body.appendChild(root);
 
-  const app = createApp(RecorderPage);
+  const recorder = ref<any>(null);
+  const app = createApp({
+    components: { RecorderPage },
+    setup() {
+      return { recorder };
+    },
+    template: '<RecorderPage ref="recorder" />',
+  });
   app.mount(root);
   await flushAsyncUpdates();
 
-  return { app, root };
+  return { app, root, recorder };
 };
 
 const mockStartSession = () => {
@@ -329,6 +336,62 @@ describe('RecorderPage trace timeline convergence', () => {
     expect(root.textContent).toContain('本次记录 0 个可回放步骤');
     expect(root.textContent).not.toContain('本次记录 2 个可回放步骤');
     expect(root.textContent).not.toContain('999');
+
+    app.unmount();
+  });
+
+  it('includes pending region id in the next assistant chat request', async () => {
+    get.mockResolvedValue({ data: { session: { timeline: [] } } });
+    mockChatSse([
+      'event: agent_done\ndata: {"message":"Task completed","trace_count":1}\n\n',
+    ]);
+
+    const { app, root, recorder } = await mountRecorderPage();
+    recorder.value.setPendingRegion({
+      regionId: 'region-1',
+      kind: 'page_region',
+      summary: 'Search results area',
+    });
+    await flushAsyncUpdates();
+
+    const textarea = root.querySelector<HTMLTextAreaElement>('textarea');
+    expect(textarea).not.toBeNull();
+    textarea!.value = 'extract the selected result';
+    textarea!.dispatchEvent(new Event('input'));
+    await flushAsyncUpdates();
+
+    root.querySelector<HTMLButtonElement>('button.flex.h-8.w-8')?.click();
+    await flushAsyncUpdates();
+
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    const [, requestInit] = fetchMock.mock.calls[0];
+    expect(JSON.parse(String((requestInit as RequestInit).body))).toMatchObject({
+      message: 'extract the selected result',
+      mode: 'trace_first',
+      region_id: 'region-1',
+    });
+    expect(root.textContent).toContain('Search results area');
+
+    app.unmount();
+  });
+
+  it('keeps pending region and shows a prompt when sending empty text', async () => {
+    get.mockResolvedValue({ data: { session: { timeline: [] } } });
+
+    const { app, root, recorder } = await mountRecorderPage();
+    recorder.value.setPendingRegion({
+      regionId: 'region-2',
+      kind: 'page_region',
+      summary: 'Login form area',
+    });
+    await flushAsyncUpdates();
+
+    root.querySelector<HTMLButtonElement>('button.flex.h-8.w-8')?.click();
+    await flushAsyncUpdates();
+
+    expect(fetch).not.toHaveBeenCalled();
+    expect(root.textContent).toContain('Type what to do with the selected region');
+    expect(root.textContent).toContain('Login form area');
 
     app.unmount();
   });
