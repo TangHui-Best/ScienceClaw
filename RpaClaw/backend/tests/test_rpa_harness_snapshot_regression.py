@@ -77,6 +77,54 @@ def test_snapshot_regression_reports_missing_expected_text(tmp_path: Path):
     item = report["assets"][0]
     assert report["summary"]["failed"] == 1
     assert item["status"] == "failed"
-    assert item["failure_category"] == "compact-snapshot-lost-signal"
+    assert item["failure_category"] == "raw-html-missing-signal"
     assert item["missing_text"] == ["Missing Project"]
+
+
+def test_snapshot_regression_distinguishes_raw_html_missing_signal(tmp_path: Path):
+    assets = _write_checkpoint_asset(tmp_path, compact_text="Missing Project")
+
+    report = run_snapshot_regression(
+        assets,
+        snapshot_builder=lambda html, checkpoint: {"html": html},
+        snapshot_compactor=lambda raw, checkpoint: dict(raw),
+    )
+
+    item = report["assets"][0]
+    assert report["summary"]["failed"] == 1
+    assert item["failure_category"] == "raw-html-missing-signal"
+    assert item["missing_text"] == ["Missing Project"]
+
+
+def test_snapshot_regression_distinguishes_compact_signal_loss(tmp_path: Path):
+    assets = _write_checkpoint_asset(tmp_path, compact_text="ScienceClaw")
+
+    report = run_snapshot_regression(
+        assets,
+        snapshot_builder=lambda html, checkpoint: {"html": html},
+        snapshot_compactor=lambda raw, checkpoint: {"visible_text": "Other Project"},
+    )
+
+    item = report["assets"][0]
+    assert report["summary"]["failed"] == 1
+    assert item["failure_category"] == "compact-snapshot-lost-signal"
+    assert item["missing_text"] == ["ScienceClaw"]
+
+
+def test_snapshot_regression_matches_normalized_split_text(tmp_path: Path):
+    assets = _write_checkpoint_asset(tmp_path, compact_text="tinyhumansai / openhuman")
+    before_html = (
+        "<html><body><h2><span>tinyhumansai /</span>\n"
+        "      <strong>openhuman</strong></h2></body></html>"
+    )
+    (tmp_path / "asset-1" / "steps" / "001" / "before.html").write_text(before_html, encoding="utf-8")
+
+    report = run_snapshot_regression(
+        assets,
+        snapshot_builder=lambda html, checkpoint: {"html": html},
+        snapshot_compactor=lambda raw, checkpoint: dict(raw),
+    )
+
+    assert report["summary"]["failed"] == 0
+    assert report["assets"][0]["missing_text"] == []
 

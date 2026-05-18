@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+from html import unescape
 from pathlib import Path
 from typing import Any, Callable
 
@@ -40,7 +42,33 @@ def _asset_id_for_checkpoint(assets_root: Path, checkpoint_path: Path) -> str:
 
 
 def _json_contains_text(payload: Any, text: str) -> bool:
-    return text in json.dumps(payload, ensure_ascii=False)
+    serialized = json.dumps(payload, ensure_ascii=False)
+    if text in serialized:
+        return True
+    return _normalize_match_text(text) in _normalize_match_text(serialized)
+
+
+def _normalize_match_text(value: str) -> str:
+    decoded = unescape(str(value)).replace("\\n", " ").replace("\\t", " ").replace("\\r", " ")
+    without_tags = re.sub(r"<[^>]+>", " ", decoded)
+    return re.sub(r"\s+", " ", without_tags).strip()
+
+
+def _snapshot_failure_category(
+    raw_snapshot: dict[str, Any],
+    compact_snapshot: dict[str, Any],
+    missing_text: list[str],
+) -> str:
+    if not missing_text:
+        return ""
+    raw_missing = [
+        text
+        for text in missing_text
+        if isinstance(text, str) and not _json_contains_text(raw_snapshot, text)
+    ]
+    if raw_missing:
+        return "raw-html-missing-signal"
+    return "compact-snapshot-lost-signal"
 
 
 def run_snapshot_regression(
@@ -69,6 +97,7 @@ def run_snapshot_regression(
             if isinstance(text, str) and not _json_contains_text(compact_snapshot, text)
         ]
         status = "failed" if missing_text else "passed"
+        failure_category = _snapshot_failure_category(raw_snapshot, compact_snapshot, missing_text)
         item = {
             "asset_id": _asset_id_for_checkpoint(root, checkpoint_path),
             "step_id": checkpoint.step_id,
@@ -76,7 +105,7 @@ def run_snapshot_regression(
             "step_intent": checkpoint.step_intent,
             "page_patterns": checkpoint.page_patterns,
             "status": status,
-            "failure_category": "compact-snapshot-lost-signal" if missing_text else "",
+            "failure_category": failure_category,
             "missing_text": missing_text,
             "raw_snapshot_size": len(json.dumps(raw_snapshot, ensure_ascii=False)),
             "compact_snapshot_size": len(json.dumps(compact_snapshot, ensure_ascii=False)),

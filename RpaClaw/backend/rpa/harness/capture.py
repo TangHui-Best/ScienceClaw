@@ -71,6 +71,20 @@ def _relative_step_path(step_index: int, filename: str) -> str:
     return f"steps/{step_index:03d}/{filename}"
 
 
+async def _read_page_content_with_non_empty_retry(page, *, attempts: int = 3, delay_ms: int = 100) -> str:
+    html = ""
+    for attempt in range(max(1, attempts)):
+        html = str(await page.content() or "")
+        if html.strip():
+            return html
+        if attempt >= attempts - 1:
+            break
+        wait_for_timeout = getattr(page, "wait_for_timeout", None)
+        if callable(wait_for_timeout):
+            await wait_for_timeout(delay_ms)
+    return html
+
+
 def _load_or_create_scenario_manifest(
     state: HarnessCaptureSessionState,
     store: HarnessAssetStore,
@@ -127,7 +141,7 @@ async def _capture_page_state(
     same_as_before: bool = False,
 ) -> HarnessPageState:
     title = await page.title()
-    html = html_override if html_override is not None else await page.content()
+    html = html_override if html_override is not None else await _read_page_content_with_non_empty_retry(page)
     html_sha256 = _sha256_text(html)
     html_path = _relative_step_path(step_index, filename)
     if not same_as_before:
@@ -145,7 +159,7 @@ async def capture_current_page_state(page) -> HarnessCapturedPageState:
     return HarnessCapturedPageState(
         url=str(getattr(page, "url", "") or ""),
         title=str(await page.title() or ""),
-        html=str(await page.content() or ""),
+        html=await _read_page_content_with_non_empty_retry(page),
     )
 
 

@@ -24,6 +24,21 @@ class _FakePage:
         return self._html
 
 
+class _EventuallyReadyPage(_FakePage):
+    def __init__(self, *, url: str, title: str, html_sequence: list[str]) -> None:
+        super().__init__(url=url, title=title, html=html_sequence[-1])
+        self._html_sequence = list(html_sequence)
+        self.wait_calls: list[int] = []
+
+    async def content(self) -> str:
+        if len(self._html_sequence) > 1:
+            return self._html_sequence.pop(0)
+        return self._html_sequence[0]
+
+    async def wait_for_timeout(self, timeout_ms: int) -> None:
+        self.wait_calls.append(timeout_ms)
+
+
 @pytest.mark.asyncio
 async def test_successful_selected_step_writes_before_and_after_html(tmp_path: Path):
     state = HarnessCaptureSessionState(
@@ -80,6 +95,45 @@ async def test_successful_selected_step_writes_before_and_after_html(tmp_path: P
     assert catalog["captures"][0]["capture_scope"] == "selected_steps"
     assert catalog["captures"][0]["asset_status"] == "draft"
     assert catalog["captures"][0]["sensitivity"] == "local-only"
+
+
+@pytest.mark.asyncio
+async def test_successful_changed_step_retries_until_after_html_is_non_empty(tmp_path: Path):
+    state = HarnessCaptureSessionState(
+        capture_id="hcap-test",
+        session_id="session-1",
+        capture_scope="full_sop",
+    )
+    store = HarnessAssetStore(tmp_path)
+    after_page = _EventuallyReadyPage(
+        url="https://example.test/project",
+        title="Project",
+        html_sequence=["", "<html><body><main>Project ready</main></body></html>"],
+    )
+
+    checkpoint = await capture_step_checkpoint(
+        state,
+        store,
+        step_index=1,
+        step_id="step-1",
+        step_intent="Click through to the project page",
+        recording_mode="manual",
+        before_page=_FakePage(
+            url="https://example.test/list",
+            title="List",
+            html="<html><body><a>Project</a></body></html>",
+        ),
+        after_page=after_page,
+        trace_events=[{"trace_id": "trace-1", "action": "navigate_click"}],
+        runtime_status="success",
+    )
+
+    step_dir = tmp_path / "hcap-test" / "steps" / "001"
+    assert checkpoint is not None
+    assert after_page.wait_calls
+    assert (step_dir / "after.html").read_text(encoding="utf-8") == (
+        "<html><body><main>Project ready</main></body></html>"
+    )
 
 
 @pytest.mark.asyncio

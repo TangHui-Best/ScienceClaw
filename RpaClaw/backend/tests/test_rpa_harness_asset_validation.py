@@ -49,13 +49,14 @@ def _write_checkpoint(
     write_trace: bool = True,
     write_expected: bool = True,
     same_as_before: bool = False,
+    after_html: str = "<html><body>after</body></html>",
 ) -> None:
     step_dir = capture_dir / "steps" / f"{step_index:03d}"
     step_dir.mkdir(parents=True, exist_ok=True)
     if write_before:
         (step_dir / "before.html").write_text("<html><body>before</body></html>", encoding="utf-8")
     if write_after:
-        (step_dir / "after.html").write_text("<html><body>after</body></html>", encoding="utf-8")
+        (step_dir / "after.html").write_text(after_html, encoding="utf-8")
     if write_trace:
         (step_dir / "trace_events.json").write_text(json.dumps([{"trace_id": f"trace-{step_index}"}]), encoding="utf-8")
     if write_expected:
@@ -139,6 +140,28 @@ def test_validation_reports_missing_checkpoint_evidence_files(tmp_path: Path):
         "missing-trace-events",
         "missing-expected-signals",
     }
+
+
+def test_validation_reports_empty_after_html_for_successful_changed_state(tmp_path: Path):
+    capture_dir = _write_scenario(tmp_path, step_indexes=[1])
+    _write_checkpoint(capture_dir, step_index=1, after_html="")
+
+    report = validate_harness_assets(tmp_path)
+
+    assert report["summary"]["issue_count"] == 1
+    issue = report["issues"][0]
+    assert issue["category"] == "empty-after-html"
+    assert issue["step_index"] == 1
+    assert issue["blocking"] is False
+
+
+def test_validation_allows_same_as_before_success_without_after_file(tmp_path: Path):
+    capture_dir = _write_scenario(tmp_path, capture_scope="selected_steps", step_indexes=[3])
+    _write_checkpoint(capture_dir, step_index=3, same_as_before=True, write_after=False)
+
+    report = validate_harness_assets(tmp_path)
+
+    assert report["summary"]["issue_count"] == 0
 
 
 def test_asset_validation_cli_writes_report_and_fails_only_for_blocking_issues(tmp_path: Path):

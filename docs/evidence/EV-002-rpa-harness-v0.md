@@ -157,6 +157,74 @@ Artifacts corrected in this recovery:
 | `f48f2fc feat: validate rpa harness asset completeness` | Add offline asset integrity validation before interpreting regression results. | `test_rpa_harness_asset_validation.py`. |
 | `a00b59c docs: document harness asset validation gate` | Document Level 0 asset validation gate. | `git diff --check` on harness docs. |
 
+## F002 Residual Harness Triage Slice
+
+Executed on branch `codex/rpa-trace-first-harness` on 2026-05-18.
+
+Scope boundary:
+
+- Harness captures facts, stores assets, and reports replay/regression evidence.
+- This slice does not repair natural-language business extraction behavior.
+- This slice does not add GitHub-specific selector or page rules.
+- Asset validation remains an offline Evidence gate, not a recording-time blocker.
+
+Implementation changes:
+
+- Asset validation now reports `empty-after-html` when a successful changed-state checkpoint writes a zero-byte `after.html`.
+- Checkpoint capture retries page content sampling briefly when `page.content()` is initially empty.
+- Snapshot regression now normalizes split HTML text and distinguishes raw-signal absence from compact-snapshot loss.
+- Compiler regression now separates executable observed-value hardcodes from comment/example observed-value pollution.
+
+Focused verification:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+pytest -q --basetemp E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-current RpaClaw/backend/tests/test_rpa_harness_asset_validation.py RpaClaw/backend/tests/test_rpa_harness_checkpoint_capture.py RpaClaw/backend/tests/test_rpa_harness_snapshot_regression.py RpaClaw/backend/tests/test_rpa_harness_compiler_regression.py RpaClaw/backend/tests/test_rpa_harness_expected_signals.py RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_captures_pure_navigation_checkpoint_from_page_baseline RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_captures_manual_trace_checkpoint_from_event_before_html
+```
+
+Result:
+
+```text
+42 passed, 27 warnings in 1.41s
+```
+
+Local bootstrap asset validation after this slice:
+
+```text
+capture_count=6
+issue_count=3
+blocking_issue_count=0
+categories={"empty-after-html": 1, "missing-entry-checkpoint": 2}
+ASSET_VALIDATION_EXIT=0
+```
+
+Local bootstrap snapshot regression after this slice:
+
+```text
+total=13
+passed=13
+failed=0
+SNAPSHOT_EXIT=0
+```
+
+Local bootstrap compiler regression after this slice:
+
+```text
+total=13
+passed=12
+failed=1
+failure_category=compiler-hardcoded-observed-value
+hardcoded_executable_values=["1.2k"]
+hardcoded_comment_values=["13.4k", "1.2k", "13.7k stars"]
+COMPILER_EXIT=1
+```
+
+Independent review:
+
+- Vision Gate Entry reviewer: Ampere.
+- Result: `ready to implement`.
+- Key boundary: do not fix GitHub selectors, Planner, or business extraction in this slice; keep failures as Harness evidence.
+
 ## Latest Verification Commands
 
 Executed on branch `codex/rpa-trace-first-harness` on 2026-05-18:
@@ -281,9 +349,11 @@ Recovery actions:
 ## Residual Findings
 
 - Current bootstrap assets are useful but not fully clean regression fixtures.
-- Two draft Full SOP assets are missing entry checkpoint evidence; this is now visible through asset validation.
-- Two snapshot expected-signal checks currently fail with `compact-snapshot-lost-signal`.
-- Two compiler expected-signal checks currently fail with `compiler-hardcoded-observed-value`.
+- Two draft Full SOP assets are missing entry checkpoint evidence; this remains visible through asset validation.
+- One draft Full SOP asset has an `empty-after-html` issue on a successful click-navigation checkpoint; this is now visible through asset validation.
+- Snapshot regression currently passes for all local bootstrap assets after normalized split-text matching.
+- One selected-step fork extraction asset still fails compiler regression with executable observed-value hardcoding: `1.2k`.
+- Comment/example observed-value pollution is reported separately as `hardcoded_comment_values` and no longer fails compiler regression by itself.
 - These residuals should be treated as follow-up evidence, not hidden by passing unit tests.
 
 ## Closeout Status

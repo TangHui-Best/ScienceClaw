@@ -97,6 +97,51 @@ def test_compiler_regression_flags_hardcoded_observed_values(tmp_path: Path):
     assert report["summary"]["failed"] == 1
     assert item["failure_category"] == "compiler-hardcoded-observed-value"
     assert item["hardcoded_values"] == ["Recorded Project"]
+    assert item["hardcoded_executable_values"] == ["Recorded Project"]
+    assert item["hardcoded_comment_values"] == []
+
+
+def test_compiler_regression_warns_for_comment_only_observed_values(tmp_path: Path):
+    assets = _write_compiler_asset(
+        tmp_path,
+        expected_compiler_signals={
+            "must_not_hardcode_observed_values": ["1.2k"],
+        },
+    )
+
+    report = run_compiler_regression(
+        assets,
+        compiler=lambda trace_events, checkpoint: "# observed example: 1.2k\nvalue = await locator.inner_text()",
+    )
+
+    item = report["assets"][0]
+    assert report["summary"]["failed"] == 0
+    assert item["status"] == "passed"
+    assert item["failure_category"] == ""
+    assert item["hardcoded_values"] == []
+    assert item["hardcoded_executable_values"] == []
+    assert item["hardcoded_comment_values"] == ["1.2k"]
+
+
+def test_compiler_regression_fails_for_observed_value_in_fallback_locator(tmp_path: Path):
+    assets = _write_compiler_asset(
+        tmp_path,
+        expected_compiler_signals={
+            "must_not_hardcode_observed_values": ["1.2k"],
+        },
+    )
+
+    report = run_compiler_regression(
+        assets,
+        compiler=lambda trace_events, checkpoint: "fork = page.get_by_role('link', name='Fork 1.2k')",
+    )
+
+    item = report["assets"][0]
+    assert report["summary"]["failed"] == 1
+    assert item["failure_category"] == "compiler-hardcoded-observed-value"
+    assert item["hardcoded_values"] == ["1.2k"]
+    assert item["hardcoded_executable_values"] == ["1.2k"]
+    assert item["hardcoded_comment_values"] == []
 
 
 def test_compiler_regression_flags_missing_dataflow_refs(tmp_path: Path):

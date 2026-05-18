@@ -24,6 +24,8 @@ updated: 2026-05-18
 
 Active. F0-F14 代码能力已通过一系列 commit 落地，但 Feature/Evidence/Lesson closeout 是在用户指出过程缺陷后追补的。当前优先级是完成 Harness closeout 恢复，让 F001/F002/ADR/EV/LL 能通过系统级 `knowledge_check.py`，然后再决定是否继续 F002 后续 feature slice。
 
+Current follow-up slice: harden Harness asset integrity and regression classification while preserving the boundary that Harness captures facts, stores assets, and reports replay/regression evidence. This slice does not repair business Agent extraction behavior or add site-specific GitHub rules. Latest focused verification is recorded in [EV-002](../evidence/EV-002-rpa-harness-v0.md).
+
 ## Links
 
 - Design: [RPA Harness v0 Design](../rpa/harness/rpa-harness-v0-design.md)
@@ -49,4 +51,4 @@ See [EV-002 RPA Harness v0 Evidence](../evidence/EV-002-rpa-harness-v0.md). It r
 
 ## Next Step
 
-Complete this Harness closeout recovery: update F001/F002/EV/ADR/LL/BACKLOG to the current bundled template shape, rerun non-strict and strict `knowledge_check.py`, run minimal RPA Harness code verification, then commit `docs: restore harness knowledge closeout`.
+Continue F002 residual triage: decide whether the remaining executable observed-value hardcode belongs in `TraceSkillCompiler` generalization, AI trace sanitization, or a dedicated compiler-regression follow-up slice. Keep `empty-after-html` and old `missing-entry-checkpoint` findings visible as draft asset quality issues until new captures replace them.

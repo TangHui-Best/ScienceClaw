@@ -17,12 +17,12 @@ updated: 2026-05-18
 
 Next actions:
 
-- Triage current local bootstrap findings:
+- Continue triaging current local bootstrap findings:
   - `missing-entry-checkpoint` on two draft Full SOP assets.
-  - `compact-snapshot-lost-signal` on one snapshot regression asset.
-  - `compiler-hardcoded-observed-value` on one compiler regression asset.
+  - `empty-after-html` on one draft Full SOP click-navigation step.
+  - `compiler-hardcoded-observed-value` on one selected-step fork extraction asset where the observed value appears in executable fallback locator code.
 - Before further F002 feature slices, update both Feature and Evidence records first.
-- Decide whether a deterministic knowledge-check script is needed so future Feature/Evidence omissions become machine-detectable.
+- Keep asset validation as an offline Evidence gate, not a recording-time blocker.
 
 ## Recently Recovered
 

@@ -173,6 +173,17 @@ def _validate_checkpoint_files(
                 path=after_path,
                 step_index=checkpoint.step_index,
             )
+        if not after.same_as_before and after_path.exists() and after_path.stat().st_size == 0:
+            _issue(
+                issues,
+                root=root,
+                asset_id=asset_id,
+                asset_status=asset_status,
+                category="empty-after-html",
+                message="Successful checkpoint after.html asset is empty",
+                path=after_path,
+                step_index=checkpoint.step_index,
+            )
 
     if checkpoint.runtime_result.status == "failed" and checkpoint.failure_path:
         failure_path = capture_dir / checkpoint.failure_path

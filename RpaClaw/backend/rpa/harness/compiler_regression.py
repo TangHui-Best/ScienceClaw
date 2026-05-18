@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import difflib
 import json
+import tokenize
+from io import StringIO
 from pathlib import Path
 from typing import Any, Callable
 
@@ -74,6 +76,33 @@ def _script_preserves_output_key(script: str, key: str) -> bool:
     )
 
 
+def _split_executable_and_comment_text(script: str) -> tuple[str, str]:
+    executable_parts: list[str] = []
+    comment_parts: list[str] = []
+    try:
+        tokens = tokenize.generate_tokens(StringIO(script).readline)
+        for token in tokens:
+            if token.type == tokenize.COMMENT:
+                comment_parts.append(token.string)
+            elif token.type not in {
+                tokenize.ENCODING,
+                tokenize.ENDMARKER,
+                tokenize.INDENT,
+                tokenize.DEDENT,
+                tokenize.NL,
+                tokenize.NEWLINE,
+            }:
+                executable_parts.append(token.string)
+    except tokenize.TokenError:
+        for line in script.splitlines():
+            stripped = line.lstrip()
+            if stripped.startswith("#"):
+                comment_parts.append(line)
+            else:
+                executable_parts.append(line)
+    return "\n".join(executable_parts), "\n".join(comment_parts)
+
+
 def run_compiler_regression(
     assets_root: str | Path,
     *,
@@ -99,7 +128,16 @@ def run_compiler_regression(
             for value in compiler_signals.get("must_not_hardcode_observed_values", [])
             if isinstance(value, str)
         ]
-        hardcoded_values = [value for value in forbidden_values if value and value in script]
+        executable_script, comment_script = _split_executable_and_comment_text(script)
+        hardcoded_executable_values = [
+            value for value in forbidden_values if value and value in executable_script
+        ]
+        hardcoded_comment_values = [
+            value
+            for value in forbidden_values
+            if value and value in comment_script and value not in hardcoded_executable_values
+        ]
+        hardcoded_values = list(hardcoded_executable_values)
         expected_output_keys = [
             value
             for value in compiler_signals.get("must_preserve_output_keys", [])
@@ -131,6 +169,8 @@ def run_compiler_regression(
                 "status": status,
                 "failure_category": failure_category,
                 "hardcoded_values": hardcoded_values,
+                "hardcoded_executable_values": hardcoded_executable_values,
+                "hardcoded_comment_values": hardcoded_comment_values,
                 "missing_output_keys": missing_output_keys,
                 "missing_dataflow_refs": missing_dataflow_refs,
                 "script_changed": bool(diff),
