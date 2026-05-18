@@ -20,7 +20,7 @@ Backend:
 - Modify `RpaClaw/backend/route/rpa.py`: add `/session/{session_id}/region/analyze`, extend `ChatRequest.region_id`, resolve context before planner execution, emit region metadata in stream events.
 - Modify `RpaClaw/backend/rpa/recording_runtime_agent.py`: accept `region_context`, compact it for planner payload, write debug artifacts, attach region evidence to accepted traces.
 - Modify `RpaClaw/backend/rpa/trace_timeline.py`: project region-backed traces with data/action summaries and evidence indicators.
-- Modify `RpaClaw/backend/rpa/trace_skill_compiler.py`: add conservative V1 compile paths for region single-value/table/list traces, with runtime AI fallback when evidence is insufficient.
+- Modify `RpaClaw/backend/rpa/trace_skill_compiler.py`: add evidence-backed V1 compile paths for region single-value, table, and repeated list/card traces; use runtime AI fallback only when the region analyzer cannot produce locator-backed structure.
 
 Frontend:
 
@@ -380,15 +380,29 @@ def classify_region_evidence(raw: Dict[str, Any]) -> str:
     return "unknown"
 ```
 
-- [ ] **Step 4: Add initial Playwright DOM collector**
+- [ ] **Step 4: Add locator-backed region DOM collector**
 
 Add to `region_context.py`:
 
 ```python
 REGION_COLLECTOR_JS = r"""
 ({ rect }) => {
+  const recorder = globalThis.__rpaPlaywrightRecorder || null;
   const norm = value => String(value || '').replace(/\s+/g, ' ').trim();
-  const roleOf = el => el.getAttribute('role') || '';
+  const roleOf = el => {
+    try {
+      return recorder && recorder.getRole ? recorder.getRole(el) || '' : el.getAttribute('role') || '';
+    } catch (e) {
+      return el.getAttribute('role') || '';
+    }
+  };
+  const nameOf = el => {
+    try {
+      return recorder && recorder.getAccessibleName ? norm(recorder.getAccessibleName(el) || '') : '';
+    } catch (e) {
+      return '';
+    }
+  };
   const isVisibleBox = box => box && box.width > 0 && box.height > 0;
   const intersects = (a, b) => (
     a.left < b.x + b.width &&
@@ -396,41 +410,165 @@ REGION_COLLECTOR_JS = r"""
     a.top < b.y + b.height &&
     a.top + a.height > b.y
   );
+  const area = box => Math.max(0, box.width) * Math.max(0, box.height);
+  const actionKinds = (el, role) => {
+    const tag = el.tagName.toLowerCase();
+    const type = (el.getAttribute('type') || '').toLowerCase();
+    const kinds = new Set();
+    if (tag === 'input' || tag === 'textarea' || el.isContentEditable) kinds.add('fill');
+    if (tag === 'select') kinds.add('select');
+    if (['button', 'link', 'checkbox', 'radio', 'menuitem', 'option'].includes(role) ||
+        ['button', 'a'].includes(tag) ||
+        ['button', 'submit', 'checkbox', 'radio'].includes(type)) kinds.add('click');
+    if (role === 'textbox') kinds.add('press');
+    return Array.from(kinds);
+  };
+  const fallbackLocatorBundle = (el, role, name, text, placeholder, title) => {
+    if (role && name) return {
+      primary: { method: 'role', role, name },
+      candidates: [{ kind: 'role', selected: true, locator: { method: 'role', role, name }, reason: 'region fallback role/name' }],
+    };
+    if (placeholder) return {
+      primary: { method: 'placeholder', value: placeholder },
+      candidates: [{ kind: 'placeholder', selected: true, locator: { method: 'placeholder', value: placeholder }, reason: 'region fallback placeholder' }],
+    };
+    if (text) return {
+      primary: { method: 'text', value: text },
+      candidates: [{ kind: 'text', selected: true, locator: { method: 'text', value: text }, reason: 'region fallback text' }],
+    };
+    if (title) return {
+      primary: { method: 'title', value: title },
+      candidates: [{ kind: 'title', selected: true, locator: { method: 'title', value: title }, reason: 'region fallback title' }],
+    };
+    return {
+      primary: { method: 'css', value: el.tagName.toLowerCase() },
+      candidates: [{ kind: 'css', selected: true, locator: { method: 'css', value: el.tagName.toLowerCase() }, reason: 'region fallback tag' }],
+    };
+  };
+  const locatorBundle = (el, role, name, text, placeholder, title) => {
+    try {
+      if (recorder && recorder.buildLocatorBundle) {
+        const bundle = recorder.buildLocatorBundle(el);
+        if (bundle && bundle.primary) return bundle;
+      }
+    } catch (e) {}
+    return fallbackLocatorBundle(el, role, name, text, placeholder, title);
+  };
+  const describe = el => {
+    const box = el.getBoundingClientRect();
+    const role = roleOf(el);
+    const name = nameOf(el);
+    const text = norm(el.innerText || el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || '').slice(0, 500);
+    const placeholder = norm(el.getAttribute('placeholder'));
+    const title = norm(el.getAttribute('title'));
+    const bundle = locatorBundle(el, role, name, text, placeholder, title);
+    const actions = actionKinds(el, role);
+    return {
+      tag: el.tagName.toLowerCase(),
+      role,
+      name,
+      text,
+      aria_label: norm(el.getAttribute('aria-label')),
+      title,
+      placeholder,
+      input_type: norm(el.getAttribute('type')),
+      box: { x: box.x, y: box.y, width: box.width, height: box.height },
+      area: area(box),
+      actionable: actions.length > 0,
+      action_kinds: actions,
+      locator: bundle.primary,
+      locator_candidates: bundle.candidates || [],
+      validation: bundle.validation || {},
+    };
+  };
+  const cellText = row => Array.from(row.querySelectorAll('th,td,[role="columnheader"],[role="rowheader"],[role="cell"],[role="gridcell"]'))
+    .map(cell => norm(cell.innerText || cell.textContent))
+    .filter(Boolean);
+  const tableSummary = selectedElements => {
+    const tableEl = selectedElements.find(el => ['table', 'thead', 'tbody', 'tr'].includes(el.tagName.toLowerCase()) || ['table', 'grid'].includes(roleOf(el)));
+    if (!tableEl) return null;
+    const root = tableEl.closest('table,[role="table"],[role="grid"]') || tableEl;
+    const rows = Array.from(root.querySelectorAll('tr,[role="row"]')).map(cellText).filter(row => row.length);
+    const rootInfo = describe(root);
+    return {
+      headers: rows[0] || [],
+      sample_rows: rows.slice(1, 6),
+      row_count: rows.length,
+      locator: rootInfo.locator,
+      locator_candidates: rootInfo.locator_candidates,
+    };
+  };
+  const siblingSignature = el => {
+    const role = roleOf(el);
+    const classes = Array.from(el.classList || []).slice(0, 3).join('.');
+    return [el.tagName.toLowerCase(), role, classes].join('|');
+  };
+  const listSummary = selectedElements => {
+    const byParent = new Map();
+    for (const el of selectedElements) {
+      const parent = el.parentElement;
+      if (!parent) continue;
+      const key = siblingSignature(el);
+      const parentIndex = all.indexOf(parent);
+      const bucketKey = key + '::parent:' + parentIndex;
+      const bucket = byParent.get(bucketKey) || { parent, key, items: [] };
+      bucket.items.push(el);
+      byParent.set(bucketKey, bucket);
+    }
+    const repeated = Array.from(byParent.values()).filter(group => group.items.length >= 2).sort((a, b) => b.items.length - a.items.length)[0];
+    if (!repeated) return null;
+    const parentInfo = describe(repeated.parent);
+    const firstItem = repeated.items[0];
+    const firstClass = firstItem && firstItem.classList && firstItem.classList.length ? '.' + Array.from(firstItem.classList).slice(0, 2).join('.') : '';
+    return {
+      item_count: repeated.items.length,
+      item_selector: firstItem ? firstItem.tagName.toLowerCase() + firstClass : '',
+      sample_items: repeated.items.slice(0, 5).map(el => {
+        const info = describe(el);
+        return {
+          text: info.text,
+          locator: info.locator,
+          locator_candidates: info.locator_candidates,
+          box: info.box,
+        };
+      }),
+      container_locator: parentInfo.locator,
+      container_locator_candidates: parentInfo.locator_candidates,
+    };
+  };
   const all = Array.from(document.querySelectorAll('body *'));
   const selected = [];
+  const selectedElements = [];
   for (const el of all) {
     const box = el.getBoundingClientRect();
     if (!isVisibleBox(box) || !intersects(box, rect)) continue;
-    const text = norm(el.innerText || el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || '');
-    if (!text && !['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA'].includes(el.tagName)) continue;
-    selected.push({
-      tag: el.tagName.toLowerCase(),
-      role: roleOf(el),
-      text: text.slice(0, 500),
-      aria_label: norm(el.getAttribute('aria-label')),
-      title: norm(el.getAttribute('title')),
-      placeholder: norm(el.getAttribute('placeholder')),
-      input_type: norm(el.getAttribute('type')),
-      box: { x: box.x, y: box.y, width: box.width, height: box.height },
-      actionable: ['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA'].includes(el.tagName) ||
-        ['button', 'link', 'checkbox', 'radio', 'combobox', 'menuitem'].includes(roleOf(el))
-    });
+    const info = describe(el);
+    if (!info.text && !info.actionable && !['table', 'grid', 'row', 'cell', 'gridcell'].includes(info.role)) continue;
+    selectedElements.push(el);
+    selected.push(info);
     if (selected.length >= 80) break;
   }
+  selected.sort((a, b) => {
+    if (a.actionable !== b.actionable) return a.actionable ? -1 : 1;
+    return a.area - b.area;
+  });
   const localText = [];
   for (const item of selected) {
     if (item.text && !localText.includes(item.text)) localText.push(item.text);
     if (localText.length >= 20) break;
   }
-  const table = selected.find(item => item.tag === 'table' || item.role === 'grid');
   const controls = selected.filter(item => item.actionable).slice(0, 20);
+  const table = tableSummary(selectedElements);
+  const list = table ? null : listSummary(selectedElements);
+  const dominant = selected[0] || {};
   return {
     rect,
     intersecting_elements: selected,
     local_text: localText,
-    dominant_container: selected[0] || {},
-    table_summary: table ? { headers: localText.slice(0, 8), sample_rows: [] } : null,
-    list_summary: null,
+    dominant_container: dominant,
+    locator_candidates: dominant.locator_candidates || [],
+    table_summary: table,
+    list_summary: list,
     action_summary: controls.length ? { controls } : null,
     warnings: selected.length ? [] : ['no_visible_elements']
   };
@@ -467,7 +605,7 @@ async def analyze_region_on_page(*, page: Any, request: RPARegionAnalyzeRequest)
         rect=dict(raw.get("rect") or request.rect.model_dump()),
         dominant_container=dict(raw.get("dominant_container") or {}),
         intersecting_elements=list(raw.get("intersecting_elements") or []),
-        locator_candidates=[],
+        locator_candidates=list(raw.get("locator_candidates") or []),
         local_text=list(raw.get("local_text") or []),
         inferred_kind=inferred,
         table_summary=raw.get("table_summary"),
@@ -726,6 +864,32 @@ def _region_selection_signal(region_context: Optional[Dict[str, Any]]) -> Dict[s
         "action_summary": compact.get("action_summary"),
         "warnings": compact.get("warnings", []),
     }
+
+
+def _region_context_decision_signal(
+    *,
+    region_context: Optional[Dict[str, Any]],
+    trace_type: str,
+    output_key: Optional[str],
+    action_type: Optional[str],
+) -> Dict[str, Any]:
+    compact = _compact_region_context(region_context)
+    if not compact:
+        return {}
+    if output_key or trace_type == "data_capture":
+        used_as = "extraction"
+    elif action_type in {"click", "fill", "select", "press", "hover", "run_python"}:
+        used_as = "action_targeting"
+    else:
+        used_as = "supporting_evidence"
+    return {
+        "region_id": compact.get("region_id", ""),
+        "inferred_kind": compact.get("inferred_kind", "unknown"),
+        "used_as": used_as,
+        "trace_type": trace_type,
+        "output_key": output_key or "",
+        "action_type": action_type or "",
+    }
 ```
 
 - [ ] **Step 5: Extend `RecordingRuntimeAgent.run` signature and payload**
@@ -755,6 +919,7 @@ Update debug writes by using the existing `extra` argument on `_write_recording_
             extra={
                 "raw_region_evidence": region_context or {},
                 "planner_region_context": compact_region_context,
+                "region_context_decision": {"status": "provided_to_planner"} if compact_region_context else {},
             },
 ```
 
@@ -773,6 +938,12 @@ Before returning:
         region_signal = _region_selection_signal(region_context)
         if region_signal:
             signals["region_selection"] = region_signal
+            signals["region_context_decision"] = _region_context_decision_signal(
+                region_context=region_context,
+                trace_type=RPATraceType.AI_OPERATION.value,
+                output_key=output_key,
+                action_type=str(plan.get("action_type") or ""),
+            )
 ```
 
 Pass to `RPAAcceptedTrace`:
@@ -1560,7 +1731,7 @@ it('adds page region evidence item for region_context events', () => {
 
 - [ ] **Step 2: Update run event mapper**
 
-In `rpaAssistantRun.ts`, extend `RpaAssistantRunItemKind` only if needed. Reuse `plan` to avoid new styling:
+In `rpaAssistantRun.ts`, keep `RpaAssistantRunItemKind` unchanged and map the backend `region_context` event into the existing `plan` item style:
 
 ```ts
 case 'region_context': {
@@ -1601,9 +1772,9 @@ def test_region_backed_trace_projects_region_summary():
     assert item.raw["signals"]["region_selection"]["region_id"] == "region-1"
 ```
 
-Adjust property names to match `RPATimelineItem` if they differ.
+This test is intentionally written against the existing `RPATimelineItem` API: `summary_value` and `raw` must remain available after the change. If the current type names differ at implementation time, update this test and the projection in the same step before running it; do not leave an adapter or skipped assertion.
 
-- [ ] **Step 4: Update timeline projection if needed**
+- [ ] **Step 4: Update timeline projection**
 
 In `RpaClaw/backend/rpa/trace_timeline.py`, ensure `_trace_to_item` includes `signals` and `region_context` in `raw`, and uses `output_key` for region-backed extract summaries:
 
@@ -1651,13 +1822,13 @@ git commit -m "feat: show rpa region evidence in recording UI"
 
 ---
 
-### Task 9: Conservative Compiler Support For Region Extraction
+### Task 9: Evidence-Backed Compiler Support For Region Extraction
 
 **Files:**
 - Modify: `RpaClaw/backend/rpa/trace_skill_compiler.py`
 - Test: `RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py`
 
-- [ ] **Step 1: Add compiler tests for V1 boundaries**
+- [ ] **Step 1: Add compiler tests for the three region-backed extraction shapes**
 
 Add tests:
 
@@ -1680,19 +1851,64 @@ def test_region_single_value_trace_compiles_to_locator_text_extract():
             "inferred_kind": "single_value",
         },
     )
-    script = TraceSkillCompiler().compile([trace])
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
     assert "_results['price']" in script or '_results["price"]' in script
     assert ".inner_text()" in script
 
 
-def test_region_table_without_headers_preserves_runtime_ai():
+def test_region_table_trace_compiles_to_locator_table_rows():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        source="ai",
+        description="extract selected table",
+        output_key="rows",
+        signals={"region_selection": {"inferred_kind": "table_region"}},
+        region_context={
+            "inferred_kind": "table_region",
+            "table_summary": {
+                "headers": ["SKU", "Price"],
+                "sample_rows": [["A-1", "$12"]],
+                "locator_candidates": [{"selected": True, "locator": {"method": "css", "value": "table.pricing"}}],
+            },
+        },
+    )
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    assert "querySelectorAll('tr,[role=\\\"row\\\"]')" in script
+    assert "_results['rows']" in script or '_results["rows"]' in script
+    assert trace_requires_runtime_ai_replay(trace) is False
+
+
+def test_region_list_trace_compiles_to_repeated_item_extract():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        source="ai",
+        description="extract selected cards",
+        output_key="cards",
+        signals={"region_selection": {"inferred_kind": "list_sample"}},
+        region_context={
+            "inferred_kind": "list_sample",
+            "list_summary": {
+                "item_selector": ".result-card",
+                "sample_items": [{"text": "Alpha $12"}, {"text": "Beta $18"}],
+                "container_locator_candidates": [{"selected": True, "locator": {"method": "css", "value": ".results"}}],
+            },
+        },
+    )
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    assert ".locator('.result-card')" in script
+    assert "evaluate_all" in script
+    assert "_results['cards']" in script or '_results["cards"]' in script
+    assert trace_requires_runtime_ai_replay(trace) is False
+
+
+def test_region_table_without_locator_preserves_runtime_ai():
     trace = RPAAcceptedTrace(
         trace_type=RPATraceType.AI_OPERATION,
         source="ai",
         description="提取表格",
         output_key="rows",
         signals={"region_selection": {"inferred_kind": "table_region"}},
-        region_context={"inferred_kind": "table_region", "table_summary": {}},
+        region_context={"inferred_kind": "table_region", "table_summary": {"headers": ["SKU", "Price"]}},
     )
     assert trace_requires_runtime_ai_replay(trace) is True
 ```
@@ -1730,6 +1946,10 @@ At the top of `_render_ai_operation_trace`, before embedded AI code handling:
         region_kind = _trace_region_kind(trace)
         if region_kind == "single_value" and self._region_has_selected_locator(trace):
             return self._render_region_single_value_trace(index, trace, used_output_keys)
+        if region_kind == "table_region" and self._region_has_table_locator(trace):
+            return self._render_region_table_trace(index, trace, used_output_keys)
+        if region_kind == "list_sample" and self._region_has_list_container(trace):
+            return self._render_region_list_trace(index, trace, used_output_keys)
 ```
 
 Add:
@@ -1743,6 +1963,20 @@ Add:
             return True
         signal = _trace_signal(trace, "region_selection")
         return isinstance(signal.get("dominant_locator"), dict) and bool(signal["dominant_locator"])
+
+    @staticmethod
+    def _region_has_table_locator(trace: RPAAcceptedTrace) -> bool:
+        context = _trace_region_context(trace)
+        table_summary = context.get("table_summary") if isinstance(context.get("table_summary"), dict) else {}
+        candidates = table_summary.get("locator_candidates")
+        return isinstance(candidates, list) and bool(candidates)
+
+    @staticmethod
+    def _region_has_list_container(trace: RPAAcceptedTrace) -> bool:
+        context = _trace_region_context(trace)
+        list_summary = context.get("list_summary") if isinstance(context.get("list_summary"), dict) else {}
+        candidates = list_summary.get("container_locator_candidates")
+        return bool(list_summary.get("item_selector")) and isinstance(candidates, list) and bool(candidates)
 ```
 
 - [ ] **Step 5: Render single-value region extraction**
@@ -1762,8 +1996,10 @@ Add method:
             context = _trace_region_context(trace)
             candidates = context.get("locator_candidates") if isinstance(context.get("locator_candidates"), list) else []
             locator = self._preferred_locator_for_trace(trace, candidates)
-        expr = self._locator_expression(locator)
+        scope_lines, scope_var = self._frame_scope_lines(trace.frame_path)
+        expr = _locator_expression(scope_var, locator)
         lines = ["", f"    # trace {index}: {trace.description or 'region single value extract'}"]
+        lines.extend(scope_lines)
         lines.append(f"    _region_locator = {expr}")
         lines.append("    _region_value = await _region_locator.inner_text()")
         lines.append("    _region_value = _region_value.strip()")
@@ -1773,7 +2009,59 @@ Add method:
 
 Use the existing locator rendering helper from the manual/data capture path. In this codebase that means reusing the same method already called by `_render_manual_action_trace` for Playwright locator expressions; keep one locator renderer rather than adding a parallel string builder.
 
-- [ ] **Step 6: Preserve runtime AI for unsupported table/list region traces**
+- [ ] **Step 6: Render table and list/card region extraction**
+
+Add methods:
+
+```python
+    def _render_region_table_trace(
+        self,
+        index: int,
+        trace: RPAAcceptedTrace,
+        used_output_keys: Dict[str, int],
+    ) -> List[str]:
+        context = _trace_region_context(trace)
+        table_summary = context.get("table_summary") if isinstance(context.get("table_summary"), dict) else {}
+        locator = self._preferred_locator_for_trace(trace, table_summary.get("locator_candidates") or [])
+        key = self._allocate_output_key(trace, trace.output_key or f"region_table_{index}", used_output_keys)
+        scope_lines, scope_var = self._frame_scope_lines(trace.frame_path)
+        lines = ["", f"    # trace {index}: {trace.description or 'region table extract'}"]
+        lines.extend(scope_lines)
+        lines.append(f"    _region_table = {_locator_expression(scope_var, locator)}")
+        lines.append("    _region_rows = await _region_table.evaluate(\"\"\"(table) => {")
+        lines.append("      const text = node => String(node.innerText || node.textContent || '').replace(/\\s+/g, ' ').trim();")
+        lines.append("      return Array.from(table.querySelectorAll('tr,[role=\\\"row\\\"]'))")
+        lines.append("        .map(row => Array.from(row.querySelectorAll('th,td,[role=\\\"columnheader\\\"],[role=\\\"rowheader\\\"],[role=\\\"cell\\\"],[role=\\\"gridcell\\\"]')).map(text).filter(Boolean))")
+        lines.append("        .filter(row => row.length);")
+        lines.append("    }\"\"\")")
+        lines.append(f"    _results[{key!r}] = _region_rows")
+        return lines
+
+    def _render_region_list_trace(
+        self,
+        index: int,
+        trace: RPAAcceptedTrace,
+        used_output_keys: Dict[str, int],
+    ) -> List[str]:
+        context = _trace_region_context(trace)
+        list_summary = context.get("list_summary") if isinstance(context.get("list_summary"), dict) else {}
+        locator = self._preferred_locator_for_trace(trace, list_summary.get("container_locator_candidates") or [])
+        item_selector = str(list_summary.get("item_selector") or "").strip()
+        key = self._allocate_output_key(trace, trace.output_key or f"region_items_{index}", used_output_keys)
+        scope_lines, scope_var = self._frame_scope_lines(trace.frame_path)
+        lines = ["", f"    # trace {index}: {trace.description or 'region list extract'}"]
+        lines.extend(scope_lines)
+        lines.append(f"    _region_container = {_locator_expression(scope_var, locator)}")
+        lines.append(f"    _region_items = await _region_container.locator({item_selector!r}).evaluate_all(\"\"\"(nodes) => nodes")
+        lines.append("      .map(node => String(node.innerText || node.textContent || '').replace(/\\s+/g, ' ').trim())")
+        lines.append("      .filter(Boolean)\"\"\")")
+        lines.append(f"    _results[{key!r}] = _region_items")
+        return lines
+```
+
+These renderers deliberately extract visible text/row arrays only. They do not infer business-specific schemas in the compiler; schema naming remains a planner or skill-compilation concern.
+
+- [ ] **Step 7: Preserve runtime AI only when region structure is missing**
 
 Update `trace_requires_runtime_ai_replay`:
 
@@ -1781,15 +2069,21 @@ Update `trace_requires_runtime_ai_replay`:
     region_kind = _trace_region_kind(trace)
     if region_kind in {"table_region", "list_sample"}:
         context = _trace_region_context(trace)
-        if region_kind == "table_region" and not (isinstance(context.get("table_summary"), dict) and context["table_summary"].get("headers")):
+        table_summary = context.get("table_summary") if isinstance(context.get("table_summary"), dict) else {}
+        list_summary = context.get("list_summary") if isinstance(context.get("list_summary"), dict) else {}
+        if region_kind == "table_region" and not (
+            table_summary.get("headers") and table_summary.get("locator_candidates")
+        ):
             return True
-        if region_kind == "list_sample" and not isinstance(context.get("list_summary"), dict):
+        if region_kind == "list_sample" and not (
+            list_summary.get("item_selector") and list_summary.get("container_locator_candidates")
+        ):
             return True
 ```
 
-This keeps V1 conservative until deterministic renderers have enough evidence.
+This keeps V1 conservative without pretending unsupported evidence is compiled. The analyzer must produce structure for all three scenarios; the compiler falls back only when that evidence is missing or not locator-backed.
 
-- [ ] **Step 7: Run compiler tests**
+- [ ] **Step 8: Run compiler tests**
 
 Run:
 
@@ -1799,11 +2093,11 @@ uv run pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```powershell
 git add RpaClaw/backend/rpa/trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py
-git commit -m "feat: compile simple rpa region extracts"
+git commit -m "feat: compile rpa region extracts"
 ```
 
 ---
@@ -1853,7 +2147,19 @@ npm run build
 
 Expected: PASS.
 
-- [ ] **Step 5: Manual smoke test**
+- [ ] **Step 5: Browser visual and interaction verification**
+
+Start backend and frontend using the existing project commands. Open the Recorder page in the in-app browser or Playwright, capture desktop and mobile-width screenshots after the page renders, and verify:
+
+1. The bottom composer keeps the existing visual style and now has a single selection icon button.
+2. No mode switch appears inside the browser canvas.
+3. Selection overlay, bottom-center hint pill, attachment chip, remove button, and error text do not overlap the browser frame, composer, or right-panel run cards.
+4. Long attachment summaries truncate inside the chip instead of resizing the composer.
+5. Dark mode classes remain legible for the chip and run-card evidence item.
+
+Expected: screenshots show the updated UI matching the current RecorderPage layout and the Stitch direction, with no text overflow or overlapping controls.
+
+- [ ] **Step 6: Manual smoke test**
 
 Start backend and frontend using the existing project commands, then verify:
 
@@ -1868,7 +2174,7 @@ Start backend and frontend using the existing project commands, then verify:
 9. Confirm a trace appears in left timeline with region evidence.
 10. Select a button region and send `点击这个区域里的导出按钮`; confirm it routes as an action, not forced `DATA_CAPTURE`.
 
-- [ ] **Step 6: Commit verification fixes only if needed**
+- [ ] **Step 7: Commit verification fixes only if needed**
 
 If any verification fix is required:
 
@@ -1893,6 +2199,7 @@ If no fixes are required, do not create an empty commit.
   - Debug artifacts: Task 3.
   - Timeline evidence: Task 8.
   - Frontend API double-prefix rule: Task 2 and Task 7 use `apiClient.post('/rpa/...')`.
+  - Non-demo evidence path: Task 2 must return locator candidates, table sample rows, and list/card item structure; Task 9 must compile all three shapes when that evidence is present.
 - Placeholder scan: no `TBD`, `TODO`, or open-ended implementation placeholders are intentionally left.
 - Type consistency:
   - Backend request uses `region_id`.
