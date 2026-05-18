@@ -584,6 +584,11 @@ class RPASessionManager:
             return None
         return self._tabs.get(session_id, {}).get(active_tab_id)
 
+    def get_page_for_tab(self, session_id: str, tab_id: Optional[str] = None) -> Optional[Page]:
+        if not tab_id:
+            return self.get_page(session_id)
+        return self._tabs.get(session_id, {}).get(tab_id)
+
     async def _ensure_context_recorder(self, session_id: str, context: BrowserContext):
         bridged_context_ids = self._bridged_context_ids.setdefault(session_id, set())
         context_key = id(context)

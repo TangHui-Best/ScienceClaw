@@ -1,10 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 from datetime import datetime, timedelta
 
+import pytest
+from pydantic import ValidationError
+
 from backend.rpa.manager import RPASession, RPASessionManager
-from backend.rpa.region_context import RPARegionContext, RPARegionEvidence
+from backend.rpa.region_context import (
+    RPARegionAnalyzeRequest,
+    RPARegionContext,
+    RPARegionEvidence,
+    RPARegionRect,
+    RPARegionViewport,
+    analyze_region_on_page,
+    classify_region_evidence,
+)
 
 
 def _session() -> RPASession:
@@ -37,6 +49,55 @@ def _context(
             warnings=[],
         ),
     )
+
+
+class _FakeFrameElement:
+    def __init__(self, bbox):
+        self._bbox = bbox
+
+    async def bounding_box(self):
+        return self._bbox
+
+
+class _FakeFrame:
+    def __init__(self, name, *, result=None, bbox=None, parent_frame=None):
+        self.name = name
+        self.result = result or {}
+        self.parent_frame = parent_frame
+        self.page = None
+        self.evaluated_rect = None
+        self._frame_element = _FakeFrameElement(bbox) if bbox else None
+
+    async def evaluate(self, script, arg):
+        assert "__rpaPlaywrightRecorder" in script
+        self.evaluated_rect = arg
+        return self.result
+
+    async def frame_element(self):
+        if self._frame_element is None:
+            raise RuntimeError("main frame has no frame element")
+        return self._frame_element
+
+
+class _FakePage:
+    def __init__(self, *, main_result=None, child_result=None):
+        self.url = "https://example.test/region"
+        self.main_frame = _FakeFrame("main", result=main_result or {})
+        self.child_frame = _FakeFrame(
+            "child",
+            result=child_result or {},
+            bbox={"x": 90, "y": 70, "width": 200, "height": 200},
+            parent_frame=self.main_frame,
+        )
+        self.main_frame.page = self
+        self.child_frame.page = self
+        self.frames = [self.main_frame, self.child_frame]
+
+    async def title(self):
+        return "Region Page"
+
+    async def evaluate(self, script, arg):
+        return await self.main_frame.evaluate(script, arg)
 
 
 def test_region_context_storage_replaces_prior_context_for_session():
@@ -101,6 +162,198 @@ def test_region_context_clear_supports_region_and_session_scope():
     manager.store_region_context("session-1", _context("region-2"))
     manager.clear_region_context("session-1")
     assert manager.resolve_region_context("session-1", "region-2") is None
+
+
+def test_region_rect_and_viewport_reject_non_positive_dimensions():
+    with pytest.raises(ValidationError):
+        RPARegionRect(x=0, y=0, width=0, height=10)
+
+    with pytest.raises(ValidationError):
+        RPARegionRect(x=0, y=0, width=10, height=-1)
+
+    with pytest.raises(ValidationError):
+        RPARegionViewport(width=1280, height=0)
+
+
+def test_classify_region_evidence_prefers_table_headers():
+    raw = {
+        "table_summary": {"headers": ["Name"]},
+        "list_summary": {"item_count": 3},
+        "action_summary": {"controls": [{"label": "Save"}]},
+        "local_text": ["Name"],
+    }
+
+    assert classify_region_evidence(raw) == "table_region"
+
+
+@pytest.mark.anyio
+async def test_analyze_region_on_page_collects_frame_local_evidence(monkeypatch):
+    child_result = {
+        "rect": {"x": 10, "y": 10, "width": 50, "height": 40},
+        "intersecting_elements": [{"tag": "table", "text": "Name Price"}],
+        "dominant_container": {"tag": "table", "text": "Name Price"},
+        "locator_candidates": [{"kind": "role", "playwright_locator": "page.get_by_role('table')"}],
+        "local_text": ["Name", "Price", "A", "$1"],
+        "table_summary": {
+            "headers": ["Name", "Price"],
+            "sample_rows": [["A", "$1"]],
+            "row_count": 1,
+            "locator_candidates": [{"kind": "css", "selector": "table"}],
+        },
+        "list_summary": {
+            "item_count": 2,
+            "item_selector": "li",
+            "sample_items": ["First", "Second"],
+            "container_locator_candidates": [{"kind": "css", "selector": "ul"}],
+        },
+        "action_summary": {
+            "controls": [
+                {
+                    "tag": "button",
+                    "text": "Save",
+                    "locator_candidates": [{"kind": "text", "playwright_locator": "page.get_by_text('Save')"}],
+                }
+            ]
+        },
+        "warnings": [],
+    }
+    page = _FakePage(child_result=child_result)
+
+    async def fake_build_frame_path(frame):
+        assert frame.name == "child"
+        return ["iframe[title='workspace']"]
+
+    monkeypatch.setattr("backend.rpa.region_context.build_frame_path", fake_build_frame_path)
+
+    evidence = await analyze_region_on_page(
+        page,
+        RPARegionAnalyzeRequest(
+            tab_id="tab-1",
+            rect=RPARegionRect(x=100, y=80, width=50, height=40),
+            viewport=RPARegionViewport(width=1280, height=720),
+        ),
+    )
+
+    assert page.child_frame.evaluated_rect == {"x": 10, "y": 10, "width": 50, "height": 40}
+    assert evidence["url"] == "https://example.test/region"
+    assert evidence["title"] == "Region Page"
+    assert evidence["frame_path"] == ["iframe[title='workspace']"]
+    assert evidence["inferred_kind"] == "table_region"
+    assert evidence["table_summary"]["headers"] == ["Name", "Price"]
+    assert evidence["table_summary"]["sample_rows"] == [["A", "$1"]]
+    assert evidence["list_summary"]["item_count"] == 2
+    assert evidence["action_summary"]["controls"][0]["text"] == "Save"
+
+
+def test_manager_get_page_for_tab_uses_active_or_requested_tab():
+    manager = RPASessionManager()
+    session = _session()
+    manager.sessions["session-1"] = session
+    active_page = object()
+    other_page = object()
+    manager._tabs["session-1"] = {"tab-1": active_page, "tab-2": other_page}
+    manager._pages["session-1"] = active_page
+
+    assert manager.get_page_for_tab("session-1", None) is active_page
+    assert manager.get_page_for_tab("session-1", "tab-2") is other_page
+    assert manager.get_page_for_tab("session-1", "missing") is None
+
+
+@pytest.mark.anyio
+async def test_analyze_region_route_stores_context(monkeypatch):
+    route_module = importlib.import_module("backend.route.rpa")
+    manager = route_module.rpa_manager
+    session = RPASession(
+        id="session-route",
+        user_id="user-1",
+        sandbox_session_id="sandbox-1",
+        active_tab_id="tab-1",
+    )
+    page = object()
+    stored = {}
+
+    async def fake_get_session(session_id):
+        assert session_id == "session-route"
+        return session
+
+    async def fake_analyze_region_on_page(page_arg, request_arg):
+        assert page_arg is page
+        assert request_arg.tab_id == "tab-1"
+        return {
+            "url": "https://example.test/region",
+            "title": "Region Page",
+            "frame_path": [],
+            "rect": request_arg.rect.model_dump(),
+            "dominant_container": {"tag": "table"},
+            "intersecting_elements": [{"tag": "table"}],
+            "locator_candidates": [{"kind": "css", "selector": "table"}],
+            "local_text": ["Name"],
+            "inferred_kind": "table_region",
+            "table_summary": {"headers": ["Name"], "sample_rows": [["A"]], "row_count": 1},
+            "list_summary": None,
+            "action_summary": {"controls": []},
+            "warnings": [],
+        }
+
+    def fake_get_page_for_tab(session_id, tab_id):
+        assert session_id == "session-route"
+        assert tab_id == "tab-1"
+        return page
+
+    def fake_store_region_context(session_id, context):
+        stored["session_id"] = session_id
+        stored["context"] = context
+        return context
+
+    monkeypatch.setattr(manager, "get_session", fake_get_session)
+    monkeypatch.setattr(manager, "get_page_for_tab", fake_get_page_for_tab)
+    monkeypatch.setattr(manager, "store_region_context", fake_store_region_context)
+    monkeypatch.setattr(route_module, "analyze_region_on_page", fake_analyze_region_on_page)
+
+    response = await route_module.analyze_rpa_region(
+        "session-route",
+        RPARegionAnalyzeRequest(
+            tab_id="tab-1",
+            rect=RPARegionRect(x=1, y=2, width=100, height=80),
+            viewport=RPARegionViewport(width=1280, height=720),
+        ),
+        type("User", (), {"id": "user-1"})(),
+    )
+
+    assert stored["session_id"] == "session-route"
+    assert stored["context"].tab_id == "tab-1"
+    assert response.region_id == stored["context"].region_id
+    assert response.inferred_kind == "table_region"
+
+
+@pytest.mark.anyio
+async def test_analyze_region_route_rejects_missing_tab_page(monkeypatch):
+    route_module = importlib.import_module("backend.route.rpa")
+    session = RPASession(
+        id="session-route",
+        user_id="user-1",
+        sandbox_session_id="sandbox-1",
+        active_tab_id="tab-1",
+    )
+
+    async def fake_get_session(_session_id):
+        return session
+
+    monkeypatch.setattr(route_module.rpa_manager, "get_session", fake_get_session)
+    monkeypatch.setattr(route_module.rpa_manager, "get_page_for_tab", lambda _session_id, _tab_id: None)
+
+    with pytest.raises(route_module.HTTPException) as exc_info:
+        await route_module.analyze_rpa_region(
+            "session-route",
+            RPARegionAnalyzeRequest(
+                tab_id="missing",
+                rect=RPARegionRect(x=1, y=2, width=100, height=80),
+                viewport=RPARegionViewport(width=1280, height=720),
+            ),
+            type("User", (), {"id": "user-1"})(),
+        )
+
+    assert exc_info.value.status_code == 404
 
 
 def test_region_context_detach_clears_pending_contexts():

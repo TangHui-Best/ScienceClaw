@@ -34,6 +34,13 @@ from backend.models import get_model_config, resolve_default_model_config
 from backend.storage import get_repository
 from backend.credential.vault import inject_credentials
 from backend.rpa.runtime_context import inject_runtime_context_kwargs, runtime_requirements_from_traces
+from backend.rpa.region_context import (
+    RPARegionAnalyzeRequest,
+    RPARegionAnalyzeResponse,
+    RPARegionContext,
+    RPARegionEvidence,
+    analyze_region_on_page,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -478,6 +485,41 @@ async def list_rpa_tabs(
         "tabs": rpa_manager.list_tabs(session_id),
         "active_tab_id": session.active_tab_id,
     }
+
+
+@router.post("/session/{session_id}/region/analyze", response_model=RPARegionAnalyzeResponse)
+async def analyze_rpa_region(
+    session_id: str,
+    request: RPARegionAnalyzeRequest,
+    current_user: User = Depends(get_current_user),
+):
+    session = await rpa_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    _ensure_session_owner(session, current_user)
+
+    page = rpa_manager.get_page_for_tab(session_id, request.tab_id)
+    if page is None:
+        raise HTTPException(status_code=404, detail="Tab page not found")
+
+    raw_evidence = await analyze_region_on_page(page, request)
+    evidence = RPARegionEvidence(**raw_evidence)
+    context = RPARegionContext(
+        session_id=session_id,
+        tab_id=request.tab_id,
+        page_url=evidence.url,
+        page_title=evidence.title,
+        evidence=evidence,
+    )
+    stored_context = rpa_manager.store_region_context(session_id, context)
+    preview = stored_context.preview()
+    rpa_manager.touch_session(session_id)
+    return RPARegionAnalyzeResponse(
+        region_id=stored_context.region_id,
+        summary=str(preview.get("summary", "")),
+        inferred_kind=evidence.inferred_kind,
+        evidence=evidence,
+    )
 
 
 @router.post("/session/{session_id}/tabs/{tab_id}/activate")
