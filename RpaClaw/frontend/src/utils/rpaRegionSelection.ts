@@ -19,14 +19,17 @@ export interface RegionAnalyzePayload {
 }
 
 export interface RegionAnalyzeResponse {
-  kind?: string;
-  summary?: string;
+  region_id: string;
+  summary: string;
+  inferred_kind: string;
+  evidence?: Record<string, unknown>;
 }
 
 export interface PendingRegionAttachment {
   payload: RegionAnalyzePayload;
   response: RegionAnalyzeResponse;
   summary: string;
+  inferredKind: string;
 }
 
 export const MIN_REGION_SIZE = 8;
@@ -66,19 +69,23 @@ export const buildRegionAnalyzePayload = ({
 });
 
 export const formatRegionAttachmentSummary = (response: RegionAnalyzeResponse): string => {
-  const summary = response.summary?.trim();
+  const summary = response.summary.trim();
   return summary && summary.length > 0 ? summary : '已选择页面区域';
 };
 
 export const regionKindLabel = (kind: string | undefined): string => {
   switch (kind) {
     case 'table':
+    case 'table_region':
       return '表格候选';
     case 'list':
+    case 'list_region':
       return '列表候选';
     case 'single_value':
+    case 'single_value_region':
       return '单值候选';
     case 'button':
+    case 'button_region':
       return '按钮候选';
     default:
       return '区域候选';

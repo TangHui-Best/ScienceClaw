@@ -7,6 +7,7 @@ import {
   normalizeSelectionRect,
   regionKindLabel,
 } from './rpaRegionSelection';
+import type { RegionAnalyzeResponse } from './rpaRegionSelection';
 
 describe('normalizeSelectionRect', () => {
   it('normalizes selections dragged in any direction', () => {
@@ -55,13 +56,25 @@ describe('isUsableRegionRect', () => {
 
 describe('formatRegionAttachmentSummary', () => {
   it('uses the backend summary when present', () => {
-    expect(formatRegionAttachmentSummary({ summary: '订单表格区域' })).toBe('订单表格区域');
+    const response: RegionAnalyzeResponse = {
+      region_id: 'region-1',
+      summary: '订单表格区域',
+      inferred_kind: 'table_region',
+      evidence: { nodeCount: 12 },
+    };
+
+    expect(formatRegionAttachmentSummary(response)).toBe('订单表格区域');
   });
 
   it('falls back to a normal Chinese default when summary is empty', () => {
-    expect(formatRegionAttachmentSummary({ summary: '' })).toBe('已选择页面区域');
-    expect(formatRegionAttachmentSummary({ summary: '   ' })).toBe('已选择页面区域');
-    expect(formatRegionAttachmentSummary({})).toBe('已选择页面区域');
+    const response: RegionAnalyzeResponse = {
+      region_id: 'region-1',
+      summary: '',
+      inferred_kind: 'table_region',
+    };
+
+    expect(formatRegionAttachmentSummary(response)).toBe('已选择页面区域');
+    expect(formatRegionAttachmentSummary({ ...response, summary: '   ' })).toBe('已选择页面区域');
   });
 });
 
@@ -73,5 +86,16 @@ describe('regionKindLabel', () => {
     expect(regionKindLabel('button')).toBe('按钮候选');
     expect(regionKindLabel('unknown')).toBe('区域候选');
     expect(regionKindLabel(undefined)).toBe('区域候选');
+  });
+
+  it('uses inferred_kind from backend-shaped responses instead of a missing kind field', () => {
+    const response: RegionAnalyzeResponse = {
+      region_id: 'region-1',
+      summary: '订单表格区域',
+      inferred_kind: 'table_region',
+    };
+
+    expect(formatRegionAttachmentSummary(response)).toBe('订单表格区域');
+    expect(regionKindLabel(response.inferred_kind)).toBe('表格候选');
   });
 });
