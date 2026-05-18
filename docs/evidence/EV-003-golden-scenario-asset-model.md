@@ -86,7 +86,7 @@ Scanned 159 markdown file(s). Checked 10 knowledge artifact(s). Errors: 0. Warni
   - `RpaClaw/backend/tests/test_rpa_harness_models.py`
   - `RpaClaw/backend/tests/test_rpa_harness_asset_validation.py`
   - `RpaClaw/backend/tests/test_rpa_harness_catalog.py`
-- Implementation commit: pending until the implementation commit is created; this Evidence will be updated in the closeout commit with the implementation hash.
+- Implementation commit: `a38b8a3` (`feat: add rpa golden scenario asset governance`).
 
 ## Entry Gate
 
