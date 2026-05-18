@@ -1,7 +1,7 @@
 ---
 id: F002
 doc_kind: feature
-status: active
+status: completed
 created: 2026-05-18
 updated: 2026-05-18
 ---
@@ -10,23 +10,29 @@ updated: 2026-05-18
 
 ## Goal
 
-建设 RPA Harness v0，让 RPA Agent 的 DOM snapshot、trace recording、`TraceSkillCompiler` 等核心链路改动能基于沉淀的 HTML/checkpoint 资产做离线回归、影响面分析和知识沉淀，而不是继续“修一个页面 bug，不知道有没有影响其他页面”。
+Build RPA Harness v0 so RPA Agent core-chain changes can be evaluated against captured HTML/checkpoint assets instead of page-specific guesswork. The Harness boundary is: capture facts, store assets, and provide regression judgment. It must not become the place where business extraction, site-specific selector rules, or `TraceSkillCompiler` generalization are silently fixed.
 
 ## Vision Anchor
 
-- 原始请求：为 RPA Agent 补齐 product/runtime Harness 能力，而不是只依赖本机 Codex Harness skills。
-- 用户痛点：不同页面/DOM 形态的 bug 修复会触碰共享核心链路，但缺少可观测、可复现、可比较的资产集。
-- 期望结果：Full SOP Capture 与 Selected Step Capture 都沉淀统一 step checkpoint；核心链路变化可以跑 snapshot/compiler/catalog/blast-radius/asset-validation。
-- 非目标：不构建 contract-first 录制层；不把 live URL 当主要 oracle；不为 GitHub、百度或任何单一页面写架构分支；不把空输出/弱 selector 做成录制主路径硬拦截。
-- Exit Gate 对照来源：本 Feature、[EV-002](../evidence/EV-002-rpa-harness-v0.md)、[LL-001](../lessons/LL-001-harness-feature-evidence-closeout-miss.md)、`docs/rpa/harness/*`。
+- Original request: add product/runtime Harness capabilities for the RPA Agent, not just local Codex Harness skills.
+- User pain point: fixing one page bug can affect other DOM shapes and core chains, but the project lacked observable, reproducible, comparable assets.
+- Desired outcome: Full SOP Capture and Selected Step Capture both persist unified step checkpoints; snapshot, compiler, catalog, blast-radius, and asset-validation runners can evaluate core-chain changes against the captured assets.
+- Non-goals: no contract-first recording layer, no live URL primary oracle, no GitHub/Baidu/single-site architecture branch, no recording-time hard block for empty output or weak selector.
+- Exit Gate source: this Feature, [EV-002](../evidence/EV-002-rpa-harness-v0.md), [LL-001](../lessons/LL-001-harness-feature-evidence-closeout-miss.md), and `docs/rpa/harness/*`.
 
 ## Current Status
 
-Active. F0-F14 代码能力已通过一系列 commit 落地，但 Feature/Evidence/Lesson closeout 是在用户指出过程缺陷后追补的。当前优先级是完成 Harness closeout 恢复，让 F001/F002/ADR/EV/LL 能通过系统级 `knowledge_check.py`，然后再决定是否继续 F002 后续 feature slice。
+Completed. RPA Harness v0 now has config-gated capture, Full SOP and selected-step checkpoint assets, expected signals, asset catalog, asset validation, snapshot regression, compiler regression, blast-radius reporting, and page-state capture quality evidence.
 
-Current follow-up slice: harden Harness asset integrity and regression classification while preserving the boundary that Harness captures facts, stores assets, and reports replay/regression evidence. This slice does not repair business Agent extraction behavior or add site-specific GitHub rules. Latest focused verification is recorded in [EV-002](../evidence/EV-002-rpa-harness-v0.md).
+The post-stabilization Full SOP asset `hcap-ef3f5d7107ef4b1586dd533c6c7f8d41` confirms navigation-step `after.html` can be captured with stable title and full-page HTML instead of an early shell.
 
-Current capture-timing slice: add page-state stabilization and `capture_quality` metadata so navigation-step `after.html` is less likely to persist an early shell state. Asset validation reports `shell-like-after-html` and `unstable-after-capture` as offline evidence only; recording remains non-blocking and business extraction behavior remains out of scope.
+Historical draft assets still contain useful residual evidence:
+
+- `missing-entry-checkpoint` on older draft Full SOP captures.
+- `empty-after-html` on an older draft click-navigation checkpoint.
+- `compiler-hardcoded-observed-value` on one selected-step fork extraction asset.
+
+These are no longer blockers for F002 completion. The first two are historical draft asset quality findings already covered by newer capture validation. The compiler hardcode is follow-up RPA Agent / `TraceSkillCompiler` generalization work, not Harness infrastructure.
 
 ## Links
 
@@ -44,17 +50,31 @@ Current capture-timing slice: add page-state stabilization and `capture_quality`
 - [x] `RPA_HARNESS_CAPTURE_ENABLED=false` remains a zero-impact gate.
 - [x] Harness captures local step checkpoint assets with URL, HTML, step intent, trace evidence, expected signals, and before/after state.
 - [x] Snapshot regression, compiler regression, asset catalog, blast-radius, and asset validation runners exist.
+- [x] Page-state stabilization records stable `after.html` and `capture_quality` for navigation checkpoints.
 - [x] System-level `knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict` passes.
-- [ ] Residual bootstrap asset findings are triaged before F002 is marked completed.
+- [x] Residual bootstrap asset findings are triaged before F002 is marked completed.
 
 ## Evidence
 
-See [EV-002 RPA Harness v0 Evidence](../evidence/EV-002-rpa-harness-v0.md). It records F0-F14 commits, post-F14 fixes, latest validator path/output, and residual risks.
+See [EV-002 RPA Harness v0 Evidence](../evidence/EV-002-rpa-harness-v0.md). It records F0-F14 commits, post-F14 fixes, validator output, focused tests, local bootstrap runner results, the post-stabilization Full SOP asset, and residual risks.
 
 ## Patch History
 
-- 2026-05-18: Recovered the F0-F14 Harness v0 closeout into Feature/Evidence/Lesson records and kept status active pending residual bootstrap asset triage.
+| Patch | Date | Commit | Symptom | Root Cause | Protection | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| F002.1 | 2026-05-18 | `2d029d9` | F0-F14 implementation lacked Feature/Evidence closeout. | Implementation plan was treated as Feature/Evidence memory. | Recovered F002/EV-002/LL-001 and added knowledge-check validation. | completed |
+| F002.2 | 2026-05-18 | `a762b7e` | Bootstrap assets exposed empty after HTML, snapshot classification noise, and compiler comment noise. | Harness runners needed better asset-quality and regression classification. | Added `empty-after-html`, normalized snapshot matching, and executable-vs-comment compiler hardcode reporting. | completed |
+| F002.3 | 2026-05-18 | `2ec5508` | Navigation-step `after.html` could persist early shell HTML. | Capture wrote page content before the browser state had settled. | Added page-state stabilization and `capture_quality` metadata. | completed |
+| F002.4 | 2026-05-18 | docs-only closeout commit | F002 remained active after successful post-stabilization Full SOP validation. | Feature status and Evidence had not been closed after manual validation. | Record `hcap-ef3f5d7107ef4b1586dd533c6c7f8d41` and move residuals to follow-up scope. | completed |
+
+## Patch Churn Review
+
+F002 had multiple follow-up slices because the project first built runtime Harness capability, then recovered missing Harness closeout, then used self-bootstrap assets to expose asset-quality gaps. The repeated patches converged on the same invariant rather than adding page-specific rules: captured assets must be factual, quality-labeled, and usable by offline regression runners. No GitHub-specific capture or selector behavior was added.
 
 ## Next Step
 
-Continue F002 residual triage: recapture a Full SOP after page-state stabilization to confirm navigation-step `after.html` quality improves; then decide whether remaining executable observed-value hardcode belongs in `TraceSkillCompiler` generalization, AI trace sanitization, or a dedicated compiler-regression follow-up slice. Keep old `missing-entry-checkpoint`, `empty-after-html`, and shell-like findings visible as draft asset quality evidence until new captures replace them.
+Post-F002 follow-ups:
+
+- Curate high-quality draft captures into active/golden regression assets after sensitivity review.
+- Track scenario/page-pattern coverage so the team can answer which page forms are represented.
+- Handle `compiler-hardcoded-observed-value` as RPA Agent / `TraceSkillCompiler` generalization work rather than as Harness infrastructure.

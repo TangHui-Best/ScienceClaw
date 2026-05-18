@@ -285,6 +285,80 @@ hardcoded_executable_values=["1.2k"]
 COMPILER_EXIT=1
 ```
 
+## F002 Completion Validation
+
+Executed on branch `codex/rpa-trace-first-harness` on 2026-05-18 after commit `2ec5508`.
+
+Manual Full SOP capture used asset:
+
+```text
+data/rpa_harness_assets_bootstrap/hcap-ef3f5d7107ef4b1586dd533c6c7f8d41
+```
+
+The captured SOP had three consecutive checkpoints:
+
+```text
+step 1: navigate to https://github.com/trending
+step 2: click link("tinyhumansai / openhuman") and navigate to the repository page
+step 3: natural-language extraction of fork count
+```
+
+Navigation capture quality evidence:
+
+```text
+step 1 after_url=https://github.com/trending
+step 1 after_title=Trending repositories on GitHub today - GitHub
+step 1 after_html_bytes=662960
+step 1 after_quality.status=stable
+step 1 after_quality.attempts=4
+step 1 after_quality.shell_like=false
+
+step 2 after_url=https://github.com/tinyhumansai/openhuman
+step 2 after_title=GitHub - tinyhumansai/openhuman: Your Personal AI super intelligence. Private, Simple and extremely powerful. - GitHub
+step 2 after_html_bytes=429789
+step 2 after_quality.status=stable
+step 2 after_quality.attempts=4
+step 2 after_quality.shell_like=false
+
+step 3 after_same_as_before=true
+step 3 before_quality.status=stable
+step 3 output_key=fork_count
+```
+
+Local bootstrap asset validation after the completion capture:
+
+```text
+capture_count=8
+issue_count=3
+blocking_issue_count=0
+categories={"empty-after-html": 1, "missing-entry-checkpoint": 2}
+ASSET_VALIDATION_EXIT=0
+```
+
+The remaining asset-validation findings are historical draft assets and are no longer F002 blockers because the post-stabilization Full SOP capture has complete entry checkpoints and stable navigation `after.html`.
+
+Local bootstrap snapshot regression after the completion capture:
+
+```text
+total=19
+passed=19
+failed=0
+SNAPSHOT_EXIT=0
+```
+
+Local bootstrap compiler regression after the completion capture:
+
+```text
+total=19
+passed=18
+failed=1
+failure_category=compiler-hardcoded-observed-value
+hardcoded_executable_values=["1.2k"]
+COMPILER_EXIT=1
+```
+
+The remaining compiler failure belongs to RPA Agent / `TraceSkillCompiler` generalization work. Harness has fulfilled its boundary by surfacing the failure as replayable regression evidence.
+
 ## Latest Verification Commands
 
 Executed on branch `codex/rpa-trace-first-harness` on 2026-05-18:
@@ -408,19 +482,20 @@ Recovery actions:
 
 ## Residual Findings
 
-- Current bootstrap assets are useful but not fully clean regression fixtures.
-- Two draft Full SOP assets are missing entry checkpoint evidence; this remains visible through asset validation.
-- One draft Full SOP asset has an `empty-after-html` issue on a successful click-navigation checkpoint; this is now visible through asset validation.
+- Current bootstrap assets are useful but not all old draft captures should become golden fixtures.
+- Two older draft Full SOP assets are missing entry checkpoint evidence; this remains visible through asset validation.
+- One older draft Full SOP asset has an `empty-after-html` issue on a successful click-navigation checkpoint; this remains visible through asset validation.
+- The post-stabilization Full SOP asset `hcap-ef3f5d7107ef4b1586dd533c6c7f8d41` has complete entry checkpoints and stable navigation `after.html`.
 - Snapshot regression currently passes for all local bootstrap assets after normalized split-text matching.
-- One selected-step fork extraction asset still fails compiler regression with executable observed-value hardcoding: `1.2k`.
+- One selected-step fork extraction asset still fails compiler regression with executable observed-value hardcoding: `1.2k`; this is follow-up RPA Agent / `TraceSkillCompiler` work rather than F002 Harness infrastructure.
 - Comment/example observed-value pollution is reported separately as `hardcoded_comment_values` and no longer fails compiler regression by itself.
 - These residuals should be treated as follow-up evidence, not hidden by passing unit tests.
 
 ## Closeout Status
 
-- Feature: F002 active.
+- Feature: F002 completed.
 - Evidence level: exhaustive, reconstructed.
 - ADR: not triggered; no new architecture decision beyond existing Harness v0 design.
 - Lesson: LL-001 written because recurrence risk is high.
-- Completion claim: not allowed for F002 overall until residual asset findings are triaged.
-- Implementation readiness for further F002 slices: conditional on updating this Evidence after each slice.
+- Completion claim: allowed for F002 v0. Residual compiler and asset-curation items are follow-up work, not blockers for the Harness v0 infrastructure.
+- Implementation readiness for post-F002 slices: start new Feature/Evidence records or update this Evidence only when the follow-up is clearly scoped to F002 maintenance.
