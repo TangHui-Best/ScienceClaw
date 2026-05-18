@@ -39,6 +39,8 @@ These are no longer blockers for F002 completion. The first two are historical d
 - Design: [RPA Harness v0 Design](../rpa/harness/rpa-harness-v0-design.md)
 - Schema: [Scenario Asset Schema](../rpa/harness/scenario-asset-schema.md)
 - Strategy: [RPA Harness Regression Strategy](../rpa/harness/regression-strategy.md)
+- Vision: [RPA Golden Evaluation Vision](../rpa/harness/golden-evaluation-vision.md)
+- Decision: [ADR-003 RPA Golden Evaluation Uses Scenario Assets, Not Direct Agent Chat](../decisions/ADR-003-rpa-golden-evaluation-uses-assets-not-live-agent-chat.md)
 - Plan: [2026-05-17 RPA Harness v0 Implementation Plan](../superpowers/plans/2026-05-17-rpa-harness-v0-implementation.md)
 - Evidence: [EV-002 RPA Harness v0 Evidence](../evidence/EV-002-rpa-harness-v0.md)
 - Lesson: [LL-001 Harness Feature Evidence Closeout Miss](../lessons/LL-001-harness-feature-evidence-closeout-miss.md)

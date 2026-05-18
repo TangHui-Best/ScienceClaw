@@ -3,7 +3,8 @@
 ## Purpose
 
 This document explains how captured Harness assets should be used after they are
-created.
+created. It should be read with [RPA Golden Evaluation Vision](golden-evaluation-vision.md),
+which defines the broader golden-evaluation direction.
 
 The strategy separates stable offline regression from live URL smoke checks.
 Offline regression is the default for core-chain changes. Live URL checks are

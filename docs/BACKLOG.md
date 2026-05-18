@@ -12,12 +12,16 @@ updated: 2026-05-18
 
 - Source Feature: `docs/features/F002-rpa-harness-v0.md`
 - Evidence: `docs/evidence/EV-002-rpa-harness-v0.md`
+- Vision: `docs/rpa/harness/golden-evaluation-vision.md`
+- Decision: `docs/decisions/ADR-003-rpa-golden-evaluation-uses-assets-not-live-agent-chat.md`
 - Status: follow-up backlog after F002 completion.
 
 Next actions:
 
-- Curate high-quality draft captures into active/golden regression assets after sensitivity review.
-- Add page-pattern coverage tags so the team can answer which page forms are represented.
+- Start F003 as Golden Scenario Asset Model, not as an extension of the existing direct Agent chat runner.
+- Curate high-quality draft captures into candidate/golden regression assets after sensitivity review.
+- Add page-pattern and core-chain coverage tags so the team can answer which page forms and RPA core paths are represented.
+- Make runner defaults consume governed scenario assets for Offline Core-Chain Regression and prepare them for future Skill Replay E2E.
 - Keep asset validation as an offline Evidence gate, not a recording-time blocker.
 - Treat historical draft asset findings as asset-governance evidence:
   - `missing-entry-checkpoint` on two older draft Full SOP assets.
