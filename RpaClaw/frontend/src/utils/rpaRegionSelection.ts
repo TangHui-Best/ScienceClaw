@@ -14,7 +14,7 @@ export interface RegionSelectionRect {
 
 export interface RegionAnalyzePayload {
   tab_id: string;
-  selection_rect: RegionSelectionRect;
+  rect: RegionSelectionRect;
   viewport: ScreencastSize;
 }
 
@@ -61,7 +61,7 @@ export const buildRegionAnalyzePayload = ({
   inputSize: ScreencastSize;
 }): RegionAnalyzePayload => ({
   tab_id: tabId,
-  selection_rect: normalizeSelectionRect(start, end),
+  rect: normalizeSelectionRect(start, end),
   viewport: inputSize,
 });
 

@@ -30,7 +30,7 @@ describe('buildRegionAnalyzePayload', () => {
       }),
     ).toEqual({
       tab_id: 'tab-1',
-      selection_rect: {
+      rect: {
         x: 40,
         y: 80,
         width: 80,
