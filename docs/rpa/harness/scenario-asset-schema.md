@@ -248,6 +248,30 @@ Example:
 
 Expected signals should be reviewed before an asset becomes `active`.
 
+## Asset Integrity Validation
+
+Before an asset is treated as a reliable regression fixture, run:
+
+```powershell
+$env:PYTHONPATH="."
+python -m backend.rpa.harness.run_asset_validation --assets ..\data\rpa_harness_assets_bootstrap
+```
+
+The validation report checks that scenario and checkpoint files form a complete
+evidence chain:
+
+- Full SOP assets start at `step_index=1`.
+- Step indexes are contiguous for the captured scope.
+- Scenario checkpoint references exist.
+- Successful steps include before and after HTML, unless `after.same_as_before`
+  explicitly reuses the before HTML.
+- Referenced `trace_events.json`, `expected.json`, and failure evidence files
+  exist.
+
+Draft assets may report non-blocking issues so developers can inspect and
+recapture them. `active` assets with error-level integrity issues should fail
+the runner, because they are no longer trustworthy regression fixtures.
+
 ## Expected Signal Draft Sources
 
 ### Natural-Language Step

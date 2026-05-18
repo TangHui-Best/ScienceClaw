@@ -36,6 +36,40 @@ compiler regressions should run against captured checkpoint assets first.
 
 ## Regression Levels
 
+### Level 0: Asset Integrity Validation
+
+Input:
+
+- `scenario.json`
+- `steps/*/checkpoint.json`
+- referenced `before.html`, `after.html`, `trace_events.json`, `expected.json`,
+  and failure evidence files
+
+Process:
+
+1. Load every captured asset directory.
+2. Validate scenario and checkpoint schema.
+3. Verify that checkpoint indexes are contiguous for the captured scope.
+4. Verify that Full SOP assets start at step index 1.
+5. Verify that successful checkpoints have before/after HTML evidence.
+6. Verify that referenced trace, expected-signal, and failure evidence files
+   exist.
+
+Questions answered:
+
+- Is the captured asset complete enough to be used as regression evidence?
+- Is a Full SOP missing its entry/navigation checkpoint?
+- Would snapshot or compiler regression be testing a broken fixture?
+- Can this asset be promoted from `draft` to `active` without silently
+  weakening the regression set?
+
+Typical trigger:
+
+- After a Harness capture session.
+- Before promoting an asset to `active`.
+- Before running snapshot or compiler regression in CI.
+- Before interpreting a snapshot/compiler failure as a code regression.
+
 ### Level 1: Snapshot Regression
 
 Input:
@@ -182,6 +216,7 @@ Live smoke should be:
 
 | Change area | Required Harness |
 | --- | --- |
+| Captured asset promotion | Asset integrity validation |
 | DOM extractor | Snapshot regression |
 | Snapshot compression | Snapshot regression |
 | Candidate/list/table/form projection | Snapshot regression + planner/action selection regression |
@@ -222,6 +257,20 @@ Baseline Update Candidates
 
 Use a bounded taxonomy so repeated failures become measurable:
 
+- `missing-scenario`
+- `invalid-scenario`
+- `missing-checkpoint-ref`
+- `invalid-checkpoint`
+- `missing-entry-checkpoint`
+- `step-index-gap`
+- `duplicate-step-index`
+- `missing-before-html`
+- `missing-after-state`
+- `missing-after-html`
+- `missing-trace-events`
+- `missing-expected-signals`
+- `missing-failure-evidence`
+- `unreferenced-checkpoint`
 - `raw-dom-missing`
 - `compact-snapshot-lost-signal`
 - `candidate-context-lost`
