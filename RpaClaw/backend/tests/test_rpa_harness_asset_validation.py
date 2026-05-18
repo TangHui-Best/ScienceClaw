@@ -11,6 +11,8 @@ def _write_scenario(
     asset_id: str = "asset-1",
     capture_scope: str = "full_sop",
     asset_status: str = "draft",
+    sensitivity: str = "local-only",
+    governance: dict | None = None,
     step_indexes: list[int],
 ) -> Path:
     capture_dir = root / asset_id
@@ -28,7 +30,8 @@ def _write_scenario(
                     "capture_trigger": capture_scope,
                 },
                 "asset_status": asset_status,
-                "sensitivity": "local-only",
+                "sensitivity": sensitivity,
+                "governance": governance or {},
                 "step_checkpoints": [
                     {"step_index": index, "checkpoint_path": f"steps/{index:03d}/checkpoint.json"}
                     for index in step_indexes
@@ -190,6 +193,50 @@ def test_validation_reports_unstable_and_shell_like_after_capture(tmp_path: Path
         "unstable-after-capture",
     }
     assert all(issue["blocking"] is False for issue in report["issues"])
+
+
+def test_validation_reports_governance_blockers_for_golden_assets_only(tmp_path: Path):
+    draft_dir = _write_scenario(
+        tmp_path,
+        asset_id="asset-draft",
+        step_indexes=[1],
+        governance={
+            "promotion_status": "captured",
+            "runner_modes": [],
+            "core_chain_coverage": [],
+            "expected_signals_reviewed": False,
+            "sensitivity_reviewed": False,
+        },
+    )
+    _write_checkpoint(draft_dir, step_index=1)
+    golden_dir = _write_scenario(
+        tmp_path,
+        asset_id="asset-golden",
+        asset_status="draft",
+        sensitivity="local-only",
+        step_indexes=[1],
+        governance={
+            "promotion_status": "golden",
+            "runner_modes": [],
+            "core_chain_coverage": [],
+            "expected_signals_reviewed": False,
+            "sensitivity_reviewed": False,
+        },
+    )
+    _write_checkpoint(golden_dir, step_index=1)
+
+    report = validate_harness_assets(tmp_path)
+
+    issues = [issue for issue in report["issues"] if issue["asset_id"] == "asset-golden"]
+    assert {issue["category"] for issue in issues} == {
+        "golden-asset-not-active",
+        "missing-runner-mode",
+        "missing-core-chain-coverage",
+        "unreviewed-expected-signals",
+        "unreviewed-sensitivity",
+    }
+    assert all(issue["blocking"] is True for issue in issues)
+    assert all(issue["asset_id"] != "asset-draft" for issue in report["issues"])
 
 
 def test_asset_validation_cli_writes_report_and_fails_only_for_blocking_issues(tmp_path: Path):

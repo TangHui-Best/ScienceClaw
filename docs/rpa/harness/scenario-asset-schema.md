@@ -68,6 +68,14 @@ Example:
   "asset_status": "draft",
   "sensitivity": "local-only",
   "page_patterns": ["search-result", "card-list"],
+  "governance": {
+    "promotion_status": "captured",
+    "runner_modes": ["offline_core_chain"],
+    "core_chain_coverage": [],
+    "expected_signals_reviewed": false,
+    "sensitivity_reviewed": false,
+    "review_notes": ""
+  },
   "step_checkpoints": [
     {
       "step_index": 1,
@@ -91,7 +99,29 @@ Example:
 | `asset_status` | yes | `draft`, `active`, `flaky`, `archived`, `superseded`. |
 | `sensitivity` | yes | `local-only`, `sanitized`, `repo-safe`, `sensitive`. |
 | `page_patterns` | recommended | High-level tags for coverage analysis. |
+| `governance` | yes | Promotion and runner eligibility metadata for candidate/golden assets. |
 | `step_checkpoints` | yes | Pointers to checkpoint files. |
+
+## Governance Fields
+
+`governance` turns a raw captured directory into a promotable scenario asset
+without changing the trace-first recording path. Fresh captures default to
+`promotion_status=captured`; promotion to `candidate` or `golden` is a review
+act, not a recorder side effect.
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `promotion_status` | yes | `captured`, `candidate`, `golden`, or `rejected`. |
+| `runner_modes` | yes | Supported values: `offline_core_chain`, `skill_replay_e2e`. |
+| `core_chain_coverage` | yes | Covered segments such as `html_to_raw_snapshot`, `raw_to_compact_snapshot`, `planner_action_selection`, `trace_to_skill`, and `skill_replay`. |
+| `expected_signals_reviewed` | yes | Whether expected signals were reviewed before promotion. |
+| `sensitivity_reviewed` | yes | Whether local/sanitized/repo-safe/sensitive classification was reviewed. |
+| `review_notes` | optional | Short promotion or rejection note. |
+
+Candidate and golden assets must declare runner and core-chain coverage and
+must have expected-signal and sensitivity review. Golden assets must also be
+`asset_status=active`, because they are intended to affect blocking regression
+judgment.
 
 ## Step `checkpoint.json`
 
@@ -361,6 +391,13 @@ site-specific rules.
 - `flaky`: useful but non-blocking.
 - `archived`: retained for history only.
 - `superseded`: replaced by a newer asset.
+
+### Promotion Status
+
+- `captured`: raw Harness capture, not yet reviewed for promotion.
+- `candidate`: under review for golden regression use.
+- `golden`: reviewed asset used as a governed regression fixture.
+- `rejected`: retained as history or diagnosis, not used as a golden fixture.
 
 ## Open Questions
 

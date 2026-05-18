@@ -42,6 +42,14 @@ def _scenario_entry(asset_dir: Path, root: Path, warnings: list[dict[str, str]])
         "sop_intent": "",
         "asset_status": "draft",
         "sensitivity": "local-only",
+        "governance": {
+            "promotion_status": "captured",
+            "runner_modes": ["offline_core_chain"],
+            "core_chain_coverage": [],
+            "expected_signals_reviewed": False,
+            "sensitivity_reviewed": False,
+            "review_notes": "",
+        },
         "source": {},
         "page_patterns": [],
         "scenario_path": _relative(scenario_path, root) if scenario_path.exists() else "",
@@ -65,6 +73,7 @@ def _scenario_entry(asset_dir: Path, root: Path, warnings: list[dict[str, str]])
         "sop_intent": scenario.sop_intent,
         "asset_status": scenario.asset_status,
         "sensitivity": scenario.sensitivity,
+        "governance": scenario.governance.model_dump(mode="json"),
         "source": scenario.source if isinstance(scenario.source, dict) else scenario.source.model_dump(mode="json"),
         "page_patterns": list(scenario.page_patterns),
         "scenario_path": _relative(scenario_path, root),
@@ -141,6 +150,17 @@ def build_harness_catalog(assets_root: str | Path) -> dict[str, Any]:
     runtime_statuses = Counter(step["runtime_status"] for step in steps)
     asset_statuses = Counter(capture["asset_status"] for capture in captures)
     sensitivity = Counter(capture["sensitivity"] for capture in captures)
+    promotion_statuses = Counter(capture["governance"]["promotion_status"] for capture in captures)
+    runner_modes = Counter(
+        mode
+        for capture in captures
+        for mode in capture["governance"].get("runner_modes", [])
+    )
+    core_chain_coverage = Counter(
+        segment
+        for capture in captures
+        for segment in capture["governance"].get("core_chain_coverage", [])
+    )
     page_patterns = _unique_sorted(
         [
             pattern
@@ -163,6 +183,9 @@ def build_harness_catalog(assets_root: str | Path) -> dict[str, Any]:
             "failed_step_count": failed,
             "asset_statuses": _counter_dict(asset_statuses),
             "sensitivity": _counter_dict(sensitivity),
+            "promotion_statuses": _counter_dict(promotion_statuses),
+            "runner_modes": _counter_dict(runner_modes),
+            "core_chain_coverage": _counter_dict(core_chain_coverage),
             "recording_modes": _counter_dict(recording_modes),
             "runtime_statuses": _counter_dict(runtime_statuses),
             "page_patterns": page_patterns,

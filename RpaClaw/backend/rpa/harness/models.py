@@ -11,6 +11,15 @@ AssetStatus = Literal["draft", "active", "flaky", "archived", "superseded"]
 Sensitivity = Literal["local-only", "sanitized", "repo-safe", "sensitive"]
 RuntimeStatus = Literal["success", "failed", "skipped"]
 RecordingMode = Literal["natural_language", "manual", "unknown"]
+PromotionStatus = Literal["captured", "candidate", "golden", "rejected"]
+RunnerMode = Literal["offline_core_chain", "skill_replay_e2e"]
+CoreChainCoverage = Literal[
+    "html_to_raw_snapshot",
+    "raw_to_compact_snapshot",
+    "planner_action_selection",
+    "trace_to_skill",
+    "skill_replay",
+]
 
 
 class HarnessPageState(BaseModel):
@@ -71,6 +80,15 @@ class HarnessStepCheckpointRef(BaseModel):
     checkpoint_path: str
 
 
+class HarnessScenarioGovernance(BaseModel):
+    promotion_status: PromotionStatus = "captured"
+    runner_modes: List[RunnerMode] = Field(default_factory=lambda: ["offline_core_chain"])
+    core_chain_coverage: List[CoreChainCoverage] = Field(default_factory=list)
+    expected_signals_reviewed: bool = False
+    sensitivity_reviewed: bool = False
+    review_notes: str = ""
+
+
 class HarnessScenarioSource(BaseModel):
     recording_id: str = ""
     captured_at: str
@@ -88,5 +106,6 @@ class HarnessScenarioAsset(BaseModel):
     asset_status: AssetStatus = "draft"
     sensitivity: Sensitivity = "local-only"
     page_patterns: List[str] = Field(default_factory=list)
+    governance: HarnessScenarioGovernance = Field(default_factory=HarnessScenarioGovernance)
     step_checkpoints: List[HarnessStepCheckpointRef | Dict[str, Any]] = Field(default_factory=list)
 

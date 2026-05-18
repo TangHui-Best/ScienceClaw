@@ -32,6 +32,43 @@ def test_scenario_asset_defaults_to_local_draft_and_supports_full_sop_scope():
     assert asset.capture_scope == "full_sop"
     assert asset.asset_status == "draft"
     assert asset.sensitivity == "local-only"
+    assert asset.governance.promotion_status == "captured"
+    assert asset.governance.runner_modes == ["offline_core_chain"]
+    assert asset.governance.core_chain_coverage == []
+    assert asset.governance.expected_signals_reviewed is False
+    assert asset.governance.sensitivity_reviewed is False
+
+
+def test_scenario_asset_records_golden_governance_metadata():
+    asset = HarnessScenarioAsset(
+        asset_id="asset-golden",
+        capture_scope="full_sop",
+        source={"captured_at": datetime(2026, 5, 17).isoformat()},
+        asset_status="active",
+        sensitivity="sanitized",
+        page_patterns=["card-list", "detail-page"],
+        governance={
+            "promotion_status": "golden",
+            "runner_modes": ["offline_core_chain", "skill_replay_e2e"],
+            "core_chain_coverage": [
+                "html_to_raw_snapshot",
+                "raw_to_compact_snapshot",
+                "trace_to_skill",
+            ],
+            "expected_signals_reviewed": True,
+            "sensitivity_reviewed": True,
+            "review_notes": "Reviewed for F003 bootstrap.",
+        },
+        step_checkpoints=[],
+    )
+
+    assert asset.governance.promotion_status == "golden"
+    assert asset.governance.runner_modes == ["offline_core_chain", "skill_replay_e2e"]
+    assert asset.governance.core_chain_coverage == [
+        "html_to_raw_snapshot",
+        "raw_to_compact_snapshot",
+        "trace_to_skill",
+    ]
 
 
 def test_scenario_asset_supports_selected_steps_scope():

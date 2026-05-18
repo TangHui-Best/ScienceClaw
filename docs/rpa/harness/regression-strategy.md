@@ -366,6 +366,13 @@ Minimum catalog JSON shape:
     "failed_step_count": 1,
     "asset_statuses": {"active": 1},
     "sensitivity": {"local-only": 1},
+    "promotion_statuses": {"golden": 1},
+    "runner_modes": {"offline_core_chain": 1},
+    "core_chain_coverage": {
+      "html_to_raw_snapshot": 1,
+      "raw_to_compact_snapshot": 1,
+      "trace_to_skill": 1
+    },
     "recording_modes": {"natural_language": 1, "manual": 1},
     "runtime_statuses": {"success": 1, "failed": 1},
     "page_patterns": ["card-list", "detail-page"],

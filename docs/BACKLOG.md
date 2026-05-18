@@ -18,7 +18,7 @@ updated: 2026-05-18
 
 Next actions:
 
-- Start F003 as Golden Scenario Asset Model, not as an extension of the existing direct Agent chat runner.
+- Curate the first candidate/golden asset set using the F003 governance metadata, not the existing direct Agent chat runner.
 - Curate high-quality draft captures into candidate/golden regression assets after sensitivity review.
 - Add page-pattern and core-chain coverage tags so the team can answer which page forms and RPA core paths are represented.
 - Make runner defaults consume governed scenario assets for Offline Core-Chain Regression and prepare them for future Skill Replay E2E.
@@ -29,6 +29,15 @@ Next actions:
 - Route `compiler-hardcoded-observed-value` to a separate RPA Agent / `TraceSkillCompiler` generalization feature; do not count it as unfinished F002 Harness infrastructure.
 
 ## Recently Completed
+
+### F003 Golden Scenario Asset Model
+
+- Feature: `docs/features/F003-golden-scenario-asset-model.md`
+- Evidence: `docs/evidence/EV-003-golden-scenario-asset-model.md`
+- Vision: `docs/rpa/harness/golden-evaluation-vision.md`
+- Decision: `docs/decisions/ADR-003-rpa-golden-evaluation-uses-assets-not-live-agent-chat.md`
+- Status: completed.
+- Result: Scenario assets now have governance metadata for promotion status, runner eligibility, core-chain coverage, expected-signal review, and sensitivity review; validation and catalog reporting consume those fields.
 
 ### F002 RPA Harness v0
 

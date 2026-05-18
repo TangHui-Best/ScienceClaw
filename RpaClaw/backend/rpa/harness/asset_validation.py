@@ -34,6 +34,7 @@ def _issue(
     message: str,
     severity: str = "error",
     path: Path | None = None,
+    blocking: bool | None = None,
     **extra: Any,
 ) -> None:
     payload = {
@@ -41,7 +42,7 @@ def _issue(
         "asset_status": asset_status,
         "category": category,
         "severity": severity,
-        "blocking": _is_blocking(asset_status, severity),
+        "blocking": _is_blocking(asset_status, severity) if blocking is None else blocking,
         "message": message,
         "path": _relative(path, root) if path is not None else "",
     }
@@ -112,6 +113,52 @@ def _load_checkpoint(
             path=checkpoint_path,
         )
         return None
+
+
+def _validate_scenario_governance(
+    *,
+    root: Path,
+    asset_id: str,
+    asset_status: str,
+    scenario: HarnessScenarioAsset,
+    issues: list[dict[str, Any]],
+) -> None:
+    governance = scenario.governance
+    promotion_status = governance.promotion_status
+    if promotion_status not in {"candidate", "golden"}:
+        return
+
+    def add_blocker(category: str, message: str) -> None:
+        _issue(
+            issues,
+            root=root,
+            asset_id=asset_id,
+            asset_status=asset_status,
+            category=category,
+            message=message,
+            blocking=True,
+            promotion_status=promotion_status,
+        )
+
+    if promotion_status == "golden" and asset_status != "active":
+        add_blocker("golden-asset-not-active", "Golden scenario assets must also be active regression assets")
+    if not governance.runner_modes:
+        add_blocker("missing-runner-mode", "Governed scenario assets must declare eligible runner modes")
+    if not governance.core_chain_coverage:
+        add_blocker(
+            "missing-core-chain-coverage",
+            "Governed scenario assets must declare covered RPA core-chain segments",
+        )
+    if not governance.expected_signals_reviewed:
+        add_blocker(
+            "unreviewed-expected-signals",
+            "Governed scenario assets require expected-signal review before promotion",
+        )
+    if not governance.sensitivity_reviewed:
+        add_blocker(
+            "unreviewed-sensitivity",
+            "Governed scenario assets require sensitivity review before promotion",
+        )
 
 
 def _validate_checkpoint_files(
@@ -300,6 +347,13 @@ def validate_harness_assets(assets_root: str | Path) -> dict[str, Any]:
             continue
         asset_id = scenario.asset_id
         asset_status = scenario.asset_status
+        _validate_scenario_governance(
+            root=root,
+            asset_id=asset_id,
+            asset_status=asset_status,
+            scenario=scenario,
+            issues=issues,
+        )
 
         ref_indexes: list[int] = []
         for ref in scenario.step_checkpoints:

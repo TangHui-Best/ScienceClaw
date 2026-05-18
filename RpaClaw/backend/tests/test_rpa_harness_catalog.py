@@ -82,6 +82,17 @@ def test_catalog_summarizes_capture_assets_and_step_coverage(tmp_path: Path):
                 "asset_status": "active",
                 "sensitivity": "local-only",
                 "page_patterns": ["search-result", "card-list"],
+                "governance": {
+                    "promotion_status": "golden",
+                    "runner_modes": ["offline_core_chain", "skill_replay_e2e"],
+                    "core_chain_coverage": [
+                        "html_to_raw_snapshot",
+                        "raw_to_compact_snapshot",
+                        "trace_to_skill",
+                    ],
+                    "expected_signals_reviewed": True,
+                    "sensitivity_reviewed": True,
+                },
                 "step_checkpoints": [{"step_index": 1, "checkpoint_path": "steps/001/checkpoint.json"}],
             }
         ),
@@ -113,11 +124,19 @@ def test_catalog_summarizes_capture_assets_and_step_coverage(tmp_path: Path):
     assert catalog["summary"]["failed_step_count"] == 1
     assert catalog["summary"]["asset_statuses"] == {"active": 1}
     assert catalog["summary"]["sensitivity"] == {"local-only": 1}
+    assert catalog["summary"]["promotion_statuses"] == {"golden": 1}
+    assert catalog["summary"]["runner_modes"] == {"offline_core_chain": 1, "skill_replay_e2e": 1}
+    assert catalog["summary"]["core_chain_coverage"] == {
+        "html_to_raw_snapshot": 1,
+        "raw_to_compact_snapshot": 1,
+        "trace_to_skill": 1,
+    }
     assert catalog["summary"]["recording_modes"] == {"manual": 1, "natural_language": 1}
     assert catalog["summary"]["page_patterns"] == ["card-list", "detail-page", "search-result"]
     assert catalog["summary"]["hosts"] == ["docs.example.test", "example.test"]
     assert catalog["captures"][0]["capture_scope"] == "selected_steps"
     assert catalog["captures"][0]["asset_status"] == "active"
+    assert catalog["captures"][0]["governance"]["promotion_status"] == "golden"
     assert catalog["steps"][0]["expected_path"] == "asset-1/steps/001/expected.json"
     assert catalog["steps"][1]["runtime_status"] == "failed"
 
