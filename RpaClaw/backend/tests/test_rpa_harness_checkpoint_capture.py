@@ -65,6 +65,20 @@ class _StabilizingPage(_FakePage):
         self.wait_calls.append(timeout_ms)
 
 
+class _LoadingStablePage(_FakePage):
+    def __init__(self, *, url: str, title: str, html: str) -> None:
+        super().__init__(url=url, title=title, html=html)
+        self.wait_calls: list[int] = []
+
+    async def evaluate(self, expression: str) -> str:
+        if "readyState" in expression:
+            return "loading"
+        return ""
+
+    async def wait_for_timeout(self, timeout_ms: int) -> None:
+        self.wait_calls.append(timeout_ms)
+
+
 @pytest.mark.asyncio
 async def test_successful_selected_step_writes_before_and_after_html(tmp_path: Path):
     state = HarnessCaptureSessionState(
@@ -208,6 +222,46 @@ async def test_successful_navigation_waits_for_stable_after_html_and_records_qua
     assert checkpoint.after.capture_quality["attempts"] == 3
     assert checkpoint.after.capture_quality["title_present"] is True
     assert checkpoint_json["after"]["capture_quality"]["status"] == "stable"
+
+
+@pytest.mark.asyncio
+async def test_loading_navigation_after_state_is_saved_as_partial_not_stable(tmp_path: Path):
+    state = HarnessCaptureSessionState(
+        capture_id="hcap-test",
+        session_id="session-1",
+        capture_scope="full_sop",
+    )
+    store = HarnessAssetStore(tmp_path)
+    early_html = "<html><body><main>" + ("early content " * 100) + "</main></body></html>"
+
+    checkpoint = await capture_step_checkpoint(
+        state,
+        store,
+        step_index=1,
+        step_id="step-1",
+        step_intent="Navigate to the report page",
+        recording_mode="manual",
+        before_page=_FakePage(
+            url="about:blank",
+            title="",
+            html="<html><body></body></html>",
+        ),
+        after_page=_LoadingStablePage(
+            url="https://example.test/report",
+            title="",
+            html=early_html,
+        ),
+        trace_events=[{"trace_id": "trace-1", "action": "navigate"}],
+        runtime_status="success",
+    )
+
+    assert checkpoint is not None
+    assert checkpoint.after is not None
+    assert checkpoint.after.capture_quality["status"] == "partial"
+    assert checkpoint.after.capture_quality["reason"] == "navigation_after_not_ready"
+    assert checkpoint.after.capture_quality["ready_state"] == "loading"
+    assert checkpoint.after.capture_quality["title_present"] is False
+    assert (tmp_path / "hcap-test" / "steps" / "001" / "after.html").read_text(encoding="utf-8") == early_html
 
 
 @pytest.mark.asyncio

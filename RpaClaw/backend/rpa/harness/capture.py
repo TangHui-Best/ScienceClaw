@@ -90,6 +90,10 @@ def _is_shell_like_sample(*, title: str, html: str, body_text_chars: int) -> boo
     )
 
 
+def _is_ready_for_stable_capture(ready_state: str) -> bool:
+    return str(ready_state or "").lower() != "loading"
+
+
 async def _safe_document_ready_state(page) -> str:
     evaluate = getattr(page, "evaluate", None)
     if not callable(evaluate):
@@ -174,11 +178,18 @@ async def _capture_stable_page_state(
             html_stable=html_stable,
         )
         sample = HarnessCapturedPageState(url=url, title=title, html=html, capture_quality=quality)
-        score = current_bytes + body_text_chars * 10 + (50_000 if title.strip() else 0) - (100_000 if shell_like else 0)
+        ready_for_stable = _is_ready_for_stable_capture(ready_state)
+        score = (
+            current_bytes
+            + body_text_chars * 10
+            + (50_000 if title.strip() else 0)
+            + (25_000 if ready_for_stable else 0)
+            - (100_000 if shell_like else 0)
+        )
         if best is None or score > best_score:
             best = sample
             best_score = score
-        if not shell_like and url_stable and title_stable and html_stable:
+        if ready_for_stable and not shell_like and url_stable and title_stable and html_stable:
             sample.capture_quality = _quality_for_sample(
                 status="stable",
                 reason="",
@@ -204,7 +215,12 @@ async def _capture_stable_page_state(
     assert best is not None
     best_quality = dict(best.capture_quality)
     best_quality["status"] = "partial"
-    best_quality["reason"] = "shell_like_after_capture" if best_quality.get("shell_like") else "timeout_before_stable"
+    if str(best_quality.get("ready_state") or "").lower() == "loading":
+        best_quality["reason"] = "navigation_after_not_ready"
+    elif best_quality.get("shell_like"):
+        best_quality["reason"] = "shell_like_after_capture"
+    else:
+        best_quality["reason"] = "timeout_before_stable"
     best_quality["attempts"] = max_attempts
     best_quality["settle_ms"] = max(0, (max_attempts - 1) * delay_ms)
     best.capture_quality = best_quality

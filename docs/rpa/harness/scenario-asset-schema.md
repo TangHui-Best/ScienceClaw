@@ -238,6 +238,11 @@ save a partial page state when the browser does not settle before the Harness
 sampling timeout; asset validation should report that as evidence for triage
 instead of blocking the recording flow.
 
+`status=stable` means the saved sample satisfied the Harness page-state
+readiness checks. Repeatedly unchanged HTML is not enough by itself: samples
+where `document.readyState` is still `loading` must remain best-effort
+`partial` evidence, usually with `reason=navigation_after_not_ready`.
+
 ## Snapshot Files
 
 Snapshot files are derived evidence:

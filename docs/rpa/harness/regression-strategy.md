@@ -272,6 +272,7 @@ Use a bounded taxonomy so repeated failures become measurable:
 - `missing-expected-signals`
 - `missing-failure-evidence`
 - `unreferenced-checkpoint`
+- `loading-after-capture`
 - `raw-dom-missing`
 - `compact-snapshot-lost-signal`
 - `candidate-context-lost`

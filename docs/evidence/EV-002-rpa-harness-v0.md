@@ -499,3 +499,105 @@ Recovery actions:
 - Lesson: LL-001 written because recurrence risk is high.
 - Completion claim: allowed for F002 v0. Residual compiler and asset-curation items are follow-up work, not blockers for the Harness v0 infrastructure.
 - Implementation readiness for post-F002 slices: start new Feature/Evidence records or update this Evidence only when the follow-up is clearly scoped to F002 maintenance.
+
+## F002.5 Initial Navigation Capture Quality Classification
+
+Started on branch `codex/rpa-trace-first-harness` on 2026-05-18.
+
+Trigger asset:
+
+```text
+data/rpa_harness_assets_bootstrap/hcap-62867b45092c428db297312f2b43f4e6
+```
+
+Observed symptom:
+
+```text
+step 1 after_url=https://github.com/trending
+step 1 after_title=
+step 1 after_html_bytes=10597
+step 1 after_quality.status=stable
+step 1 after_quality.ready_state=loading
+step 1 after_quality.title_present=false
+```
+
+Root cause hypothesis:
+
+`_capture_stable_page_state()` can classify an early navigation shell as stable when URL/title/HTML remain unchanged across samples, even if the browser still reports `document.readyState=loading` and the captured page lacks normal document evidence.
+
+Scope boundary:
+
+- Fix generic capture-quality classification for navigation-like changed page states.
+- Do not add GitHub-specific rules.
+- Do not block the recording path.
+- Do not repair planner, selector, business extraction, or compiler behavior.
+- Save best-effort page evidence on timeout, but mark it as `partial` when navigation readiness is not trustworthy.
+
+Planned verification:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+pytest -q --basetemp E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-current RpaClaw/backend/tests/test_rpa_harness_checkpoint_capture.py RpaClaw/backend/tests/test_rpa_harness_asset_validation.py RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_captures_pure_navigation_checkpoint_from_page_baseline
+python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
+```
+
+RED verification before implementation:
+
+```text
+2 failed in 0.47s
+```
+
+Failing tests:
+
+- `test_loading_navigation_after_state_is_saved_as_partial_not_stable`
+- `test_validation_reports_loading_after_capture_even_if_marked_stable`
+
+Implementation changes:
+
+- `_capture_stable_page_state()` no longer treats `document.readyState=loading` samples as stable, even when URL/title/HTML are unchanged across samples.
+- Best-effort loading samples are still saved, but their `capture_quality.status` becomes `partial` with `reason=navigation_after_not_ready`.
+- Asset validation reports `loading-after-capture` as a non-blocking warning for successful checkpoints captured while `document.readyState` was still `loading`.
+- Existing best-sample scoring remains only a fallback selection mechanism after timeout; it does not decide stable vs partial.
+
+Focused GREEN verification:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+pytest -q --basetemp E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-current RpaClaw/backend/tests/test_rpa_harness_checkpoint_capture.py RpaClaw/backend/tests/test_rpa_harness_asset_validation.py RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py RpaClaw/backend/tests/test_rpa_harness_expected_signals.py RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_captures_pure_navigation_checkpoint_from_page_baseline RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_captures_manual_trace_checkpoint_from_event_before_html
+```
+
+Result:
+
+```text
+34 passed, 27 warnings in 1.44s
+```
+
+Broader Harness regression verification:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+pytest -q --basetemp E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-current RpaClaw/backend/tests/test_rpa_harness_models.py RpaClaw/backend/tests/test_rpa_harness_checkpoint_capture.py RpaClaw/backend/tests/test_rpa_harness_asset_validation.py RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py RpaClaw/backend/tests/test_rpa_harness_expected_signals.py RpaClaw/backend/tests/test_rpa_harness_catalog.py RpaClaw/backend/tests/test_rpa_harness_snapshot_regression.py RpaClaw/backend/tests/test_rpa_harness_compiler_regression.py RpaClaw/backend/tests/test_rpa_harness_blast_radius.py RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_captures_pure_navigation_checkpoint_from_page_baseline RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_captures_manual_trace_checkpoint_from_event_before_html
+```
+
+Result:
+
+```text
+63 passed, 27 warnings in 1.74s
+```
+
+Trigger asset validation after this fix:
+
+```text
+capture_count=1
+issue_count=1
+blocking_issue_count=0
+categories={"loading-after-capture": 1}
+```
+
+Closeout status:
+
+- Feature patch: F002.5 completed.
+- Evidence level: standard for the bugfix, linked from F002's exhaustive Evidence.
+- ADR: not triggered; no new architecture decision.
+- Lesson: not triggered; F002 already has Patch Churn Review and this fix stays within its invariant.
+- Residual risk: real Full SOP recapture should be run before promoting this page shape to golden. Existing draft asset remains valid diagnostic evidence but now reports a quality warning.

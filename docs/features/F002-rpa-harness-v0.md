@@ -68,6 +68,7 @@ See [EV-002 RPA Harness v0 Evidence](../evidence/EV-002-rpa-harness-v0.md). It r
 | F002.2 | 2026-05-18 | `a762b7e` | Bootstrap assets exposed empty after HTML, snapshot classification noise, and compiler comment noise. | Harness runners needed better asset-quality and regression classification. | Added `empty-after-html`, normalized snapshot matching, and executable-vs-comment compiler hardcode reporting. | completed |
 | F002.3 | 2026-05-18 | `2ec5508` | Navigation-step `after.html` could persist early shell HTML. | Capture wrote page content before the browser state had settled. | Added page-state stabilization and `capture_quality` metadata. | completed |
 | F002.4 | 2026-05-18 | docs-only closeout commit | F002 remained active after successful post-stabilization Full SOP validation. | Feature status and Evidence had not been closed after manual validation. | Record `hcap-ef3f5d7107ef4b1586dd533c6c7f8d41` and move residuals to follow-up scope. | completed |
+| F002.5 | 2026-05-18 | pending | A new Full SOP capture marked an initial navigation `after` state as `stable` even though `ready_state=loading`, `title_present=false`, and HTML was much smaller than the settled next-step page. | Stable classification treated repeated unchanged early navigation samples as reliable page evidence. | Align capture quality with navigation readiness: loading samples are saved as `partial` evidence, not `stable`; validation reports `loading-after-capture` as a non-blocking quality warning. | completed |
 
 ## Patch Churn Review
 
@@ -80,3 +81,4 @@ Post-F002 follow-ups:
 - Curate high-quality draft captures into active/golden regression assets after sensitivity review.
 - Track scenario/page-pattern coverage so the team can answer which page forms are represented.
 - Handle `compiler-hardcoded-observed-value` as RPA Agent / `TraceSkillCompiler` generalization work rather than as Harness infrastructure.
+- Use F002.5 quality warnings when deciding whether a draft capture can become candidate/golden regression evidence.

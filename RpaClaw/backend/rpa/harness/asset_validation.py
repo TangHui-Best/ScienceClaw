@@ -259,6 +259,19 @@ def _validate_checkpoint_files(
                 step_index=checkpoint.step_index,
                 reason=after.capture_quality.get("reason", ""),
             )
+        if str(after.capture_quality.get("ready_state") or "").lower() == "loading":
+            _issue(
+                issues,
+                root=root,
+                asset_id=asset_id,
+                asset_status=asset_status,
+                category="loading-after-capture",
+                severity="warning",
+                message="Successful checkpoint after state was captured while document.readyState was still loading",
+                path=after_path if after_path.exists() else None,
+                step_index=checkpoint.step_index,
+                reason=after.capture_quality.get("reason", ""),
+            )
         if not after.same_as_before and after_path.exists() and after_path.stat().st_size > 0:
             after_html = after_path.read_text(encoding="utf-8", errors="ignore")
             if _is_shell_like_html(title=after.title, html=after_html):

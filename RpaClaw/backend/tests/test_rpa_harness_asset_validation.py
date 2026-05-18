@@ -195,6 +195,32 @@ def test_validation_reports_unstable_and_shell_like_after_capture(tmp_path: Path
     assert all(issue["blocking"] is False for issue in report["issues"])
 
 
+def test_validation_reports_loading_after_capture_even_if_marked_stable(tmp_path: Path):
+    capture_dir = _write_scenario(tmp_path, step_indexes=[1])
+    early_html = "<html><body><main>" + ("early content " * 40) + "</main></body></html>"
+    _write_checkpoint(
+        capture_dir,
+        step_index=1,
+        after_title="",
+        after_html=early_html,
+        after_capture_quality={
+            "status": "stable",
+            "reason": "",
+            "ready_state": "loading",
+            "html_bytes": len(early_html.encode("utf-8")),
+            "body_text_chars": 559,
+            "title_present": False,
+        },
+    )
+
+    report = validate_harness_assets(tmp_path)
+
+    assert {issue["category"] for issue in report["issues"]} == {"loading-after-capture"}
+    issue = report["issues"][0]
+    assert issue["severity"] == "warning"
+    assert issue["blocking"] is False
+
+
 def test_validation_reports_governance_blockers_for_golden_assets_only(tmp_path: Path):
     draft_dir = _write_scenario(
         tmp_path,
