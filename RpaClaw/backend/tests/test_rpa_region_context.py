@@ -245,6 +245,37 @@ async def test_analyze_region_on_page_collects_frame_local_evidence(monkeypatch)
     assert evidence["action_summary"]["controls"][0]["text"] == "Save"
 
 
+@pytest.mark.anyio
+async def test_analyze_region_on_page_keeps_main_frame_when_iframe_overlap_is_minor(monkeypatch):
+    main_result = {
+        "intersecting_elements": [{"tag": "section", "text": "Main content"}],
+        "dominant_container": {"tag": "section", "text": "Main content"},
+        "local_text": ["Main content"],
+        "warnings": [],
+    }
+    page = _FakePage(main_result=main_result, child_result={"local_text": ["Iframe content"]})
+
+    async def fail_if_frame_path_requested(_frame):
+        raise AssertionError("minor iframe overlap should not resolve a frame path")
+
+    monkeypatch.setattr("backend.rpa.region_context.build_frame_path", fail_if_frame_path_requested)
+
+    evidence = await analyze_region_on_page(
+        page,
+        RPARegionAnalyzeRequest(
+            tab_id="tab-1",
+            rect=RPARegionRect(x=0, y=0, width=100, height=80),
+            viewport=RPARegionViewport(width=1280, height=720),
+        ),
+    )
+
+    assert page.main_frame.evaluated_rect == {"x": 0, "y": 0, "width": 100, "height": 80}
+    assert page.child_frame.evaluated_rect is None
+    assert evidence["frame_path"] == []
+    assert evidence["rect"] == {"x": 0, "y": 0, "width": 100, "height": 80}
+    assert evidence["local_text"] == ["Main content"]
+
+
 def test_manager_get_page_for_tab_uses_active_or_requested_tab():
     manager = RPASessionManager()
     session = _session()

@@ -480,6 +480,11 @@ async def _dominant_frame_for_rect(page: Any, rect: Dict[str, float]) -> tuple[A
     if best_frame is None or best_box is None or best_area <= 0:
         return page, rect, [], warnings
 
+    selected_area = max(0.0, float(rect.get("width", 0) or 0) * float(rect.get("height", 0) or 0))
+    main_area = max(0.0, selected_area - best_area)
+    if best_area <= main_area:
+        return page, rect, [], warnings
+
     try:
         frame_path = await build_frame_path(best_frame)
     except Exception as exc:
