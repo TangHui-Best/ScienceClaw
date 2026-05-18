@@ -47,6 +47,13 @@ $env:PYTHONPATH='RpaClaw'
 python -m backend.rpa.harness.run_governed_regression --assets data\rpa_harness_assets_bootstrap --format summary
 ```
 
+Real governed Chinese summary:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m backend.rpa.harness.run_governed_regression --assets data\rpa_harness_assets_bootstrap --format summary --lang zh
+```
+
 Real governed JSON:
 
 ```powershell
@@ -69,6 +76,13 @@ python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --
 
 ## Results
 
+F006.1 RED result after adding `--lang zh` tests before production code:
+
+```text
+1 failed, 7 passed
+SystemExit: 2 for unrecognized arguments: --lang zh
+```
+
 RED result after adding observable-report tests before production code:
 
 ```text
@@ -86,7 +100,21 @@ GREEN result for governed regression tests:
 Focused Harness regression:
 
 ```text
-38 passed in 0.64s
+39 passed in 0.64s
+```
+
+Real governed Chinese summary:
+
+```text
+受治理离线回归：通过
+
+本次评估：1 个 candidate 资产，3 个步骤
+覆盖范围：card-list, data-extraction, detail-page, multi-page, semantic-selection
+核心链路：html_to_raw_snapshot=1, planner_action_selection=1, raw_to_compact_snapshot=1, trace_to_skill=1
+未纳入回归：0 个 capture；原因=无
+执行信号：validation 阻塞=0，snapshot 失败=0，compiler 失败=0
+影响范围：受影响资产=无；受影响页面形态=无
+可信度边界：single-candidate-asset-baseline
 ```
 
 Strict Harness knowledge validation:
@@ -145,6 +173,8 @@ confidence.status=passed
   Future Skill Replay E2E should add runner-specific diagnostics without
   breaking the stable asset, coverage, runner-signal, blast-radius, and
   confidence sections.
+- F006.1 intentionally localizes only the human summary. JSON field names and
+  machine-readable values remain English stable-contract values.
 
 ## Closeout Status
 

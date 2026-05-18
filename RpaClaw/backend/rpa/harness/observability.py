@@ -107,6 +107,10 @@ def _plural(count: int, singular: str, plural: str | None = None) -> str:
     return f"{count} {word}"
 
 
+def _zh_count(count: int, noun: str) -> str:
+    return f"{count} 个{noun}"
+
+
 def _asset_phrase(observability: dict[str, Any]) -> str:
     qualification = observability["asset_qualification"]
     selected_count = qualification["selected_capture_count"]
@@ -119,14 +123,44 @@ def _asset_phrase(observability: dict[str, Any]) -> str:
     return ", ".join(parts) if parts else _plural(selected_count, "governed asset")
 
 
+def _zh_asset_phrase(observability: dict[str, Any]) -> str:
+    qualification = observability["asset_qualification"]
+    selected_count = qualification["selected_capture_count"]
+    promotion_counts = qualification.get("selected_promotion_status_counts") or {}
+    parts = [
+        _zh_count(int(promotion_counts[status]), f" {status} 资产")
+        for status in ["candidate", "golden"]
+        if int(promotion_counts.get(status) or 0)
+    ]
+    return "，".join(parts) if parts else _zh_count(selected_count, "受治理资产")
+
+
 def _format_list(values: list[str]) -> str:
     return ", ".join(values) if values else "none"
+
+
+def _zh_format_list(values: list[str]) -> str:
+    return ", ".join(values) if values else "无"
 
 
 def _format_counts(values: dict[str, int]) -> str:
     if not values:
         return "none"
     return ", ".join(f"{key}={values[key]}" for key in sorted(values))
+
+
+def _zh_format_counts(values: dict[str, int]) -> str:
+    if not values:
+        return "无"
+    return ", ".join(f"{key}={values[key]}" for key in sorted(values))
+
+
+def _zh_status(status: str) -> str:
+    return {
+        "passed": "通过",
+        "failed": "失败",
+        "passed_with_warnings": "通过但有警告",
+    }.get(status, status or "未知")
 
 
 def render_human_summary(report: dict[str, Any]) -> str:
@@ -165,4 +199,43 @@ def render_human_summary(report: dict[str, Any]) -> str:
     failure_category = confidence.get("failure_category")
     if failure_category:
         lines.insert(1, f"Failure category: {failure_category}")
+    return "\n".join(lines) + "\n"
+
+
+def render_chinese_summary(report: dict[str, Any]) -> str:
+    observability = report.get("observability") or build_observability_contract(report)
+    summary = report.get("summary", {})
+    qualification = observability["asset_qualification"]
+    coverage = observability["coverage"]
+    runner_signals = observability["runner_signals"]
+    blast_radius = observability["blast_radius"]
+    confidence = observability["confidence"]
+
+    lines = [
+        f"受治理离线回归：{_zh_status(str(summary.get('status') or 'unknown'))}",
+        "",
+        f"本次评估：{_zh_asset_phrase(observability)}，{_zh_count(coverage['selected_step_count'], '步骤')}",
+        f"覆盖范围：{_zh_format_list(coverage['page_patterns'])}",
+        f"核心链路：{_zh_format_counts(coverage['core_chain_coverage'])}",
+        (
+            "未纳入回归："
+            f"{_zh_count(qualification['excluded_capture_count'], ' capture')}；"
+            f"原因={_zh_format_counts(qualification['excluded_reason_counts'])}"
+        ),
+        (
+            "执行信号："
+            f"validation 阻塞={runner_signals['validation_blocking_issue_count']}，"
+            f"snapshot 失败={runner_signals['snapshot_failed']}，"
+            f"compiler 失败={runner_signals['compiler_failed']}"
+        ),
+        (
+            "影响范围："
+            f"受影响资产={_zh_format_list(blast_radius['affected_assets'])}；"
+            f"受影响页面形态={_zh_format_list(blast_radius['affected_page_patterns'])}"
+        ),
+        f"可信度边界：{_zh_format_list(confidence['risks'])}",
+    ]
+    failure_category = confidence.get("failure_category")
+    if failure_category:
+        lines.insert(1, f"失败类别：{failure_category}")
     return "\n".join(lines) + "\n"

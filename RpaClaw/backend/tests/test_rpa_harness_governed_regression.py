@@ -219,6 +219,22 @@ def test_governed_offline_regression_cli_can_emit_human_summary(tmp_path: Path, 
     assert "Confidence risks: single-candidate-asset-baseline" in output
 
 
+def test_governed_offline_regression_cli_can_emit_chinese_summary(tmp_path: Path, capsys):
+    _write_asset(tmp_path, asset_id="candidate-ready")
+
+    exit_code = run_governed_regression_main(
+        ["--assets", str(tmp_path), "--format", "summary", "--lang", "zh"]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "受治理离线回归：通过" in output
+    assert "本次评估：1 个 candidate 资产，1 个步骤" in output
+    assert "覆盖范围：repository-detail" in output
+    assert "执行信号：validation 阻塞=0，snapshot 失败=0，compiler 失败=0" in output
+    assert "可信度边界：single-candidate-asset-baseline" in output
+
+
 def test_governed_offline_regression_summary_names_candidate_and_golden_assets(tmp_path: Path, capsys):
     _write_asset(tmp_path, asset_id="candidate-ready", promotion_status="candidate")
     _write_asset(tmp_path, asset_id="golden-ready", promotion_status="golden")
