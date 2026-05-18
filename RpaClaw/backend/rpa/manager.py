@@ -224,6 +224,7 @@ class RPASessionManager:
         self._bridged_context_ids.pop(session_id, None)
         self._pending_event_counts.pop(session_id, None)
         self._pending_event_idle.pop(session_id, None)
+        self._pending_region_contexts.pop(session_id, None)
 
         session = self.sessions.get(session_id)
         if session:

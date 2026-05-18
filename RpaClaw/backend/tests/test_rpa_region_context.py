@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
+import asyncio
+from datetime import datetime, timedelta
 
 from backend.rpa.manager import RPASession, RPASessionManager
 from backend.rpa.region_context import RPARegionContext, RPARegionEvidence
@@ -100,3 +101,26 @@ def test_region_context_clear_supports_region_and_session_scope():
     manager.store_region_context("session-1", _context("region-2"))
     manager.clear_region_context("session-1")
     assert manager.resolve_region_context("session-1", "region-2") is None
+
+
+def test_region_context_detach_clears_pending_contexts():
+    manager = RPASessionManager()
+    manager.sessions["session-1"] = _session()
+    manager.store_region_context("session-1", _context("region-1"))
+
+    manager.detach_context("session-1")
+
+    assert manager.resolve_region_context("session-1", "region-1") is None
+
+
+def test_region_context_expired_cleanup_clears_pending_contexts():
+    manager = RPASessionManager()
+    session = _session()
+    session.last_activity_at = datetime.now() - timedelta(seconds=120)
+    manager.sessions["session-1"] = session
+    manager.store_region_context("session-1", _context("region-1"))
+
+    removed = asyncio.run(manager.cleanup_expired_sessions(max_idle_seconds=60))
+
+    assert removed == ["session-1"]
+    assert manager.resolve_region_context("session-1", "region-1") is None
