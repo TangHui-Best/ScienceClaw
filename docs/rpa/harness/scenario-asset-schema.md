@@ -131,6 +131,20 @@ Example:
     "html_path": "after.html",
     "html_sha256": "...",
     "same_as_before": false,
+    "capture_quality": {
+      "status": "stable",
+      "reason": "",
+      "attempts": 3,
+      "settle_ms": 400,
+      "html_bytes": 577141,
+      "body_text_chars": 18420,
+      "title_present": true,
+      "ready_state": "complete",
+      "url_stable": true,
+      "title_stable": true,
+      "html_stable": true,
+      "shell_like": false
+    },
     "screenshot_path": "after.png",
     "raw_snapshot_path": "after.raw_snapshot.json",
     "compact_snapshot_path": "after.compact_snapshot.json"
@@ -187,6 +201,12 @@ Use hash deduplication to avoid storing duplicate files:
   }
 }
 ```
+
+`capture_quality` records how reliable the saved page state looked at capture
+time. It is evidence metadata, not a runtime gate. A successful step may still
+save a partial page state when the browser does not settle before the Harness
+sampling timeout; asset validation should report that as evidence for triage
+instead of blocking the recording flow.
 
 ## Snapshot Files
 

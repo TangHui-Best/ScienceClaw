@@ -19,6 +19,7 @@ class HarnessPageState(BaseModel):
     html_path: str = ""
     html_sha256: str = ""
     same_as_before: bool = False
+    capture_quality: Dict[str, Any] = Field(default_factory=dict)
     screenshot_path: str = ""
     raw_snapshot_path: str = ""
     compact_snapshot_path: str = ""

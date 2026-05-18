@@ -225,6 +225,66 @@ Independent review:
 - Result: `ready to implement`.
 - Key boundary: do not fix GitHub selectors, Planner, or business extraction in this slice; keep failures as Harness evidence.
 
+## F002 Page-State Stabilization Slice
+
+Executed on branch `codex/rpa-trace-first-harness` on 2026-05-18.
+
+Scope boundary:
+
+- Harness may wait briefly for a page state that is better evidence before writing `after.html`.
+- Harness must still save the best observed state on timeout instead of blocking recording.
+- This slice does not add Full SOP physical deduplication and does not repair business extraction or compiler generalization.
+
+Implementation changes:
+
+- Capture now samples page URL, title, HTML, body-text size, and `document.readyState` over a short window before persisting page state.
+- Checkpoint page states now include `capture_quality` metadata such as `status`, `reason`, `attempts`, `settle_ms`, `html_bytes`, `body_text_chars`, `title_present`, and stability flags.
+- Asset validation now reports non-blocking `shell-like-after-html` and `unstable-after-capture` findings for successful checkpoints that look like early navigation shells or partial captures.
+- Existing hash-based `same_as_before` deduplication remains the only v0 storage optimization; complex Full SOP content-addressed dedupe is intentionally deferred.
+
+Focused verification:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+pytest -q --basetemp E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-current RpaClaw/backend/tests/test_rpa_harness_asset_validation.py RpaClaw/backend/tests/test_rpa_harness_checkpoint_capture.py RpaClaw/backend/tests/test_rpa_harness_snapshot_regression.py RpaClaw/backend/tests/test_rpa_harness_compiler_regression.py RpaClaw/backend/tests/test_rpa_harness_expected_signals.py RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_captures_pure_navigation_checkpoint_from_page_baseline RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_captures_manual_trace_checkpoint_from_event_before_html
+```
+
+Result:
+
+```text
+44 passed, 27 warnings in 2.90s
+```
+
+Local bootstrap asset validation after this slice:
+
+```text
+capture_count=7
+issue_count=3
+blocking_issue_count=0
+categories={"empty-after-html": 1, "missing-entry-checkpoint": 2}
+ASSET_VALIDATION_EXIT=0
+```
+
+Local bootstrap snapshot regression after this slice:
+
+```text
+total=16
+passed=16
+failed=0
+SNAPSHOT_EXIT=0
+```
+
+Local bootstrap compiler regression after this slice:
+
+```text
+total=16
+passed=15
+failed=1
+failure_category=compiler-hardcoded-observed-value
+hardcoded_executable_values=["1.2k"]
+COMPILER_EXIT=1
+```
+
 ## Latest Verification Commands
 
 Executed on branch `codex/rpa-trace-first-harness` on 2026-05-18:

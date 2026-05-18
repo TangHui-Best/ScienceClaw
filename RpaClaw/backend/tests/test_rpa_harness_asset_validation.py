@@ -50,6 +50,8 @@ def _write_checkpoint(
     write_expected: bool = True,
     same_as_before: bool = False,
     after_html: str = "<html><body>after</body></html>",
+    after_title: str = "After",
+    after_capture_quality: dict | None = None,
 ) -> None:
     step_dir = capture_dir / "steps" / f"{step_index:03d}"
     step_dir.mkdir(parents=True, exist_ok=True)
@@ -80,10 +82,11 @@ def _write_checkpoint(
                 },
                 "after": {
                     "url": "https://example.test/after",
-                    "title": "After",
+                    "title": after_title,
                     "html_path": after_path,
                     "html_sha256": "after",
                     "same_as_before": same_as_before,
+                    "capture_quality": after_capture_quality or {},
                 },
                 "runtime_result": {"status": "success"},
                 "captured_at": "2026-05-18T10:00:00",
@@ -162,6 +165,31 @@ def test_validation_allows_same_as_before_success_without_after_file(tmp_path: P
     report = validate_harness_assets(tmp_path)
 
     assert report["summary"]["issue_count"] == 0
+
+
+def test_validation_reports_unstable_and_shell_like_after_capture(tmp_path: Path):
+    capture_dir = _write_scenario(tmp_path, step_indexes=[1])
+    _write_checkpoint(
+        capture_dir,
+        step_index=1,
+        after_title="",
+        after_html="<html><body></body></html>",
+        after_capture_quality={
+            "status": "partial",
+            "reason": "timeout_before_stable",
+            "html_bytes": 26,
+            "body_text_chars": 0,
+            "title_present": False,
+        },
+    )
+
+    report = validate_harness_assets(tmp_path)
+
+    assert {issue["category"] for issue in report["issues"]} == {
+        "shell-like-after-html",
+        "unstable-after-capture",
+    }
+    assert all(issue["blocking"] is False for issue in report["issues"])
 
 
 def test_asset_validation_cli_writes_report_and_fails_only_for_blocking_issues(tmp_path: Path):

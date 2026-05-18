@@ -26,6 +26,8 @@ Active. F0-F14 代码能力已通过一系列 commit 落地，但 Feature/Eviden
 
 Current follow-up slice: harden Harness asset integrity and regression classification while preserving the boundary that Harness captures facts, stores assets, and reports replay/regression evidence. This slice does not repair business Agent extraction behavior or add site-specific GitHub rules. Latest focused verification is recorded in [EV-002](../evidence/EV-002-rpa-harness-v0.md).
 
+Current capture-timing slice: add page-state stabilization and `capture_quality` metadata so navigation-step `after.html` is less likely to persist an early shell state. Asset validation reports `shell-like-after-html` and `unstable-after-capture` as offline evidence only; recording remains non-blocking and business extraction behavior remains out of scope.
+
 ## Links
 
 - Design: [RPA Harness v0 Design](../rpa/harness/rpa-harness-v0-design.md)
@@ -49,6 +51,10 @@ Current follow-up slice: harden Harness asset integrity and regression classific
 
 See [EV-002 RPA Harness v0 Evidence](../evidence/EV-002-rpa-harness-v0.md). It records F0-F14 commits, post-F14 fixes, latest validator path/output, and residual risks.
 
+## Patch History
+
+- 2026-05-18: Recovered the F0-F14 Harness v0 closeout into Feature/Evidence/Lesson records and kept status active pending residual bootstrap asset triage.
+
 ## Next Step
 
-Continue F002 residual triage: decide whether the remaining executable observed-value hardcode belongs in `TraceSkillCompiler` generalization, AI trace sanitization, or a dedicated compiler-regression follow-up slice. Keep `empty-after-html` and old `missing-entry-checkpoint` findings visible as draft asset quality issues until new captures replace them.
+Continue F002 residual triage: recapture a Full SOP after page-state stabilization to confirm navigation-step `after.html` quality improves; then decide whether remaining executable observed-value hardcode belongs in `TraceSkillCompiler` generalization, AI trace sanitization, or a dedicated compiler-regression follow-up slice. Keep old `missing-entry-checkpoint`, `empty-after-html`, and shell-like findings visible as draft asset quality evidence until new captures replace them.

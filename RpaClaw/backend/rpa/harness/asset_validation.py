@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -46,6 +47,20 @@ def _issue(
     }
     payload.update(extra)
     issues.append(payload)
+
+
+def _body_text_chars_from_html(html: str) -> int:
+    text = re.sub(r"<[^>]+>", " ", html or "")
+    return len(re.sub(r"\s+", " ", text).strip())
+
+
+def _is_shell_like_html(*, title: str, html: str) -> bool:
+    html_bytes = len((html or "").encode("utf-8"))
+    return not html.strip() or (
+        not title.strip()
+        and html_bytes < 50_000
+        and _body_text_chars_from_html(html) < 80
+    )
 
 
 def _load_scenario(asset_dir: Path, root: Path, issues: list[dict[str, Any]]) -> HarnessScenarioAsset | None:
@@ -184,6 +199,33 @@ def _validate_checkpoint_files(
                 path=after_path,
                 step_index=checkpoint.step_index,
             )
+        if after.capture_quality.get("status") == "partial":
+            _issue(
+                issues,
+                root=root,
+                asset_id=asset_id,
+                asset_status=asset_status,
+                category="unstable-after-capture",
+                severity="warning",
+                message="Successful checkpoint after state was captured before the page became stable",
+                path=after_path if after_path.exists() else None,
+                step_index=checkpoint.step_index,
+                reason=after.capture_quality.get("reason", ""),
+            )
+        if not after.same_as_before and after_path.exists() and after_path.stat().st_size > 0:
+            after_html = after_path.read_text(encoding="utf-8", errors="ignore")
+            if _is_shell_like_html(title=after.title, html=after_html):
+                _issue(
+                    issues,
+                    root=root,
+                    asset_id=asset_id,
+                    asset_status=asset_status,
+                    category="shell-like-after-html",
+                    severity="warning",
+                    message="Successful checkpoint after.html looks like an early navigation shell",
+                    path=after_path,
+                    step_index=checkpoint.step_index,
+                )
 
     if checkpoint.runtime_result.status == "failed" and checkpoint.failure_path:
         failure_path = capture_dir / checkpoint.failure_path

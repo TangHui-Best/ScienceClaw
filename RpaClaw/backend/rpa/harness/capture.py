@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime
 from typing import Literal
 from uuid import uuid4
@@ -61,6 +62,7 @@ class HarnessCapturedPageState(BaseModel):
     url: str = ""
     title: str = ""
     html: str = ""
+    capture_quality: dict = Field(default_factory=dict)
 
 
 def _sha256_text(value: str) -> str:
@@ -71,18 +73,142 @@ def _relative_step_path(step_index: int, filename: str) -> str:
     return f"steps/{step_index:03d}/{filename}"
 
 
-async def _read_page_content_with_non_empty_retry(page, *, attempts: int = 3, delay_ms: int = 100) -> str:
-    html = ""
-    for attempt in range(max(1, attempts)):
+def _body_text_chars_from_html(html: str) -> int:
+    text = re.sub(r"<[^>]+>", " ", html or "")
+    return len(re.sub(r"\s+", " ", text).strip())
+
+
+def _html_bytes(html: str) -> int:
+    return len((html or "").encode("utf-8"))
+
+
+def _is_shell_like_sample(*, title: str, html: str, body_text_chars: int) -> bool:
+    return not html.strip() or (
+        not title.strip()
+        and _html_bytes(html) < 50_000
+        and body_text_chars < 80
+    )
+
+
+async def _safe_document_ready_state(page) -> str:
+    evaluate = getattr(page, "evaluate", None)
+    if not callable(evaluate):
+        return ""
+    try:
+        return str(await evaluate("document.readyState") or "")
+    except Exception:
+        return ""
+
+
+def _quality_for_sample(
+    *,
+    status: str,
+    reason: str,
+    attempts: int,
+    settle_ms: int,
+    url: str,
+    title: str,
+    html: str,
+    body_text_chars: int,
+    ready_state: str,
+    url_stable: bool,
+    title_stable: bool,
+    html_stable: bool,
+) -> dict:
+    return {
+        "status": status,
+        "reason": reason,
+        "attempts": attempts,
+        "settle_ms": settle_ms,
+        "url": url,
+        "html_bytes": _html_bytes(html),
+        "body_text_chars": body_text_chars,
+        "title_present": bool(title.strip()),
+        "ready_state": ready_state,
+        "url_stable": url_stable,
+        "title_stable": title_stable,
+        "html_stable": html_stable,
+        "shell_like": _is_shell_like_sample(title=title, html=html, body_text_chars=body_text_chars),
+    }
+
+
+async def _capture_stable_page_state(
+    page,
+    *,
+    attempts: int = 10,
+    delay_ms: int = 200,
+) -> HarnessCapturedPageState:
+    previous: HarnessCapturedPageState | None = None
+    best: HarnessCapturedPageState | None = None
+    best_score = -1
+    max_attempts = max(1, attempts)
+
+    for attempt in range(max_attempts):
+        url = str(getattr(page, "url", "") or "")
+        title = str(await page.title() or "")
         html = str(await page.content() or "")
-        if html.strip():
-            return html
-        if attempt >= attempts - 1:
-            break
-        wait_for_timeout = getattr(page, "wait_for_timeout", None)
-        if callable(wait_for_timeout):
-            await wait_for_timeout(delay_ms)
-    return html
+        ready_state = await _safe_document_ready_state(page)
+        body_text_chars = _body_text_chars_from_html(html)
+        url_stable = previous is not None and previous.url == url
+        title_stable = previous is not None and previous.title == title
+        previous_bytes = _html_bytes(previous.html) if previous is not None else 0
+        current_bytes = _html_bytes(html)
+        html_stable = (
+            previous is not None
+            and previous_bytes > 0
+            and abs(current_bytes - previous_bytes) <= max(128, int(current_bytes * 0.02))
+        )
+        shell_like = _is_shell_like_sample(title=title, html=html, body_text_chars=body_text_chars)
+        quality = _quality_for_sample(
+            status="partial",
+            reason="sampling",
+            attempts=attempt + 1,
+            settle_ms=attempt * delay_ms,
+            url=url,
+            title=title,
+            html=html,
+            body_text_chars=body_text_chars,
+            ready_state=ready_state,
+            url_stable=url_stable,
+            title_stable=title_stable,
+            html_stable=html_stable,
+        )
+        sample = HarnessCapturedPageState(url=url, title=title, html=html, capture_quality=quality)
+        score = current_bytes + body_text_chars * 10 + (50_000 if title.strip() else 0) - (100_000 if shell_like else 0)
+        if best is None or score > best_score:
+            best = sample
+            best_score = score
+        if not shell_like and url_stable and title_stable and html_stable:
+            sample.capture_quality = _quality_for_sample(
+                status="stable",
+                reason="",
+                attempts=attempt + 1,
+                settle_ms=attempt * delay_ms,
+                url=url,
+                title=title,
+                html=html,
+                body_text_chars=body_text_chars,
+                ready_state=ready_state,
+                url_stable=url_stable,
+                title_stable=title_stable,
+                html_stable=html_stable,
+            )
+            return sample
+
+        previous = sample
+        if attempt < max_attempts - 1:
+            wait_for_timeout = getattr(page, "wait_for_timeout", None)
+            if callable(wait_for_timeout):
+                await wait_for_timeout(delay_ms)
+
+    assert best is not None
+    best_quality = dict(best.capture_quality)
+    best_quality["status"] = "partial"
+    best_quality["reason"] = "shell_like_after_capture" if best_quality.get("shell_like") else "timeout_before_stable"
+    best_quality["attempts"] = max_attempts
+    best_quality["settle_ms"] = max(0, (max_attempts - 1) * delay_ms)
+    best.capture_quality = best_quality
+    return best
 
 
 def _load_or_create_scenario_manifest(
@@ -140,27 +266,33 @@ async def _capture_page_state(
     html_override: str | None = None,
     same_as_before: bool = False,
 ) -> HarnessPageState:
-    title = await page.title()
-    html = html_override if html_override is not None else await _read_page_content_with_non_empty_retry(page)
+    captured = (
+        HarnessCapturedPageState(
+            url=str(getattr(page, "url", "") or ""),
+            title=str(await page.title() or ""),
+            html=html_override,
+            capture_quality={"status": "provided"},
+        )
+        if html_override is not None
+        else await _capture_stable_page_state(page)
+    )
+    html = captured.html
     html_sha256 = _sha256_text(html)
     html_path = _relative_step_path(step_index, filename)
     if not same_as_before:
         store.write_text(store.capture_dir(capture_id) / html_path, html)
     return HarnessPageState(
-        url=str(getattr(page, "url", "") or ""),
-        title=str(title or ""),
+        url=captured.url,
+        title=captured.title,
         html_path=html_path,
         html_sha256=html_sha256,
         same_as_before=same_as_before,
+        capture_quality=captured.capture_quality,
     )
 
 
 async def capture_current_page_state(page) -> HarnessCapturedPageState:
-    return HarnessCapturedPageState(
-        url=str(getattr(page, "url", "") or ""),
-        title=str(await page.title() or ""),
-        html=await _read_page_content_with_non_empty_retry(page),
-    )
+    return await _capture_stable_page_state(page)
 
 
 def _write_captured_page_state(
@@ -181,6 +313,7 @@ def _write_captured_page_state(
         html_path=html_path,
         html_sha256=_sha256_text(captured.html),
         same_as_before=same_as_before,
+        capture_quality=captured.capture_quality,
     )
 
 
