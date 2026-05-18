@@ -119,7 +119,11 @@ def _step_entry(
     }
 
 
-def build_harness_catalog(assets_root: str | Path) -> dict[str, Any]:
+def build_harness_catalog(
+    assets_root: str | Path,
+    *,
+    asset_ids: set[str] | None = None,
+) -> dict[str, Any]:
     root = Path(assets_root)
     warnings: list[dict[str, str]] = []
     captures: list[dict[str, Any]] = []
@@ -127,7 +131,11 @@ def build_harness_catalog(assets_root: str | Path) -> dict[str, Any]:
 
     asset_dirs = sorted(path for path in root.iterdir() if path.is_dir()) if root.exists() else []
     for asset_dir in asset_dirs:
+        if asset_ids is not None and asset_dir.name not in asset_ids:
+            continue
         capture = _scenario_entry(asset_dir, root, warnings)
+        if asset_ids is not None and capture["asset_id"] not in asset_ids:
+            continue
         asset_id = capture["asset_id"]
         checkpoint_paths = sorted(asset_dir.glob("steps/*/checkpoint.json"))
         capture_steps = [

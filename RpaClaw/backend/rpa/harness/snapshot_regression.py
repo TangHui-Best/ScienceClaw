@@ -76,11 +76,15 @@ def run_snapshot_regression(
     *,
     snapshot_builder: SnapshotBuilder = _default_snapshot_builder,
     snapshot_compactor: SnapshotCompactor = _default_snapshot_compactor,
+    asset_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     root = Path(assets_root)
     items: list[dict[str, Any]] = []
 
     for checkpoint_path in sorted(root.glob("*/steps/*/checkpoint.json")):
+        asset_id = _asset_id_for_checkpoint(root, checkpoint_path)
+        if asset_ids is not None and asset_id not in asset_ids:
+            continue
         checkpoint = HarnessStepCheckpoint.model_validate(_load_json(checkpoint_path))
         capture_dir = checkpoint_path.parents[2]
         before_html_path = capture_dir / checkpoint.before.html_path

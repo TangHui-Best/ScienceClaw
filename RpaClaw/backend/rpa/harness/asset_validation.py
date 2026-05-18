@@ -349,16 +349,26 @@ def _validate_step_sequence(
         )
 
 
-def validate_harness_assets(assets_root: str | Path) -> dict[str, Any]:
+def validate_harness_assets(
+    assets_root: str | Path,
+    *,
+    asset_ids: set[str] | None = None,
+) -> dict[str, Any]:
     root = Path(assets_root)
     issues: list[dict[str, Any]] = []
     asset_dirs = sorted(path for path in root.iterdir() if path.is_dir()) if root.exists() else []
+    checked_capture_count = 0
 
     for asset_dir in asset_dirs:
+        if asset_ids is not None and asset_dir.name not in asset_ids:
+            continue
+        checked_capture_count += 1
         scenario = _load_scenario(asset_dir, root, issues)
         if scenario is None:
             continue
         asset_id = scenario.asset_id
+        if asset_ids is not None and asset_id not in asset_ids:
+            continue
         asset_status = scenario.asset_status
         _validate_scenario_governance(
             root=root,
@@ -442,7 +452,7 @@ def validate_harness_assets(assets_root: str | Path) -> dict[str, Any]:
     return {
         "schema_version": "rpa-harness-validation-v0",
         "summary": {
-            "capture_count": len(asset_dirs),
+            "capture_count": checked_capture_count,
             "issue_count": len(issues),
             "blocking_issue_count": len([issue for issue in issues if issue["blocking"]]),
             "categories": {key: categories[key] for key in sorted(categories)},

@@ -123,6 +123,13 @@ must have expected-signal and sensitivity review. Golden assets must also be
 `asset_status=active`, because they are intended to affect blocking regression
 judgment.
 
+The default governed offline regression pool is stricter than raw promotion
+metadata. It selects only active `candidate` or `golden` assets that are
+eligible for `offline_core_chain`, declare core-chain coverage, and have both
+expected-signal and sensitivity review completed. Assets outside that set remain
+available for analysis, validation, recapture decisions, and future promotion,
+but they do not form the default blocking baseline.
+
 ## Step `checkpoint.json`
 
 Example:

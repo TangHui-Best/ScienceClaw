@@ -107,11 +107,15 @@ def run_compiler_regression(
     assets_root: str | Path,
     *,
     compiler: Compiler = _default_compiler,
+    asset_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     root = Path(assets_root)
     items: list[dict[str, Any]] = []
 
     for checkpoint_path in sorted(root.glob("*/steps/*/checkpoint.json")):
+        asset_id = _asset_id_for_checkpoint(root, checkpoint_path)
+        if asset_ids is not None and asset_id not in asset_ids:
+            continue
         checkpoint = HarnessStepCheckpoint.model_validate(_load_json(checkpoint_path))
         capture_dir = checkpoint_path.parents[2]
         step_dir = checkpoint_path.parent

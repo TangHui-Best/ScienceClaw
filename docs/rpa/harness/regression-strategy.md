@@ -37,6 +37,36 @@ compiler regressions should run against captured checkpoint assets first.
 
 ## Regression Levels
 
+### Default: Governed Offline Regression
+
+The default local Harness command for core-chain changes should run against the
+governed offline asset pool, not every draft capture directory.
+
+An asset enters the default governed pool only when it is metadata-ready:
+
+- `asset_status=active`
+- `governance.promotion_status` is `candidate` or `golden`
+- `governance.runner_modes` contains `offline_core_chain`
+- `governance.core_chain_coverage` is non-empty
+- `governance.expected_signals_reviewed=true`
+- `governance.sensitivity_reviewed=true`
+
+Draft, captured, rejected, unreviewed, live-only, or incomplete-governance
+assets remain analyzable evidence, but they are excluded from the default
+blocking baseline with explicit exclusion reasons. An empty governed pool must
+fail with `no-governed-offline-assets`; an empty baseline is not a passing
+regression signal.
+
+Suggested command:
+
+```powershell
+$env:PYTHONPATH="RpaClaw"
+python -m backend.rpa.harness.run_governed_regression --assets data/rpa_harness_assets
+```
+
+The governed report combines selection, catalog coverage, asset validation,
+snapshot regression, compiler regression, and blast-radius output.
+
 ### Level 0: Asset Integrity Validation
 
 Input:
@@ -273,6 +303,7 @@ Use a bounded taxonomy so repeated failures become measurable:
 - `missing-failure-evidence`
 - `unreferenced-checkpoint`
 - `loading-after-capture`
+- `no-governed-offline-assets`
 - `raw-dom-missing`
 - `compact-snapshot-lost-signal`
 - `candidate-context-lost`
@@ -344,6 +375,7 @@ python -m backend.rpa.harness.run_snapshot_regression --assets data/rpa_harness_
 python -m backend.rpa.harness.run_compiler_regression --assets data/rpa_harness_assets
 python -m backend.rpa.harness.run_catalog --assets data/rpa_harness_assets --output catalog.json
 python -m backend.rpa.harness.run_blast_radius --snapshot-report snapshot.json --compiler-report compiler.json --catalog catalog.json --output blast-radius.json
+python -m backend.rpa.harness.run_governed_regression --assets data/rpa_harness_assets --output governed-regression.json
 ```
 
 The exact module path can change during implementation. The important boundary

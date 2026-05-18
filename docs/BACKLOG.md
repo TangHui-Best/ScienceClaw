@@ -8,6 +8,16 @@ updated: 2026-05-18
 
 ## Active
 
+### F004 Governed Offline Regression Asset Pool
+
+- Feature: `docs/features/F004-governed-offline-regression-asset-pool.md`
+- Evidence: `docs/evidence/EV-004-governed-offline-regression-asset-pool.md`
+- Vision: `docs/rpa/harness/golden-evaluation-vision.md`
+- Decision: `docs/decisions/ADR-003-rpa-golden-evaluation-uses-assets-not-live-agent-chat.md`
+- Status: active.
+- Goal: make Offline Core-Chain Regression default to governed candidate/golden
+  assets and report selected/excluded assets with coverage and failures.
+
 ### Post-F002 RPA Harness Follow-ups
 
 - Source Feature: `docs/features/F002-rpa-harness-v0.md`

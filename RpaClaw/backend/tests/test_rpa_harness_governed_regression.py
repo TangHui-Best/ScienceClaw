@@ -1,0 +1,164 @@
+import json
+from pathlib import Path
+
+from backend.rpa.harness.governed_regression import run_governed_offline_regression
+from backend.rpa.harness.run_governed_regression import main as run_governed_regression_main
+
+
+def _write_asset(
+    root: Path,
+    *,
+    asset_id: str,
+    asset_status: str = "active",
+    promotion_status: str = "candidate",
+    runner_modes: list[str] | None = None,
+    core_chain_coverage: list[str] | None = None,
+    expected_signals_reviewed: bool = True,
+    sensitivity_reviewed: bool = True,
+    page_patterns: list[str] | None = None,
+    step_text: str = "ScienceClaw",
+) -> None:
+    asset_dir = root / asset_id
+    step_dir = asset_dir / "steps" / "001"
+    step_dir.mkdir(parents=True, exist_ok=True)
+    patterns = page_patterns or ["repository-detail"]
+    (asset_dir / "scenario.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "rpa-harness-scenario-v0",
+                "asset_id": asset_id,
+                "capture_scope": "full_sop",
+                "sop_intent": "Open and inspect a repository",
+                "source": {
+                    "recording_id": f"rec-{asset_id}",
+                    "captured_at": "2026-05-18T10:00:00",
+                    "capture_mode": "harness",
+                    "capture_trigger": "full_sop",
+                },
+                "asset_status": asset_status,
+                "sensitivity": "local-only",
+                "page_patterns": patterns,
+                "governance": {
+                    "promotion_status": promotion_status,
+                    "runner_modes": runner_modes or ["offline_core_chain"],
+                    "core_chain_coverage": core_chain_coverage
+                    or [
+                        "html_to_raw_snapshot",
+                        "raw_to_compact_snapshot",
+                        "trace_to_skill",
+                    ],
+                    "expected_signals_reviewed": expected_signals_reviewed,
+                    "sensitivity_reviewed": sensitivity_reviewed,
+                    "review_notes": "reviewed for governed offline regression",
+                },
+                "step_checkpoints": [{"step_index": 1, "checkpoint_path": "steps/001/checkpoint.json"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (step_dir / "before.html").write_text(f"<html><body>{step_text}</body></html>", encoding="utf-8")
+    (step_dir / "after.html").write_text(f"<html><body>{step_text} after</body></html>", encoding="utf-8")
+    (step_dir / "trace_events.json").write_text("[]", encoding="utf-8")
+    (step_dir / "expected.json").write_text(
+        json.dumps({"snapshot_signals": {"must_contain_text": [step_text]}}),
+        encoding="utf-8",
+    )
+    (step_dir / "checkpoint.json").write_text(
+        json.dumps(
+            {
+                "step_index": 1,
+                "step_id": f"trace-{asset_id}",
+                "step_intent": "Inspect repository",
+                "recording_mode": "manual",
+                "page_patterns": patterns,
+                "before": {
+                    "url": "https://example.test/repo",
+                    "title": "Repo",
+                    "html_path": "steps/001/before.html",
+                    "html_sha256": "before",
+                },
+                "action": {"trace_events_path": "steps/001/trace_events.json"},
+                "after": {
+                    "url": "https://example.test/repo",
+                    "title": "Repo",
+                    "html_path": "steps/001/after.html",
+                    "html_sha256": "after",
+                    "capture_quality": {
+                        "status": "stable",
+                        "ready_state": "complete",
+                        "title_present": True,
+                    },
+                },
+                "runtime_result": {"status": "success"},
+                "captured_at": "2026-05-18T10:00:00",
+                "expected_path": "steps/001/expected.json",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_governed_offline_regression_selects_only_reviewed_candidate_and_golden_assets(tmp_path: Path):
+    _write_asset(tmp_path, asset_id="candidate-ready", promotion_status="candidate")
+    _write_asset(tmp_path, asset_id="golden-ready", promotion_status="golden")
+    _write_asset(tmp_path, asset_id="draft-captured", asset_status="draft", promotion_status="captured")
+    _write_asset(tmp_path, asset_id="candidate-unreviewed", expected_signals_reviewed=False)
+    _write_asset(tmp_path, asset_id="candidate-live-only", runner_modes=["skill_replay_e2e"])
+
+    report = run_governed_offline_regression(tmp_path)
+
+    assert report["schema_version"] == "rpa-harness-governed-offline-regression-v0"
+    assert report["summary"]["status"] == "passed"
+    assert report["summary"]["selected_capture_count"] == 2
+    assert report["summary"]["selected_step_count"] == 2
+    assert report["summary"]["excluded_capture_count"] == 3
+    assert report["summary"]["selected_asset_ids"] == ["candidate-ready", "golden-ready"]
+    assert report["snapshot"]["summary"] == {"total": 2, "passed": 2, "failed": 0}
+    assert report["compiler"]["summary"] == {"total": 2, "passed": 2, "failed": 0}
+    assert report["blast_radius"]["summary"]["checked_steps"] == 2
+    excluded = {item["asset_id"]: item["reasons"] for item in report["selection"]["excluded_captures"]}
+    assert excluded["draft-captured"] == ["asset-status-draft", "promotion-status-captured"]
+    assert excluded["candidate-unreviewed"] == ["expected-signals-not-reviewed"]
+    assert excluded["candidate-live-only"] == ["offline-core-chain-not-enabled"]
+
+
+def test_governed_offline_regression_marks_selected_runner_failures_as_blocking(tmp_path: Path):
+    _write_asset(tmp_path, asset_id="candidate-broken", step_text="Expected text")
+    expected_path = tmp_path / "candidate-broken" / "steps" / "001" / "expected.json"
+    expected_path.write_text(
+        json.dumps({"snapshot_signals": {"must_contain_text": ["Missing text"]}}),
+        encoding="utf-8",
+    )
+
+    report = run_governed_offline_regression(tmp_path)
+
+    assert report["summary"]["status"] == "failed"
+    assert report["summary"]["snapshot_failed"] == 1
+    assert report["blast_radius"]["summary"]["blocking_failed_steps"] == 1
+    assert report["blast_radius"]["affected_steps"][0]["asset_id"] == "candidate-broken"
+
+
+def test_governed_offline_regression_fails_when_no_governed_assets_exist(tmp_path: Path):
+    _write_asset(tmp_path, asset_id="draft-captured", asset_status="draft", promotion_status="captured")
+
+    report = run_governed_offline_regression(tmp_path)
+
+    assert report["summary"]["status"] == "failed"
+    assert report["summary"]["failure_category"] == "no-governed-offline-assets"
+    assert report["summary"]["selected_capture_count"] == 0
+    assert report["validation"]["summary"]["capture_count"] == 0
+    assert report["selection"]["excluded_captures"][0]["asset_id"] == "draft-captured"
+
+
+def test_governed_offline_regression_cli_writes_report(tmp_path: Path):
+    _write_asset(tmp_path, asset_id="candidate-ready")
+    output_path = tmp_path / "governed-report.json"
+
+    exit_code = run_governed_regression_main(
+        ["--assets", str(tmp_path), "--output", str(output_path)]
+    )
+
+    assert exit_code == 0
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["summary"]["selected_asset_ids"] == ["candidate-ready"]
+    assert report["summary"]["status"] == "passed"
