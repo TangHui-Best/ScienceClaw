@@ -139,6 +139,28 @@ signal or sensitivity review.
   - `RpaClaw/backend/rpa/harness/compiler_regression.py`
 - Tests:
   - `RpaClaw/backend/tests/test_rpa_harness_governed_regression.py`
+- Implementation commit: `a21654c` (`feat: add governed rpa harness offline regression`).
+
+## Implementation Summary
+
+F004 adds `run_governed_offline_regression()` and
+`python -m backend.rpa.harness.run_governed_regression`.
+
+The report:
+
+- builds the full catalog to inspect all local assets;
+- selects only active, reviewed `candidate` or `golden` assets with
+  `offline_core_chain` runner eligibility and non-empty core-chain coverage;
+- reports excluded captures with concrete reasons such as
+  `asset-status-draft`, `promotion-status-captured`,
+  `expected-signals-not-reviewed`, or `offline-core-chain-not-enabled`;
+- runs validation, snapshot regression, compiler regression, and blast-radius
+  reporting over the selected governed assets;
+- fails with `no-governed-offline-assets` when the governed pool is empty.
+
+Existing catalog, validation, snapshot, and compiler runners now accept an
+optional `asset_ids` filter so governed regression can reuse the same
+components without evaluating every draft capture.
 
 ## Notes
 
@@ -164,4 +186,18 @@ signal or sensitivity review.
 
 ## Closeout Status
 
-Pending implementation.
+- Feature: F004 completed.
+- Evidence level: exhaustive for this Harness regression slice.
+- Readiness: pass for commit/push with residual independent-review risk noted.
+- Completion claim: allowed for F004 Governed Offline Regression Asset Pool.
+- ADR: not triggered. ADR-003 already owns the scenario-asset-first golden
+  evaluation decision.
+- Lesson: not triggered. No new recurring failure mode was found.
+- Patch Churn Review: not triggered. F004 has no patch history.
+- Residual risks:
+  - The latest real Full SOP asset remains `draft/captured`; a later curation
+    step should promote or reject it by editing asset metadata or copying it
+    into a governed fixture pool.
+  - Skill Replay E2E remains out of scope until governed offline assets exist.
+  - Independent review is recommended for this non-trivial Harness feature but
+    was not run because subagent dispatch requires explicit user authorization.

@@ -1,7 +1,7 @@
 ---
 id: F004
 doc_kind: feature
-status: active
+status: completed
 created: 2026-05-18
 updated: 2026-05-18
 ---
@@ -42,8 +42,10 @@ approval ritual.
 
 ## Current Status
 
-Active. Entry Gate passed with a bounded scope: implement governed asset
-selection and a default offline regression report over selected assets.
+Completed. F004 adds a governed offline regression selector, default report,
+and CLI entrypoint. Offline Core-Chain Regression can now default to active,
+reviewed candidate/golden assets while reporting excluded draft or unreviewed
+captures with explicit reasons.
 
 ## Links
 
@@ -56,19 +58,19 @@ selection and a default offline regression report over selected assets.
 
 ## Acceptance Criteria
 
-- [ ] Harness can select governed offline regression assets by default:
+- [x] Harness can select governed offline regression assets by default:
   `promotion_status in {candidate, golden}`, `asset_status=active`, and
   `offline_core_chain` runner eligibility.
-- [ ] Draft or captured assets remain analyzable, but are excluded from the
+- [x] Draft or captured assets remain analyzable, but are excluded from the
   default governed regression baseline.
-- [ ] A default offline regression report combines asset eligibility, catalog
+- [x] A default offline regression report combines asset eligibility, catalog
   coverage, validation, snapshot regression, and compiler regression outcomes.
-- [ ] The report exposes excluded asset reasons so recapture/review/rejection
+- [x] The report exposes excluded asset reasons so recapture/review/rejection
   decisions are visible without blocking recording-time capture.
-- [ ] CLI or module entrypoint can run the governed offline report without
+- [x] CLI or module entrypoint can run the governed offline report without
   relying on direct Agent chat.
-- [ ] Focused backend tests and Harness `knowledge_check.py --strict` pass.
-- [ ] EV-004 records RED/GREEN verification, implementation commit hash,
+- [x] Focused backend tests and Harness `knowledge_check.py --strict` pass.
+- [x] EV-004 records RED/GREEN verification, implementation commit hash,
   residual risks, and closeout status before moving to Skill Replay E2E work.
 
 ## Patch History
@@ -84,6 +86,6 @@ See [EV-004 Governed Offline Regression Asset Pool Evidence](../evidence/EV-004-
 
 ## Next Step
 
-Implement the first governed offline regression selector and runner report via
-TDD. Seed promotion policy should be generic and metadata-driven; any specific
-GitHub capture is only validation evidence, not a special rule.
+Use F004's governed report to curate the first real candidate/golden asset
+metadata. After at least one governed pool exists, the next coherent feature is
+Skill Replay E2E preparation over scenario assets, not direct Agent chat.

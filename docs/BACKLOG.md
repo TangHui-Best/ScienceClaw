@@ -8,16 +8,6 @@ updated: 2026-05-18
 
 ## Active
 
-### F004 Governed Offline Regression Asset Pool
-
-- Feature: `docs/features/F004-governed-offline-regression-asset-pool.md`
-- Evidence: `docs/evidence/EV-004-governed-offline-regression-asset-pool.md`
-- Vision: `docs/rpa/harness/golden-evaluation-vision.md`
-- Decision: `docs/decisions/ADR-003-rpa-golden-evaluation-uses-assets-not-live-agent-chat.md`
-- Status: active.
-- Goal: make Offline Core-Chain Regression default to governed candidate/golden
-  assets and report selected/excluded assets with coverage and failures.
-
 ### Post-F002 RPA Harness Follow-ups
 
 - Source Feature: `docs/features/F002-rpa-harness-v0.md`
@@ -39,6 +29,17 @@ Next actions:
 - Route `compiler-hardcoded-observed-value` to a separate RPA Agent / `TraceSkillCompiler` generalization feature; do not count it as unfinished F002 Harness infrastructure.
 
 ## Recently Completed
+
+### F004 Governed Offline Regression Asset Pool
+
+- Feature: `docs/features/F004-governed-offline-regression-asset-pool.md`
+- Evidence: `docs/evidence/EV-004-governed-offline-regression-asset-pool.md`
+- Vision: `docs/rpa/harness/golden-evaluation-vision.md`
+- Decision: `docs/decisions/ADR-003-rpa-golden-evaluation-uses-assets-not-live-agent-chat.md`
+- Status: completed.
+- Result: Offline Core-Chain Regression now has a governed default report over
+  active reviewed candidate/golden assets, with explicit excluded-asset reasons
+  and a `no-governed-offline-assets` failure when the baseline is empty.
 
 ### F003 Golden Scenario Asset Model
 
