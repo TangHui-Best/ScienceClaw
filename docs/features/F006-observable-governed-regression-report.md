@@ -75,7 +75,7 @@ PR, and Evidence use.
 
 | Patch | Date | Commit | Symptom | Root Cause | Protection | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| F006.1 | 2026-05-18 | pending | Human-readable summary is English-only, making the report less useful for Chinese Evidence review. | F006 intentionally kept the machine contract stable but did not localize the human rendering layer. | Add `--lang zh` for `--format summary` while keeping JSON and default English output unchanged. | completed |
+| F006.1 | 2026-05-18 | `2cf62a08094802ec84d743f04f65e9c9d63610b1` | Human-readable summary is English-only, making the report less useful for Chinese Evidence review. | F006 intentionally kept the machine contract stable but did not localize the human rendering layer. | Add `--lang zh` for `--format summary` while keeping JSON and default English output unchanged. | completed |
 
 ## Evidence
 

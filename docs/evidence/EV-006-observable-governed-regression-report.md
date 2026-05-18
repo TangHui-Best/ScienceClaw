@@ -100,7 +100,7 @@ GREEN result for governed regression tests:
 Focused Harness regression:
 
 ```text
-39 passed in 0.64s
+39 passed in 0.62s
 ```
 
 Real governed Chinese summary:
@@ -182,11 +182,13 @@ confidence.status=passed
 - Evidence level: exhaustive for this report-contract slice.
 - Implementation commit:
   `d4a6e46fdbe535df16765f496cfe79780f514d98`.
+- Patch F006.1 commit:
+  `2cf62a08094802ec84d743f04f65e9c9d63610b1`.
 - Reviewer status: self-review allowed after Delegation Gate review decision;
   independent review not required for this focused report-contract slice.
 - Readiness: pass. Strict Harness knowledge check, focused Harness regression,
   and real governed summary output are recorded above.
 - Completion claim: allowed after this closeout record is committed and pushed.
-- ADR: not triggered yet. F006 applies ADR-003 rather than changing it.
+- ADR: not triggered. F006 applies ADR-003 rather than changing it.
 - Lesson: not triggered. No recurring failure mode was found.
-- Patch Churn Review: not triggered. F006 has no patch history.
+- Patch Churn Review: not triggered. F006 has one focused localization patch.
