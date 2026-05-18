@@ -258,6 +258,8 @@ const harnessCaptureStatusLabel = computed(() => {
 const harnessHasPendingNaturalLanguageStep = computed(() => (
   harnessPendingNaturalLanguageSteps.value > 0 || harnessNextNaturalLanguageStepMarked.value
 ));
+const harnessCaptureActiveButtonClass = 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200';
+const harnessCaptureIdleButtonClass = 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-[#272728] dark:text-gray-200 dark:hover:bg-white/10';
 
 const loadAssistantModels = async () => {
   try {
@@ -1186,7 +1188,7 @@ const sendMessage = async () => {
               type="button"
               data-testid="harness-start-full-sop"
               class="h-8 rounded-lg border px-2 text-[10px] font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-              :class="harnessCaptureMode === 'full_sop' ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200' : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-[#272728] dark:text-gray-200 dark:hover:bg-white/10'"
+              :class="harnessCaptureMode === 'full_sop' ? harnessCaptureActiveButtonClass : harnessCaptureIdleButtonClass"
               :disabled="!sessionId || harnessCaptureBusy || agentRunning || harnessCaptureMode === 'full_sop' || harnessHasPendingNaturalLanguageStep"
               @click="startHarnessCapture('full_sop')"
             >
@@ -1195,8 +1197,9 @@ const sendMessage = async () => {
             <button
               type="button"
               data-testid="harness-mark-next-step"
-              class="h-8 rounded-lg border border-gray-200 bg-white px-2 text-[10px] font-bold text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:bg-[#272728] dark:text-gray-200 dark:hover:bg-white/10"
-              :disabled="!sessionId || harnessCaptureBusy || agentRunning || harnessCaptureMode === 'full_sop'"
+              class="h-8 rounded-lg border px-2 text-[10px] font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+              :class="harnessHasPendingNaturalLanguageStep ? harnessCaptureActiveButtonClass : harnessCaptureIdleButtonClass"
+              :disabled="!sessionId || harnessCaptureBusy || agentRunning || harnessCaptureMode === 'full_sop' || harnessHasPendingNaturalLanguageStep"
               @click="markNextHarnessStep"
             >
               {{ t('Harness Next NL Step') }}

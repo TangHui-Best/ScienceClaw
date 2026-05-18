@@ -449,6 +449,8 @@ describe('RecorderPage trace timeline convergence', () => {
     await flushAsyncUpdates();
     await flushAsyncUpdates();
 
+    const nextStepButton = root.querySelector<HTMLButtonElement>('[data-testid="harness-mark-next-step"]');
+    expect(nextStepButton?.classList.contains('bg-emerald-50')).toBe(true);
     expect(root.textContent).toContain('Harness Next NL Step pending');
     expect(root.querySelector<HTMLButtonElement>('[data-testid="harness-start-full-sop"]')?.disabled).toBe(true);
 
@@ -467,6 +469,7 @@ describe('RecorderPage trace timeline convergence', () => {
 
     expect(root.textContent).not.toContain('Harness Next NL Step pending');
     expect(root.textContent).toContain('Harness Selected Step active');
+    expect(nextStepButton?.classList.contains('bg-emerald-50')).toBe(false);
     expect(root.querySelector<HTMLButtonElement>('[data-testid="harness-start-full-sop"]')?.disabled).toBe(false);
 
     app.unmount();
