@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
-from pathlib import Path
 from typing import Sequence
 
 from .catalog import build_harness_catalog
+from .cli import emit_json_report
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -16,13 +15,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     report = build_harness_catalog(args.assets)
-    rendered = json.dumps(report, ensure_ascii=False, indent=2)
-    if args.output:
-        output_path = Path(args.output)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(rendered, encoding="utf-8")
-    else:
-        print(rendered)
+    emit_json_report(report, output_path=args.output)
     return 0
 
 

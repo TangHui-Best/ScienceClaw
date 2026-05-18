@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 
+from .cli import emit_json_report
 from .snapshot_regression import run_snapshot_regression
 
 
@@ -13,7 +13,7 @@ def main() -> int:
     args = parser.parse_args()
 
     report = run_snapshot_regression(args.assets)
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    emit_json_report(report)
     return 1 if report["summary"]["failed"] else 0
 
 

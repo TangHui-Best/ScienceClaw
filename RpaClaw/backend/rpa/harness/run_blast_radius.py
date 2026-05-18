@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .blast_radius import build_blast_radius_report
+from .cli import emit_json_report
 
 
 def _load_json(path: str | None) -> dict[str, Any] | None:
@@ -28,13 +29,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         compiler_report=_load_json(args.compiler_report),
         catalog=_load_json(args.catalog),
     )
-    rendered = json.dumps(report, ensure_ascii=False, indent=2)
-    if args.output:
-        output_path = Path(args.output)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(rendered, encoding="utf-8")
-    else:
-        print(rendered)
+    emit_json_report(report, output_path=args.output)
     return 1 if report["summary"]["status"] == "failed" else 0
 
 
