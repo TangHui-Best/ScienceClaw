@@ -16,7 +16,7 @@ from .frame_selectors import build_frame_path
 from .manual_recording_models import ManualRecordedAction, ManualRecordingDiagnostic
 from .manual_recording_normalizer import build_manual_recording_outcome
 from .playwright_security import get_context_kwargs
-from .trace_models import RPAAcceptedTrace, RPATraceDiagnostic, RPARuntimeResults
+from .trace_models import RPAAcceptedTrace, RPAPageState, RPATraceDiagnostic, RPATraceType, RPARuntimeResults
 from .trace_recorder import infer_dataflow_for_ai_fill, infer_dataflow_for_fill, manual_step_to_trace
 from .harness.capture import HarnessCapturedPageState, HarnessCaptureSessionState
 from .harness.capture import capture_current_page_state, capture_step_checkpoint
@@ -139,6 +139,7 @@ class RPASessionManager:
         self._pending_event_idle: Dict[str, asyncio.Event] = {}
         self._harness_capture_sessions: Dict[str, HarnessCaptureSessionState] = {}
         self._manual_harness_before_states: Dict[str, Dict[str, HarnessCapturedPageState]] = {}
+        self._suppressed_navigation_events: Dict[str, Dict[str, str]] = {}
 
     def touch_session(self, session_id: str) -> None:
         session = self.sessions.get(session_id)
@@ -231,6 +232,7 @@ class RPASessionManager:
         self._pending_event_idle.pop(session_id, None)
         self._harness_capture_sessions.pop(session_id, None)
         self._manual_harness_before_states.pop(session_id, None)
+        self._suppressed_navigation_events.pop(session_id, None)
 
         session = self.sessions.get(session_id)
         if session:
@@ -567,6 +569,17 @@ class RPASessionManager:
             raise ValueError(f"No active page for session {session_id}")
 
         normalized_url = self._normalize_url(url)
+        harness_state = self._harness_capture_sessions.get(session_id)
+        harness_before_state = None
+        harness_step_index = len(session.traces) + 1
+        if (
+            settings.rpa_harness_capture_enabled
+            and harness_state is not None
+            and harness_state.capture_scope == "full_sop"
+        ):
+            harness_before_state = await capture_current_page_state(page)
+            self._suppressed_navigation_events.setdefault(session_id, {})[session.active_tab_id] = normalized_url
+
         await page.goto(normalized_url)
         await page.wait_for_load_state("domcontentloaded")
 
@@ -578,10 +591,40 @@ class RPASessionManager:
             if title:
                 tab.title = title
 
+        if harness_before_state is not None:
+            after_state = await capture_current_page_state(page)
+            trace = RPAAcceptedTrace(
+                trace_id=f"trace-{uuid.uuid4()}",
+                trace_type=RPATraceType.NAVIGATION,
+                source="manual",
+                action="navigate",
+                description=f"Navigate to {normalized_url}",
+                before_page=RPAPageState(url=harness_before_state.url, title=harness_before_state.title),
+                after_page=RPAPageState(url=after_state.url, title=after_state.title),
+                value=normalized_url,
+                signals={"tab": {"tab_id": session.active_tab_id}},
+            )
+            await self.append_trace(session_id, trace)
+            await self.capture_harness_step_checkpoint(
+                session_id,
+                step_index=harness_step_index,
+                step_id=trace.trace_id,
+                step_intent=trace.description,
+                recording_mode="manual",
+                before_state=harness_before_state,
+                after_state=after_state,
+                trace_events=[trace.model_dump(mode="json")],
+                runtime_status="success",
+            )
+
         return {
             "tab_id": session.active_tab_id,
             "url": getattr(page, "url", normalized_url) or normalized_url,
         }
+
+    @staticmethod
+    def _navigation_urls_match(left: str, right: str) -> bool:
+        return str(left or "").rstrip("/") == str(right or "").rstrip("/")
 
     async def activate_tab(self, session_id: str, tab_id: str, source: str = "auto"):
         page = self._tabs.get(session_id, {}).get(tab_id)
@@ -773,6 +816,13 @@ class RPASessionManager:
             new_url = frame.url
             if new_url and new_url != last_url["value"] and new_url != "about:blank":
                 last_url["value"] = new_url
+                suppressed = self._suppressed_navigation_events.get(session_id, {})
+                expected_url = suppressed.get(tab_id)
+                if expected_url and self._navigation_urls_match(new_url, expected_url):
+                    suppressed.pop(tab_id, None)
+                    if not suppressed:
+                        self._suppressed_navigation_events.pop(session_id, None)
+                    return
                 tab = self._tab_meta.get(session_id, {}).get(tab_id)
                 if tab:
                     tab.url = new_url

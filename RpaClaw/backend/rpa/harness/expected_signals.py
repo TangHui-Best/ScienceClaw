@@ -18,7 +18,38 @@ def _target_evidence(trace_event: dict[str, Any]) -> dict[str, Any]:
         evidence = signals.get("target_evidence")
         if isinstance(evidence, dict):
             return evidence
+    locator_evidence = _selected_locator_evidence(trace_event)
+    if locator_evidence:
+        return locator_evidence
     return {}
+
+
+def _selected_locator_evidence(trace_event: dict[str, Any]) -> dict[str, Any]:
+    candidates = trace_event.get("locator_candidates")
+    if not isinstance(candidates, list):
+        return {}
+    selected = next(
+        (candidate for candidate in candidates if isinstance(candidate, dict) and candidate.get("selected") is True),
+        None,
+    )
+    if selected is None:
+        selected = next((candidate for candidate in candidates if isinstance(candidate, dict)), None)
+    if not isinstance(selected, dict):
+        return {}
+    locator = selected.get("locator")
+    if not isinstance(locator, dict):
+        return {}
+    method = str(locator.get("method") or "").strip()
+    role = str(locator.get("role") or "").strip()
+    name = str(locator.get("name") or locator.get("value") or "").strip()
+    evidence: dict[str, Any] = {}
+    if role:
+        evidence["role"] = role
+    elif method:
+        evidence["role"] = method
+    if name:
+        evidence["text"] = name
+    return evidence
 
 
 def _first_text(value: Any) -> str:

@@ -78,6 +78,7 @@ class _MutableFakePage:
         self._title = "Search"
         self._html = "<html><body><a>ScienceClaw</a></body></html>"
         self.content_calls = 0
+        self.goto_calls: list[tuple[str, str | None]] = []
 
     async def title(self) -> str:
         return self._title
@@ -85,6 +86,15 @@ class _MutableFakePage:
     async def content(self) -> str:
         self.content_calls += 1
         return self._html
+
+    async def goto(self, url: str) -> None:
+        self.goto_calls.append((url, None))
+        self.url = url
+        self._title = "Trending" if url.endswith("/trending") else "Page"
+        self._html = f"<html><body><main>{url}</main></body></html>"
+
+    async def wait_for_load_state(self, state: str) -> None:
+        return None
 
     def move_to_project(self) -> None:
         self.url = "https://example.test/project/scienceclaw"
@@ -364,4 +374,45 @@ async def test_selected_next_ai_step_survives_manual_trace_interleaving(monkeypa
         assert step_done_data["capture"]["pending_natural_language_step_captures"] == 0
     finally:
         manager._harness_capture_sessions.pop(session.id, None)
+        manager.sessions.pop(session.id, None)
+
+
+@pytest.mark.asyncio
+async def test_full_sop_capture_records_entry_navigation_checkpoint(monkeypatch, tmp_path: Path):
+    manager = ROUTE_MODULE.rpa_manager
+    session = RPASession(
+        id="harness-entry-navigation",
+        user_id="u1",
+        sandbox_session_id="sandbox",
+        active_tab_id="tab-1",
+    )
+    manager.sessions[session.id] = session
+    page = _MutableFakePage()
+    page.url = "about:blank"
+    page._title = ""
+    page._html = "<html><body>blank</body></html>"
+    manager._tabs[session.id] = {"tab-1": page}
+
+    monkeypatch.setattr(ROUTE_MODULE.settings, "rpa_harness_capture_enabled", True)
+    monkeypatch.setattr(ROUTE_MODULE.settings, "rpa_harness_assets_dir", str(tmp_path))
+    manager.start_harness_capture(session.id, capture_scope="full_sop", enabled=True)
+
+    try:
+        await manager.navigate_active_tab(session.id, "github.com/trending")
+
+        capture_state = manager.get_harness_capture_session(session.id)
+        step_dir = tmp_path / capture_state.capture_id / "steps" / "001"
+        checkpoint = json.loads((step_dir / "checkpoint.json").read_text(encoding="utf-8"))
+        traces = json.loads((step_dir / "trace_events.json").read_text(encoding="utf-8"))
+        assert checkpoint["recording_mode"] == "manual"
+        assert checkpoint["step_intent"] == "Navigate to https://github.com/trending"
+        assert checkpoint["before"]["url"] == "about:blank"
+        assert checkpoint["after"]["url"] == "https://github.com/trending"
+        assert traces[0]["trace_type"] == "navigation"
+        assert traces[0]["action"] == "navigate"
+        assert traces[0]["after_page"]["url"] == "https://github.com/trending"
+        assert session.traces[0].trace_id == traces[0]["trace_id"]
+    finally:
+        manager._harness_capture_sessions.pop(session.id, None)
+        manager._tabs.pop(session.id, None)
         manager.sessions.pop(session.id, None)

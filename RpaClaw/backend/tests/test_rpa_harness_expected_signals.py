@@ -71,6 +71,33 @@ def test_manual_step_prefers_semantic_target_context_over_absolute_selector():
     assert "must_click_selector" not in draft.action_signals
 
 
+def test_manual_step_derives_target_signals_from_selected_locator_candidate():
+    draft = build_expected_signal_draft(
+        step_intent="",
+        recording_mode="manual",
+        trace_events=[
+            {
+                "action": "navigate_click",
+                "locator_candidates": [
+                    {
+                        "selected": True,
+                        "locator": {
+                            "method": "role",
+                            "role": "link",
+                            "name": "tinyhumansai / openhuman",
+                        },
+                    }
+                ],
+            }
+        ],
+    )
+
+    assert draft.action_signals["expected_action_type"] == "navigate_click"
+    assert draft.action_signals["target_role"] == "link"
+    assert draft.action_signals["target_text_contains"] == "tinyhumansai / openhuman"
+    assert draft.snapshot_signals["must_contain_text"] == ["tinyhumansai / openhuman"]
+
+
 def test_extraction_output_key_and_observed_output_generate_compiler_signals_without_snapshot_locator():
     draft = build_expected_signal_draft(
         step_intent="Extract the star count",
