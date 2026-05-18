@@ -8,6 +8,7 @@ from .asset_validation import validate_harness_assets
 from .blast_radius import build_blast_radius_report
 from .catalog import build_harness_catalog
 from .compiler_regression import run_compiler_regression
+from .observability import build_observability_contract
 from .snapshot_regression import run_snapshot_regression
 
 
@@ -131,7 +132,7 @@ def run_governed_offline_regression(assets_root: str | Path) -> dict[str, Any]:
         failure_category = "compiler-regression-failed"
     elif blast_radius["summary"]["status"] == "failed":
         failure_category = "blast-radius-failed"
-    return {
+    report = {
         "schema_version": "rpa-harness-governed-offline-regression-v0",
         "summary": {
             "status": status,
@@ -168,3 +169,5 @@ def run_governed_offline_regression(assets_root: str | Path) -> dict[str, Any]:
         "compiler": compiler,
         "blast_radius": blast_radius,
     }
+    report["observability"] = build_observability_contract(report)
+    return report

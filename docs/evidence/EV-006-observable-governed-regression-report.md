@@ -1,0 +1,159 @@
+---
+id: EV-006
+doc_kind: evidence
+title: Observable Governed Regression Report Evidence
+status: active
+scope: project
+feature_ids: [F006]
+created: 2026-05-18
+updated: 2026-05-18
+evidence_level: exhaustive
+---
+
+# EV-006 Observable Governed Regression Report Evidence
+
+## Scope
+
+Evidence for F006: make governed offline regression explain what was selected,
+what was covered, what failed, what was affected, and what confidence limits
+remain.
+
+## Entry Gate
+
+- Start Gate: non-trivial Harness report contract change. Required durable
+  anchor is F006 plus this Evidence record.
+- Knowledge Retrieval: completed against F004, F005, EV-004, EV-005, ADR-003,
+  and the golden evaluation vision.
+- Vision Gate Entry: ready to implement. The smallest coherent path is to
+  derive an observable summary from the current governed regression reports,
+  not to add a new runner or scoring model.
+- Delegation Gate: not needed. The change is focused in the Harness report
+  layer and can be verified with narrow tests.
+- TDD: required. Tests must fail before production report code is added.
+
+## Commands
+
+RED verification:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+pytest -q --basetemp E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-current RpaClaw/backend/tests/test_rpa_harness_governed_regression.py
+```
+
+Real governed summary:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m backend.rpa.harness.run_governed_regression --assets data\rpa_harness_assets_bootstrap --format summary
+```
+
+Real governed JSON:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m backend.rpa.harness.run_governed_regression --assets data\rpa_harness_assets_bootstrap
+```
+
+Focused Harness regression:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+pytest -q --basetemp E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-current RpaClaw/backend/tests/test_rpa_harness_governed_regression.py RpaClaw/backend/tests/test_rpa_harness_asset_validation.py RpaClaw/backend/tests/test_rpa_harness_catalog.py RpaClaw/backend/tests/test_rpa_harness_snapshot_regression.py RpaClaw/backend/tests/test_rpa_harness_compiler_regression.py RpaClaw/backend/tests/test_rpa_harness_blast_radius.py
+```
+
+Harness knowledge validation:
+
+```powershell
+python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
+```
+
+## Results
+
+RED result after adding observable-report tests before production code:
+
+```text
+3 failed, 3 passed
+KeyError: 'observability'
+SystemExit: 2 for unrecognized arguments: --format summary
+```
+
+GREEN result for governed regression tests:
+
+```text
+7 passed in 0.49s
+```
+
+Focused Harness regression:
+
+```text
+38 passed in 0.61s
+```
+
+Strict Harness knowledge validation:
+
+```text
+Scanned 165 markdown file(s). Checked 16 knowledge artifact(s). Errors: 0. Warnings: 0.
+```
+
+Real governed human summary:
+
+```text
+Governed Offline Regression: passed
+
+Evaluated: 1 candidate asset, 3 steps
+Coverage: card-list, data-extraction, detail-page, multi-page, semantic-selection
+Core chain: html_to_raw_snapshot=1, planner_action_selection=1, raw_to_compact_snapshot=1, trace_to_skill=1
+Excluded: 9 captures; reasons=asset-status-draft=9, expected-signals-not-reviewed=9, missing-core-chain-coverage=9, promotion-status-captured=9, sensitivity-not-reviewed=9
+Signals: validation blocking=0, snapshot failed=0, compiler failed=0
+Blast radius: affected assets=none; affected page patterns=none
+Confidence risks: single-candidate-asset-baseline
+```
+
+Real governed JSON now includes:
+
+```text
+observability.schema_version=rpa-harness-observability-v0
+asset_qualification.scanned_capture_count=10
+asset_qualification.selected_capture_count=1
+asset_qualification.excluded_capture_count=9
+asset_qualification.selected_promotion_status_counts={"candidate": 1}
+coverage.selected_step_count=3
+coverage.coverage_risks=["single-candidate-asset-baseline"]
+runner_signals.snapshot_failed=0
+runner_signals.compiler_failed=0
+blast_radius.affected_assets=[]
+confidence.status=passed
+```
+
+## Artifacts
+
+- Feature: [F006 Observable Governed Regression Report](../features/F006-observable-governed-regression-report.md)
+- Evidence: [EV-006 Observable Governed Regression Report Evidence](EV-006-observable-governed-regression-report.md)
+
+## Notes
+
+- Stable observability fields should survive core-chain implementation changes.
+- Runner-specific diagnostics may grow as snapshot, compiler, planner, or replay
+  behavior evolves.
+
+## Residual Risks
+
+- The current repo-safe governed baseline still has one candidate asset. The
+  report now makes that explicit as `single-candidate-asset-baseline`, but more
+  assets are still needed before claiming broad RPA coverage.
+- The observability contract currently covers the offline core-chain runner.
+  Future Skill Replay E2E should add runner-specific diagnostics without
+  breaking the stable asset, coverage, runner-signal, blast-radius, and
+  confidence sections.
+
+## Closeout Status
+
+- Feature: F006 completed.
+- Evidence level: exhaustive for this report-contract slice.
+- Implementation commit: pending final commit hash backfill.
+- Readiness: pending final strict Harness knowledge check and commit hash
+  backfill.
+- Completion claim: pending final closeout commit.
+- ADR: not triggered yet. F006 applies ADR-003 rather than changing it.
+- Lesson: not triggered. No recurring failure mode was found.
+- Patch Churn Review: not triggered. F006 has no patch history.

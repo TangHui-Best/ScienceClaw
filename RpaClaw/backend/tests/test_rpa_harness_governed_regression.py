@@ -122,6 +122,43 @@ def test_governed_offline_regression_selects_only_reviewed_candidate_and_golden_
     assert excluded["candidate-live-only"] == ["offline-core-chain-not-enabled"]
 
 
+def test_governed_offline_regression_exposes_observability_contract(tmp_path: Path):
+    _write_asset(
+        tmp_path,
+        asset_id="candidate-ready",
+        promotion_status="candidate",
+        page_patterns=["card-list", "detail-page"],
+    )
+    _write_asset(tmp_path, asset_id="draft-captured", asset_status="draft", promotion_status="captured")
+
+    report = run_governed_offline_regression(tmp_path)
+
+    observability = report["observability"]
+    assert observability["schema_version"] == "rpa-harness-observability-v0"
+    assert observability["asset_qualification"] == {
+        "scanned_capture_count": 2,
+        "selected_capture_count": 1,
+        "excluded_capture_count": 1,
+        "selected_asset_ids": ["candidate-ready"],
+        "excluded_asset_ids": ["draft-captured"],
+        "selected_promotion_status_counts": {"candidate": 1},
+        "excluded_reason_counts": {
+            "asset-status-draft": 1,
+            "promotion-status-captured": 1,
+        },
+    }
+    assert observability["coverage"]["selected_step_count"] == 1
+    assert observability["coverage"]["page_patterns"] == ["card-list", "detail-page"]
+    assert observability["coverage"]["core_chain_coverage"] == {
+        "html_to_raw_snapshot": 1,
+        "raw_to_compact_snapshot": 1,
+        "trace_to_skill": 1,
+    }
+    assert observability["runner_signals"]["snapshot_failure_categories"] == {}
+    assert observability["runner_signals"]["compiler_failure_categories"] == {}
+    assert observability["confidence"]["risks"] == ["single-candidate-asset-baseline"]
+
+
 def test_governed_offline_regression_marks_selected_runner_failures_as_blocking(tmp_path: Path):
     _write_asset(tmp_path, asset_id="candidate-broken", step_text="Expected text")
     expected_path = tmp_path / "candidate-broken" / "steps" / "001" / "expected.json"
@@ -134,6 +171,10 @@ def test_governed_offline_regression_marks_selected_runner_failures_as_blocking(
 
     assert report["summary"]["status"] == "failed"
     assert report["summary"]["snapshot_failed"] == 1
+    assert report["observability"]["runner_signals"]["snapshot_failure_categories"] == {
+        "raw-html-missing-signal": 1
+    }
+    assert report["observability"]["blast_radius"]["affected_page_patterns"] == ["repository-detail"]
     assert report["blast_radius"]["summary"]["blocking_failed_steps"] == 1
     assert report["blast_radius"]["affected_steps"][0]["asset_id"] == "candidate-broken"
 
@@ -162,3 +203,28 @@ def test_governed_offline_regression_cli_writes_report(tmp_path: Path):
     report = json.loads(output_path.read_text(encoding="utf-8"))
     assert report["summary"]["selected_asset_ids"] == ["candidate-ready"]
     assert report["summary"]["status"] == "passed"
+
+
+def test_governed_offline_regression_cli_can_emit_human_summary(tmp_path: Path, capsys):
+    _write_asset(tmp_path, asset_id="candidate-ready")
+
+    exit_code = run_governed_regression_main(["--assets", str(tmp_path), "--format", "summary"])
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "Governed Offline Regression: passed" in output
+    assert "Evaluated: 1 candidate asset, 1 step" in output
+    assert "Coverage: repository-detail" in output
+    assert "Signals: validation blocking=0, snapshot failed=0, compiler failed=0" in output
+    assert "Confidence risks: single-candidate-asset-baseline" in output
+
+
+def test_governed_offline_regression_summary_names_candidate_and_golden_assets(tmp_path: Path, capsys):
+    _write_asset(tmp_path, asset_id="candidate-ready", promotion_status="candidate")
+    _write_asset(tmp_path, asset_id="golden-ready", promotion_status="golden")
+
+    exit_code = run_governed_regression_main(["--assets", str(tmp_path), "--format", "summary"])
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "Evaluated: 1 candidate asset, 1 golden asset, 2 steps" in output

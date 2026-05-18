@@ -30,6 +30,15 @@ Next actions:
 
 ## Recently Completed
 
+### F006 Observable Governed Regression Report
+
+- Feature: `docs/features/F006-observable-governed-regression-report.md`
+- Evidence: `docs/evidence/EV-006-observable-governed-regression-report.md`
+- Status: completed.
+- Result: governed offline regression now emits a machine-readable
+  `observability` contract and `--format summary` human report covering asset
+  qualification, coverage, runner signals, blast radius, and confidence risks.
+
 ### F005 First Governed Candidate Asset
 
 - Feature: `docs/features/F005-first-governed-candidate-asset.md`
