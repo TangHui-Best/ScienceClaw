@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 from datetime import datetime, timedelta
 
 import pytest
@@ -49,6 +50,30 @@ def _context(
             warnings=[],
         ),
     )
+
+
+async def _collect_sse_events(response):
+    events = []
+    chunks = []
+    async for chunk in response.body_iterator:
+        if isinstance(chunk, dict):
+            events.append(chunk)
+        else:
+            chunks.append(chunk.decode("utf-8") if isinstance(chunk, bytes) else str(chunk))
+    body = "".join(chunks)
+    current_event = None
+    for line in body.splitlines():
+        if line.startswith("event:"):
+            current_event = line.removeprefix("event:").strip()
+        elif line.startswith("data:"):
+            events.append(
+                {
+                    "event": current_event or "message",
+                    "data": line.removeprefix("data:").strip(),
+                }
+            )
+            current_event = None
+    return events
 
 
 class _FakeFrameElement:
@@ -472,3 +497,174 @@ def test_region_context_expired_cleanup_clears_pending_contexts():
 
     assert removed == ["session-1"]
     assert manager.resolve_region_context("session-1", "region-1") is None
+
+
+def test_resolve_chat_region_context_returns_model_dump(monkeypatch):
+    route_module = importlib.import_module("backend.route.rpa")
+    context = _context("region-route", url="https://example.test/a")
+
+    def fake_resolve_region_context(session_id, region_id, *, current_url=None):
+        assert session_id == "session-1"
+        assert region_id == "region-route"
+        assert current_url == "https://example.test/a"
+        return context
+
+    monkeypatch.setattr(route_module.rpa_manager, "resolve_region_context", fake_resolve_region_context)
+
+    assert route_module._resolve_chat_region_context(
+        "session-1",
+        "region-route",
+        "https://example.test/a",
+    ) == context.model_dump(mode="json")
+
+
+def test_resolve_chat_region_context_rejects_missing_or_stale_region(monkeypatch):
+    route_module = importlib.import_module("backend.route.rpa")
+    calls = []
+
+    def fake_resolve_region_context(session_id, region_id, *, current_url=None):
+        calls.append((session_id, region_id, current_url))
+        return None
+
+    monkeypatch.setattr(route_module.rpa_manager, "resolve_region_context", fake_resolve_region_context)
+
+    assert route_module._resolve_chat_region_context(
+        "session-1",
+        None,
+        "https://example.test/a",
+    ) is None
+    assert calls == []
+
+    with pytest.raises(route_module.HTTPException) as exc_info:
+        route_module._resolve_chat_region_context(
+            "session-1",
+            "missing-region",
+            "https://example.test/a",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "reselect" in str(exc_info.value.detail).lower()
+
+
+@pytest.mark.anyio
+async def test_chat_resolves_region_before_agent_streams_preview_and_clears_on_success(monkeypatch):
+    route_module = importlib.import_module("backend.route.rpa")
+    manager = route_module.rpa_manager
+    session = RPASession(
+        id="session-chat-region",
+        user_id="user-1",
+        sandbox_session_id="sandbox-1",
+        active_tab_id="tab-1",
+    )
+    manager.sessions[session.id] = session
+    page = type("Page", (), {"url": "https://example.test/a"})()
+    context = _context("region-chat", url="https://example.test/a")
+    calls = []
+
+    def fake_get_page(session_id):
+        assert session_id == session.id
+        return page
+
+    def fake_resolve_chat_region_context(session_id, region_id, current_url):
+        calls.append(("resolve", session_id, region_id, current_url))
+        return context.model_dump(mode="json")
+
+    class FakeRecordingRuntimeAgent:
+        def __init__(self, *args, **kwargs):
+            calls.append(("agent_init", kwargs))
+
+        async def run(self, **kwargs):
+            calls.append(("agent_run", kwargs))
+            return route_module.RecordingAgentResult(
+                success=True,
+                message="completed",
+            )
+
+    def fake_clear_region_context(session_id, region_id=None):
+        calls.append(("clear", session_id, region_id))
+
+    async def fake_resolve_user_model_config(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(manager, "get_page", fake_get_page)
+    monkeypatch.setattr(route_module, "_resolve_chat_region_context", fake_resolve_chat_region_context)
+    monkeypatch.setattr(route_module, "RecordingRuntimeAgent", FakeRecordingRuntimeAgent)
+    monkeypatch.setattr(manager, "clear_region_context", fake_clear_region_context)
+    monkeypatch.setattr(route_module, "_resolve_user_model_config", fake_resolve_user_model_config)
+
+    try:
+        response = await route_module.chat_with_assistant(
+            session.id,
+            route_module.ChatRequest(message="read selected table", region_id="region-chat"),
+            type("User", (), {"id": "user-1"})(),
+        )
+        events = await _collect_sse_events(response)
+    finally:
+        manager.sessions.pop(session.id, None)
+
+    call_names = [call[0] for call in calls]
+    assert call_names.index("resolve") < call_names.index("agent_run")
+    assert calls[0] == ("resolve", session.id, "region-chat", "https://example.test/a")
+    agent_run = next(call for call in calls if call[0] == "agent_run")[1]
+    assert agent_run["region_context"] == context.model_dump(mode="json")
+    assert ("clear", session.id, "region-chat") in calls
+
+    event_names = [event["event"] for event in events]
+    assert event_names.index("region_context") < event_names.index("agent_thought")
+    region_event = next(event for event in events if event["event"] == "region_context")
+    region_payload = json.loads(region_event["data"])
+    assert region_payload == context.preview()
+    assert "evidence" not in region_payload
+    assert "intersecting_elements" not in region_payload
+    assert "local_text" not in region_payload
+
+
+@pytest.mark.anyio
+async def test_chat_agent_aborted_includes_region_preview(monkeypatch):
+    route_module = importlib.import_module("backend.route.rpa")
+    manager = route_module.rpa_manager
+    session = RPASession(
+        id="session-chat-region-abort",
+        user_id="user-1",
+        sandbox_session_id="sandbox-1",
+        active_tab_id="tab-1",
+    )
+    manager.sessions[session.id] = session
+    page = type("Page", (), {"url": "https://example.test/a"})()
+    context = _context("region-chat", url="https://example.test/a")
+
+    class FakeRecordingRuntimeAgent:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def run(self, **kwargs):
+            return route_module.RecordingAgentResult(
+                success=False,
+                message="could not complete",
+            )
+
+    async def fake_resolve_user_model_config(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(manager, "get_page", lambda _session_id: page)
+    monkeypatch.setattr(
+        route_module,
+        "_resolve_chat_region_context",
+        lambda _session_id, _region_id, _current_url: context.model_dump(mode="json"),
+    )
+    monkeypatch.setattr(route_module, "RecordingRuntimeAgent", FakeRecordingRuntimeAgent)
+    monkeypatch.setattr(route_module, "_resolve_user_model_config", fake_resolve_user_model_config)
+
+    try:
+        response = await route_module.chat_with_assistant(
+            session.id,
+            route_module.ChatRequest(message="read selected table", region_id="region-chat"),
+            type("User", (), {"id": "user-1"})(),
+        )
+        events = await _collect_sse_events(response)
+    finally:
+        manager.sessions.pop(session.id, None)
+
+    aborted_event = next(event for event in events if event["event"] == "agent_aborted")
+    aborted_payload = json.loads(aborted_event["data"])
+    assert aborted_payload["region"] == context.preview()

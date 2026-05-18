@@ -78,6 +78,7 @@ class ChatRequest(BaseModel):
     message: str
     mode: str = "chat"
     model_config_id: str | None = None
+    region_id: str | None = None
 
 
 class ConfirmRequest(BaseModel):
@@ -244,6 +245,35 @@ async def _apply_recording_agent_result(session_id: str, result: RecordingAgentR
         await rpa_manager.append_trace(session_id, result.trace)
     if result.output_key:
         rpa_manager.write_runtime_result(session_id, result.output_key, result.output)
+
+
+def _resolve_chat_region_context(
+    session_id: str,
+    region_id: str | None,
+    current_url: str | None,
+) -> dict[str, Any] | None:
+    if not region_id:
+        return None
+    context = rpa_manager.resolve_region_context(
+        session_id,
+        region_id,
+        current_url=current_url,
+    )
+    if context is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Selected region is unavailable or no longer matches the current page. "
+                "Please reselect the region before sending this command."
+            ),
+        )
+    return context.model_dump(mode="json")
+
+
+def _preview_chat_region_context(region_context: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not region_context:
+        return None
+    return RPARegionContext.model_validate(region_context).preview()
 
 
 async def _get_ws_user(websocket: WebSocket) -> User | None:
@@ -862,6 +892,12 @@ async def chat_with_assistant(
     if not page:
         raise HTTPException(status_code=400, detail="No active page for this session")
 
+    region_context = _resolve_chat_region_context(
+        session_id,
+        request.region_id,
+        getattr(page, "url", None),
+    )
+    region_preview = _preview_chat_region_context(region_context)
     steps = [step.model_dump() for step in session.steps]
 
     async def event_generator():
@@ -915,6 +951,11 @@ async def chat_with_assistant(
                     }
             else:
                 before_trace_ids = {trace.trace_id for trace in session.traces}
+                if region_preview is not None:
+                    yield {
+                        "event": "region_context",
+                        "data": json.dumps(region_preview, ensure_ascii=False),
+                    }
                 yield {
                     "event": "agent_thought",
                     "data": json.dumps({"text": "Planning one trace-first recording command."}, ensure_ascii=False),
@@ -925,8 +966,11 @@ async def chat_with_assistant(
                     instruction=request.message,
                     runtime_results=session.runtime_results.values,
                     debug_context={"session_id": session_id},
+                    region_context=region_context,
                 )
                 await _apply_recording_agent_result(session_id, result)
+                if request.region_id and result.success:
+                    rpa_manager.clear_region_context(session_id, request.region_id)
                 run_trace_count = len([
                     trace for trace in session.traces
                     if trace.trace_id not in before_trace_ids
@@ -978,6 +1022,7 @@ async def chat_with_assistant(
                             {
                                 "reason": result.message,
                                 "diagnostics": [d.model_dump(mode="json") for d in result.diagnostics],
+                                "region": region_preview,
                             },
                             ensure_ascii=False,
                         ),
