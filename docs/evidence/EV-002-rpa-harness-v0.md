@@ -1,0 +1,197 @@
+---
+doc_kind: evidence
+id: EV-002
+title: RPA Harness v0 Evidence
+status: active
+feature_ids: [F002]
+created: 2026-05-18
+updated: 2026-05-18
+evidence_level: exhaustive
+---
+
+# EV-002 RPA Harness v0 Evidence
+
+## Scope
+
+Evidence for F002: build RPA Harness v0 so captured HTML/checkpoint assets can validate DOM snapshot compression, accepted trace evidence, `TraceSkillCompiler`, and blast radius for core-chain changes.
+
+This Evidence is partly reconstructed because F0-F14 were implemented before the required Feature/Evidence materials were created. The reconstruction itself is an incident recovery action and is linked to `docs/lessons/LL-001-harness-feature-evidence-closeout-miss.md`.
+
+## Entry Gate
+
+- Start Gate: high-risk product Harness feature with storage, capture, UI, CLI, and regression-runner behavior.
+- Knowledge Retrieval: recovered from `docs/rpa/harness/*`, the implementation plan, recent commits, tests, and user self-bootstrap validation.
+- Delegation Gate: user explicitly required subagents for complex work and independent Vision review.
+- Vision Anchor: `docs/features/F002-rpa-harness-v0.md`.
+- Non-goals: no site-specific architecture, no live URL primary oracle, no default capture when disabled, no contract-first recording layer.
+
+## Feature Evidence Matrix
+
+| Slice | Commit | Verification evidence |
+| --- | --- | --- |
+| F0 Document and plan anchor | `81e3f67 docs: define rpa harness v0` | Created `docs/rpa/harness/rpa-harness-v0-design.md`, `scenario-asset-schema.md`, `regression-strategy.md`, and implementation plan. |
+| F1 Gate and models | `9b396d7 feat: add rpa harness asset gate and models` | Added config/model tests for disabled-by-default gate, capture scope, checkpoint schema, status, and sensitivity defaults. |
+| F2 Capture session skeleton | `7b3a2d9 feat: add rpa harness capture session skeleton` | Added backend capture session tests; no HTML capture in disabled or skeleton path. |
+| F3 Step checkpoints | `1836d97 feat: capture rpa harness step checkpoints` | Added checkpoint capture tests for before/after HTML, local store, and trace evidence files. |
+| F4 Expected signals | `4a40f45 feat: draft expected signals for harness checkpoints` | Added expected-signal tests for natural-language/manual trace-derived signal drafts. |
+| F5 Snapshot regression | `e63b3fc feat: add rpa harness snapshot regression` | Added snapshot regression runner and tests over captured HTML/expected signals. |
+| F6 Compiler regression | `5dd5d25 feat: add rpa harness compiler regression` | Added compiler regression runner and tests for hardcoded values, dataflow refs, and generated skill checks. |
+| F7 AI checkpoint integration | `ca2bddb feat: capture ai recording steps as harness assets` | Added AI capture integration tests for trace-first natural-language steps and disabled-path behavior. |
+| F8 Capture controls | `77dcef1 feat: add rpa harness capture controls` | Added RecorderPage controls and tests for config-gated Full SOP / selected-step capture. |
+| F9 Asset catalog | `58dc4e9 feat: add rpa harness asset catalog` | Added catalog CLI/tests for asset coverage, status, hosts, URLs, and page-pattern reporting. |
+| F10 Blast-radius report | `a62362a feat: add rpa harness blast radius report` | Added blast-radius CLI/tests that combine snapshot/compiler findings with asset catalog context. |
+| F11 State sync | `a967d0b fix: sync rpa harness capture state` | Added backend/frontend tests so selected-step state clears from backend capture truth. |
+| F12 Scenario manifest | `f1ad336 feat: persist rpa harness scenario manifests` | Added manifest persistence tests preserving lifecycle metadata and checkpoint refs. |
+| F13 Manual checkpoints | `74f2ce7 feat: capture manual rpa harness checkpoints` | Added manual checkpoint tests and JS syntax check for pre-event before-state capture. |
+| F14 Expected-signal enrichment | `f03ba6f feat: enrich rpa harness expected signals` | Added expected-signal/compiler-regression tests for output keys, dataflow refs, hardcoded observed values, and empty-output evidence. |
+
+## Post-F14 Self-Bootstrap Evidence
+
+| Commit | Purpose | Evidence |
+| --- | --- | --- |
+| `8335380 fix: emit rpa harness cli reports as utf8` | Keep JSON reports readable for Chinese step intent on Windows console. | `test_rpa_harness_cli.py`. |
+| `b6b6bbc fix: capture full sop entry navigation` | Improve Full SOP initial navigation capture. | AI capture integration and expected-signal tests. |
+| `b9de022 fix: align harness step capture button state` | Align selected-step UI active/disabled state with Full SOP style. | `RecorderPage.test.ts`. |
+| `73c5634 fix: capture full sop pure navigation checkpoints` | Capture pure navigation checkpoints from page baselines. | `test_full_sop_harness_captures_pure_navigation_checkpoint_from_page_baseline`. |
+| `f48f2fc feat: validate rpa harness asset completeness` | Add offline asset integrity validation before interpreting regression results. | `test_rpa_harness_asset_validation.py`. |
+| `a00b59c docs: document harness asset validation gate` | Document Level 0 asset validation gate. | `git diff --check` on harness docs. |
+
+## Latest Verification Commands
+
+Executed on branch `codex/rpa-trace-first-harness` on 2026-05-18:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+$env:TMP='E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-current'
+$env:TEMP=$env:TMP
+pytest -q RpaClaw/backend/tests/test_rpa_harness_expected_signals.py RpaClaw/backend/tests/test_rpa_harness_checkpoint_capture.py RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py RpaClaw/backend/tests/test_rpa_harness_snapshot_regression.py RpaClaw/backend/tests/test_rpa_harness_compiler_regression.py RpaClaw/backend/tests/test_rpa_harness_asset_validation.py RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_captures_pure_navigation_checkpoint_from_page_baseline
+```
+
+Result:
+
+```text
+33 passed, 27 warnings in 1.36s
+```
+
+Local asset validation:
+
+```powershell
+$env:PYTHONPATH='.'
+python -m backend.rpa.harness.run_asset_validation --assets ..\data\rpa_harness_assets_bootstrap --output ..\tmp-harness-asset-validation.json
+```
+
+Result:
+
+```json
+{
+  "capture_count": 3,
+  "issue_count": 2,
+  "blocking_issue_count": 0,
+  "categories": {
+    "missing-entry-checkpoint": 2
+  }
+}
+```
+
+Catalog:
+
+```powershell
+$env:PYTHONPATH='.'
+python -m backend.rpa.harness.run_catalog --assets ..\data\rpa_harness_assets_bootstrap --output ..\tmp-harness-catalog.json
+```
+
+Result summary:
+
+```json
+{
+  "capture_count": 3,
+  "step_count": 5,
+  "successful_step_count": 5,
+  "failed_step_count": 0,
+  "asset_statuses": {
+    "draft": 3
+  }
+}
+```
+
+Snapshot regression over local bootstrap assets:
+
+```powershell
+$env:PYTHONPATH='.'
+python -m backend.rpa.harness.run_snapshot_regression --assets ..\data\rpa_harness_assets_bootstrap
+```
+
+Result:
+
+```text
+total=5, passed=4, failed=1
+failure_category=compact-snapshot-lost-signal
+missing_text=["tinyhumansai / openhuman"]
+```
+
+Compiler regression over local bootstrap assets:
+
+```powershell
+$env:PYTHONPATH='.'
+python -m backend.rpa.harness.run_compiler_regression --assets ..\data\rpa_harness_assets_bootstrap
+```
+
+Result:
+
+```text
+total=5, passed=4, failed=1
+failure_category=compiler-hardcoded-observed-value
+hardcoded_values=["13.4k"]
+```
+
+## Independent Review Records
+
+Independent Vision review during post-F14 asset validation work concluded:
+
+- Direction is valid only if anchored in accepted trace/checkpoint schema and generic Full SOP evidence chain.
+- Do not special-case GitHub.
+- Full SOP must cover complete accepted timeline evidence, especially entry navigation.
+- Asset validation should be offline report/evidence, not runtime hard block.
+- Generic failure categories are correct: `missing-entry-checkpoint`, `step-index-gap`, `successful-step-missing-html`, etc.
+
+An additional post-incident audit was requested after the user identified the missing F0-F14 Feature/Evidence records. Its findings should be appended when complete.
+
+## Incident Recovery Evidence
+
+User-reported issue:
+
+```text
+F01 到 F14 没有沉淀 Feature 等相关材料，没有遵从 harness 相关 skill。
+```
+
+Confirmed facts:
+
+- `docs/features` only had F001 before this recovery.
+- `docs/evidence` only had EV-001 before this recovery.
+- RPA Harness v0 had design docs and an implementation plan, but no dedicated Feature/Evidence/Lesson closeout record for F0-F14.
+- The implementation plan was updated for some later slices, but it was not a substitute for Feature/Evidence closeout.
+
+Recovery actions:
+
+- Created `docs/features/F002-rpa-harness-v0.md`.
+- Created this Evidence record.
+- Created `docs/lessons/LL-001-harness-feature-evidence-closeout-miss.md`.
+- Created `docs/BACKLOG.md` with active recovery/follow-up state.
+- Added a project rule requiring Feature/Evidence updates before moving between multi-feature Harness slices.
+
+## Residual Findings
+
+- Current bootstrap assets are useful but not fully clean regression fixtures.
+- Two draft Full SOP assets are missing entry checkpoint evidence; this is now visible through asset validation.
+- One snapshot expected signal currently fails.
+- One compiler expected signal currently detects a hardcoded observed value.
+- These residuals should be treated as follow-up evidence, not hidden by passing unit tests.
+
+## Closeout Status
+
+- Feature: F002 active.
+- Evidence level: exhaustive, reconstructed.
+- ADR: not triggered; no new architecture decision beyond existing Harness v0 design.
+- Lesson: LL-001 written because recurrence risk is high.
+- Completion claim: not allowed for F002 overall until residual asset findings are triaged.
+- Implementation readiness for further F002 slices: conditional on updating this Evidence after each slice.

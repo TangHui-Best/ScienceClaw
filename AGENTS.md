@@ -11,6 +11,14 @@
 
 RpaClaw is a privacy-first personal research assistant with a local RPA skill recording system. The current RPA direction is **Trace-first Recording + Post-hoc Skill Compilation**.
 
+## Harness Delivery Records
+
+- Scope: multi-feature Harness, RPA architecture, or other high-risk implementation sequences.
+- Requirement: agents MUST create or update the active Feature page before implementation starts, and MUST update the linked Evidence record with verification, commit hash, reviewer status, and residual risk before advancing to the next feature slice.
+- Requirement: an implementation plan is not a substitute for Feature/Evidence closeout. If closeout is missing, report `implementation done, harness closeout pending` instead of claiming readiness or continuing feature delivery.
+- Source: `docs/lessons/LL-001-harness-feature-evidence-closeout-miss.md`.
+- Rationale: prevents code-only progress from replacing recoverable project memory.
+
 - **Backend**: FastAPI, Python, Pydantic v2, LangGraph/DeepAgents, MongoDB.
 - **Frontend**: Vue 3, TypeScript, Vite, Tailwind CSS.
 - **RPA runtime**: Playwright, local CDP screencast mode, Docker/VNC mode.
