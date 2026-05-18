@@ -165,18 +165,29 @@ class RecordingRuntimeAgent:
         instruction: str,
         runtime_results: Optional[Dict[str, Any]] = None,
         debug_context: Optional[Dict[str, Any]] = None,
+        region_context: Optional[Dict[str, Any]] = None,
     ) -> RecordingAgentResult:
         runtime_results = runtime_results if runtime_results is not None else {}
         debug_context = dict(debug_context or {})
         before = await _page_state(page)
         snapshot = await _safe_page_snapshot(page)
         compact_snapshot = _compact_snapshot(snapshot, instruction)
+        compact_region_context = _compact_region_context(region_context)
+        raw_region_evidence = _raw_region_evidence(region_context)
         payload = {
             "instruction": instruction,
             "page": before.model_dump(mode="json"),
             "snapshot": compact_snapshot,
             "runtime_results": runtime_results,
         }
+        if compact_region_context:
+            payload["region_context"] = compact_region_context
+        snapshot_extra: Dict[str, Any] = {}
+        if raw_region_evidence:
+            snapshot_extra["raw_region_evidence"] = raw_region_evidence
+        if compact_region_context:
+            snapshot_extra["planner_region_context"] = compact_region_context
+            snapshot_extra["region_context_decision"] = {}
         _write_recording_snapshot_debug(
             "initial",
             instruction=instruction,
@@ -185,6 +196,7 @@ class RecordingRuntimeAgent:
             compact_snapshot=compact_snapshot,
             runtime_results=runtime_results,
             debug_context=debug_context,
+            extra=snapshot_extra or None,
         )
 
         first_plan = _build_table_ordinal_overlay_plan(instruction, snapshot)
@@ -233,6 +245,7 @@ class RecordingRuntimeAgent:
                 before,
                 repair_attempted=False,
                 snapshot=snapshot,
+                region_context=compact_region_context,
             )
             return RecordingAgentResult(
                 success=True,
@@ -259,6 +272,14 @@ class RecordingRuntimeAgent:
             "failed_plan": _safe_jsonable(first_plan),
             "error": first_error,
         }
+        if raw_region_evidence:
+            repair_snapshot_extra["raw_region_evidence"] = raw_region_evidence
+        if compact_region_context:
+            repair_snapshot_extra["planner_region_context"] = compact_region_context
+            repair_snapshot_extra["region_context_decision"] = _region_context_decision_signal(
+                first_plan,
+                compact_region_context,
+            )
         if first_error_type:
             repair_snapshot_extra["error_type"] = first_error_type
         if first_traceback:
@@ -356,6 +377,7 @@ class RecordingRuntimeAgent:
                 before,
                 repair_attempted=True,
                 snapshot=failed_snapshot,
+                region_context=compact_region_context,
             )
             return RecordingAgentResult(
                 success=True,
@@ -411,12 +433,17 @@ class RecordingRuntimeAgent:
         *,
         repair_attempted: bool,
         snapshot: Optional[Dict[str, Any]] = None,
+        region_context: Optional[Dict[str, Any]] = None,
     ) -> RPAAcceptedTrace:
         after = await _page_state(page)
         output = result.get("output")
         output_key = _normalize_result_key(plan.get("output_key"))
         locator_stability = _build_locator_stability_metadata(plan, snapshot or {})
         signals = _merge_runtime_ai_signal(dict(result.get("signals") or {}), plan)
+        compact_region_context = dict(region_context or {})
+        if compact_region_context:
+            signals["region_selection"] = _region_selection_signal(compact_region_context)
+            signals["region_context_decision"] = _region_context_decision_signal(plan, compact_region_context)
         if _normalize_bool(plan.get("allow_empty_output")):
             output_contract = signals.get("output_contract") if isinstance(signals.get("output_contract"), dict) else {}
             signals["output_contract"] = {**output_contract, "allow_empty": True}
@@ -428,6 +455,7 @@ class RecordingRuntimeAgent:
             before_page=before,
             after_page=after,
             signals=signals,
+            region_context=compact_region_context,
             output_key=output_key,
             output=output,
             ai_execution=RPAAIExecution(
@@ -2027,6 +2055,88 @@ async def _safe_page_snapshot(page: Any) -> Dict[str, Any]:
         return await build_page_snapshot(page, build_frame_path)
     except Exception:
         return {"url": getattr(page, "url", ""), "title": "", "frames": []}
+
+
+def _compact_region_context(region_context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    context = _object_dict(region_context)
+    evidence = _object_dict(context.get("evidence"))
+    if not context and not evidence:
+        return {}
+
+    compact: Dict[str, Any] = {}
+    _set_if_present(compact, "region_id", context.get("region_id"))
+    _set_if_present(compact, "tab_id", context.get("tab_id"))
+    _set_if_present(compact, "page_url", context.get("page_url") or evidence.get("url"))
+    _set_if_present(compact, "page_title", context.get("page_title") or evidence.get("title"))
+    _set_if_present(compact, "inferred_kind", evidence.get("inferred_kind"))
+    _set_if_present(compact, "frame_path", _compact_list(evidence.get("frame_path")))
+    _set_if_present(compact, "rect", evidence.get("rect"))
+    _set_if_present(compact, "local_text", _compact_list(evidence.get("local_text"), limit=20))
+    _set_if_present(compact, "dominant_container", evidence.get("dominant_container"))
+    _set_if_present(compact, "locator_candidates", _compact_list(evidence.get("locator_candidates"), limit=10))
+    _set_if_present(compact, "table_summary", evidence.get("table_summary"))
+    _set_if_present(compact, "list_summary", evidence.get("list_summary"))
+    _set_if_present(compact, "action_summary", evidence.get("action_summary"))
+    _set_if_present(compact, "warnings", _compact_list(evidence.get("warnings")))
+    return _safe_jsonable(compact) if compact else {}
+
+
+def _raw_region_evidence(region_context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    context = _object_dict(region_context)
+    evidence = _object_dict(context.get("evidence"))
+    return _safe_jsonable(evidence) if evidence else {}
+
+
+def _region_selection_signal(region_context: Dict[str, Any]) -> Dict[str, Any]:
+    signal: Dict[str, Any] = {}
+    _set_if_present(signal, "region_id", region_context.get("region_id"))
+    _set_if_present(signal, "inferred_kind", region_context.get("inferred_kind"))
+    _set_if_present(signal, "rect", region_context.get("rect"))
+    _set_if_present(signal, "frame_path", region_context.get("frame_path"))
+    _set_if_present(signal, "local_text_preview", region_context.get("local_text"))
+    _set_if_present(signal, "table", region_context.get("table_summary"))
+    _set_if_present(signal, "list", region_context.get("list_summary"))
+    _set_if_present(signal, "action", region_context.get("action_summary"))
+    _set_if_present(signal, "warnings", region_context.get("warnings"))
+    return signal
+
+
+def _region_context_decision_signal(plan: Dict[str, Any], region_context: Dict[str, Any]) -> Dict[str, Any]:
+    action_type = str(plan.get("action_type") or "").strip()
+    output_key = _normalize_result_key(plan.get("output_key"))
+    if output_key or action_type == "data_capture":
+        used_as = "extraction"
+    elif action_type in {"click", "fill", "select", "press", "hover", "run_python"}:
+        used_as = "action_targeting"
+    else:
+        used_as = "supporting_evidence"
+
+    signal: Dict[str, Any] = {"used_as": used_as}
+    _set_if_present(signal, "region_id", region_context.get("region_id"))
+    _set_if_present(signal, "action_type", action_type)
+    _set_if_present(signal, "output_key", output_key)
+    return signal
+
+
+def _object_dict(value: Any) -> Dict[str, Any]:
+    if isinstance(value, BaseModel):
+        value = value.model_dump(mode="json")
+    if isinstance(value, dict):
+        return dict(value)
+    return {}
+
+
+def _compact_list(value: Any, *, limit: Optional[int] = None) -> List[Any]:
+    if not isinstance(value, list):
+        return []
+    items = value[:limit] if limit is not None else value
+    return [_safe_jsonable(item) for item in items]
+
+
+def _set_if_present(target: Dict[str, Any], key: str, value: Any) -> None:
+    if value in (None, "", [], {}):
+        return
+    target[key] = _safe_jsonable(value)
 
 
 def _compact_snapshot(snapshot: Dict[str, Any], instruction: str, limit: int = 80) -> Dict[str, Any]:

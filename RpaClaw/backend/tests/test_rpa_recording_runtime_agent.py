@@ -636,6 +636,111 @@ async def test_recording_runtime_agent_accepts_successful_python_plan():
     assert result.trace.ai_execution.repair_attempted is False
 
 
+def test_recording_runtime_agent_passes_region_context_to_planner():
+    async def run_test():
+        planner_calls = []
+        region_context = {
+            "region_id": "region-1",
+            "tab_id": "tab-1",
+            "page_url": "https://example.test/start",
+            "page_title": "Example",
+            "evidence": {
+                "url": "https://example.test/start",
+                "title": "Example",
+                "frame_path": ["iframe.detail"],
+                "rect": {"x": 10, "y": 20, "width": 300, "height": 160},
+                "inferred_kind": "table_region",
+                "local_text": [f"cell-{index}" for index in range(25)],
+                "dominant_container": {"tag": "table", "text": "Orders"},
+                "locator_candidates": [
+                    {"kind": "css", "selector": f"table tr:nth-child({index})"} for index in range(12)
+                ],
+                "table_summary": {"headers": ["Name", "Price"], "row_count": 2},
+                "list_summary": {"item_count": 0},
+                "action_summary": {"controls": [{"text": "Open"}]},
+                "warnings": ["partial-overlap"],
+                "intersecting_elements": [{"text": "raw dom should not be forwarded"}],
+            },
+        }
+
+        async def planner(payload):
+            planner_calls.append(payload)
+            return {
+                "description": "Extract selected region",
+                "action_type": "run_python",
+                "output_key": "selected_region",
+                "code": "async def run(page, results):\n    return {'ok': True}",
+            }
+
+        result = await RecordingRuntimeAgent(planner=planner).run(
+            page=_FakePage(),
+            instruction="extract selected region",
+            runtime_results={},
+            region_context=region_context,
+        )
+
+        assert result.success is True
+        compact = planner_calls[0]["region_context"]
+        assert compact["region_id"] == "region-1"
+        assert compact["tab_id"] == "tab-1"
+        assert compact["page_url"] == "https://example.test/start"
+        assert compact["page_title"] == "Example"
+        assert compact["inferred_kind"] == "table_region"
+        assert compact["frame_path"] == ["iframe.detail"]
+        assert compact["rect"] == {"x": 10, "y": 20, "width": 300, "height": 160}
+        assert compact["local_text"] == [f"cell-{index}" for index in range(20)]
+        assert len(compact["locator_candidates"]) == 10
+        assert "intersecting_elements" not in compact
+        assert result.trace.region_context == compact
+        assert result.trace.signals["region_selection"] == {
+            "region_id": "region-1",
+            "inferred_kind": "table_region",
+            "rect": {"x": 10, "y": 20, "width": 300, "height": 160},
+            "frame_path": ["iframe.detail"],
+            "local_text_preview": [f"cell-{index}" for index in range(20)],
+            "table": {"headers": ["Name", "Price"], "row_count": 2},
+            "list": {"item_count": 0},
+            "action": {"controls": [{"text": "Open"}]},
+            "warnings": ["partial-overlap"],
+        }
+        assert result.trace.signals["region_context_decision"] == {
+            "region_id": "region-1",
+            "used_as": "extraction",
+            "action_type": "run_python",
+            "output_key": "selected_region",
+        }
+
+    asyncio.run(run_test())
+
+
+def test_recording_runtime_agent_omits_region_context_when_absent():
+    async def run_test():
+        planner_calls = []
+
+        async def planner(payload):
+            planner_calls.append(payload)
+            return {
+                "description": "Extract title",
+                "action_type": "run_python",
+                "output_key": "page_title",
+                "code": "async def run(page, results):\n    return {'title': await page.title()}",
+            }
+
+        result = await RecordingRuntimeAgent(planner=planner).run(
+            page=_FakePage(),
+            instruction="extract title",
+            runtime_results={},
+        )
+
+        assert result.success is True
+        assert "region_context" not in planner_calls[0]
+        assert result.trace.region_context == {}
+        assert "region_selection" not in result.trace.signals
+        assert "region_context_decision" not in result.trace.signals
+
+    asyncio.run(run_test())
+
+
 @pytest.mark.asyncio
 async def test_recording_runtime_agent_persists_runtime_ai_preserve_signal():
     async def planner(_payload):
