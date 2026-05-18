@@ -106,14 +106,14 @@ def _fake_steps(session_id: str, user_id: str):
     }
 
 
-def test_get_rpa_session_steps_preserves_ai_traces_with_recorded_actions(monkeypatch):
+def test_get_rpa_session_steps_uses_traces_and_ignores_recorded_actions(monkeypatch):
     session = RPASession(id="session-1", user_id="user-1", sandbox_session_id="sandbox-1")
     session.recorded_actions.append(
         ManualRecordedAction(
             step_id="step-search",
             action_kind=ManualActionKind.CLICK,
-            description='click button("Search")',
-            target={"method": "role", "role": "button", "name": "Search"},
+            description="DO_NOT_USE_LEGACY",
+            target={"method": "role", "role": "button", "name": "DO_NOT_USE_LEGACY"},
             validation={"status": "ok"},
             page_state={"url": "https://example.com/search"},
         )
@@ -125,7 +125,13 @@ def test_get_rpa_session_steps_preserves_ai_traces_with_recorded_actions(monkeyp
                 trace_type=RPATraceType.MANUAL_ACTION,
                 source="manual",
                 action="click",
-                description="legacy manual trace",
+                description='click button("Search")',
+                locator_candidates=[
+                    {
+                        "locator": {"method": "role", "role": "button", "name": "Search"},
+                        "selected": True,
+                    }
+                ],
             ),
             RPAAcceptedTrace(
                 trace_id="trace-ai-select",
@@ -153,6 +159,8 @@ def test_get_rpa_session_steps_preserves_ai_traces_with_recorded_actions(monkeyp
         "Click first project",
     ]
     assert payload["steps"][0]["rpa_trace"]["trace_id"] == "trace-step-search"
+    assert payload["steps"][0]["target"]["name"] == "Search"
+    assert "DO_NOT_USE_LEGACY" not in str(payload["steps"])
     assert payload["steps"][1]["source"] == "ai"
     assert payload["steps"][1]["action"] == "ai_script"
     assert payload["steps"][1]["rpa_trace"]["trace_type"] == "ai_operation"

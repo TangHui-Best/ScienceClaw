@@ -19,6 +19,36 @@ def test_normalize_playwright_locator_first_into_nth_role_locator():
     }
 
 
+def test_normalize_playwright_locator_named_role_first_into_nth_role_locator():
+    normalized = normalize_manual_candidate(
+        {
+            "kind": "role",
+            "playwright_locator": 'page.get_by_role("textbox", name="请输入").first',
+            "selected": True,
+        }
+    )
+    assert normalized["locator"] == {
+        "method": "nth",
+        "locator": {"method": "role", "role": "textbox", "name": "请输入"},
+        "index": 0,
+    }
+
+
+def test_normalize_playwright_locator_placeholder_first_into_nth_locator():
+    normalized = normalize_manual_candidate(
+        {
+            "kind": "placeholder",
+            "playwright_locator": 'page.get_by_placeholder("请输入").first',
+            "selected": True,
+        }
+    )
+    assert normalized["locator"] == {
+        "method": "nth",
+        "locator": {"method": "placeholder", "value": "请输入"},
+        "index": 0,
+    }
+
+
 def test_build_outcome_accepts_canonicalized_interactive_action():
     outcome = build_manual_recording_outcome(
         action="click",

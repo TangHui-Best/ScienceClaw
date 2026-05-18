@@ -112,4 +112,16 @@ describe('rpaAssistantRun', () => {
     expect(run.rounds[0].items[0].detail).toBe('正在把你的目标拆成可录制的浏览器操作。');
     expect(run.rounds[0].items[2].detail).toBe('提取项目名、star数和fork数');
   });
-});
+
+
+  it('ignores legacy total_steps when finishing assistant runs', () => {
+    let run = createRpaAssistantRun('00:42');
+
+    run = applyRpaAssistantRunEvent(run, 'agent_done', {
+      message: 'Task completed',
+      total_steps: 999,
+    });
+
+    expect(run.status).toBe('done');
+    expect(run.traceCount).toBe(0);
+  });});

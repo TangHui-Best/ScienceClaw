@@ -121,7 +121,7 @@ async def execute_skill(page, **kwargs):
         result = await executor.execute(browser, script, on_log=logs.append, timeout=0.01)
 
         self.assertFalse(result["success"])
-        self.assertEqual(result["failed_step_index"], 1)
+        self.assertEqual(result["failed_trace_index"], 1)
         self.assertTrue(any(log.startswith("TRACE_START 1: runtime semantic repository selection") for log in logs))
 
     async def test_execute_registers_popup_pages_with_session_manager(self):
@@ -193,7 +193,7 @@ async def execute_skill(page, **kwargs):
 class StepExecutionErrorTests(unittest.IsolatedAsyncioTestCase):
     """Tests for STEP_FAILED: parsing in the except Exception block."""
 
-    async def test_execute_returns_failed_step_index_on_step_error(self):
+    async def test_execute_returns_failed_trace_index_on_step_error(self):
         executor = EXECUTOR_MODULE.ScriptExecutor()
         script = '''
 class StepExecutionError(Exception):
@@ -209,10 +209,10 @@ async def execute_skill(page, **kwargs):
         result = await executor.execute(browser, script)
 
         self.assertFalse(result["success"])
-        self.assertEqual(result["failed_step_index"], 2)
+        self.assertEqual(result["failed_trace_index"], 2)
         self.assertEqual(result["error"], "Timeout 30000ms exceeded")
 
-    async def test_execute_returns_none_failed_step_index_on_generic_error(self):
+    async def test_execute_returns_none_failed_trace_index_on_generic_error(self):
         executor = EXECUTOR_MODULE.ScriptExecutor()
         script = '''
 async def execute_skill(page, **kwargs):
@@ -222,9 +222,9 @@ async def execute_skill(page, **kwargs):
         result = await executor.execute(browser, script)
 
         self.assertFalse(result["success"])
-        self.assertIsNone(result["failed_step_index"])
+        self.assertIsNone(result["failed_trace_index"])
 
-    async def test_execute_returns_none_failed_step_index_on_success(self):
+    async def test_execute_returns_none_failed_trace_index_on_success(self):
         executor = EXECUTOR_MODULE.ScriptExecutor()
         script = '''
 async def execute_skill(page, **kwargs):
@@ -234,7 +234,7 @@ async def execute_skill(page, **kwargs):
         result = await executor.execute(browser, script)
 
         self.assertTrue(result["success"])
-        self.assertIsNone(result.get("failed_step_index"))
+        self.assertIsNone(result.get("failed_trace_index"))
 
 
 if __name__ == "__main__":

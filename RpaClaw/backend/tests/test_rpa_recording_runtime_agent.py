@@ -1608,6 +1608,29 @@ async def test_recording_runtime_agent_accepts_empty_extract_when_plan_explicitl
 
     assert result.success is True
     assert result.output == {"notifications": []}
+    assert result.trace.signals["output_contract"] == {"allow_empty": True}
+
+
+@pytest.mark.asyncio
+async def test_recording_runtime_agent_does_not_mark_empty_output_allowed_by_default():
+    async def planner(_payload):
+        return {
+            "description": "Collect optional notifications",
+            "action_type": "run_python",
+            "expected_effect": "extract",
+            "output_key": "notifications",
+            "code": "async def run(page, results):\n    return {'notifications': []}",
+        }
+
+    result = await RecordingRuntimeAgent(planner=planner).run(
+        page=_FakePage(),
+        instruction="collect notifications",
+        runtime_results={},
+    )
+
+    assert result.success is True
+    assert result.output == {"notifications": []}
+    assert "output_contract" not in result.trace.signals
 
 
 @pytest.mark.asyncio

@@ -50,7 +50,6 @@ type EditableParam = {
   defaultValue: string;
   originalValue?: unknown;
   sourceTraceId?: string;
-  sourceStepIndex?: number;
 };
 
 const PARAM_TYPES = ['string', 'number', 'integer', 'boolean', 'array', 'object'];
@@ -419,7 +418,6 @@ const hydrateEditableParams = (toolPreview: RpaMcpPreview | null, options: { pre
       const schemaProp = (prop || {}) as Record<string, any>;
       const originalValue = info.original_value ?? schemaProp.default;
       const sourceTraceId = typeof info.source_trace_id === 'string' ? info.source_trace_id : undefined;
-      const sourceStepIndex = typeof info.source_step_index === 'number' ? info.source_step_index : undefined;
       return {
         id: `param-${index}-${key}`,
         sourceKey: String(info.source_param || key),
@@ -431,7 +429,6 @@ const hydrateEditableParams = (toolPreview: RpaMcpPreview | null, options: { pre
         defaultValue: stringifyEditorValue(originalValue),
         originalValue,
         sourceTraceId,
-        sourceStepIndex,
       };
     });
 };
@@ -459,8 +456,6 @@ const buildConfirmedParams = () => {
     };
     if (param.sourceTraceId) {
       confirmed[name].source_trace_id = param.sourceTraceId;
-    } else if (param.sourceStepIndex !== undefined) {
-      confirmed[name].source_step_index = param.sourceStepIndex;
     }
   }
   return confirmed;
@@ -622,6 +617,7 @@ const canPromoteStepLocator = (step: RecordedStepItem) => (
   canTuneRecordedSteps.value
   && step.configurable !== false
   && step.source !== 'ai'
+  && Boolean(getRecordedStepTraceId(step))
 );
 
 const getRecordedStepTraceId = (step: RecordedStepItem | undefined): string => (
@@ -879,15 +875,13 @@ const promoteLocator = async (stepIndex: number, candidateIndex: number) => {
   promotingStepIndex.value = stepIndex;
   try {
     const traceId = getRecordedStepTraceId(recordedSteps.value[stepIndex]);
-    if (traceId) {
-      await apiClient.post(`/rpa/session/${sessionId.value}/trace/${traceId}/locator`, {
-        candidate_index: candidateIndex,
-      });
-    } else {
-      await apiClient.post(`/rpa/session/${sessionId.value}/step/${stepIndex}/locator`, {
-        candidate_index: candidateIndex,
-      });
+    if (!traceId) {
+      showErrorToast(t('MCP Editor Failed to switch locator'));
+      return;
     }
+    await apiClient.post(`/rpa/session/${sessionId.value}/trace/${traceId}/locator`, {
+      candidate_index: candidateIndex,
+    });
     await Promise.all([loadRecordedSession(), loadPreview()]);
     expandedStepIndex.value = stepIndex;
     showSuccessToast(t('MCP Editor Step locator updated'));
@@ -1065,7 +1059,7 @@ watch(viewActiveTab, async (tab) => {
                       {{ t('MCP Editor Parameter enabled') }}
                     </label>
                     <span class="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-500 dark:bg-white/10 dark:text-slate-400">
-                      {{ t('MCP Editor Source parameter') }} {{ param.sourceKey }}<template v-if="param.sourceTraceId"> · {{ param.sourceTraceId }}</template><template v-else-if="param.sourceStepIndex !== undefined"> · {{ t('MCP Editor Step number', { number: param.sourceStepIndex + 1 }) }}</template>
+                      {{ t('MCP Editor Source parameter') }} {{ param.sourceKey }}<template v-if="param.sourceTraceId"> · {{ param.sourceTraceId }}</template>
                     </span>
                   </div>
 

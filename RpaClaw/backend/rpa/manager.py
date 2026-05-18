@@ -778,11 +778,6 @@ class RPASessionManager:
         session = self.sessions.get(session_id)
         if not session or not trace_id:
             return False
-        target_trace = next((trace for trace in session.traces if trace.trace_id == trace_id), None)
-        if target_trace and target_trace.source == "manual" and trace_id.startswith("trace-"):
-            step_id = trace_id.removeprefix("trace-")
-            if any(step.id == step_id for step in session.steps):
-                return await self.delete_step_by_id(session_id, step_id)
         original_count = len(session.traces)
         session.traces = [trace for trace in session.traces if trace.trace_id != trace_id]
         deleted = len(session.traces) != original_count
@@ -794,6 +789,22 @@ class RPASessionManager:
         session = self.sessions.get(session_id)
         if not session or not diagnostic_id:
             return False
+        diagnostic = next(
+            (
+                item
+                for item in session.trace_diagnostics
+                if item.diagnostic_id == diagnostic_id
+            ),
+            None,
+        )
+        if (
+            diagnostic is not None
+            and diagnostic.source == "manual_recording"
+            and isinstance(diagnostic.raw, dict)
+        ):
+            related_step_id = str(diagnostic.raw.get("related_step_id") or "")
+            if related_step_id:
+                return await self.delete_step_by_id(session_id, related_step_id)
         original_count = len(session.trace_diagnostics)
         session.trace_diagnostics = [
             diagnostic
@@ -813,6 +824,17 @@ class RPASessionManager:
     def _unescape_playwright_literal(value: str) -> str:
         return value.replace('\\"', '"').replace("\\\\", "\\")
 
+    @staticmethod
+    def _playwright_literal_pattern() -> str:
+        return r'(?:"((?:\\.|[^"\\])*)"|\'((?:\\.|[^\'\\])*)\')'
+
+    @staticmethod
+    def _playwright_literal_value(match: re.Match, first_group: int) -> str:
+        value = match.group(first_group)
+        if value is None:
+            value = match.group(first_group + 1)
+        return RPASessionManager._unescape_playwright_literal(value or "")
+
     @classmethod
     def _parse_playwright_locator_expression(cls, expression: str) -> Optional[Dict[str, Any]]:
         if not expression:
@@ -821,14 +843,15 @@ class RPASessionManager:
         if remaining.startswith("page."):
             remaining = remaining[5:]
 
+        literal = cls._playwright_literal_pattern()
         current: Optional[Dict[str, Any]] = None
         value_patterns = (
-            ("testid", r'get_by_test_id\("((?:\\.|[^"\\])*)"\)'),
-            ("label", r'get_by_label\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)'),
-            ("placeholder", r'get_by_placeholder\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)'),
-            ("alt", r'get_by_alt_text\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)'),
-            ("title", r'get_by_title\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)'),
-            ("text", r'get_by_text\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)'),
+            ("testid", rf'get_by_test_id\({literal}\)'),
+            ("label", rf'get_by_label\({literal}(?:,\s*exact=True)?\)'),
+            ("placeholder", rf'get_by_placeholder\({literal}(?:,\s*exact=True)?\)'),
+            ("alt", rf'get_by_alt_text\({literal}(?:,\s*exact=True)?\)'),
+            ("title", rf'get_by_title\({literal}(?:,\s*exact=True)?\)'),
+            ("text", rf'get_by_text\({literal}(?:,\s*exact=True)?\)'),
         )
 
         while remaining:
@@ -836,25 +859,21 @@ class RPASessionManager:
             step: Optional[Dict[str, Any]] = None
 
             if current is None:
-                locator_match = re.match(r'locator\("((?:\\.|[^"\\])*)"\)', remaining)
+                locator_match = re.match(rf'locator\({literal}\)', remaining)
                 if locator_match:
                     matched_text = locator_match.group(0)
-                    step = {"method": "css", "value": cls._unescape_playwright_literal(locator_match.group(1))}
+                    step = {"method": "css", "value": cls._playwright_literal_value(locator_match, 1)}
                 else:
                     role_match = re.match(
-                        r'get_by_role\("((?:\\.|[^"\\])*)"(?:,\s*name="((?:\\.|[^"\\])*)"(?:,\s*exact=True)?)?\)',
+                        rf'get_by_role\({literal}(?:,\s*name={literal}(?:,\s*exact=True)?)?\)',
                         remaining,
                     )
                     if role_match:
                         matched_text = role_match.group(0)
                         step = {
                             "method": "role",
-                            "role": cls._unescape_playwright_literal(role_match.group(1)),
-                            "name": (
-                                cls._unescape_playwright_literal(role_match.group(2))
-                                if role_match.group(2) is not None
-                                else ""
-                            ),
+                            "role": cls._playwright_literal_value(role_match, 1),
+                            "name": cls._playwright_literal_value(role_match, 3),
                         }
                     else:
                         for method, pattern in value_patterns:
@@ -862,7 +881,7 @@ class RPASessionManager:
                             if not match:
                                 continue
                             matched_text = match.group(0)
-                            step = {"method": method, "value": cls._unescape_playwright_literal(match.group(1))}
+                            step = {"method": method, "value": cls._playwright_literal_value(match, 1)}
                             break
             else:
                 nth_match = re.match(r'\.nth\((\d+)\)', remaining)
@@ -874,34 +893,39 @@ class RPASessionManager:
                         "index": int(nth_match.group(1)),
                     }
                 else:
-                    locator_match = re.match(r'\.locator\("((?:\\.|[^"\\])*)"\)', remaining)
-                    if locator_match:
-                        matched_text = locator_match.group(0)
-                        step = {"method": "css", "value": cls._unescape_playwright_literal(locator_match.group(1))}
+                    first_match = re.match(r'\.first(?:\(\))?', remaining)
+                    if first_match:
+                        matched_text = first_match.group(0)
+                        current = {
+                            "method": "nth",
+                            "locator": current,
+                            "index": 0,
+                        }
                     else:
-                        role_match = re.match(
-                            r'\.get_by_role\("((?:\\.|[^"\\])*)"(?:,\s*name="((?:\\.|[^"\\])*)"(?:,\s*exact=True)?)?\)',
-                            remaining,
-                        )
-                        if role_match:
-                            matched_text = role_match.group(0)
-                            step = {
-                                "method": "role",
-                                "role": cls._unescape_playwright_literal(role_match.group(1)),
-                                "name": (
-                                    cls._unescape_playwright_literal(role_match.group(2))
-                                    if role_match.group(2) is not None
-                                    else ""
-                                ),
-                            }
+                        locator_match = re.match(rf'\.locator\({literal}\)', remaining)
+                        if locator_match:
+                            matched_text = locator_match.group(0)
+                            step = {"method": "css", "value": cls._playwright_literal_value(locator_match, 1)}
                         else:
-                            for method, pattern in value_patterns:
-                                match = re.match(r"\." + pattern, remaining)
-                                if not match:
-                                    continue
-                                matched_text = match.group(0)
-                                step = {"method": method, "value": cls._unescape_playwright_literal(match.group(1))}
-                                break
+                            role_match = re.match(
+                                rf'\.get_by_role\({literal}(?:,\s*name={literal}(?:,\s*exact=True)?)?\)',
+                                remaining,
+                            )
+                            if role_match:
+                                matched_text = role_match.group(0)
+                                step = {
+                                    "method": "role",
+                                    "role": cls._playwright_literal_value(role_match, 1),
+                                    "name": cls._playwright_literal_value(role_match, 3),
+                                }
+                            else:
+                                for method, pattern in value_patterns:
+                                    match = re.match(r"\." + pattern, remaining)
+                                    if not match:
+                                        continue
+                                    matched_text = match.group(0)
+                                    step = {"method": method, "value": cls._playwright_literal_value(match, 1)}
+                                    break
 
             if not matched_text:
                 return None
@@ -1231,6 +1255,44 @@ class RPASessionManager:
             ]
         return trace
 
+    async def resolve_trace_diagnostic_locator_candidate(
+        self,
+        session_id: str,
+        diagnostic_id: str,
+        candidate_index: int,
+    ) -> RPAAcceptedTrace:
+        session = self.sessions.get(session_id)
+        if not session or not diagnostic_id:
+            raise ValueError("Invalid diagnostic id")
+
+        diagnostic = next(
+            (item for item in session.trace_diagnostics if item.diagnostic_id == diagnostic_id),
+            None,
+        )
+        if diagnostic is None:
+            raise ValueError("Invalid diagnostic id")
+        if diagnostic.source != "manual_recording" or not isinstance(diagnostic.raw, dict):
+            raise ValueError("Diagnostic cannot be resolved by locator")
+
+        related_step_id = str(diagnostic.raw.get("related_step_id") or "")
+        step_index = next(
+            (
+                index
+                for index, step in enumerate(session.steps)
+                if step.id == related_step_id
+            ),
+            None,
+        )
+        if step_index is None:
+            raise ValueError("Diagnostic backing step not found")
+
+        await self.select_step_locator_candidate(session_id, step_index, candidate_index)
+        trace_id = diagnostic.trace_id or f"trace-{related_step_id}"
+        trace = next((item for item in session.traces if item.trace_id == trace_id), None)
+        if trace is None:
+            raise ValueError("Diagnostic did not resolve to trace")
+        return trace
+
     def pause_recording(self, session_id: str):
         """Pause event recording (used during AI execution)."""
         if session_id in self.sessions:
@@ -1514,6 +1576,7 @@ class RPASessionManager:
                             last_step.action = "navigate_click"
                             last_step.url = evt.get("url", last_step.url)
                             last_step.description = f"{last_step.description} 并跳转页面"
+                            self._rebuild_manual_recording_state(session)
                             await self._record_manual_trace_for_step(session_id, last_step)
                             await self._broadcast_step(session_id, last_step)
                             logger.debug(f"[RPA] Upgraded click to navigate_click: {evt.get('url', '')[:60]}")
@@ -1521,6 +1584,7 @@ class RPASessionManager:
                         if last_step.action == "press":
                             last_step.action = "navigate_press"
                             last_step.url = evt.get("url", last_step.url)
+                            self._rebuild_manual_recording_state(session)
                             await self._record_manual_trace_for_step(session_id, last_step)
                             await self._broadcast_step(session_id, last_step)
                             logger.debug(f"[RPA] Upgraded press to navigate_press: {evt.get('url', '')[:60]}")
@@ -1634,6 +1698,55 @@ class RPASessionManager:
         return step
 
     @staticmethod
+    def _manual_trace_diagnostic_from_recording(
+        diagnostic: ManualRecordingDiagnostic,
+    ) -> RPATraceDiagnostic:
+        related_step_id = diagnostic.related_step_id or ""
+        page_state = dict(diagnostic.page_state or {})
+        raw = {
+            "related_step_id": related_step_id,
+            "failure_reason": diagnostic.failure_reason,
+            "action": diagnostic.related_action_kind.value,
+            "locator_candidates": list(diagnostic.raw_candidates or []),
+            "element_snapshot": dict(diagnostic.element_snapshot or {}),
+            "page_state": page_state,
+            "url": str(page_state.get("url", "") or ""),
+        }
+        return RPATraceDiagnostic(
+            diagnostic_id=f"diag-{related_step_id}" if related_step_id else "",
+            trace_id=f"trace-{related_step_id}" if related_step_id else None,
+            source="manual_recording",
+            message=diagnostic.failure_reason,
+            raw=raw,
+        )
+
+    @classmethod
+    def _sync_manual_trace_diagnostics(cls, session: RPASession) -> None:
+        preserved = [
+            diagnostic
+            for diagnostic in session.trace_diagnostics
+            if diagnostic.source != "manual_recording"
+        ]
+        manual_diagnostics = [
+            cls._manual_trace_diagnostic_from_recording(diagnostic)
+            for diagnostic in session.recording_diagnostics
+            if diagnostic.related_step_id
+        ]
+        session.trace_diagnostics = preserved + manual_diagnostics
+
+    @staticmethod
+    def _has_manual_trace_diagnostic_for_step(session: RPASession, step_id: str) -> bool:
+        trace_id = f"trace-{step_id}"
+        return any(
+            diagnostic.source == "manual_recording"
+            and (
+                diagnostic.trace_id == trace_id
+                or str((diagnostic.raw or {}).get("related_step_id") or "") == step_id
+            )
+            for diagnostic in session.trace_diagnostics
+        )
+
+    @staticmethod
     def _rebuild_manual_recording_state(session: RPASession) -> None:
         session.recorded_actions = []
         session.recording_diagnostics = []
@@ -1657,7 +1770,10 @@ class RPASessionManager:
             if outcome.accepted_action is not None:
                 session.recorded_actions.append(outcome.accepted_action)
             if outcome.diagnostic is not None:
+                if step.action in {"navigate_click", "navigate_press"} and step.url:
+                    continue
                 session.recording_diagnostics.append(outcome.diagnostic)
+        RPASessionManager._sync_manual_trace_diagnostics(session)
 
     @staticmethod
     def _step_event_ts_ms(step: RPAStep) -> int:
@@ -1787,6 +1903,12 @@ class RPASessionManager:
         if not session:
             return
         try:
+            trace_id = f"trace-{step.id}"
+            if self._has_manual_trace_diagnostic_for_step(session, step.id):
+                session.traces = [
+                    existing for existing in session.traces if existing.trace_id != trace_id
+                ]
+                return
             trace = manual_step_to_trace(step.model_dump())
             trace = infer_dataflow_for_fill(trace, session.runtime_results)
             session.traces = [existing for existing in session.traces if existing.trace_id != trace.trace_id]

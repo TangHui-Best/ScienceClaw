@@ -14,7 +14,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { buildRpaToolEditorLocation } from '@/utils/rpaMcpConvert';
 import {
   getManualRecordingDiagnostics,
-  getLegacyRpaSteps,
   mapRpaConfigureDisplaySteps,
   type RpaRecordingDiagnosticItem,
   type RpaConfigureStep,
@@ -91,7 +90,6 @@ interface CredentialItem {
 }
 
 const steps = ref<StepItem[]>([]);
-const legacySteps = ref<StepItem[]>([]);
 const diagnostics = ref<RpaRecordingDiagnosticItem[]>([]);
 const skillName = ref('');
 const skillDescription = ref('');
@@ -144,18 +142,16 @@ const getValidationClass = (status?: string) => {
 
 const promoteLocator = async (stepIndex: number, candidateIndex: number, step: StepItem = steps.value[stepIndex]) => {
   if (!sessionId.value || promotingStepIndex.value !== null) return;
+  if (!step?.traceId) {
+    error.value = 'Cannot promote locator without trace id';
+    return;
+  }
   promotingStepIndex.value = stepIndex;
   error.value = null;
   try {
-    if (step?.traceId) {
-      await apiClient.post(`/rpa/session/${sessionId.value}/trace/${step.traceId}/locator`, {
-        candidate_index: candidateIndex,
-      });
-    } else {
-      await apiClient.post(`/rpa/session/${sessionId.value}/step/${stepIndex}/locator`, {
-        candidate_index: candidateIndex,
-      });
-    }
+    await apiClient.post(`/rpa/session/${sessionId.value}/trace/${step.traceId}/locator`, {
+      candidate_index: candidateIndex,
+    });
     await loadSession();
   } catch (err: any) {
     error.value = `切换定位器失败: ${err.response?.data?.detail || err.message}`;
@@ -166,37 +162,34 @@ const promoteLocator = async (stepIndex: number, candidateIndex: number, step: S
 
 const promoteDiagnosticLocator = async (diagnostic: RpaRecordingDiagnosticItem, candidateIndex: number) => {
   if (!sessionId.value || promotingStepIndex.value !== null) return;
-  if (diagnostic.traceId) {
-    const promotionIndex = diagnostic.stepIndex ?? -1;
-    promotingStepIndex.value = promotionIndex;
-    error.value = null;
-    try {
-      await apiClient.post(`/rpa/session/${sessionId.value}/trace/${diagnostic.traceId}/locator`, {
-        candidate_index: candidateIndex,
-      });
-      await loadSession();
-    } catch (err: any) {
-      error.value = `鍒囨崲瀹氫綅鍣ㄥけ璐? ${err.response?.data?.detail || err.message}`;
-    } finally {
-      promotingStepIndex.value = null;
-    }
+  if (!diagnostic.diagnosticId) {
+    error.value = 'Cannot resolve diagnostic locator without diagnostic id';
     return;
   }
-  if (diagnostic.stepIndex === null) return;
-  await promoteLocator(diagnostic.stepIndex, candidateIndex);
+  promotingStepIndex.value = -1;
+  error.value = null;
+  try {
+    await apiClient.post(`/rpa/session/${sessionId.value}/diagnostic/${diagnostic.diagnosticId}/resolve-locator`, {
+      candidate_index: candidateIndex,
+    });
+    await loadSession();
+  } catch (err: any) {
+    error.value = `切换定位器失败: ${err.response?.data?.detail || err.message}`;
+  } finally {
+    promotingStepIndex.value = null;
+  }
 };
 
 const deleteDiagnosticStep = async (diagnostic: RpaRecordingDiagnosticItem) => {
   if (!sessionId.value || promotingStepIndex.value !== null) return;
-  if (!diagnostic.diagnosticId && diagnostic.stepIndex === null) return;
-  promotingStepIndex.value = diagnostic.stepIndex ?? -1;
+  if (!diagnostic.diagnosticId) {
+    error.value = 'Cannot delete diagnostic without diagnostic id';
+    return;
+  }
+  promotingStepIndex.value = -1;
   error.value = null;
   try {
-    if (diagnostic.diagnosticId) {
-      await apiClient.delete(`/rpa/session/${sessionId.value}/diagnostic/${diagnostic.diagnosticId}`);
-    } else {
-      await apiClient.delete(`/rpa/session/${sessionId.value}/step/${diagnostic.stepIndex}`);
-    }
+    await apiClient.delete(`/rpa/session/${sessionId.value}/diagnostic/${diagnostic.diagnosticId}`);
     await loadSession();
     if (!diagnostics.value.length && !generatedScript.value) {
       await generateScript({ openDrawer: false });
@@ -233,15 +226,34 @@ const loadSkillConfigDraft = async (generatedParams: ParamItem[]) => {
 };
 
 const KEYWORD_MAP: Record<string, string> = {
-  邮箱: 'email', 邮件: 'email', email: 'email', 'e-mail': 'email',
-  密码: 'password', password: 'password', pwd: 'password',
-  用户名: 'username', 用户: 'username', username: 'username', user: 'username',
-  账号: 'account', account: 'account',
-  手机: 'phone', 电话: 'phone', phone: 'phone', tel: 'phone', mobile: 'phone',
-  验证码: 'captcha', captcha: 'captcha', code: 'code',
-  搜索: 'search', search: 'search',
-  地址: 'address', address: 'address', url: 'url',
-  姓名: 'name', name: 'name',
+  '邮箱': 'email',
+  '邮件': 'email',
+  email: 'email',
+  'e-mail': 'email',
+  '密码': 'password',
+  password: 'password',
+  pwd: 'password',
+  '用户名': 'username',
+  '用户': 'username',
+  username: 'username',
+  user: 'username',
+  '账号': 'account',
+  account: 'account',
+  '手机': 'phone',
+  '电话': 'phone',
+  phone: 'phone',
+  tel: 'phone',
+  mobile: 'phone',
+  '验证码': 'captcha',
+  captcha: 'captcha',
+  code: 'code',
+  '搜索': 'search',
+  search: 'search',
+  '地址': 'address',
+  address: 'address',
+  url: 'url',
+  '姓名': 'name',
+  name: 'name',
 };
 
 function deriveParamName(loc: ParsedLocator | null, sensitive: boolean): string {
@@ -284,15 +296,13 @@ const loadSession = async () => {
       ...(resp.data.session || {}),
       timeline: resp.data.session?.timeline ?? resp.data.timeline,
     };
-    legacySteps.value = getLegacyRpaSteps(session) as StepItem[];
     steps.value = mapRpaConfigureDisplaySteps(session) as StepItem[];
     diagnostics.value = getManualRecordingDiagnostics(session);
     loadFailed.value = false;
     error.value = null;
 
     const usedNames = new Set<string>();
-    const paramSourceSteps = Array.isArray(session.timeline) ? steps.value : legacySteps.value;
-    const generatedParams = paramSourceSteps
+    const generatedParams = steps.value
       .filter((step) => step.action === 'fill' || step.action === 'select')
       .map((step, index) => {
         let label = `参数${index + 1}`;
@@ -329,7 +339,7 @@ const loadSession = async () => {
       });
     params.value = generatedParams;
 
-    const navStep = steps.value.find((step) => !!step.url) || legacySteps.value.find((step) => !!step.url);
+    const navStep = steps.value.find((step) => !!step.url);
     if (navStep?.url) {
       try {
         const url = new URL(navStep.url);
@@ -402,7 +412,7 @@ const goToTest = async () => {
       },
     });
   } catch (err: any) {
-    error.value = `淇濆瓨閰嶇疆鑽夌澶辫触: ${err.response?.data?.detail || err.message}`;
+    error.value = `保存配置失败: ${err.response?.data?.detail || err.message}`;
   }
 };
 
@@ -555,10 +565,10 @@ onMounted(async () => {
                   <button
                     type="button"
                     class="shrink-0 rounded-full border border-rose-200 dark:border-rose-900/60 px-3 py-1.5 text-xs font-semibold text-rose-700 dark:text-rose-300 transition-colors hover:bg-rose-100/80 dark:hover:bg-rose-900/30 disabled:cursor-not-allowed disabled:opacity-60"
-                    :disabled="(!diagnostic.diagnosticId && diagnostic.stepIndex === null) || promotingStepIndex === (diagnostic.stepIndex ?? -1)"
+                    :disabled="!diagnostic.diagnosticId || promotingStepIndex === -1"
                     @click="deleteDiagnosticStep(diagnostic)"
                   >
-                    {{ promotingStepIndex === (diagnostic.stepIndex ?? -1) ? '处理中...' : '删除该步' }}
+                    {{ promotingStepIndex === -1 ? '处理中...' : '删除该步' }}
                   </button>
                 </div>
 
@@ -585,10 +595,10 @@ onMounted(async () => {
                     <button
                       type="button"
                       class="shrink-0 rounded-full border border-[#831bd7]/25 px-3 py-1.5 text-xs font-semibold text-[#831bd7] transition-colors hover:bg-[#831bd7]/5 disabled:cursor-not-allowed disabled:opacity-60"
-                      :disabled="(!diagnostic.traceId && diagnostic.stepIndex === null) || promotingStepIndex === (diagnostic.stepIndex ?? -1)"
+                      :disabled="!diagnostic.diagnosticId || promotingStepIndex === -1"
                       @click="promoteDiagnosticLocator(diagnostic, candidateIndex)"
                     >
-                      {{ promotingStepIndex === (diagnostic.stepIndex ?? -1) ? '切换中...' : '使用此定位器' }}
+                      {{ promotingStepIndex === -1 ? '切换中...' : '使用此定位器' }}
                     </button>
                   </div>
                 </div>

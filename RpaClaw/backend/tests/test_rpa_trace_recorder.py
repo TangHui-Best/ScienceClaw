@@ -37,6 +37,27 @@ def test_manual_navigation_step_preserves_tab_id_signal():
     assert trace.signals["tab"] == {"tab_id": "tab-second"}
 
 
+def test_manual_step_to_trace_preserves_recording_order_signal():
+    trace = manual_step_to_trace(
+        {
+            "id": "step-ordered",
+            "action": "click",
+            "source": "record",
+            "description": "Click ordered button",
+            "target": '{"method":"role","role":"button","name":"Save"}',
+            "sequence": 17,
+            "event_timestamp_ms": 1234567890,
+            "signals": {"tab": {"tab_id": "tab-main"}},
+        }
+    )
+
+    assert trace.signals["recording"] == {
+        "sequence": 17,
+        "event_timestamp_ms": 1234567890,
+    }
+    assert trace.signals["tab"] == {"tab_id": "tab-main"}
+
+
 def test_manual_fill_step_records_value_and_locator_candidates():
     trace = manual_step_to_trace(
         {
@@ -53,6 +74,23 @@ def test_manual_fill_step_records_value_and_locator_candidates():
     assert trace.trace_type == "manual_action"
     assert trace.value == "Alice Zhang"
     assert trace.locator_candidates[0]["kind"] == "role"
+
+
+def test_manual_sensitive_fill_step_records_credential_placeholder_and_sensitive_flag():
+    trace = manual_step_to_trace(
+        {
+            "id": "step-password",
+            "action": "fill",
+            "source": "record",
+            "description": "Fill password",
+            "target": '{"method":"role","role":"textbox","name":"Password"}',
+            "value": "secret-password",
+            "sensitive": True,
+        }
+    )
+
+    assert trace.value == "{{credential}}"
+    assert trace.sensitive is True
 
 
 def test_extract_text_step_becomes_data_capture_trace():

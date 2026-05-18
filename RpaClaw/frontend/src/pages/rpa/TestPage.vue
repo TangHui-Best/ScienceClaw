@@ -363,7 +363,7 @@ const runTest = async () => {
       : -1;
     const newFailedIndex = traceMatchedIndex >= 0
       ? traceMatchedIndex
-      : (resp.data.failed_step_index ?? resp.data.failed_trace_index ?? null);
+      : (resp.data.failed_trace_index ?? null);
     if (newFailedIndex !== previousFailedIndex || newFailedTraceId !== previousFailedTraceId) {
       triedCandidateIndices.value = new Set();
     }
@@ -382,23 +382,19 @@ const runTest = async () => {
 };
 
 const retryWithCandidate = async (candidateIndex: number) => {
-  if (retryingWithCandidate.value || (!failedTraceId.value && failedStepIndex.value === null)) return;
+  if (retryingWithCandidate.value || !failedTraceId.value) {
+    error.value = 'Cannot retry locator without failed trace id';
+    return;
+  }
   retryingWithCandidate.value = true;
 
   try {
     const candidate = failedStepCandidates.value[candidateIndex];
     const originalIndex = candidate.original_index ?? candidateIndex;
-    if (failedTraceId.value) {
-      await apiClient.post(
-        `/rpa/session/${sessionId.value}/trace/${failedTraceId.value}/locator`,
-        { candidate_index: originalIndex },
-      );
-    } else {
-      await apiClient.post(
-        `/rpa/session/${sessionId.value}/step/${failedStepIndex.value}/locator`,
-        { candidate_index: originalIndex },
-      );
-    }
+    await apiClient.post(
+      `/rpa/session/${sessionId.value}/trace/${failedTraceId.value}/locator`,
+      { candidate_index: originalIndex },
+    );
 
     triedCandidateIndices.value.add(candidateIndex);
     await loadSessionDiagnostics();

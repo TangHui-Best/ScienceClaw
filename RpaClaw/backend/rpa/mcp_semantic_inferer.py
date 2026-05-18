@@ -136,8 +136,8 @@ class RpaMcpSemanticInferer:
                     "description": info_dict.get("description", ""),
                     "type": info_dict.get("type", "string"),
                     "example_value": "" if info_dict.get("sensitive") else info_dict.get("original_value", ""),
-                    "source_step_index": info_dict.get("source_step_index"),
-                    "source_step_id": info_dict.get("source_step_id"),
+                    "source_trace_id": info_dict.get("source_trace_id"),
+                    "source_trace_output_key": info_dict.get("source_trace_output_key"),
                 }
             )
         return candidates

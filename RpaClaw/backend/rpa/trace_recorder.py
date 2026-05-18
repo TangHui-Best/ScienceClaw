@@ -54,6 +54,15 @@ def _tab_signal(step: Dict[str, Any]) -> Dict[str, Any]:
     return signal
 
 
+def _recording_signal(step: Dict[str, Any]) -> Dict[str, Any]:
+    signal: Dict[str, Any] = {}
+    for key in ("sequence", "event_timestamp_ms"):
+        value = _step_get(step, key)
+        if value is not None:
+            signal[key] = value
+    return signal
+
+
 def _page_state_from_step(step: Dict[str, Any], *, prefer_after: bool = True) -> RPAPageState:
     url = _step_get(step, "url", "") or _step_get(step, "page_url", "") or ""
     title = _step_get(step, "title", "") or _step_get(step, "page_title", "") or ""
@@ -67,6 +76,8 @@ def manual_step_to_trace(step: Dict[str, Any]) -> RPAAcceptedTrace:
     trace_type = RPATraceType.NAVIGATION if action in {"navigate", "goto"} else RPATraceType.MANUAL_ACTION
     if action == "extract_text":
         trace_type = RPATraceType.DATA_CAPTURE
+    sensitive = bool(_step_get(step, "sensitive", False))
+    value = "{{credential}}" if sensitive else _step_get(step, "value")
 
     trace_id = f"trace-{_step_get(step, 'id', '') or action or 'manual'}"
     after_page = _page_state_from_step(step, prefer_after=True)
@@ -78,6 +89,10 @@ def manual_step_to_trace(step: Dict[str, Any]) -> RPAAcceptedTrace:
     if tab_signal:
         existing_tab_signal = signals.get("tab") if isinstance(signals.get("tab"), dict) else {}
         signals["tab"] = {**existing_tab_signal, **tab_signal}
+    recording_signal = _recording_signal(step)
+    if recording_signal:
+        existing_recording_signal = signals.get("recording") if isinstance(signals.get("recording"), dict) else {}
+        signals["recording"] = {**existing_recording_signal, **recording_signal}
 
     return RPAAcceptedTrace(
         trace_id=trace_id,
@@ -91,7 +106,8 @@ def manual_step_to_trace(step: Dict[str, Any]) -> RPAAcceptedTrace:
         locator_candidates=_locator_candidates(step),
         validation=dict(_step_get(step, "validation", {}) or {}),
         signals=signals,
-        value=_step_get(step, "value"),
+        value=value,
+        sensitive=sensitive,
         output_key=_step_get(step, "result_key"),
         output=_step_get(step, "output"),
     )

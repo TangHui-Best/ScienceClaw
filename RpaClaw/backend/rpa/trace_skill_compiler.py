@@ -638,7 +638,7 @@ class TraceSkillCompiler:
         if action == "close_tab":
             lines.extend(self._render_close_tab_trace(trace))
             return lines
-        if not locator and action in {"hover", "click", "fill", "press", "check", "uncheck", "select"}:
+        if not locator and action in {"hover", "click", "fill", "press", "check", "uncheck", "select", "set_input_files"}:
             lines.extend(self._invalid_manual_action_lines(action))
             return lines
         if not locator:
@@ -676,6 +676,9 @@ class TraceSkillCompiler:
             lines.append(f"    await {expr}.uncheck()")
         elif action == "select":
             lines.append(f"    await {expr}.select_option({str(trace.value or '')!r})")
+        elif action == "set_input_files":
+            input_files_value = self._build_input_files_value(trace)
+            lines.append(f"    await {expr}.set_input_files({input_files_value})")
         else:
             lines.append(f"    # Unsupported manual action preserved as no-op: {action}")
         return lines
@@ -802,9 +805,11 @@ class TraceSkillCompiler:
         previous_traces: List[RPAAcceptedTrace],
         used_output_keys: Dict[str, int],
     ) -> List[str]:
-        if _trace_signal(trace, "extract_snapshot"):
+        if self._has_usable_snapshot_extract_fields(trace):
             return self._render_snapshot_extract_trace(index, trace, used_output_keys)
         if _should_preserve_runtime_ai_instruction(trace):
+            return self._render_runtime_ai_instruction_trace(index, trace, used_output_keys)
+        if _embedded_ai_code_has_weak_empty_extract_evidence(trace):
             return self._render_runtime_ai_instruction_trace(index, trace, used_output_keys)
         if trace.ai_execution and trace.ai_execution.code:
             return self._render_embedded_ai_code_trace(index, trace, previous_traces, used_output_keys)
@@ -833,7 +838,7 @@ class TraceSkillCompiler:
         used_output_keys: Dict[str, int],
     ) -> List[str]:
         signal = _trace_signal(trace, "extract_snapshot")
-        fields = self._snapshot_extract_fields(trace, signal)
+        fields = self._snapshot_extract_fields(signal)
         key = self._allocate_output_key(trace, trace.output_key or f"snapshot_extract_{index}", used_output_keys)
         lines = ["", f"    # trace {index}: {trace.description or 'snapshot extract'}"]
         frame_path = signal.get("frame_path") if isinstance(signal.get("frame_path"), list) else trace.frame_path
@@ -862,14 +867,14 @@ class TraceSkillCompiler:
         return lines
 
     @staticmethod
-    def _snapshot_extract_fields(trace: RPAAcceptedTrace, signal: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _has_usable_snapshot_extract_fields(trace: RPAAcceptedTrace) -> bool:
+        signal = _trace_signal(trace, "extract_snapshot")
+        return bool(TraceSkillCompiler._snapshot_extract_fields(signal))
+
+    @staticmethod
+    def _snapshot_extract_fields(signal: Dict[str, Any]) -> List[Dict[str, Any]]:
         fields = [dict(field) for field in list(signal.get("fields") or []) if isinstance(field, dict)]
-        usable_fields = [field for field in fields if str(field.get("label") or "").strip()]
-        if usable_fields:
-            return usable_fields
-        if isinstance(trace.output, dict):
-            return [{"label": str(label), "data_prop": ""} for label in trace.output.keys() if str(label).strip()]
-        return []
+        return [field for field in fields if str(field.get("label") or "").strip()]
 
     @staticmethod
     def _build_param_lookup(params: Dict[str, Any]) -> Dict[str, List[tuple[str, Dict[str, Any]]]]:
@@ -901,6 +906,15 @@ class TraceSkillCompiler:
         if default_value in (None, ""):
             default_value = value
         return f"kwargs.get({param_name!r}, {default_value!r})"
+
+    def _build_input_files_value(self, trace: RPAAcceptedTrace) -> str:
+        signal = _trace_signal(trace, "set_input_files")
+        raw_files = signal.get("files")
+        files = [str(item) for item in raw_files if str(item)] if isinstance(raw_files, list) else []
+        if len(files) > 1:
+            return repr(files)
+        effective_value = files[0] if files else str(trace.value or "")
+        return self._maybe_parameterize_value(effective_value)
 
     def _render_embedded_ai_code_trace(
         self,
@@ -1018,7 +1032,13 @@ class TraceSkillCompiler:
             RPATraceType.DATA_CAPTURE,
         }:
             return locator
-        return self._apply_exact_defaults(locator)
+        locator = self._apply_exact_defaults(locator)
+        if trace.trace_type == RPATraceType.MANUAL_ACTION and self._effective_manual_action(trace) in {
+            "navigate_click",
+            "navigate_press",
+        }:
+            locator = self._relax_navigating_link_exact(locator)
+        return locator
 
     def _apply_exact_defaults(self, locator: Dict[str, Any]) -> Dict[str, Any]:
         method = locator.get("method")
@@ -1039,6 +1059,27 @@ class TraceSkillCompiler:
             return normalized
         if method in _EXACT_DEFAULT_METHODS and normalized.get("exact") is None:
             normalized["exact"] = True
+        return normalized
+
+    def _relax_navigating_link_exact(self, locator: Dict[str, Any]) -> Dict[str, Any]:
+        method = locator.get("method")
+        normalized = dict(locator)
+        if method == "nested":
+            parent = locator.get("parent")
+            child = locator.get("child")
+            if isinstance(parent, dict):
+                normalized["parent"] = self._relax_navigating_link_exact(parent)
+            if isinstance(child, dict):
+                normalized["child"] = self._relax_navigating_link_exact(child)
+            return normalized
+        if method == "nth":
+            base = locator.get("locator") or locator.get("base")
+            if isinstance(base, dict):
+                normalized["locator"] = self._relax_navigating_link_exact(base)
+                normalized.pop("base", None)
+            return normalized
+        if method == "role" and str(locator.get("role") or "").strip() == "link":
+            normalized.pop("exact", None)
         return normalized
 
     @staticmethod
@@ -1280,9 +1321,11 @@ def _should_preserve_runtime_ai_instruction(trace: RPAAcceptedTrace) -> bool:
 def trace_requires_runtime_ai_replay(trace: RPAAcceptedTrace) -> bool:
     if trace.trace_type != RPATraceType.AI_OPERATION:
         return False
-    if _trace_signal(trace, "extract_snapshot"):
+    if _trace_signal(trace, "extract_snapshot") and TraceSkillCompiler._has_usable_snapshot_extract_fields(trace):
         return False
     if _should_preserve_runtime_ai_instruction(trace):
+        return True
+    if _embedded_ai_code_has_weak_empty_extract_evidence(trace):
         return True
     if trace.ai_execution and trace.ai_execution.code:
         return False
@@ -1291,6 +1334,38 @@ def trace_requires_runtime_ai_replay(trace: RPAAcceptedTrace) -> bool:
 
 def traces_require_runtime_ai_replay(traces: Iterable[RPAAcceptedTrace]) -> bool:
     return any(trace_requires_runtime_ai_replay(trace) for trace in traces)
+
+
+def _embedded_ai_code_has_weak_empty_extract_evidence(trace: RPAAcceptedTrace) -> bool:
+    if trace.trace_type != RPATraceType.AI_OPERATION:
+        return False
+    if not trace.ai_execution or not trace.ai_execution.code:
+        return False
+    if not trace.output_key:
+        return False
+    if _trace_allows_empty_output(trace):
+        return False
+    if trace.ai_execution.output is None and trace.output is None:
+        return False
+    output = trace.ai_execution.output if trace.ai_execution.output is not None else trace.output
+    return _is_empty_trace_output(output)
+
+
+def _trace_allows_empty_output(trace: RPAAcceptedTrace) -> bool:
+    contract = _trace_signal(trace, "output_contract")
+    return contract.get("allow_empty") is True or contract.get("allow_empty_output") is True
+
+
+def _is_empty_trace_output(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, tuple, set)):
+        return not value or all(_is_empty_trace_output(item) for item in value)
+    if isinstance(value, dict):
+        return not value or all(_is_empty_trace_output(item) for item in value.values())
+    return False
 
 
 def _runner_template(is_local: bool) -> str:
