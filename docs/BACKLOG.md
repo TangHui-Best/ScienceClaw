@@ -30,6 +30,16 @@ Next actions:
 
 ## Recently Completed
 
+### F005 First Governed Candidate Asset
+
+- Feature: `docs/features/F005-first-governed-candidate-asset.md`
+- Evidence: `docs/evidence/EV-005-first-governed-candidate-asset.md`
+- Asset: `data/rpa_harness_assets_bootstrap/hcap-4be6265f43eb42dfa259182207aa64cc`
+- Status: completed.
+- Result: first repo-safe `candidate` asset is selected by the F004 governed
+  offline report and passes validation, snapshot, compiler, and blast-radius
+  checks.
+
 ### F004 Governed Offline Regression Asset Pool
 
 - Feature: `docs/features/F004-governed-offline-regression-asset-pool.md`

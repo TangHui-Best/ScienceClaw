@@ -1,0 +1,64 @@
+[
+  {
+    "trace_id": "trace-4dc4ac88-c666-4378-9f09-c2b0bd7e51ab",
+    "trace_type": "manual_action",
+    "source": "manual",
+    "user_instruction": null,
+    "action": "navigate_click",
+    "description": "点击 link(\"tinyhumansai / openhuman\") 并跳转页面",
+    "before_page": {
+      "url": "",
+      "title": "",
+      "snapshot_summary": {}
+    },
+    "after_page": {
+      "url": "https://github.com/tinyhumansai/openhuman",
+      "title": "",
+      "snapshot_summary": {}
+    },
+    "frame_path": [],
+    "locator_candidates": [
+      {
+        "kind": "role",
+        "score": 0,
+        "strict_match_count": 1,
+        "visible_match_count": 1,
+        "selected": true,
+        "selector": "internal:role=link[name=\"tinyhumansai / openhuman\"i]",
+        "playwright_locator": "page.get_by_role(\"link\", name=\"tinyhumansai / openhuman\")",
+        "locator": {
+          "method": "role",
+          "role": "link",
+          "name": "tinyhumansai / openhuman"
+        },
+        "reason": "selected Playwright candidate is strict unique"
+      }
+    ],
+    "validation": {
+      "status": "ok",
+      "details": "selected Playwright candidate is strict unique",
+      "selected_candidate_index": 0,
+      "selected_candidate_kind": "role"
+    },
+    "signals": {
+      "tab": {
+        "tab_id": "87012d00-2fdb-49dd-b7e4-29e94a31cb71"
+      },
+      "recording": {
+        "sequence": 3,
+        "event_timestamp_ms": 1779102589340
+      }
+    },
+    "value": "",
+    "sensitive": false,
+    "output_key": null,
+    "output": null,
+    "ai_execution": null,
+    "locator_stability": null,
+    "dataflow": null,
+    "diagnostics_ref": null,
+    "accepted": true,
+    "started_at": "2026-05-18T19:09:51.310201",
+    "ended_at": "2026-05-18T19:09:51.310201"
+  }
+]

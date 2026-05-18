@@ -1,0 +1,21 @@
+{
+  "snapshot_signals": {},
+  "action_signals": {
+    "expected_action_type": "ai_operation",
+    "step_intent": "获取fork数"
+  },
+  "compiler_signals": {
+    "must_preserve_output_keys": [
+      "fork_count"
+    ],
+    "must_not_hardcode_observed_values": [
+      "Fork 1.3k"
+    ]
+  },
+  "state_signals": {
+    "output_key": "fork_count",
+    "observed_output_shape": {
+      "type": "str"
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "snapshot_signals": {},
+  "action_signals": {
+    "expected_action_type": "navigate"
+  },
+  "compiler_signals": {},
+  "state_signals": {
+    "observed_output_shape": {
+      "type": "null"
+    }
+  }
+}
