@@ -597,6 +597,7 @@ categories={"loading-after-capture": 1}
 Closeout status:
 
 - Feature patch: F002.5 completed.
+- Implementation commit: `1a0fa48`.
 - Evidence level: standard for the bugfix, linked from F002's exhaustive Evidence.
 - ADR: not triggered; no new architecture decision.
 - Lesson: not triggered; F002 already has Patch Churn Review and this fix stays within its invariant.
