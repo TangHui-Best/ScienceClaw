@@ -1,85 +1,56 @@
 ---
-doc_kind: lesson
 id: LL-001
-title: Harness Feature Evidence Closeout Miss
+doc_kind: lesson
 status: active
-feature_ids: [F002]
+scope: project
+source_feature_ids: [F002]
+applies_to: [harness-closeout, multi-slice-feature, evidence-gate]
 created: 2026-05-18
 updated: 2026-05-18
-source: user_reported_process_miss
 ---
 
-# LL-001 Harness Feature Evidence Closeout Miss
+# LL-001: Harness Feature Evidence Closeout Miss
 
-## Context
+## Pitfall
 
-During RPA Harness v0 implementation, the work was intentionally split into F0-F14 capability slices and each slice was committed and pushed. The implementation also used tests and some subagent review.
-
-However, the local AI-development Harness process was not followed completely: the work did not create or maintain a dedicated Feature page, Evidence record, Lesson/incident record, or Backlog state for F0-F14 before continuing through the feature sequence.
-
-## Failure
-
-The user reported:
-
-```text
-F01 到 F14 没有沉淀 Feature 等相关材料，没有遵从 harness 相关 skill。
-```
-
-The report is valid. Before this recovery:
-
-- `docs/features` had `F001` only.
-- `docs/evidence` had `EV-001` only.
-- RPA Harness v0 had design docs and a plan, but no dedicated `F002` / `EV-002` closeout trail.
-- The implementation plan had partial checkbox updates, but that did not satisfy the Harness Feature/Evidence lifecycle.
+多 slice / high-risk 工作不能把 implementation plan、commit 序列或聊天记录当成 Feature/Evidence closeout。计划说明“怎么做”，commit 说明“改了什么”，但它们不能替代 Feature 的愿景/状态，也不能替代 Evidence 的验证、review、残留风险和门禁结果。
 
 ## Root Cause
 
-The agent treated “feature slices independently committed and pushed” as sufficient progress control, and treated the implementation plan as the durable Harness anchor.
-
-That was wrong. A plan is an execution route. It is not the same thing as:
-
-- a Feature page that captures vision, acceptance, status, and residual risk;
-- an Evidence record that captures verification and reviewer context;
-- a Lesson when the process itself failed.
+F0-F14 开发过程中，执行者把 `docs/superpowers/plans/2026-05-17-rpa-harness-v0-implementation.md` 的 checklist 和每个 slice 的 commit/push 当成了足够的 Harness 约束，跳过了 F002 Feature、EV-002 Evidence、Lesson、Backlog 的同步更新。旧版执行依赖 agent 自觉，没有在项目内或系统级 validator 上形成每个 slice 的硬检查。
 
 ## Trigger
 
-The failure became visible when the user reviewed the development trajectory and noticed that F01-F14 did not have corresponding Feature/Evidence materials despite explicit instructions to obey Harness skills.
+用户在回顾 RPA Harness v0 开发过程时指出：F01 到 F14 没有沉淀 Feature 等相关材料，没有遵从 Harness skill。随后使用系统级 `knowledge_check.py` 验证，确认 F001/F002/EV/ADR/LL 文档结构不符合最新 Harness 模板。
 
-## Impact
+## Fix
 
-- Future agents could recover code history from commits, but not the original intent and acceptance state per capability slice.
-- Residual asset findings could be mistaken for unrelated failures because no Feature-level Evidence connected them to Harness v0.
-- The project risked building product Harness while violating its own AI-development Harness discipline.
-- Review readiness was overstated because tests and commits existed but durable closeout was missing.
+本次恢复直接修正现有 Harness artifacts，而不是新增重复 Lesson：
+
+- `docs/features/F002-rpa-harness-v0.md` 成为 RPA Harness v0 的 Feature anchor。
+- `docs/evidence/EV-002-rpa-harness-v0.md` 记录 F0-F14、post-F14 fixes、系统级 validator 路径/输出和残留风险。
+- 本 Lesson 保留过程事故根因和防复发机制。
+- `docs/BACKLOG.md` 记录 F002 active 状态和下一步。
+- 后续使用系统级 bundled validator：`C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py`。
 
 ## Protection
 
-For any future multi-feature or high-risk Harness/RPA work:
+后续 multi-slice / high-risk 工作必须遵守：
 
-1. Create or update the Feature page before implementation starts.
-2. Record the Vision Anchor, non-goals, feature sequence, acceptance criteria, and residual risks in the Feature page.
-3. Record each slice's verification, commit hash, reviewer status, and residual risks in the Evidence record before moving to the next slice.
-4. Treat an implementation plan as incomplete unless it links to Feature and Evidence records.
-5. If any closeout category is missing, report `implementation done, harness closeout pending` instead of claiming completion or moving on.
+1. 开始前创建或更新 active Feature page。
+2. 每个 slice 开始前确认 Feature/Evidence 当前状态。
+3. 每个 slice 完成后，在 Evidence 记录 commit、验证命令、结果、review 状态和 residual risk，再进入下一 slice。
+4. 如果 closeout 缺失，只能报告 `implementation done, harness closeout pending`，不能继续声明 ready/completed。
+5. 使用系统级 bundled scripts/templates；不要求项目先复制 Harness scripts/templates，除非未来接 CI、GitHub Actions 或离线策略。
 
-## Project Rule Candidate
+## Source
 
-This lesson should be promoted to `AGENTS.md` because it changes future agent behavior across multi-feature Harness/RPA work:
+- User report: “F01 到 F14 没有沉淀 Feature 等相关材料，没有遵从 harness 相关 skill。”
+- Feature: [F002 RPA Harness v0](../features/F002-rpa-harness-v0.md)
+- Evidence: [EV-002 RPA Harness v0 Evidence](../evidence/EV-002-rpa-harness-v0.md)
+- Backlog: [Backlog](../BACKLOG.md)
+- Recovery commit before template migration: `63107f8 docs: recover rpa harness feature evidence`
 
-- Scope: multi-feature Harness, RPA architecture, or other high-risk implementation sequences.
-- Requirement: agents MUST create/update Feature and Evidence records before advancing between slices.
-- Source: this Lesson.
-- Rationale: prevents code-only progress from replacing recoverable project memory.
+## Principle
 
-## Evidence
-
-Recovery artifacts:
-
-- Feature: `docs/features/F002-rpa-harness-v0.md`
-- Evidence: `docs/evidence/EV-002-rpa-harness-v0.md`
-- Backlog: `docs/BACKLOG.md`
-
-## Status
-
-Active. The immediate recovery creates the missing durable records, but F002 remains active until residual bootstrap asset findings are triaged and future slices prove they update Feature/Evidence before advancing.
+Harness 的门禁必须留下可验证的项目记忆。计划、测试和 commit 都是证据输入，但 Feature/Evidence closeout 才是后续 agent 能恢复目标、验收状态和残留风险的入口。

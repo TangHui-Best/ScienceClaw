@@ -3,6 +3,7 @@ doc_kind: evidence
 id: EV-002
 title: RPA Harness v0 Evidence
 status: active
+scope: project
 feature_ids: [F002]
 created: 2026-05-18
 updated: 2026-05-18
@@ -16,6 +17,106 @@ evidence_level: exhaustive
 Evidence for F002: build RPA Harness v0 so captured HTML/checkpoint assets can validate DOM snapshot compression, accepted trace evidence, `TraceSkillCompiler`, and blast radius for core-chain changes.
 
 This Evidence is partly reconstructed because F0-F14 were implemented before the required Feature/Evidence materials were created. The reconstruction itself is an incident recovery action and is linked to `docs/lessons/LL-001-harness-feature-evidence-closeout-miss.md`.
+
+## Commands
+
+Harness closeout recovery uses the bundled validator installed with the system-level `using-harness` skill:
+
+```powershell
+python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs
+python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
+```
+
+Relevant F002 code verification uses the focused RPA Harness test set:
+
+```powershell
+$env:PYTHONPATH="RpaClaw"
+pytest -q --basetemp E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-current RpaClaw/backend/tests/test_rpa_harness_expected_signals.py RpaClaw/backend/tests/test_rpa_harness_checkpoint_capture.py RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py RpaClaw/backend/tests/test_rpa_harness_snapshot_regression.py RpaClaw/backend/tests/test_rpa_harness_compiler_regression.py RpaClaw/backend/tests/test_rpa_harness_asset_validation.py RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_captures_pure_navigation_checkpoint_from_page_baseline
+```
+
+## Results
+
+Initial bundled validator result before this recovery:
+
+```text
+Scanned 155 markdown file(s). Checked 7 knowledge artifact(s). Errors: 39. Warnings: 4.
+```
+
+Final bundled validator result after this recovery:
+
+```text
+Scanned 155 markdown file(s). Checked 7 knowledge artifact(s). Errors: 0. Warnings: 0.
+```
+
+Strict validator result after this recovery:
+
+```text
+Scanned 155 markdown file(s). Checked 7 knowledge artifact(s). Errors: 0. Warnings: 0.
+```
+
+Focused RPA Harness code verification:
+
+```text
+33 passed, 27 warnings in 1.01s
+```
+
+Local bootstrap asset validation:
+
+```text
+capture_count=4
+issue_count=2
+blocking_issue_count=0
+categories={"missing-entry-checkpoint": 2}
+ASSET_VALIDATION_EXIT=0
+```
+
+Local bootstrap snapshot regression:
+
+```text
+total=8
+passed=6
+failed=2
+failure_category=compact-snapshot-lost-signal
+SNAPSHOT_EXIT=1
+```
+
+Local bootstrap compiler regression:
+
+```text
+total=8
+passed=6
+failed=2
+failure_category=compiler-hardcoded-observed-value
+hardcoded_values=["13.4k", "13.7k stars"]
+COMPILER_EXIT=1
+```
+
+F002 remains active after this recovery because local bootstrap assets still contain residual snapshot/compiler findings that need triage before completion.
+
+## Artifacts
+
+- Feature: [F002 RPA Harness v0](../features/F002-rpa-harness-v0.md)
+- Lesson: [LL-001 Harness Feature Evidence Closeout Miss](../lessons/LL-001-harness-feature-evidence-closeout-miss.md)
+- Backlog: [Backlog](../BACKLOG.md)
+- Design: [RPA Harness v0 Design](../rpa/harness/rpa-harness-v0-design.md)
+- Schema: [Scenario Asset Schema](../rpa/harness/scenario-asset-schema.md)
+- Strategy: [RPA Harness Regression Strategy](../rpa/harness/regression-strategy.md)
+
+## Notes
+
+This recovery uses system-level bundled Harness resources. ScienceClaw does not need to copy `scripts/` or `templates/` into the project unless future CI, GitHub Actions, or offline policy requires vendoring them.
+
+Artifacts corrected in this recovery:
+
+- `docs/features/F001-rpa-trace-source-convergence.md`
+- `docs/features/F002-rpa-harness-v0.md`
+- `docs/evidence/EV-001-rpa-trace-source-convergence.md`
+- `docs/evidence/EV-002-rpa-harness-v0.md`
+- `docs/decisions/ADR-001-rpa-trace-is-single-accepted-timeline.md`
+- `docs/decisions/ADR-002-trace-evidence-driven-compiler-strategy.md`
+- `docs/lessons/LL-001-harness-feature-evidence-closeout-miss.md`
+
+`docs/BACKLOG.md` was inspected and remains aligned with F002 active status, so no content change was needed in this recovery commit.
 
 ## Entry Gate
 
@@ -62,15 +163,13 @@ Executed on branch `codex/rpa-trace-first-harness` on 2026-05-18:
 
 ```powershell
 $env:PYTHONPATH='RpaClaw'
-$env:TMP='E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-current'
-$env:TEMP=$env:TMP
-pytest -q RpaClaw/backend/tests/test_rpa_harness_expected_signals.py RpaClaw/backend/tests/test_rpa_harness_checkpoint_capture.py RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py RpaClaw/backend/tests/test_rpa_harness_snapshot_regression.py RpaClaw/backend/tests/test_rpa_harness_compiler_regression.py RpaClaw/backend/tests/test_rpa_harness_asset_validation.py RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_captures_pure_navigation_checkpoint_from_page_baseline
+pytest -q --basetemp E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-current RpaClaw/backend/tests/test_rpa_harness_expected_signals.py RpaClaw/backend/tests/test_rpa_harness_checkpoint_capture.py RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py RpaClaw/backend/tests/test_rpa_harness_snapshot_regression.py RpaClaw/backend/tests/test_rpa_harness_compiler_regression.py RpaClaw/backend/tests/test_rpa_harness_asset_validation.py RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_captures_pure_navigation_checkpoint_from_page_baseline
 ```
 
 Result:
 
 ```text
-33 passed, 27 warnings in 1.36s
+33 passed, 27 warnings in 1.01s
 ```
 
 Local asset validation:
@@ -183,8 +282,8 @@ Recovery actions:
 
 - Current bootstrap assets are useful but not fully clean regression fixtures.
 - Two draft Full SOP assets are missing entry checkpoint evidence; this is now visible through asset validation.
-- One snapshot expected signal currently fails.
-- One compiler expected signal currently detects a hardcoded observed value.
+- Two snapshot expected-signal checks currently fail with `compact-snapshot-lost-signal`.
+- Two compiler expected-signal checks currently fail with `compiler-hardcoded-observed-value`.
 - These residuals should be treated as follow-up evidence, not hidden by passing unit tests.
 
 ## Closeout Status

@@ -1,36 +1,36 @@
 ---
-doc_kind: adr
 id: ADR-002
-title: Trace Evidence Drives Compiler Strategy
+doc_kind: adr
 status: accepted
+scope: project
 feature_ids: [F001]
-date: 2026-05-15
+decision_area: rpa-trace-compiler-strategy
+created: 2026-05-15
+updated: 2026-05-18
 ---
 
-# ADR-002 Trace Evidence Drives Compiler Strategy
+# ADR-002: Trace Evidence Drives Compiler Strategy
 
 ## Context
 
 F001 and ADR-001 make `RPAAcceptedTrace` the single accepted RPA timeline. During trace-source convergence, a GitHub Trending recording exposed a second boundary: unifying the timeline into trace does not mean every trace can be compiled through the same deterministic replay strategy.
 
-The problematic shape is an AI extraction trace with an observed output such as `{"Star count": "48.2k"}` but without structured snapshot field evidence. If the compiler treats that output label as a replay locator, it can generate internal-detail XPath code such as an `aui-form-item` ancestor lookup on a GitHub page. That is a false abstraction: the recorded output is evidence that a value existed, not proof that the replay page has an AUI detail field with that label.
+An AI extraction trace may contain an observed output such as `{"Star count": "48.2k"}` without structured snapshot field evidence. If the compiler treats that output label as a replay locator, it can invent false DOM assumptions. The recorded output is evidence that a value existed, not proof that the replay page has a stable field with that label.
 
 ## Decision
 
-`RPAAcceptedTrace` remains the only accepted timeline carrier, but compiler strategy must be selected from evidence profile, not from output shape alone.
+`RPAAcceptedTrace` remains the only accepted timeline carrier, but compiler strategy must be selected from the trace evidence profile, not from output shape alone.
 
-The compiler may deterministically render snapshot extraction only when `signals.extract_snapshot.fields` contains usable structured field evidence from the recording snapshot. Observed `trace.output` keys are not sufficient to invent field locators.
+Compiler strategy follows this priority:
 
-Compiler strategy should follow this priority:
-
-1. Navigation side-effect evidence: render `expect_navigation`, `wait_for_url`, or tab handling from trace signals/actions.
-2. Structured snapshot evidence: render deterministic field extraction only from explicit `extract_snapshot.fields`.
-3. Runtime semantic evidence: preserve runtime AI when replay requires semantic judgment or when deterministic evidence is missing.
+1. Navigation side-effect evidence: render navigation waits or tab handling from trace signals/actions.
+2. Structured snapshot evidence: render deterministic field extraction only from explicit `signals.extract_snapshot.fields`.
+3. Runtime semantic evidence: preserve runtime AI when replay requires semantic judgment or deterministic evidence is missing.
 4. Embedded AI code evidence: preserve bounded recording-time AI code when it is the best available replay body and can be safely generalized.
 5. Dataflow evidence: prefer `_results` / `output_key` references over observed literals.
 6. Output-only evidence: never invent DOM extraction from output keys alone.
 
-## Rejected Options
+## Alternatives
 
 - Add a GitHub-specific `star_count` compiler rule. Rejected because GitHub is a validation sample, not an architecture source.
 - Compile all AI extraction traces through runtime AI. Rejected because it discards valid structured snapshot evidence and weakens trace-first replay.
@@ -39,13 +39,13 @@ Compiler strategy should follow this priority:
 
 ## Consequences
 
-- Existing tests that expected output-label fallback snapshot extraction must be updated; that behavior is no longer valid for the generic compiler.
-- Structured AUI/detail extraction remains supported when the trace contains explicit structured field evidence.
-- Weak extraction traces may replay through runtime AI instead of deterministic code until the recorder captures stronger snapshot facts.
+- Tests that expected output-label fallback snapshot extraction must be updated; that behavior is no longer valid for the generic compiler.
+- Structured extraction remains supported when the trace contains explicit field evidence.
+- Weak extraction traces may replay through runtime AI until the recorder captures stronger snapshot facts.
 - Final F001 readiness must include golden tests for both positive structured snapshot extraction and negative output-only extraction.
 
-## Links
+## Evidence
 
-- Feature: `docs/features/F001-rpa-trace-source-convergence.md`
-- Evidence: `docs/evidence/EV-001-rpa-trace-source-convergence.md`
-- Generalization notes: `docs/rpa/trace-skill-compiler-generalization.md`
+- Feature: [F001 RPA Trace Source Convergence](../features/F001-rpa-trace-source-convergence.md)
+- Evidence: [EV-001 RPA Trace Source Convergence Evidence](../evidence/EV-001-rpa-trace-source-convergence.md)
+- Generalization notes: [TraceSkillCompiler Generalization](../rpa/trace-skill-compiler-generalization.md)
