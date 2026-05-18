@@ -100,6 +100,33 @@ class _FakePage:
         return await self.main_frame.evaluate(script, arg)
 
 
+class _FakeNestedPage:
+    def __init__(self, *, outer_result=None, inner_result=None):
+        self.url = "https://example.test/nested-region"
+        self.main_frame = _FakeFrame("main", result={})
+        self.outer_frame = _FakeFrame(
+            "outer",
+            result=outer_result or {},
+            bbox={"x": 90, "y": 70, "width": 240, "height": 180},
+            parent_frame=self.main_frame,
+        )
+        self.inner_frame = _FakeFrame(
+            "inner",
+            result=inner_result or {},
+            bbox={"x": 120, "y": 100, "width": 80, "height": 60},
+            parent_frame=self.outer_frame,
+        )
+        for frame in (self.main_frame, self.outer_frame, self.inner_frame):
+            frame.page = self
+        self.frames = [self.main_frame, self.outer_frame, self.inner_frame]
+
+    async def title(self):
+        return "Nested Region Page"
+
+    async def evaluate(self, script, arg):
+        return await self.main_frame.evaluate(script, arg)
+
+
 def test_region_context_storage_replaces_prior_context_for_session():
     manager = RPASessionManager()
     manager.sessions["session-1"] = _session()
@@ -274,6 +301,43 @@ async def test_analyze_region_on_page_keeps_main_frame_when_iframe_overlap_is_mi
     assert evidence["frame_path"] == []
     assert evidence["rect"] == {"x": 0, "y": 0, "width": 100, "height": 80}
     assert evidence["local_text"] == ["Main content"]
+
+
+@pytest.mark.anyio
+async def test_analyze_region_on_page_prefers_deeper_frame_when_overlap_ties(monkeypatch):
+    page = _FakeNestedPage(
+        outer_result={"local_text": ["Outer frame"]},
+        inner_result={
+            "intersecting_elements": [{"tag": "table", "text": "Nested table"}],
+            "dominant_container": {"tag": "table", "text": "Nested table"},
+            "local_text": ["Nested table"],
+            "warnings": [],
+        },
+    )
+
+    async def fake_build_frame_path(frame):
+        if frame.name == "inner":
+            return ["iframe[title='outer']", "iframe[title='inner']"]
+        if frame.name == "outer":
+            return ["iframe[title='outer']"]
+        return []
+
+    monkeypatch.setattr("backend.rpa.region_context.build_frame_path", fake_build_frame_path)
+
+    evidence = await analyze_region_on_page(
+        page,
+        RPARegionAnalyzeRequest(
+            tab_id="tab-1",
+            rect=RPARegionRect(x=120, y=100, width=80, height=60),
+            viewport=RPARegionViewport(width=1280, height=720),
+        ),
+    )
+
+    assert page.outer_frame.evaluated_rect is None
+    assert page.inner_frame.evaluated_rect == {"x": 0, "y": 0, "width": 80, "height": 60}
+    assert evidence["frame_path"] == ["iframe[title='outer']", "iframe[title='inner']"]
+    assert evidence["rect"] == {"x": 0, "y": 0, "width": 80, "height": 60}
+    assert evidence["local_text"] == ["Nested table"]
 
 
 def test_manager_get_page_for_tab_uses_active_or_requested_tab():

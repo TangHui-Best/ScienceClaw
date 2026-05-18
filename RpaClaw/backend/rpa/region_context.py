@@ -451,6 +451,26 @@ def _frame_local_rect(rect: Dict[str, float], frame_box: Dict[str, float]) -> Di
     }
 
 
+def _frame_depth(frame: Any) -> int:
+    depth = 0
+    current = getattr(frame, "parent_frame", None)
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        depth += 1
+        current = getattr(current, "parent_frame", None)
+    return depth
+
+
+def _rect_area(rect: Dict[str, float]) -> float:
+    return max(0.0, float(rect.get("width", 0) or 0) * float(rect.get("height", 0) or 0))
+
+
+def _areas_nearly_equal(left: float, right: float) -> bool:
+    tolerance = max(1e-6, max(abs(left), abs(right)) * 1e-9)
+    return abs(left - right) <= tolerance
+
+
 async def _dominant_frame_for_rect(page: Any, rect: Dict[str, float]) -> tuple[Any, Dict[str, float], List[str], List[str]]:
     warnings: List[str] = []
     frames = list(getattr(page, "frames", None) or [])
@@ -458,6 +478,8 @@ async def _dominant_frame_for_rect(page: Any, rect: Dict[str, float]) -> tuple[A
     best_frame = None
     best_box: Dict[str, float] | None = None
     best_area = 0.0
+    best_depth = -1
+    best_box_area = 0.0
 
     for frame in frames:
         if main_frame is not None and frame is main_frame:
@@ -472,15 +494,27 @@ async def _dominant_frame_for_rect(page: Any, rect: Dict[str, float]) -> tuple[A
             continue
         frame_box = _rect_dict(box)
         area = _intersection_area(rect, frame_box)
-        if area > best_area:
+        depth = _frame_depth(frame)
+        box_area = _rect_area(frame_box)
+        if (
+            area > best_area and not _areas_nearly_equal(area, best_area)
+        ) or (
+            _areas_nearly_equal(area, best_area)
+            and (
+                depth > best_depth
+                or (depth == best_depth and (best_box_area <= 0 or box_area < best_box_area))
+            )
+        ):
             best_area = area
             best_frame = frame
             best_box = frame_box
+            best_depth = depth
+            best_box_area = box_area
 
     if best_frame is None or best_box is None or best_area <= 0:
         return page, rect, [], warnings
 
-    selected_area = max(0.0, float(rect.get("width", 0) or 0) * float(rect.get("height", 0) or 0))
+    selected_area = _rect_area(rect)
     main_area = max(0.0, selected_area - best_area)
     if best_area <= main_area:
         return page, rect, [], warnings
