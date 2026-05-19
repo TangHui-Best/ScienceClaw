@@ -85,7 +85,7 @@ class MockWebSocket {
     setTimeout(() => this.onopen?.(), 0);
   }
 
-  send() {}
+  send = vi.fn();
 
   close() {
     this.readyState = 3;
@@ -124,6 +124,63 @@ const dispatchSelectedRegion = (
   pageRoot!.dispatchEvent(new CustomEvent('rpa-region-selected', {
     bubbles: true,
     detail: attachment,
+  }));
+};
+
+const getCanvas = (root: HTMLElement) => {
+  const canvas = root.querySelector<HTMLCanvasElement>('canvas');
+  expect(canvas).not.toBeNull();
+  canvas!.getBoundingClientRect = () => ({
+    left: 0,
+    top: 0,
+    width: 1280,
+    height: 720,
+    right: 1280,
+    bottom: 720,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  });
+  return canvas!;
+};
+
+const selectRegionButton = (root: HTMLElement) => {
+  const button = root.querySelector<HTMLButtonElement>('button[aria-label="Select page region"]');
+  expect(button).not.toBeNull();
+  return button!;
+};
+
+const syncActiveScreencastTab = async () => {
+  const ws = MockWebSocket.instances[0];
+  expect(ws).toBeDefined();
+  ws.onmessage?.({
+    data: JSON.stringify({
+      type: 'tabs_snapshot',
+      tabs: [
+        {
+          tab_id: 'tab-1',
+          title: 'Results',
+          url: 'https://example.test/results',
+          status: 'ready',
+          active: true,
+        },
+      ],
+    }),
+  } as MessageEvent);
+  await flushAsyncUpdates();
+};
+
+const dispatchCanvasMouse = (
+  canvas: HTMLCanvasElement,
+  type: 'mousedown' | 'mousemove' | 'mouseup',
+  clientX: number,
+  clientY: number,
+) => {
+  canvas.dispatchEvent(new MouseEvent(type, {
+    bubbles: true,
+    clientX,
+    clientY,
+    button: 0,
   }));
 };
 
@@ -648,6 +705,154 @@ describe('RecorderPage trace timeline convergence', () => {
       mode: 'trace_first',
       region_id: 'region-b',
     });
+
+    app.unmount();
+  });
+
+  it('does not forward canvas mouse events to screencast while selecting a region', async () => {
+    get.mockResolvedValue({ data: { session: { timeline: [] } } });
+
+    const { app, root } = await mountRecorderPage();
+    await syncActiveScreencastTab();
+    const canvas = getCanvas(root);
+    const ws = MockWebSocket.instances[0];
+    ws.send.mockClear();
+
+    selectRegionButton(root).click();
+    await flushAsyncUpdates();
+    expect(root.textContent).toContain('Drag to select page region · Esc to cancel');
+
+    dispatchCanvasMouse(canvas, 'mousedown', 20, 30);
+    dispatchCanvasMouse(canvas, 'mousemove', 120, 150);
+    dispatchCanvasMouse(canvas, 'mouseup', 120, 150);
+    await flushAsyncUpdates();
+
+    expect(ws.send).not.toHaveBeenCalled();
+
+    app.unmount();
+  });
+
+  it('analyzes a valid canvas drag and sends the next chat with the selected region id', async () => {
+    get.mockResolvedValue({ data: { session: { timeline: [] } } });
+    post.mockImplementation((url: string) => {
+      if (url === '/rpa/session/start') {
+        return Promise.resolve({
+          data: {
+            status: 'success',
+            session: { id: 'session-1' },
+          },
+        });
+      }
+      if (url === '/rpa/session/session-1/region/analyze') {
+        return Promise.resolve({
+          data: {
+            region_id: 'region-42',
+            summary: 'Search results area',
+            inferred_kind: 'list_region',
+            evidence: { nodeCount: 5 },
+          },
+        });
+      }
+      return Promise.resolve({ data: {} });
+    });
+    mockChatSse([
+      'event: agent_done\ndata: {"message":"Task completed","trace_count":1}\n\n',
+    ]);
+
+    const { app, root } = await mountRecorderPage();
+    await syncActiveScreencastTab();
+    const canvas = getCanvas(root);
+
+    selectRegionButton(root).click();
+    await flushAsyncUpdates();
+    dispatchCanvasMouse(canvas, 'mousedown', 20, 30);
+    dispatchCanvasMouse(canvas, 'mousemove', 120, 150);
+    dispatchCanvasMouse(canvas, 'mouseup', 120, 150);
+    await flushAsyncUpdates();
+
+    expect(post).toHaveBeenCalledWith('/rpa/session/session-1/region/analyze', {
+      tab_id: 'tab-1',
+      rect: {
+        x: 20,
+        y: 30,
+        width: 100,
+        height: 120,
+      },
+      viewport: {
+        width: 1280,
+        height: 720,
+      },
+    });
+    expect(root.textContent).toContain('Search results area');
+
+    const textarea = root.querySelector<HTMLTextAreaElement>('textarea');
+    expect(textarea).not.toBeNull();
+    textarea!.value = 'extract selected results';
+    textarea!.dispatchEvent(new Event('input'));
+    await flushAsyncUpdates();
+
+    root.querySelector<HTMLButtonElement>('button.flex.h-8.w-8')?.click();
+    await flushAsyncUpdates();
+
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    const [, requestInit] = fetchMock.mock.calls[0];
+    expect(JSON.parse(String((requestInit as RequestInit).body))).toMatchObject({
+      message: 'extract selected results',
+      mode: 'trace_first',
+      region_id: 'region-42',
+    });
+
+    app.unmount();
+  });
+
+  it('cancels region selection with Escape without analyzing', async () => {
+    get.mockResolvedValue({ data: { session: { timeline: [] } } });
+
+    const { app, root } = await mountRecorderPage();
+    await syncActiveScreencastTab();
+    const canvas = getCanvas(root);
+
+    selectRegionButton(root).click();
+    await flushAsyncUpdates();
+    expect(root.textContent).toContain('Drag to select page region · Esc to cancel');
+
+    canvas.dispatchEvent(new KeyboardEvent('keydown', {
+      bubbles: true,
+      key: 'Escape',
+      code: 'Escape',
+    }));
+    await flushAsyncUpdates();
+
+    expect(root.textContent).not.toContain('Drag to select page region · Esc to cancel');
+    expect(post).not.toHaveBeenCalledWith(
+      '/rpa/session/session-1/region/analyze',
+      expect.anything(),
+    );
+
+    app.unmount();
+  });
+
+  it('silently cancels tiny region selections without analyzing', async () => {
+    get.mockResolvedValue({ data: { session: { timeline: [] } } });
+
+    const { app, root } = await mountRecorderPage();
+    await syncActiveScreencastTab();
+    const canvas = getCanvas(root);
+
+    selectRegionButton(root).click();
+    await flushAsyncUpdates();
+    expect(root.textContent).toContain('Drag to select page region · Esc to cancel');
+
+    dispatchCanvasMouse(canvas, 'mousedown', 20, 30);
+    dispatchCanvasMouse(canvas, 'mousemove', 24, 35);
+    dispatchCanvasMouse(canvas, 'mouseup', 24, 35);
+    await flushAsyncUpdates();
+
+    expect(root.textContent).not.toContain('Drag to select page region · Esc to cancel');
+    expect(post).not.toHaveBeenCalledWith(
+      '/rpa/session/session-1/region/analyze',
+      expect.anything(),
+    );
 
     app.unmount();
   });

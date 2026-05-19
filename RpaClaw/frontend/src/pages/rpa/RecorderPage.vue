@@ -48,6 +48,14 @@ import {
   shouldSubmitRpaAssistantComposer,
 } from '@/utils/rpaAssistantModel';
 import { buildRpaAssistantRequestHeaders } from '@/utils/rpaAssistantRequest';
+import {
+  buildRegionAnalyzePayload,
+  formatRegionAttachmentSummary as formatAnalyzedRegionAttachmentSummary,
+  isUsableRegionRect,
+  type RegionAnalyzePayload,
+  type RegionAnalyzeResponse,
+  type ViewportPoint,
+} from '@/utils/rpaRegionSelection';
 
 const router = useRouter();
 const route = useRoute();
@@ -201,10 +209,23 @@ const sessionWithTimeline = (payload: any) => ({
 
 interface PendingRegionAttachment {
   regionId: string;
+  tabId?: string;
   kind?: string;
   summary?: string;
+  inferredKind?: string;
+  evidence?: Record<string, unknown>;
   pageTitle?: string;
   pageUrl?: string;
+  rect?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  viewport?: {
+    width: number;
+    height: number;
+  };
   bounds?: {
     x: number;
     y: number;
@@ -241,8 +262,29 @@ const selectedModelId = ref<string | null>(null);
 const modelDropdownOpen = ref(false);
 const pendingRegion = ref<PendingRegionAttachment | null>(null);
 const regionError = ref('');
+const selectingRegion = ref(false);
+
+interface RegionDragPoint {
+  viewport: ViewportPoint;
+  local: ViewportPoint;
+}
+
+const regionDragStart = ref<RegionDragPoint | null>(null);
+const regionDragCurrent = ref<RegionDragPoint | null>(null);
 
 const t = (key: string) => String(i18n.global.t(key));
+
+const regionSelectionOverlayRect = computed(() => {
+  if (!regionDragStart.value || !regionDragCurrent.value) return null;
+  const start = regionDragStart.value.local;
+  const current = regionDragCurrent.value.local;
+  return {
+    left: Math.min(start.x, current.x),
+    top: Math.min(start.y, current.y),
+    width: Math.abs(current.x - start.x),
+    height: Math.abs(current.y - start.y),
+  };
+});
 
 const regionKindLabel = (kind?: string) => {
   if (kind === 'page_region' || kind === 'region') return t('Page region evidence');
@@ -269,6 +311,23 @@ const applyPendingRegionAttachment = (attachment: PendingRegionAttachment) => {
   if (!attachment.regionId) return;
   pendingRegion.value = { ...attachment };
   regionError.value = '';
+};
+
+const applyAnalyzedRegionAttachment = (
+  payload: RegionAnalyzePayload,
+  response: RegionAnalyzeResponse,
+) => {
+  applyPendingRegionAttachment({
+    regionId: response.region_id,
+    tabId: payload.tab_id,
+    kind: response.inferred_kind || 'page_region',
+    summary: formatAnalyzedRegionAttachmentSummary(response),
+    inferredKind: response.inferred_kind,
+    evidence: response.evidence,
+    rect: payload.rect,
+    viewport: payload.viewport,
+    bounds: payload.rect,
+  });
 };
 
 const clearPendingRegion = () => {
@@ -682,7 +741,124 @@ const focusCanvas = () => {
   canvasRef.value?.focus();
 };
 
+const clearRegionDragState = () => {
+  regionDragStart.value = null;
+  regionDragCurrent.value = null;
+};
+
+const startRegionSelection = () => {
+  if (!sessionId.value || sending.value || agentRunning.value) return;
+  selectingRegion.value = true;
+  regionError.value = '';
+  clearRegionDragState();
+  void nextTick(() => focusCanvas());
+};
+
+const cancelRegionSelection = () => {
+  selectingRegion.value = false;
+  clearRegionDragState();
+};
+
+const getRegionDragPoint = (e: MouseEvent): RegionDragPoint | null => {
+  const canvas = canvasRef.value;
+  if (!canvas) return null;
+
+  const rect = canvas.getBoundingClientRect();
+  const viewport = mapClientPointToViewportPoint({
+    clientX: e.clientX,
+    clientY: e.clientY,
+    containerRect: {
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+    },
+    frameSize: screencastFrameSize.value,
+    inputSize: screencastInputSize.value,
+  });
+  if (!viewport) return null;
+
+  return {
+    viewport,
+    local: {
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    },
+  };
+};
+
+const finalizeRegionSelection = async (endPoint: RegionDragPoint) => {
+  const startPoint = regionDragStart.value;
+  const sid = sessionId.value;
+  if (!startPoint || !sid) {
+    cancelRegionSelection();
+    return;
+  }
+
+  regionDragCurrent.value = endPoint;
+  const payload = buildRegionAnalyzePayload({
+    tabId: activeTabId.value || '',
+    start: startPoint.viewport,
+    end: endPoint.viewport,
+    inputSize: screencastInputSize.value,
+  });
+
+  if (!isUsableRegionRect(payload.rect)) {
+    cancelRegionSelection();
+    return;
+  }
+
+  try {
+    const resp = await apiClient.post(`/rpa/session/${sid}/region/analyze`, payload);
+    applyAnalyzedRegionAttachment(payload, resp.data as RegionAnalyzeResponse);
+  } catch (err: any) {
+    regionError.value = err.response?.data?.detail || t('Region analysis failed, please select again');
+  } finally {
+    selectingRegion.value = false;
+    clearRegionDragState();
+  }
+};
+
+const handleRegionSelectionMouse = (e: MouseEvent) => {
+  e.preventDefault();
+  if (e.type === 'mousedown') {
+    const point = getRegionDragPoint(e);
+    if (!point) return;
+    regionDragStart.value = point;
+    regionDragCurrent.value = point;
+    return;
+  }
+
+  if (!regionDragStart.value) return;
+
+  const point = getRegionDragPoint(e);
+  if (!point) return;
+
+  if (e.type === 'mousemove') {
+    regionDragCurrent.value = point;
+    return;
+  }
+
+  if (e.type === 'mouseup') {
+    void finalizeRegionSelection(point);
+  }
+};
+
 const sendInputEvent = (e: Event) => {
+  if (selectingRegion.value) {
+    if (e instanceof MouseEvent && !(e instanceof WheelEvent)) {
+      handleRegionSelectionMouse(e);
+    } else if (e instanceof KeyboardEvent) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        cancelRegionSelection();
+      }
+    } else if (e instanceof WheelEvent) {
+      e.preventDefault();
+    }
+    return;
+  }
+
   if (!screencastWs || screencastWs.readyState !== WebSocket.OPEN) return;
   const canvas = canvasRef.value;
   if (!canvas) return;
@@ -766,6 +942,7 @@ const sendInputEvent = (e: Event) => {
 };
 
 const handlePaste = (e: ClipboardEvent) => {
+  if (selectingRegion.value) return;
   if (!screencastWs || screencastWs.readyState !== WebSocket.OPEN) return;
   const text = e.clipboardData?.getData('text');
   if (!text) return;
@@ -1094,7 +1271,8 @@ const sendMessage = async () => {
             <canvas
               v-if="sessionId"
               ref="canvasRef"
-              class="w-full h-full object-contain cursor-default"
+              class="w-full h-full object-contain"
+              :class="selectingRegion ? 'cursor-crosshair' : 'cursor-default'"
               tabindex="0"
               @click="focusCanvas"
               @mousedown="sendInputEvent"
@@ -1112,10 +1290,27 @@ const sendMessage = async () => {
               <p v-else-if="error" class="text-sm font-medium text-red-400">{{ error }}</p>
             </div>
 
+            <div
+              v-if="selectingRegion && regionSelectionOverlayRect"
+              class="pointer-events-none absolute border border-white/90 bg-[#831bd7]/20 shadow-[0_0_0_1px_rgba(131,27,215,0.75)]"
+              :style="{
+                left: `${regionSelectionOverlayRect.left}px`,
+                top: `${regionSelectionOverlayRect.top}px`,
+                width: `${regionSelectionOverlayRect.width}px`,
+                height: `${regionSelectionOverlayRect.height}px`,
+              }"
+            ></div>
+
             <div v-if="error && sessionId" class="absolute top-4 right-4 max-w-xs bg-red-500/90 text-white text-[11px] px-3 py-2 rounded-lg shadow-lg">
               {{ error }}
             </div>
-            <div v-if="sessionId" class="absolute bottom-3 left-1/2 -translate-x-1/2 bg-white/10 backdrop-blur-md border border-white/20 px-3 py-1.5 rounded-full flex items-center gap-2">
+            <div
+              v-if="selectingRegion"
+              class="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-white/20 bg-black/55 px-3 py-1.5 text-[10px] font-bold text-white shadow-lg backdrop-blur-md"
+            >
+              {{ t('Drag to select page region · Esc to cancel') }}
+            </div>
+            <div v-else-if="sessionId" class="absolute bottom-3 left-1/2 -translate-x-1/2 bg-white/10 backdrop-blur-md border border-white/20 px-3 py-1.5 rounded-full flex items-center gap-2">
               <Radio class="text-red-400 animate-pulse" :size="14" />
               <span class="text-white text-[10px] font-bold tracking-wider uppercase">实时 CDP 串流</span>
             </div>
@@ -1353,7 +1548,8 @@ const sendMessage = async () => {
                   class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#f2f4f6] text-gray-500 transition-colors disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white/10 dark:text-gray-300"
                   :aria-label="t('Select page region')"
                   :title="t('Drag to select page region · Esc to cancel')"
-                  disabled
+                  :disabled="sending || agentRunning || !sessionId"
+                  @click="startRegionSelection"
                 >
                   <Crop :size="13" />
                 </button>
