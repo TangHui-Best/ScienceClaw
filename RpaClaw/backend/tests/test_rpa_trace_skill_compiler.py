@@ -1438,6 +1438,14 @@ def test_region_single_value_prefers_nested_scope_locator():
         user_instruction="Extract order status from the selected region",
         description="Extract selected order status",
         output_key="order_status",
+        locator_candidates=[
+            {
+                "selected": True,
+                "kind": "text",
+                "locator": {"method": "text", "value": "Order A Paid Refund"},
+                "source": "trace_target",
+            }
+        ],
         region_context={
             "inferred_kind": "single_value",
             "locator_candidates": [
@@ -1472,6 +1480,7 @@ def test_region_single_value_prefers_nested_scope_locator():
     body = _execute_body(script)
 
     assert "get_by_text('Order A').get_by_text('Paid')" in body
+    assert "get_by_text('Order A Paid Refund')" not in body
     assert "_results['order_status'] = _result" in body
 
 

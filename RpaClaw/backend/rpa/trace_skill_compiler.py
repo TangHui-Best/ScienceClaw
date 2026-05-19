@@ -1363,6 +1363,26 @@ def _trace_region_frame_path(trace: RPAAcceptedTrace, region_context: Dict[str, 
     return list(trace.frame_path or [])
 
 
+def _locator_candidate_dicts(value: Any) -> List[Dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _prioritized_region_locator_candidates(*groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    for index, group in enumerate(groups):
+        if not group:
+            continue
+        candidates = list(group)
+        for fallback_group in groups[index + 1 :]:
+            for candidate in fallback_group:
+                fallback = dict(candidate)
+                fallback.pop("selected", None)
+                candidates.append(fallback)
+        return candidates
+    return []
+
+
 def _trace_region_value_locator_candidates(
     trace: RPAAcceptedTrace,
     region_context: Dict[str, Any],
@@ -1374,13 +1394,11 @@ def _trace_region_value_locator_candidates(
             if not isinstance(element, dict):
                 continue
             candidates = element.get("nested_locator_candidates")
-            if isinstance(candidates, list):
-                nested_candidates.extend(item for item in candidates if isinstance(item, dict))
-    root_candidates = region_context.get("locator_candidates")
-    return (
-        list(trace.locator_candidates or [])
-        + nested_candidates
-        + (root_candidates if isinstance(root_candidates, list) else [])
+            nested_candidates.extend(_locator_candidate_dicts(candidates))
+    return _prioritized_region_locator_candidates(
+        nested_candidates,
+        _locator_candidate_dicts(region_context.get("locator_candidates")),
+        _locator_candidate_dicts(trace.locator_candidates),
     )
 
 
