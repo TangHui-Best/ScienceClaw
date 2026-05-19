@@ -808,11 +808,16 @@ describe('RecorderPage trace timeline convergence', () => {
 
     const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
     const [, requestInit] = fetchMock.mock.calls[0];
-    expect(JSON.parse(String((requestInit as RequestInit).body))).toMatchObject({
+    const body = JSON.parse(String((requestInit as RequestInit).body));
+    expect(body).toEqual({
       message: 'extract selected results',
       mode: 'trace_first',
       region_id: 'region-42',
     });
+    expect(body).not.toHaveProperty('region_context');
+    expect(body).not.toHaveProperty('evidence');
+    expect(body).not.toHaveProperty('rect');
+    expect(body).not.toHaveProperty('viewport');
 
     app.unmount();
   });
