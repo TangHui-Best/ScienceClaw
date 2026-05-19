@@ -1141,6 +1141,62 @@ async def test_recording_runtime_agent_preserves_extract_snapshot_frame_path(mon
     assert result.trace.signals["extract_snapshot"]["frame_path"] == ["iframe[title='detail']"]
 
 
+def test_recording_runtime_agent_fills_region_extract_snapshot_from_local_text(monkeypatch):
+    async def run_test():
+        async def fake_build_page_snapshot(_page, _build_frame_path):
+            return {
+                "url": "https://example.test/pricing",
+                "title": "Pricing",
+                "frames": [],
+                "actionable_nodes": [],
+                "content_nodes": [],
+                "containers": [],
+                "detail_views": [],
+            }
+
+        async def planner(_payload):
+            return {
+                "description": "Extract model count from selected region",
+                "action_type": "extract_snapshot",
+                "expected_effect": "extract",
+                "output_key": "model_count",
+                "source": "detail_views",
+                "fields": [
+                    {
+                        "label": "模型数量",
+                        "value": "",
+                        "visible": True,
+                        "value_kind": "number",
+                    }
+                ],
+            }
+
+        monkeypatch.setattr("backend.rpa.recording_runtime_agent.build_page_snapshot", fake_build_page_snapshot)
+
+        result = await RecordingRuntimeAgent(planner=planner).run(
+            page=_FakePage(),
+            instruction="获取框选区域的模型数量",
+            runtime_results={},
+            region_context={
+                "region_id": "region-1",
+                "page_url": "https://example.test/pricing",
+                "evidence": {
+                    "inferred_kind": "text_region",
+                    "local_text": ["Total 99 models"],
+                    "rect": {"x": 10, "y": 20, "width": 110, "height": 34},
+                },
+            },
+        )
+
+        assert result.success is True
+        assert result.output == {"模型数量": "99"}
+        assert result.trace.signals["extract_snapshot"]["source"] == "selected_region.local_text"
+        assert result.trace.signals["extract_snapshot"]["fields"][0]["value"] == "99"
+        assert result.trace.region_context["local_text"] == ["Total 99 models"]
+
+    asyncio.run(run_test())
+
+
 @pytest.mark.asyncio
 async def test_recording_runtime_agent_attaches_locator_stability_metadata_when_available():
     async def planner(_payload):

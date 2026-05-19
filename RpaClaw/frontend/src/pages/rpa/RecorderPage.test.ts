@@ -453,6 +453,31 @@ describe('RecorderPage trace timeline convergence', () => {
     app.unmount();
   });
 
+  it('reenables the chat input when a stream closes without a terminal event', async () => {
+    get.mockResolvedValue({ data: { session: { timeline: [] } } });
+    mockChatSse([
+      'event: agent_thought\ndata: {"text":"Planning one trace-first recording command."}\n\n',
+    ]);
+
+    const { app, root } = await mountRecorderPage();
+    await vi.advanceTimersByTimeAsync(3000);
+    await flushAsyncUpdates();
+
+    const textarea = root.querySelector<HTMLTextAreaElement>('textarea');
+    expect(textarea).not.toBeNull();
+    textarea!.value = 'extract selected region';
+    textarea!.dispatchEvent(new Event('input'));
+    await flushAsyncUpdates();
+
+    root.querySelector<HTMLButtonElement>('button.flex.h-8.w-8')?.click();
+    await flushAsyncUpdates();
+
+    expect(textarea!.disabled).toBe(false);
+    expect(textarea!.placeholder).not.toBe('Agent 运行中...');
+
+    app.unmount();
+  });
+
   it('keeps pending region and shows a prompt when sending empty text', async () => {
     get.mockResolvedValue({ data: { session: { timeline: [] } } });
 

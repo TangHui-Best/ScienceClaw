@@ -395,10 +395,11 @@ class TraceSkillCompiler:
             "            continue",
             "    return ''",
             "",
-            "async def _execute_runtime_ai_instruction(page, results, kwargs, instruction, output_key):",
+            "async def _execute_runtime_ai_instruction(page, results, kwargs, instruction, output_key, region_context=None):",
             "    from backend.rpa.recording_runtime_agent import RecordingRuntimeAgent",
             "    agent = RecordingRuntimeAgent(model_config=_runtime_ai_model_config(kwargs))",
-            "    outcome = await agent.run(page=page, instruction=instruction, runtime_results=results)",
+            "    scoped_region = region_context if isinstance(region_context, dict) and region_context else None",
+            "    outcome = await agent.run(page=page, instruction=instruction, runtime_results=results, region_context=scoped_region)",
             "    if not outcome.success:",
             "        detail = '; '.join(str(item.message) for item in outcome.diagnostics) or outcome.message",
             "        raise RuntimeError(f'Runtime semantic instruction failed: {detail}')",
@@ -805,6 +806,13 @@ class TraceSkillCompiler:
         previous_traces: List[RPAAcceptedTrace],
         used_output_keys: Dict[str, int],
     ) -> List[str]:
+        if _is_selected_region_local_text_extract(trace):
+            return self._render_runtime_ai_instruction_trace(
+                index,
+                trace,
+                used_output_keys,
+                region_context=_trace_region_context(trace),
+            )
         if self._has_usable_snapshot_extract_fields(trace):
             return self._render_snapshot_extract_trace(index, trace, used_output_keys)
         region_lines = self._render_region_extract_trace(index, trace, used_output_keys)
@@ -943,13 +951,15 @@ class TraceSkillCompiler:
         index: int,
         trace: RPAAcceptedTrace,
         used_output_keys: Dict[str, int],
+        region_context: Optional[Dict[str, Any]] = None,
     ) -> List[str]:
         key = self._allocate_output_key(trace, trace.output_key or f"ai_result_{index}", used_output_keys)
         instruction = str(trace.user_instruction or trace.description or "").strip()
+        region_arg = f", {region_context!r}" if region_context else ""
         return [
             "",
             f"    # trace {index}: runtime semantic instruction",
-            f"    _result = await _execute_runtime_ai_instruction(current_page, _results, kwargs, {instruction!r}, {key!r})",
+            f"    _result = await _execute_runtime_ai_instruction(current_page, _results, kwargs, {instruction!r}, {key!r}{region_arg})",
         ]
 
     def _render_snapshot_extract_trace(
@@ -1382,6 +1392,11 @@ def _trace_region_frame_path(trace: RPAAcceptedTrace, region_context: Dict[str, 
     if isinstance(frame_path, list):
         return [str(item) for item in frame_path if str(item or "").strip()]
     return list(trace.frame_path or [])
+
+
+def _is_selected_region_local_text_extract(trace: RPAAcceptedTrace) -> bool:
+    signal = _trace_signal(trace, "extract_snapshot")
+    return str(signal.get("source") or "").strip() == "selected_region.local_text"
 
 
 def _locator_candidate_dicts(value: Any) -> List[Dict[str, Any]]:

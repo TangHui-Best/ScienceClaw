@@ -1228,6 +1228,9 @@ const sendMessage = async () => {
     agentRunning.value = false;
   } finally {
     sending.value = false;
+    if (!pendingConfirm.value) {
+      agentRunning.value = false;
+    }
   }
 };
 

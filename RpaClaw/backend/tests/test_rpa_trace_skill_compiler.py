@@ -1527,6 +1527,35 @@ def test_region_single_value_falls_back_when_first_nested_locator_is_invalid():
     assert "_execute_runtime_ai_instruction" not in body
 
 
+def test_selected_region_local_text_extract_compiles_to_scoped_runtime_ai():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        user_instruction="获取框选区域的模型数量",
+        description="Extract selected model count",
+        output_key="model_count",
+        output={"模型数量": "99"},
+        signals={
+            "extract_snapshot": {
+                "source": "selected_region.local_text",
+                "fields": [{"label": "模型数量", "value": "99", "visible": True}],
+            }
+        },
+        region_context={
+            "region_id": "region-1",
+            "inferred_kind": "text_region",
+            "local_text": ["Total 99 models"],
+        },
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    _assert_script_loads(script)
+    body = _execute_body(script)
+
+    assert "_execute_runtime_ai_instruction(current_page, _results, kwargs, '获取框选区域的模型数量', 'model_count'," in body
+    assert "'region_id': 'region-1'" in body
+    assert "aui-form-item" not in body
+
+
 def test_region_table_extract_filters_to_selected_row_indexes():
     trace = RPAAcceptedTrace(
         trace_type=RPATraceType.AI_OPERATION,

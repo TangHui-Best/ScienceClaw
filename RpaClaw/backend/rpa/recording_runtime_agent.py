@@ -67,6 +67,7 @@ Rules:
 - If code is returned, it must define async def run(page, results).
 - Use action_type="extract_snapshot" only when the requested extract-only data is already present in snapshot.detail_views fields.
 - For extract_snapshot, return the relevant observed detail fields in the plan itself, including the detail view frame_path when present; do not generate Python code and do not reference `snapshot` inside `run()`.
+- For snapshot.mode="selected_region_snapshot", selected_region evidence is the authoritative scope. If you use extract_snapshot, fields must contain visible non-empty values copied from selected_region evidence; otherwise use run_python with selected region locator evidence.
 - `snapshot` is planner-only evidence. Generated Python can access only `page` and `results`.
 - 结果返回规则：
   - `results` 是普通 Python dict，只包含之前已成功步骤的输出结果。
@@ -219,6 +220,7 @@ class RecordingRuntimeAgent:
                     ],
                     message="Recording planner failed to return a valid plan.",
                 )
+        first_plan = _prepare_region_extract_snapshot_plan(first_plan, compact_region_context, instruction)
         first_llm_call = self._planner_llm_call_since(first_planner_call_index)
         first_result = await self.executor(page, first_plan, runtime_results)
         first_result = await _ensure_expected_effect(
@@ -356,6 +358,7 @@ class RecordingRuntimeAgent:
                 diagnostics=diagnostics,
                 message="Recording planner failed to return a valid repair plan.",
             )
+        repair_plan = _prepare_region_extract_snapshot_plan(repair_plan, compact_region_context, instruction)
         repair_llm_call = self._planner_llm_call_since(repair_planner_call_index)
         repair_result = await self.executor(page, repair_plan, runtime_results)
         repair_result = await _ensure_expected_effect(
@@ -721,6 +724,99 @@ def _snapshot_plan_fields(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
     if isinstance(extraction, dict) and isinstance(extraction.get("fields"), list):
         return [dict(field) for field in extraction["fields"] if isinstance(field, dict)]
     return []
+
+
+def _prepare_region_extract_snapshot_plan(
+    plan: Dict[str, Any],
+    region_context: Dict[str, Any],
+    instruction: str,
+) -> Dict[str, Any]:
+    if str(plan.get("action_type") or "").strip() != "extract_snapshot":
+        return plan
+    if not region_context or _extract_snapshot_plan_has_visible_value(plan):
+        return plan
+
+    local_text = [str(item or "").strip() for item in list(region_context.get("local_text") or [])]
+    local_text = [item for item in local_text if item]
+    if not local_text:
+        return plan
+
+    value, value_kind = _selected_region_local_text_value(instruction, plan, local_text)
+    if value == "":
+        return plan
+
+    label = _selected_region_extract_label(instruction, plan)
+    prepared = dict(plan)
+    prepared["source"] = "selected_region.local_text"
+    prepared["fields"] = [
+        {
+            "label": label,
+            "value": value,
+            "visible": True,
+            "value_kind": value_kind,
+        }
+    ]
+    return prepared
+
+
+def _extract_snapshot_plan_has_visible_value(plan: Dict[str, Any]) -> bool:
+    include_hidden = _normalize_bool(plan.get("include_hidden"))
+    include_empty = _normalize_bool(plan.get("include_empty"))
+    for field in _snapshot_plan_fields(plan):
+        if not str(field.get("label") or "").strip():
+            continue
+        if not bool(field.get("visible", True)) and not include_hidden:
+            continue
+        if field.get("value") == "" and not include_empty:
+            continue
+        return True
+    return False
+
+
+def _selected_region_extract_label(instruction: str, plan: Dict[str, Any]) -> str:
+    for field in _snapshot_plan_fields(plan):
+        label = str(field.get("label") or "").strip()
+        if label:
+            return label
+    output_key = str(plan.get("output_key") or "").strip()
+    if output_key:
+        return output_key
+    return "selected_region_value" if not instruction.strip() else instruction.strip()[:80]
+
+
+def _selected_region_local_text_value(
+    instruction: str,
+    plan: Dict[str, Any],
+    local_text: List[str],
+) -> tuple[str, str]:
+    combined = " ".join(local_text).strip()
+    if not combined:
+        return "", "empty"
+
+    label_text = " ".join(
+        str(field.get("label") or "")
+        for field in _snapshot_plan_fields(plan)
+        if isinstance(field, dict)
+    )
+    if _asks_for_numeric_region_value(f"{instruction} {label_text}"):
+        numbers = re.findall(r"(?<![\w.])-?\d+(?:\.\d+)?(?![\w.])", combined)
+        if len(numbers) == 1:
+            return numbers[0], "number"
+    return combined, "text"
+
+
+def _asks_for_numeric_region_value(text: str) -> bool:
+    normalized = text.lower()
+    markers = (
+        "数量",
+        "个数",
+        "总数",
+        "多少",
+        "count",
+        "number",
+        "total",
+    )
+    return any(marker in normalized for marker in markers)
 
 
 def _extract_snapshot_preview_code(plan: Dict[str, Any]) -> str:
