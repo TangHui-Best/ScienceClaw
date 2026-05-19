@@ -22,14 +22,24 @@ compiler、selector 或 extraction 的缺陷悄悄修在 Harness 里面。
 | Stateful SOP Capture-to-Skill | 用受管 Full SOP asset 模拟录制输入边界，重建 session-style accepted traces，编译完整 SOP Skill，并可控 replay。 | recording-to-Skill 内部链路漂移、accepted trace 缺失、完整 SOP 编译或 replay 失败。 |
 | Observability / blast radius | 汇总状态、failure categories、受影响资产、受影响页面形态、confidence risks。 | 判断失败是单点、资产级、runner 级，还是覆盖度不足。 |
 
-当前默认 repo-safe baseline 只有一个 candidate asset：
+当前 bootstrap baseline 已经有两个 blocking `candidate` assets：
 
 ```text
 data/rpa_harness_assets_bootstrap/hcap-4be6265f43eb42dfa259182207aa64cc
+data/rpa_harness_assets_bootstrap/hcap-de463b7bb608482e9b5bcdd5b78a224e
 ```
 
-所以 Harness 已经可运行，但置信度仍受 `single-candidate-asset-baseline`
-限制。真正提升价值的下一步是录制更多内网真实资产并审核 promoted。
+它们覆盖的真实 SOP 形态是：
+
+```text
+GitHub Trending -> 点击 tinyhumansai / openhuman -> 提取 fork_count
+GitHub Trending -> 点击 tinyhumansai / openhuman -> 提取 star_count
+```
+
+所以 Harness 已经能证明“沉淀 Full SOP 资产 -> accepted traces ->
+TraceSkillCompiler -> generated Skill -> controlled replay”的基本闭环。
+但当前覆盖仍集中在 GitHub 和简单详情页字段提取；真正提升价值的下一步是录制
+更多内网真实资产并审核 promoted。
 
 ## 环境准备
 
@@ -43,11 +53,11 @@ Harness 不需要启动 FastAPI backend 或 frontend dev server。它需要本�
 Python 环境、项目依赖，以及 Playwright/browser 依赖，因为 snapshot 和
 replay runner 会用到浏览器能力。
 
-内网迁移时，直接拉取包含 F009 的分支或 commit：
+内网迁移时，直接拉取当前 Harness 分支或 commit：
 
 ```text
 branch: codex/rpa-trace-first-harness
-current pushed HEAD: 909c72c20b2c3f8e6c58b7ed5f8b30ff401ff054
+minimum commit: f9fa5acba42a6d9d0d607a30b9accd96ed446ae0 or newer
 ```
 
 ## 标准执行命令
@@ -93,6 +103,45 @@ snapshot
 compiler
 skill_replay
 stateful_sop
+```
+
+### 工程判断报告
+
+Harness 的目的不是只输出 `passed/failed`，而是让用户和 Agent 判断：
+
+- 哪些 RPA Agent 核心链路被资产证明是健康的；
+- 哪些链路暴露了风险或覆盖不足；
+- 当前失败应该由资产、snapshot、planner、compiler、skill replay 还是
+  stateful SOP owning module 处理；
+- 某次优化是否真的被沉淀资产验证通过。
+
+因此执行资产后，Agent 应同时保留机器 JSON，并生成一份人类可读 Markdown
+分析报告。推荐位置：
+
+```text
+docs/rpa/harness/reports/YYYY-MM-DD-<scope>-governed-run.md
+```
+
+报告至少包含：
+
+```text
+执行对象
+执行命令
+Asset validation 摘要
+Governed regression 摘要
+Runner 输出摘要
+核心链路健康判断
+本次执行证明了什么
+暴露的风险与优化信号
+是否说明当前 RPA Agent 需要优化
+后续优化如何用同一批资产验收
+机器报告路径
+```
+
+已有示例：
+
+```text
+docs/rpa/harness/reports/2026-05-19-two-assets-governed-run.md
 ```
 
 ### 单独 runner
@@ -254,51 +303,129 @@ python -m backend.rpa.harness.run_asset_promote --assets data\rpa_harness_assets
    data/rpa_harness_assets_internal/<asset_id>
    ```
 
-2. 跑 asset validation。
+2. 生成 Review Packet，不要直接让人读原始 HTML / trace / checkpoint：
 
-3. 做 sensitivity review。内网页面 HTML、截图、凭证、session token、个人信息
-   不应复制到外部仓库。
-
-4. 做 expected signals review。expected signals 应表达业务意图，不应冻结偶然的
-   absolute selector 或临时页面文案。
-
-5. 审核通过后再编辑 `scenario.json` promoted：
-
-   ```json
-   {
-     "asset_status": "active",
-     "sensitivity": "local-only",
-     "governance": {
-       "promotion_status": "candidate",
-       "runner_modes": [
-         "offline_core_chain",
-         "skill_replay_e2e",
-         "stateful_sop_capture_to_skill"
-       ],
-       "core_chain_coverage": [
-         "html_to_raw_snapshot",
-         "raw_to_compact_snapshot",
-         "planner_action_selection",
-         "trace_to_skill",
-         "skill_replay",
-         "stateful_capture_to_skill"
-       ],
-       "expected_signals_reviewed": true,
-       "sensitivity_reviewed": true,
-       "review_notes": "Internal reviewed candidate asset."
-     }
-   }
+   ```powershell
+   $env:PYTHONPATH='RpaClaw'
+   python -m backend.rpa.harness.run_asset_review --assets data\rpa_harness_assets_internal --asset-id <asset_id>
    ```
 
-6. 对内网资产根目录跑 governed regression：
+3. 先升级到非阻塞 `candidate-lite` 观察层：
+
+   ```powershell
+   $env:PYTHONPATH='RpaClaw'
+   python -m backend.rpa.harness.run_asset_promote --assets data\rpa_harness_assets_internal --asset-id <asset_id> --level candidate-lite
+   ```
+
+4. 跑 governed regression，确认它只作为 warning-only observation，不污染
+   blocking baseline。
+
+5. 做 sensitivity review。内网页面 HTML、截图、凭证、session token、个人信息
+   不应复制到外部仓库。
+
+6. 做 expected signals review。expected signals 应表达业务意图，不应冻结偶然的
+   absolute selector 或临时页面文案。
+
+7. 明确确认 expected 和 sensitivity 后，用 CLI 升级为 blocking `candidate`。
+   不要手改 governance JSON：
+
+   ```powershell
+   $env:PYTHONPATH='RpaClaw'
+   python -m backend.rpa.harness.run_asset_promote --assets data\rpa_harness_assets_internal --asset-id <asset_id> --level candidate --confirm-expected --confirm-sensitivity
+   ```
+
+8. 对内网资产根目录跑 governed regression：
 
    ```powershell
    $env:PYTHONPATH='RpaClaw'
    python -m backend.rpa.harness.run_governed_regression --assets data\rpa_harness_assets_internal --format summary --lang zh
    ```
 
-`golden` 只给应当成为 blocking regression fixture 的资产。还在评估的资产先用
-`candidate`。
+9. 生成工程判断报告，说明本次资产执行证明了哪些核心链路健康、暴露了哪些风险、
+   是否需要优化 RPA Agent。
+
+`golden` 只给长期稳定、应当成为强 blocking regression fixture 的资产。刚通过
+人工确认的资产先用 `candidate`。
+
+## 可直接交给内网 Agent 的执行提示词
+
+下面这段提示词可以直接发给内网 Agent。把 `<asset_root>` 替换成内网资产根目录，
+必要时把 `<report_slug>` 换成更具体的名字。
+
+```text
+你是 ScienceClaw / RpaClaw 的 RPA Harness 执行 Agent。请严格按 Harness 工程目标执行：
+
+目标：
+基于已沉淀的 RPA Harness 资产执行核心链路，判断当前 RPA Agent 的 snapshot、planner/action selection、TraceSkillCompiler、Skill Replay、Stateful SOP capture-to-skill 链路是否健康；生成机器 JSON 和人类可读 Markdown 工程判断报告。
+
+工作目录：
+E:\Work-Project\OtherWork\ScienceClaw
+
+资产根目录：
+<asset_root>
+
+必须遵守：
+- 不访问 live URL 作为 oracle。
+- 不恢复 direct Agent chat。
+- 不用嵌套 Agent 去点击 RPA 产品 UI。
+- 不为了通过回归而添加站点特定 Harness 规则。
+- 先看 asset validation，再看 snapshot，再看 compiler，再看 skill replay，再看 stateful SOP。
+- 如果失败，定位最早失败层和 owning module，不要在 Harness 里掩盖 RPA core bug。
+- 报告以中文为主，必要技术名词保留英文。
+
+请执行：
+1. 设置环境：
+   $env:PYTHONPATH='RpaClaw'
+
+2. 跑资产校验：
+   python -m backend.rpa.harness.run_asset_validation --assets <asset_root> --output tmp-harness-asset-validation-<report_slug>.json
+
+3. 跑 governed regression：
+   python -m backend.rpa.harness.run_governed_regression --assets <asset_root> --output tmp-harness-governed-<report_slug>.json
+
+4. 读取两个 JSON 报告，提取：
+   - validation summary
+   - governed summary
+   - selected_asset_ids / excluded_asset_ids
+   - snapshot_failed / compiler_failed / skill_replay_failed / stateful_sop_failed
+   - observability.runner_signals
+   - observability.blast_radius
+   - stateful_sop.assets[*].accepted_trace_count
+   - stateful_sop.assets[*].replay.actual_output
+   - skill_replay.assets 中带 output_key 的输出项
+
+5. 生成 Markdown 工程判断报告：
+   docs/rpa/harness/reports/YYYY-MM-DD-<report_slug>-governed-run.md
+
+报告必须包含这些章节：
+- 执行结论
+- 执行对象
+- 执行命令
+- Asset Validation
+- Governed Regression
+- Runner 输出摘要
+- 核心链路健康判断
+- 本次执行证明了什么
+- 暴露的风险与优化信号
+- 是否说明当前 RPA Agent 需要优化
+- 后续优化如何用这批资产验收
+- 机器报告路径
+
+报告判断规则：
+- 如果 selected_capture_count 为 0，说明没有真正进入 blocking baseline。
+- 如果 excluded_capture_count > 0，必须列出每个 excluded asset 的原因。
+- 如果 snapshot_failed > 0，先比较 raw_signal_status 和 compact_signal_status。
+- 如果 compiler_failed > 0，优先检查 hardcoded observed value、missing output key、missing dataflow refs。
+- 如果 skill_replay_failed > 0，说明 generated Skill 或 controlled replay 断言有问题。
+- 如果 stateful_sop_failed > 0，说明完整 SOP recording-to-Skill 内部链路漂移。
+- 如果全部通过，也必须写覆盖边界和残余风险，不能泛化成“RPA Agent 全局健康”。
+
+最后输出：
+- 两个 JSON 报告路径
+- Markdown 报告路径
+- 总体结论：passed / warning / failed
+- 是否建议进入 RPA Agent 优化任务
+```
 
 ## 给其它 Agent 的分析协议
 
