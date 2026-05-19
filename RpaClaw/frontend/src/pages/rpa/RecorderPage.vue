@@ -271,6 +271,9 @@ interface RegionDragPoint {
 
 const regionDragStart = ref<RegionDragPoint | null>(null);
 const regionDragCurrent = ref<RegionDragPoint | null>(null);
+let regionSelectionToken = 0;
+let finalizedRegionSelectionToken: number | null = null;
+let regionDocumentListenersAttached = false;
 
 const t = (key: string) => String(i18n.global.t(key));
 
@@ -526,6 +529,7 @@ onBeforeUnmount(() => {
   shouldReconnectScreencast = false;
   if (timerInterval.value) clearInterval(timerInterval.value);
   if (pollInterval) clearInterval(pollInterval);
+  removeRegionDocumentListeners();
   disconnectScreencast();
 });
 
@@ -746,17 +750,35 @@ const clearRegionDragState = () => {
   regionDragCurrent.value = null;
 };
 
+const addRegionDocumentListeners = () => {
+  if (regionDocumentListenersAttached) return;
+  document.addEventListener('mousemove', handleRegionSelectionDocumentMouse);
+  document.addEventListener('mouseup', handleRegionSelectionDocumentMouse);
+  regionDocumentListenersAttached = true;
+};
+
+const removeRegionDocumentListeners = () => {
+  if (!regionDocumentListenersAttached) return;
+  document.removeEventListener('mousemove', handleRegionSelectionDocumentMouse);
+  document.removeEventListener('mouseup', handleRegionSelectionDocumentMouse);
+  regionDocumentListenersAttached = false;
+};
+
 const startRegionSelection = () => {
   if (!sessionId.value || sending.value || agentRunning.value) return;
+  regionSelectionToken += 1;
+  finalizedRegionSelectionToken = null;
   selectingRegion.value = true;
   regionError.value = '';
   clearRegionDragState();
+  addRegionDocumentListeners();
   void nextTick(() => focusCanvas());
 };
 
 const cancelRegionSelection = () => {
   selectingRegion.value = false;
   clearRegionDragState();
+  removeRegionDocumentListeners();
 };
 
 const getRegionDragPoint = (e: MouseEvent): RegionDragPoint | null => {
@@ -788,6 +810,9 @@ const getRegionDragPoint = (e: MouseEvent): RegionDragPoint | null => {
 };
 
 const finalizeRegionSelection = async (endPoint: RegionDragPoint) => {
+  const token = regionSelectionToken;
+  if (finalizedRegionSelectionToken === token) return;
+
   const startPoint = regionDragStart.value;
   const sid = sessionId.value;
   if (!startPoint || !sid) {
@@ -808,14 +833,24 @@ const finalizeRegionSelection = async (endPoint: RegionDragPoint) => {
     return;
   }
 
+  finalizedRegionSelectionToken = token;
+  selectingRegion.value = false;
+  clearRegionDragState();
+  removeRegionDocumentListeners();
+
   try {
     const resp = await apiClient.post(`/rpa/session/${sid}/region/analyze`, payload);
+    if (regionSelectionToken !== token) return;
     applyAnalyzedRegionAttachment(payload, resp.data as RegionAnalyzeResponse);
   } catch (err: any) {
+    if (regionSelectionToken !== token) return;
     regionError.value = err.response?.data?.detail || t('Region analysis failed, please select again');
   } finally {
-    selectingRegion.value = false;
-    clearRegionDragState();
+    if (regionSelectionToken === token) {
+      selectingRegion.value = false;
+      clearRegionDragState();
+      removeRegionDocumentListeners();
+    }
   }
 };
 
@@ -831,7 +866,7 @@ const handleRegionSelectionMouse = (e: MouseEvent) => {
 
   if (!regionDragStart.value) return;
 
-  const point = getRegionDragPoint(e);
+  const point = getRegionDragPoint(e) || (e.type === 'mouseup' ? regionDragCurrent.value : null);
   if (!point) return;
 
   if (e.type === 'mousemove') {
@@ -843,6 +878,12 @@ const handleRegionSelectionMouse = (e: MouseEvent) => {
     void finalizeRegionSelection(point);
   }
 };
+
+function handleRegionSelectionDocumentMouse(e: MouseEvent) {
+  if (e.target === canvasRef.value) return;
+  if (!selectingRegion.value) return;
+  handleRegionSelectionMouse(e);
+}
 
 const sendInputEvent = (e: Event) => {
   if (selectingRegion.value) {

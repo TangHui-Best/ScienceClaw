@@ -184,6 +184,10 @@ const dispatchCanvasMouse = (
   }));
 };
 
+const regionAnalyzeCalls = () => post.mock.calls.filter(([url]) => (
+  url === '/rpa/session/session-1/region/analyze'
+));
+
 const mockStartSession = () => {
   post.mockImplementation((url: string) => {
     if (url === '/rpa/session/start') {
@@ -801,6 +805,112 @@ describe('RecorderPage trace timeline convergence', () => {
       mode: 'trace_first',
       region_id: 'region-42',
     });
+
+    app.unmount();
+  });
+
+  it('only analyzes once when mouseup is delivered repeatedly before the first analysis resolves', async () => {
+    get.mockResolvedValue({ data: { session: { timeline: [] } } });
+    let resolveAnalyze: ((value: unknown) => void) | null = null;
+    post.mockImplementation((url: string) => {
+      if (url === '/rpa/session/start') {
+        return Promise.resolve({
+          data: {
+            status: 'success',
+            session: { id: 'session-1' },
+          },
+        });
+      }
+      if (url === '/rpa/session/session-1/region/analyze') {
+        return new Promise((resolve) => {
+          resolveAnalyze = resolve;
+        });
+      }
+      return Promise.resolve({ data: {} });
+    });
+
+    const { app, root } = await mountRecorderPage();
+    await syncActiveScreencastTab();
+    const canvas = getCanvas(root);
+
+    selectRegionButton(root).click();
+    await flushAsyncUpdates();
+    dispatchCanvasMouse(canvas, 'mousedown', 20, 30);
+    dispatchCanvasMouse(canvas, 'mousemove', 120, 150);
+    dispatchCanvasMouse(canvas, 'mouseup', 120, 150);
+    dispatchCanvasMouse(canvas, 'mouseup', 120, 150);
+    await flushAsyncUpdates();
+
+    expect(regionAnalyzeCalls()).toHaveLength(1);
+
+    resolveAnalyze?.({
+      data: {
+        region_id: 'region-once',
+        summary: 'Single analyzed area',
+        inferred_kind: 'list_region',
+      },
+    });
+    await flushAsyncUpdates();
+
+    expect(root.textContent).toContain('Single analyzed area');
+
+    app.unmount();
+  });
+
+  it('finalizes a valid region when mouseup happens outside the canvas', async () => {
+    get.mockResolvedValue({ data: { session: { timeline: [] } } });
+    post.mockImplementation((url: string) => {
+      if (url === '/rpa/session/start') {
+        return Promise.resolve({
+          data: {
+            status: 'success',
+            session: { id: 'session-1' },
+          },
+        });
+      }
+      if (url === '/rpa/session/session-1/region/analyze') {
+        return Promise.resolve({
+          data: {
+            region_id: 'region-outside',
+            summary: 'Released outside area',
+            inferred_kind: 'list_region',
+          },
+        });
+      }
+      return Promise.resolve({ data: {} });
+    });
+
+    const { app, root } = await mountRecorderPage();
+    await syncActiveScreencastTab();
+    const canvas = getCanvas(root);
+
+    selectRegionButton(root).click();
+    await flushAsyncUpdates();
+    dispatchCanvasMouse(canvas, 'mousedown', 20, 30);
+    dispatchCanvasMouse(canvas, 'mousemove', 120, 150);
+    document.dispatchEvent(new MouseEvent('mouseup', {
+      bubbles: true,
+      clientX: 1400,
+      clientY: 900,
+      button: 0,
+    }));
+    await flushAsyncUpdates();
+
+    expect(post).toHaveBeenCalledWith('/rpa/session/session-1/region/analyze', {
+      tab_id: 'tab-1',
+      rect: {
+        x: 20,
+        y: 30,
+        width: 100,
+        height: 120,
+      },
+      viewport: {
+        width: 1280,
+        height: 720,
+      },
+    });
+    expect(root.textContent).toContain('Released outside area');
+    expect(root.textContent).not.toContain('Drag to select page region 路 Esc to cancel');
 
     app.unmount();
   });
