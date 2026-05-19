@@ -65,6 +65,11 @@ Active implementation slice. RegionScope conversion, region-prioritized raw snap
 - 2026-05-19: Implemented RegionScope conversion, scoped raw snapshot capture, `region_scoped_snapshot` compression, RecordingRuntimeAgent wiring, trace scope evidence, and focused backend regression coverage. Full readiness remains blocked by local verification dependencies documented in EV-011.
 - 2026-05-19: Added generic planner failure debug dumps for initial/repair planner contract failures so invalid JSON/code responses persist with compact snapshot summary, raw-vs-compact presence comparison, and LLM call summary. Independent review requested repair-path coverage; direct initial and repair tests now cover the artifact path. This is diagnostic-only and does not change planner, prompt, selector, UI, or replay behavior.
 - 2026-05-19: Fixed region-scoped action-group compression after manual validation showed selected standalone text (`1,027 stars today`) was present in raw snapshot but missing from compact expanded evidence, while an outside same-card action (`star 37,451`) remained available as a candidate. Scoped action groups now preserve selected text evidence and filter outside actions from expanded candidates.
+- 2026-05-19: Fixed planner contract handling after manual validation showed raw and compact region-scoped snapshots both contained the selected repository star text (`3,184 stars today`), but the planner returned a valid JSON plan whose `code` field was top-level Playwright Python lacking `async def run(page, results)`. The runtime now narrowly wraps top-level `run_python` code only when it references recording runtime context (`page`, `await`, or `results`), leaving non-runtime or invalid code as planner contract failures.
+
+## Patch Churn Review
+
+2026-05-19: F011 已出现多次手动验证后补丁，按 Harness 归零审视要求重新检查失败轨迹。前两类失败分别暴露了诊断证据不足、选区内 standalone text 未进入 compact candidate；这些修复都移动到诊断/压缩边界，而不是新增站点规则。最新失败的诊断显示 raw snapshot 与 compact `region_scoped_snapshot` 都已经包含目标 star 文本，因此不应继续修改 snapshot compression、prompt 或 selector。当前修复上移到 planner JSON contract 边界：对缺少 runner wrapper 但引用 `page`/`await`/`results` 的 top-level runtime code 做窄包装，使其进入真实执行/repair；非 runtime Python-like 片段仍保持 contract failure。独立 Vision Gate / Patch Churn reviewer 结论为 pass，建议已落实为窄判定测试。无需 ADR；复发保护由 RED/GREEN regression tests 与 EV-011 证据承担。
 
 ## Evidence
 

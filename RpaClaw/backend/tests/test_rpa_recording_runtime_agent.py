@@ -2565,6 +2565,44 @@ def test_parse_json_object_rejects_run_python_without_runner():
         _parse_json_object(json.dumps(payload))
 
 
+def test_parse_json_object_wraps_top_level_run_python_code():
+    payload = {
+        "description": "Extract stars",
+        "action_type": "run_python",
+        "expected_effect": "extract",
+        "output_key": "stars_count",
+        "code": (
+            "import re\n\n"
+            "locator = page.locator('text=/stars today/')\n"
+            "if await locator.count() > 0:\n"
+            "    text_content = await locator.first.text_content()\n"
+            "    match = re.search(r'([\\d,]+)\\s*stars', text_content)\n"
+            "    if match:\n"
+            "        return match.group(1)\n"
+            "return ''"
+        ),
+    }
+
+    parsed = _parse_json_object(json.dumps(payload))
+
+    assert parsed["code"].startswith("async def run(page, results):\n")
+    assert "    import re" in parsed["code"]
+    assert "    locator = page.locator" in parsed["code"]
+    assert "    if await locator.count() > 0:" in parsed["code"]
+    assert "return match.group(1)" in parsed["code"]
+
+
+def test_parse_json_object_rejects_top_level_python_without_runtime_context():
+    payload = {
+        "description": "Hard-coded extract",
+        "action_type": "run_python",
+        "code": "import re\nreturn '3,184'",
+    }
+
+    with pytest.raises(ValueError):
+        _parse_json_object(json.dumps(payload))
+
+
 def test_parse_json_object_accepts_plan_with_extra_planner_output():
     payload = {
         "description": "Run",
