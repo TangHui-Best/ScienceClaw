@@ -170,8 +170,13 @@ class RecordingRuntimeAgent:
         runtime_results = runtime_results if runtime_results is not None else {}
         debug_context = dict(debug_context or {})
         before = await _page_state(page)
-        snapshot = await _safe_page_snapshot(page)
-        compact_snapshot = _compact_snapshot(snapshot, instruction)
+        region_scope = _region_scope_from_context(region_context)
+        snapshot = (
+            await _safe_page_snapshot(page, region_scope=region_scope)
+            if region_scope
+            else await _safe_page_snapshot(page)
+        )
+        compact_snapshot = _compact_snapshot(snapshot, instruction, region_scope=region_scope or None)
         compact_region_context = _compact_region_context(region_context)
         raw_region_evidence = _raw_region_evidence(region_context)
         payload = {
@@ -180,11 +185,12 @@ class RecordingRuntimeAgent:
             "snapshot": compact_snapshot,
             "runtime_results": runtime_results,
         }
-        if compact_region_context:
-            payload["region_context"] = compact_region_context
         snapshot_extra: Dict[str, Any] = {}
         if raw_region_evidence:
             snapshot_extra["raw_region_evidence"] = raw_region_evidence
+        if region_scope:
+            snapshot_extra["region_scope"] = region_scope
+            snapshot_extra["region_scoped_snapshot"] = compact_snapshot
         if compact_region_context:
             snapshot_extra["planner_region_context"] = compact_region_context
             snapshot_extra["region_context_decision"] = {}
@@ -246,6 +252,7 @@ class RecordingRuntimeAgent:
                 repair_attempted=False,
                 snapshot=snapshot,
                 region_context=compact_region_context,
+                region_scope=region_scope,
             )
             return RecordingAgentResult(
                 success=True,
@@ -256,8 +263,12 @@ class RecordingRuntimeAgent:
             )
 
         failed_page = await _page_state(page)
-        failed_snapshot = await _safe_page_snapshot(page)
-        compact_failed_snapshot = _compact_snapshot(failed_snapshot, instruction)
+        failed_snapshot = (
+            await _safe_page_snapshot(page, region_scope=region_scope)
+            if region_scope
+            else await _safe_page_snapshot(page)
+        )
+        compact_failed_snapshot = _compact_snapshot(failed_snapshot, instruction, region_scope=region_scope or None)
         first_error = str(first_result.get("error") or "recording command failed")
         first_error_type = str(first_result.get("error_type") or "").strip()
         first_traceback = str(first_result.get("traceback") or "").strip()
@@ -274,6 +285,9 @@ class RecordingRuntimeAgent:
         }
         if raw_region_evidence:
             repair_snapshot_extra["raw_region_evidence"] = raw_region_evidence
+        if region_scope:
+            repair_snapshot_extra["region_scope"] = region_scope
+            repair_snapshot_extra["region_scoped_snapshot"] = compact_failed_snapshot
         if compact_region_context:
             repair_snapshot_extra["planner_region_context"] = compact_region_context
             repair_snapshot_extra["region_context_decision"] = _region_context_decision_signal(
@@ -378,6 +392,7 @@ class RecordingRuntimeAgent:
                 repair_attempted=True,
                 snapshot=failed_snapshot,
                 region_context=compact_region_context,
+                region_scope=region_scope,
             )
             return RecordingAgentResult(
                 success=True,
@@ -434,6 +449,7 @@ class RecordingRuntimeAgent:
         repair_attempted: bool,
         snapshot: Optional[Dict[str, Any]] = None,
         region_context: Optional[Dict[str, Any]] = None,
+        region_scope: Optional[Dict[str, Any]] = None,
     ) -> RPAAcceptedTrace:
         after = await _page_state(page)
         output = result.get("output")
@@ -456,6 +472,7 @@ class RecordingRuntimeAgent:
             after_page=after,
             signals=signals,
             region_context=compact_region_context,
+            region_scope=dict(region_scope or {}),
             output_key=output_key,
             output=output,
             ai_execution=RPAAIExecution(
@@ -2050,11 +2067,37 @@ def _build_locator_stability_metadata(
     return fallback_metadata
 
 
-async def _safe_page_snapshot(page: Any) -> Dict[str, Any]:
+async def _safe_page_snapshot(page: Any, region_scope: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     try:
+        if region_scope:
+            return await build_page_snapshot(page, build_frame_path, region_scope=region_scope)
         return await build_page_snapshot(page, build_frame_path)
     except Exception:
-        return {"url": getattr(page, "url", ""), "title": "", "frames": []}
+        payload = {"url": getattr(page, "url", ""), "title": "", "frames": []}
+        if region_scope:
+            payload["region_scope"] = dict(region_scope)
+        return payload
+
+
+def _region_scope_from_context(region_context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    context = _object_dict(region_context)
+    evidence = _object_dict(context.get("evidence"))
+    if not context and not evidence:
+        return {}
+    rect = _safe_jsonable(evidence.get("rect") or {})
+    if not isinstance(rect, dict):
+        rect = {}
+    return {
+        "region_id": str(context.get("region_id") or ""),
+        "session_id": str(context.get("session_id") or ""),
+        "tab_id": str(context.get("tab_id") or ""),
+        "page_url": str(context.get("page_url") or evidence.get("url") or ""),
+        "page_title": str(context.get("page_title") or evidence.get("title") or ""),
+        "viewport_rect": dict(rect),
+        "frame_path": _compact_list(evidence.get("frame_path")),
+        "frame_rect": dict(rect),
+        "warnings": _compact_list(evidence.get("warnings")),
+    }
 
 
 def _compact_region_context(region_context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -2139,9 +2182,17 @@ def _set_if_present(target: Dict[str, Any], key: str, value: Any) -> None:
     target[key] = _safe_jsonable(value)
 
 
-def _compact_snapshot(snapshot: Dict[str, Any], instruction: str, limit: int = 80) -> Dict[str, Any]:
+def _compact_snapshot(
+    snapshot: Dict[str, Any],
+    instruction: str,
+    limit: int = 80,
+    region_scope: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     try:
-        compact_snapshot = compact_recording_snapshot(snapshot, instruction)
+        if region_scope is not None:
+            compact_snapshot = compact_recording_snapshot(snapshot, instruction, region_scope=region_scope)
+        else:
+            compact_snapshot = compact_recording_snapshot(snapshot, instruction)
         if isinstance(compact_snapshot, dict):
             return compact_snapshot
     except Exception:

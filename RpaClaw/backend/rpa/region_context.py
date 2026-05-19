@@ -360,6 +360,18 @@ class RPARegionEvidence(BaseModel):
     warnings: List[str] = Field(default_factory=list)
 
 
+class RPARegionScope(BaseModel):
+    region_id: str
+    session_id: str
+    tab_id: str
+    page_url: str = ""
+    page_title: str = ""
+    viewport_rect: Dict[str, float] = Field(default_factory=dict)
+    frame_path: List[str] = Field(default_factory=list)
+    frame_rect: Dict[str, float] = Field(default_factory=dict)
+    warnings: List[str] = Field(default_factory=list)
+
+
 class RPARegionContext(BaseModel):
     region_id: str = Field(default_factory=lambda: f"region-{uuid4().hex}")
     session_id: str
@@ -383,6 +395,20 @@ class RPARegionContext(BaseModel):
             "page_title": self.page_title,
             "warnings": list(self.evidence.warnings),
         }
+
+    def to_scope(self) -> RPARegionScope:
+        rect = _rect_dict(self.evidence.rect or {})
+        return RPARegionScope(
+            region_id=self.region_id,
+            session_id=self.session_id,
+            tab_id=self.tab_id,
+            page_url=self.page_url,
+            page_title=self.page_title,
+            viewport_rect=rect,
+            frame_path=list(self.evidence.frame_path or []),
+            frame_rect=rect,
+            warnings=list(self.evidence.warnings or []),
+        )
 
 
 class RPARegionAnalyzeResponse(BaseModel):

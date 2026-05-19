@@ -200,6 +200,37 @@ def test_region_context_preview_returns_readable_summary():
     }
 
 
+def test_region_context_builds_scope_from_evidence():
+    context = _context("region-1", url="https://example.test/a")
+    context.evidence.frame_path = ["iframe.detail"]
+    context.evidence.rect = {"x": 10, "y": 20, "width": 100, "height": 50}
+
+    scope = context.to_scope()
+
+    assert scope.model_dump(mode="json") == {
+        "region_id": "region-1",
+        "session_id": "session-1",
+        "tab_id": "tab-1",
+        "page_url": "https://example.test/a",
+        "page_title": "Example",
+        "viewport_rect": {"x": 10.0, "y": 20.0, "width": 100.0, "height": 50.0},
+        "frame_path": ["iframe.detail"],
+        "frame_rect": {"x": 10.0, "y": 20.0, "width": 100.0, "height": 50.0},
+        "warnings": [],
+    }
+
+
+def test_region_scope_omits_standalone_evidence_payload():
+    context = _context("region-1")
+    context.evidence.local_text = ["Price", "SKU"]
+    context.evidence.intersecting_elements = [{"text": "raw dom"}]
+
+    payload = context.to_scope().model_dump(mode="json")
+
+    assert "local_text" not in payload
+    assert "intersecting_elements" not in payload
+
+
 def test_region_context_clear_supports_region_and_session_scope():
     manager = RPASessionManager()
     manager.sessions["session-1"] = _session()

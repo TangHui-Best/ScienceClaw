@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
@@ -74,3 +75,31 @@ def test_snapshot_v2_js_collects_jalor_grid_as_scoped_table_view():
     assert "bodyTableId ? `#${escapeCssIdentifier(bodyTableId)} tbody.igrid-data tr.grid-row`" in SNAPSHOT_V2_JS
     assert "td[field=\"" in SNAPSHOT_V2_JS
     assert "framework_hint: 'jalor-igrid'" in SNAPSHOT_V2_JS
+
+
+def test_snapshot_v2_js_accepts_region_scope_and_marks_scope_relation():
+    assert "(regionScopeArg = null)" in SNAPSHOT_V2_JS
+    assert "scopeRelationForRect" in SNAPSHOT_V2_JS
+    assert "scopeRelationForElement" in SNAPSHOT_V2_JS
+    assert "scope_relation: scopeRelationForRect(rect)" in SNAPSHOT_V2_JS
+    assert "sortScopedFirst" in SNAPSHOT_V2_JS
+
+
+def test_snapshot_v2_js_marks_structured_views_with_region_scope():
+    assert "scope_relation: scopeRelationForElement(root)" in SNAPSHOT_V2_JS
+    assert "scope_relation: scopeRelationForElement(row)" in SNAPSHOT_V2_JS
+    assert "scope_relation: scopeRelationForElement(cell)" in SNAPSHOT_V2_JS
+    assert "sortScopedFirst(bodyRows).slice(0, 10)" in SNAPSHOT_V2_JS
+    assert "selected_row_indexes: rows.filter(row => row.scope_relation === 'inside_region')" in SNAPSHOT_V2_JS
+    assert "scope_relation: scopeRelationForElement(section)" in SNAPSHOT_V2_JS
+    assert "scope_relation: scopeRelationForElement(field)" in SNAPSHOT_V2_JS
+    assert "return 'ancestor_context';" in SNAPSHOT_V2_JS
+
+
+def test_build_page_snapshot_accepts_region_scope():
+    from backend.rpa.assistant_runtime import build_page_snapshot
+
+    signature = inspect.signature(build_page_snapshot)
+
+    assert "region_scope" in signature.parameters
+    assert signature.parameters["region_scope"].default is None

@@ -680,18 +680,19 @@ def test_recording_runtime_agent_passes_region_context_to_planner():
         )
 
         assert result.success is True
-        compact = planner_calls[0]["region_context"]
+        assert "region_context" not in planner_calls[0]
+        snapshot = planner_calls[0]["snapshot"]
+        assert snapshot["mode"] == "region_scoped_snapshot"
+        assert snapshot["region_scope"]["region_id"] == "region-1"
+        assert snapshot["region_scope"]["tab_id"] == "tab-1"
+        assert snapshot["region_scope"]["frame_path"] == ["iframe.detail"]
+        assert snapshot["region_scope"]["frame_rect"] == {"x": 10, "y": 20, "width": 300, "height": 160}
+        assert "intersecting_elements" not in snapshot["region_scope"]
+        assert result.trace.region_scope["region_id"] == "region-1"
+        assert result.trace.region_scope["frame_path"] == ["iframe.detail"]
+        compact = result.trace.region_context
         assert compact["region_id"] == "region-1"
-        assert compact["tab_id"] == "tab-1"
-        assert compact["page_url"] == "https://example.test/start"
-        assert compact["page_title"] == "Example"
         assert compact["inferred_kind"] == "table_region"
-        assert compact["frame_path"] == ["iframe.detail"]
-        assert compact["rect"] == {"x": 10, "y": 20, "width": 300, "height": 160}
-        assert compact["local_text"] == [f"cell-{index}" for index in range(20)]
-        assert len(compact["locator_candidates"]) == 10
-        assert "intersecting_elements" not in compact
-        assert result.trace.region_context == compact
         assert result.trace.signals["region_selection"] == {
             "region_id": "region-1",
             "inferred_kind": "table_region",
@@ -735,6 +736,7 @@ def test_recording_runtime_agent_omits_region_context_when_absent():
         assert result.success is True
         assert "region_context" not in planner_calls[0]
         assert result.trace.region_context == {}
+        assert result.trace.region_scope == {}
         assert "region_selection" not in result.trace.signals
         assert "region_context_decision" not in result.trace.signals
 
