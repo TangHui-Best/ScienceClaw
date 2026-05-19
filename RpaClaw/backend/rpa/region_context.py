@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -571,8 +572,45 @@ def _is_semantic_region_container(record: Dict[str, Any]) -> bool:
     return tag in _SEMANTIC_CONTAINER_TAGS or role in _SEMANTIC_CONTAINER_ROLES
 
 
+def _css_locator_has_stable_scope(value: Any) -> bool:
+    css = str(value or "").strip().lower()
+    if not css:
+        return False
+    return (
+        "[data-testid" in css
+        or "[data-test" in css
+        or re.search(r"(^|[\s>+~,(])#[a-z_][\w:-]*", css) is not None
+    )
+
+
+def _has_stable_scope_locator_candidate(record: Dict[str, Any]) -> bool:
+    if not isinstance(record, dict):
+        return False
+    locator_candidates = record.get("locator_candidates")
+    if not isinstance(locator_candidates, list):
+        return False
+
+    for candidate in locator_candidates:
+        if not isinstance(candidate, dict):
+            continue
+        kind = str(candidate.get("kind") or "").lower()
+        locator = candidate.get("locator") if isinstance(candidate.get("locator"), dict) else {}
+        method = str(locator.get("method") or "").lower()
+        if kind == "testid" or method == "testid":
+            return True
+        if kind == "text" or method == "text":
+            continue
+        if (
+            _css_locator_has_stable_scope(candidate.get("selector"))
+            or _css_locator_has_stable_scope(candidate.get("value"))
+            or _css_locator_has_stable_scope(locator.get("value"))
+        ):
+            return True
+    return False
+
+
 def _is_oversized_ancestor_record(record: Dict[str, Any], selected_rect: Dict[str, float]) -> bool:
-    if _is_semantic_region_container(record):
+    if _is_semantic_region_container(record) or _has_stable_scope_locator_candidate(record):
         return False
     record_area = _rect_area(_record_rect(record))
     selected_area = _rect_area(selected_rect)
@@ -615,7 +653,7 @@ def prune_region_evidence(raw: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(dominant_container, dict) and _is_oversized_ancestor_record(dominant_container, selected_rect):
         evidence["dominant_container"] = remaining_elements[0] if remaining_elements else {}
 
-    if remaining_elements:
+    if isinstance(elements, list):
         evidence["local_text"] = _dedupe_text(
             [
                 record.get("text") or record.get("name")

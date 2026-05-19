@@ -188,6 +188,82 @@ def test_region_evidence_pruning_keeps_semantic_table_container():
     assert pruned["local_text"][0] == "Name Price A 10"
 
 
+def test_region_evidence_pruning_does_not_restore_text_when_all_elements_pruned():
+    oversized_text = " ".join(["Full page boilerplate and unrelated details"] * 8)
+    raw = {
+        "rect": {"x": 100, "y": 100, "width": 200, "height": 100},
+        "intersecting_elements": [
+            {
+                "tag": "main",
+                "text": oversized_text,
+                "rect": {"x": 0, "y": 0, "width": 1200, "height": 900},
+                "locator_candidates": [
+                    {
+                        "kind": "text",
+                        "locator": {"method": "text", "value": oversized_text[:120]},
+                    }
+                ],
+            },
+            {
+                "tag": "div",
+                "text": oversized_text,
+                "rect": {"x": 0, "y": 0, "width": 1100, "height": 800},
+            },
+        ],
+        "dominant_container": {
+            "tag": "main",
+            "text": oversized_text,
+            "rect": {"x": 0, "y": 0, "width": 1200, "height": 900},
+        },
+        "local_text": [oversized_text],
+    }
+
+    pruned = prune_region_evidence(raw)
+
+    assert pruned["intersecting_elements"] == []
+    assert oversized_text not in pruned["local_text"]
+    assert pruned["local_text"] == []
+
+
+def test_region_evidence_pruning_keeps_oversized_container_with_stable_locator():
+    oversized_text = " ".join(["Order card content with stable test id"] * 8)
+    raw = {
+        "rect": {"x": 100, "y": 100, "width": 200, "height": 100},
+        "intersecting_elements": [
+            {
+                "tag": "div",
+                "text": oversized_text,
+                "rect": {"x": 0, "y": 0, "width": 1200, "height": 900},
+                "locator_candidates": [
+                    {
+                        "kind": "css",
+                        "locator": {"method": "css", "value": "div[data-testid='order-card']"},
+                        "selector": "#order-card",
+                    }
+                ],
+            },
+        ],
+        "dominant_container": {
+            "tag": "div",
+            "text": oversized_text,
+            "rect": {"x": 0, "y": 0, "width": 1200, "height": 900},
+            "locator_candidates": [
+                {
+                    "kind": "testid",
+                    "locator": {"method": "testid", "value": "order-card"},
+                }
+            ],
+        },
+        "local_text": [oversized_text],
+    }
+
+    pruned = prune_region_evidence(raw)
+
+    assert [item.get("tag") for item in pruned["intersecting_elements"]] == ["div"]
+    assert pruned["dominant_container"]["tag"] == "div"
+    assert pruned["local_text"] == [oversized_text]
+
+
 async def _collect_sse_events(response):
     events = []
     chunks = []
