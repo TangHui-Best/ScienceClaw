@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { createApp, nextTick, ref } from 'vue';
+import { createApp, nextTick } from 'vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const push = vi.fn();
@@ -104,18 +104,27 @@ const mountRecorderPage = async () => {
   const root = document.createElement('div');
   document.body.appendChild(root);
 
-  const recorder = ref<any>(null);
-  const app = createApp({
-    components: { RecorderPage },
-    setup() {
-      return { recorder };
-    },
-    template: '<RecorderPage ref="recorder" />',
-  });
+  const app = createApp(RecorderPage);
   app.mount(root);
   await flushAsyncUpdates();
 
-  return { app, root, recorder };
+  return { app, root };
+};
+
+const dispatchSelectedRegion = (
+  root: HTMLElement,
+  attachment: {
+    regionId: string;
+    kind?: string;
+    summary?: string;
+  },
+) => {
+  const pageRoot = root.firstElementChild;
+  expect(pageRoot).not.toBeNull();
+  pageRoot!.dispatchEvent(new CustomEvent('rpa-region-selected', {
+    bubbles: true,
+    detail: attachment,
+  }));
 };
 
 const mockStartSession = () => {
@@ -346,8 +355,8 @@ describe('RecorderPage trace timeline convergence', () => {
       'event: agent_done\ndata: {"message":"Task completed","trace_count":1}\n\n',
     ]);
 
-    const { app, root, recorder } = await mountRecorderPage();
-    recorder.value.setPendingRegion({
+    const { app, root } = await mountRecorderPage();
+    dispatchSelectedRegion(root, {
       regionId: 'region-1',
       kind: 'page_region',
       summary: 'Search results area',
@@ -378,8 +387,8 @@ describe('RecorderPage trace timeline convergence', () => {
   it('keeps pending region and shows a prompt when sending empty text', async () => {
     get.mockResolvedValue({ data: { session: { timeline: [] } } });
 
-    const { app, root, recorder } = await mountRecorderPage();
-    recorder.value.setPendingRegion({
+    const { app, root } = await mountRecorderPage();
+    dispatchSelectedRegion(root, {
       regionId: 'region-2',
       kind: 'page_region',
       summary: 'Login form area',
@@ -392,6 +401,67 @@ describe('RecorderPage trace timeline convergence', () => {
     expect(fetch).not.toHaveBeenCalled();
     expect(root.textContent).toContain('Type what to do with the selected region');
     expect(root.textContent).toContain('Login form area');
+
+    app.unmount();
+  });
+
+  it('keeps selected region available for retry when chat fetch fails', async () => {
+    get.mockResolvedValue({ data: { session: { timeline: [] } } });
+    const encoder = new TextEncoder();
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new Error('network down'))
+      .mockResolvedValueOnce({
+        ok: true,
+        body: {
+          getReader: () => {
+            let done = false;
+            return {
+              read: () => {
+                if (done) return Promise.resolve({ done: true, value: undefined });
+                done = true;
+                return Promise.resolve({
+                  done: false,
+                  value: encoder.encode('event: agent_done\ndata: {"message":"Task completed","trace_count":1}\n\n'),
+                });
+              },
+            };
+          },
+        },
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { app, root } = await mountRecorderPage();
+    dispatchSelectedRegion(root, {
+      regionId: 'region-retry',
+      kind: 'page_region',
+      summary: 'Retry target area',
+    });
+    await flushAsyncUpdates();
+
+    const textarea = root.querySelector<HTMLTextAreaElement>('textarea');
+    expect(textarea).not.toBeNull();
+    textarea!.value = 'try first';
+    textarea!.dispatchEvent(new Event('input'));
+    await flushAsyncUpdates();
+
+    root.querySelector<HTMLButtonElement>('button.flex.h-8.w-8')?.click();
+    await flushAsyncUpdates();
+
+    expect(root.textContent).toContain('Retry target area');
+
+    textarea!.value = 'try again';
+    textarea!.dispatchEvent(new Event('input'));
+    await flushAsyncUpdates();
+
+    root.querySelector<HTMLButtonElement>('button.flex.h-8.w-8')?.click();
+    await flushAsyncUpdates();
+
+    const [, retryInit] = fetchMock.mock.calls[1];
+    expect(JSON.parse(String((retryInit as RequestInit).body))).toMatchObject({
+      message: 'try again',
+      mode: 'trace_first',
+      region_id: 'region-retry',
+    });
 
     app.unmount();
   });

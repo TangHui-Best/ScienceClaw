@@ -258,15 +258,29 @@ const formatRegionAttachmentSummary = (attachment: PendingRegionAttachment) => {
   return regionKindLabel(attachment.kind);
 };
 
-const setPendingRegion = (attachment: PendingRegionAttachment) => {
+const isPendingRegionAttachment = (value: unknown): value is PendingRegionAttachment => (
+  typeof value === 'object' &&
+  value !== null &&
+  typeof (value as PendingRegionAttachment).regionId === 'string' &&
+  Boolean((value as PendingRegionAttachment).regionId)
+);
+
+const applyPendingRegionAttachment = (attachment: PendingRegionAttachment) => {
   if (!attachment.regionId) return;
   pendingRegion.value = { ...attachment };
   regionError.value = '';
 };
 
-const clearPendingRegion = () => {
+const clearPendingRegion = (regionId?: string) => {
+  if (regionId && pendingRegion.value?.regionId !== regionId) return;
   pendingRegion.value = null;
   regionError.value = '';
+};
+
+const handlePendingRegionAttachmentEvent = (event: Event) => {
+  const attachment = (event as CustomEvent<unknown>).detail;
+  if (!isPendingRegionAttachment(attachment)) return;
+  applyPendingRegionAttachment(attachment);
 };
 
 const selectedModel = computed(() => (
@@ -841,7 +855,6 @@ const sendMessage = async () => {
     time: now,
     ...(regionAttachment ? { regionAttachment } : {}),
   });
-  clearPendingRegion();
 
   const assistantMsg: ChatMessage = {
     role: 'assistant',
@@ -964,6 +977,7 @@ const sendMessage = async () => {
               chatMessages.value[msgIdx].text += `\nTask completed, accepted ${completedCount} trace(s).`;
               agentRunning.value = false;
               pendingConfirm.value = null;
+              clearPendingRegion(regionAttachment?.regionId);
             } else if (eventType === 'agent_aborted') {
               chatMessages.value[msgIdx].status = 'error';
               chatMessages.value[msgIdx].text += `\n⚠️ Agent 已停止：${data.reason || ''}`;
@@ -995,16 +1009,13 @@ const sendMessage = async () => {
   }
 };
 
-defineExpose({
-  pendingRegion,
-  regionError,
-  setPendingRegion,
-  clearPendingRegion,
-});
 </script>
 
 <template>
-  <div class="flex flex-col h-screen bg-[#f5f6f7] dark:bg-[#161618] overflow-hidden">
+  <div
+    class="flex flex-col h-screen bg-[#f5f6f7] dark:bg-[#161618] overflow-hidden"
+    @rpa-region-selected="handlePendingRegionAttachmentEvent"
+  >
     <!-- Header -->
     <RpaFlowGuide
       current-step="record"
