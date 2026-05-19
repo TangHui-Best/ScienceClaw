@@ -513,3 +513,9 @@ This design follows RpaClaw's RPA rules:
 - Stability warnings are evidence, not pre-execution blockers.
 - Site-specific examples are validation cases, not architecture.
 - Raw coordinates are recording evidence only. Replay should prefer locators and structure.
+
+## Region-Scoped Planner Context Hardening
+
+When a chat command includes `region_id`, the selected region is the planner scope for the initial runtime LLM call. The planner receives page URL/title, runtime results, and compact region evidence. It must not receive full-page snapshot structures such as `actionable_nodes`, `frames`, `table_views`, `detail_views`, `form_views`, `expanded_regions`, or `sampled_regions` as competing initial context.
+
+Full-page ordinal overlay shortcuts are disabled for region-backed commands. Region evidence must preserve scoped locator hierarchy, including stable parent containers and nested parent-child locator candidates, while pruning oversized ancestor text from planner-facing local text. Region evidence may still include locator-backed local table/list/control summaries, but raw coordinates remain diagnostic evidence rather than replay logic.
