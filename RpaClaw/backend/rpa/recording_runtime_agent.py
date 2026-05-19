@@ -840,9 +840,39 @@ def _coerce_recording_plan(parsed: Any) -> Dict[str, Any]:
     parsed.setdefault("action_type", "run_python")
     parsed["expected_effect"] = _normalize_expected_effect(parsed.get("expected_effect"))
     parsed["allow_empty_output"] = _normalize_bool(parsed.get("allow_empty_output"))
-    if parsed.get("action_type") == "run_python" and "async def run(page, results)" not in str(parsed.get("code") or ""):
-        raise ValueError("Recording planner must return Python code defining async def run(page, results)")
+    if parsed.get("action_type") == "run_python":
+        code = str(parsed.get("code") or "")
+        if "async def run(page, results)" not in code:
+            wrapped_code = _wrap_top_level_run_python_code(code)
+            if wrapped_code:
+                parsed["code"] = wrapped_code
+            else:
+                raise ValueError("Recording planner must return Python code defining async def run(page, results)")
     return parsed
+
+
+def _wrap_top_level_run_python_code(code: str) -> Optional[str]:
+    source = str(code or "").strip()
+    if not _looks_like_top_level_python(source):
+        return None
+    body = "\n".join(("    " + line) if line.strip() else "" for line in source.splitlines())
+    wrapped = "async def run(page, results):\n" + (body or "    return None")
+    try:
+        compile(wrapped, _GENERATED_CODE_FILENAME, "exec")
+    except SyntaxError:
+        return None
+    return wrapped
+
+
+def _looks_like_top_level_python(source: str) -> bool:
+    if not source or "async def run(page, results)" in source:
+        return False
+    python_signals = (
+        "page.",
+        "await ",
+        "results",
+    )
+    return any(signal in source for signal in python_signals)
 
 
 def _planner_contract_diagnostic(
