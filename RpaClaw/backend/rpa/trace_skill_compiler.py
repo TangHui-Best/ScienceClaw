@@ -1367,7 +1367,21 @@ def _trace_region_value_locator_candidates(
     trace: RPAAcceptedTrace,
     region_context: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
-    return list(trace.locator_candidates or []) + list(region_context.get("locator_candidates") or [])
+    nested_candidates: List[Dict[str, Any]] = []
+    intersecting_elements = region_context.get("intersecting_elements")
+    if isinstance(intersecting_elements, list):
+        for element in intersecting_elements:
+            if not isinstance(element, dict):
+                continue
+            candidates = element.get("nested_locator_candidates")
+            if isinstance(candidates, list):
+                nested_candidates.extend(item for item in candidates if isinstance(item, dict))
+    root_candidates = region_context.get("locator_candidates")
+    return (
+        list(trace.locator_candidates or [])
+        + nested_candidates
+        + (root_candidates if isinstance(root_candidates, list) else [])
+    )
 
 
 def _trace_region_runtime_ai_requirement(trace: RPAAcceptedTrace) -> Optional[bool]:

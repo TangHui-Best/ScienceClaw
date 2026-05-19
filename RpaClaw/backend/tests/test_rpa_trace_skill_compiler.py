@@ -1442,14 +1442,26 @@ def test_region_single_value_prefers_nested_scope_locator():
             "inferred_kind": "single_value",
             "locator_candidates": [
                 {
-                    "selected": True,
-                    "kind": "nested",
-                    "locator": {
-                        "method": "nested",
-                        "parent": {"method": "text", "value": "Order A"},
-                        "child": {"method": "text", "value": "Paid"},
-                    },
-                    "source": "region_ancestor_scope",
+                    "kind": "text",
+                    "locator": {"method": "text", "value": "Order A Paid Refund"},
+                    "source": "dominant_scope",
+                }
+            ],
+            "intersecting_elements": [
+                {
+                    "tag": "span",
+                    "text": "Paid",
+                    "nested_locator_candidates": [
+                        {
+                            "kind": "nested",
+                            "locator": {
+                                "method": "nested",
+                                "parent": {"method": "text", "value": "Order A"},
+                                "child": {"method": "text", "value": "Paid"},
+                            },
+                            "source": "region_ancestor_scope",
+                        }
+                    ],
                 }
             ],
         },
