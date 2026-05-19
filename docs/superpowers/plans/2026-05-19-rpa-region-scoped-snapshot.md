@@ -17,6 +17,8 @@
 - Do not compile or replay raw coordinates.
 - Do not use screenshot/VLM as the main path.
 - Do not let `region_context.py` become a second snapshot/compression/compiler system.
+- Treat region geometry as a routing signal, not as the final semantic boundary. For tables/lists/forms, expand partial hits only to the smallest useful semantic unit, such as selected cell, selected row, selected column, field pair, or action group.
+- If a user selects only several table rows, outside rows must not compete as task candidates; table headers, row identity, table title, parent container, and frame path may still be retained as context.
 
 ## File Structure
 
@@ -33,6 +35,7 @@
   - Add optional `region_scope`.
   - Add `region_scoped_snapshot` mode.
   - Scope `table_views`, `detail_views`, `form_views`, `expanded_regions`, `sampled_regions`, and `region_catalogue`.
+  - Preserve semantic-unit boundaries for partial table/list/form selections instead of promoting every intersecting container to a full task candidate set.
 - Modify `RpaClaw/backend/rpa/recording_runtime_agent.py`
   - Convert `region_context` into scope.
   - Pass scope into snapshot capture/compression.
@@ -453,13 +456,36 @@ def test_region_scoped_snapshot_keeps_selected_table_headers_and_rows():
     assert compact["detail_views"] == []
 ```
 
+Also add a partial-selection test for table rows:
+
+```python
+def test_region_scoped_snapshot_keeps_only_selected_table_rows_with_headers():
+    snapshot = _structured_view_snapshot()
+    snapshot["region_scope"] = {
+        "region_id": "region-table-rows",
+        "frame_path": [],
+        "frame_rect": {"x": 0, "y": 120, "width": 500, "height": 80},
+    }
+    snapshot["table_views"][0]["scope_relation"] = "inside_region"
+    snapshot["table_views"][0]["selected_row_indexes"] = [1, 2]
+
+    compact = compact_recording_snapshot(snapshot, "只处理圈中的采购行", char_budget=1)
+
+    table = compact["table_views"][0]
+    assert table["headers"]
+    assert [row["index"] for row in table["rows"]] == [1, 2]
+    assert all(row.get("scope_relation") == "inside_region" for row in table["rows"])
+```
+
+This test may need small fixture adjustments if the current structured table helper does not yet expose row indexes. The acceptance point is semantic: selected rows are candidates, headers remain context, and unselected rows do not compete.
+
 - [ ] **Step 3: Run scoped compression tests and verify failure**
 
 Run:
 
 ```powershell
 $env:PYTHONPATH="RpaClaw"
-python -m pytest RpaClaw/backend/tests/test_rpa_snapshot_compression.py::test_region_scoped_snapshot_expands_only_selected_candidate_regions RpaClaw/backend/tests/test_rpa_snapshot_compression_structured.py::test_region_scoped_snapshot_keeps_selected_table_headers_and_rows -q
+python -m pytest RpaClaw/backend/tests/test_rpa_snapshot_compression.py::test_region_scoped_snapshot_expands_only_selected_candidate_regions RpaClaw/backend/tests/test_rpa_snapshot_compression_structured.py::test_region_scoped_snapshot_keeps_selected_table_headers_and_rows RpaClaw/backend/tests/test_rpa_snapshot_compression_structured.py::test_region_scoped_snapshot_keeps_only_selected_table_rows_with_headers -q
 ```
 
 Expected: fail because scoped mode does not exist.
@@ -598,6 +624,14 @@ Update signatures:
 def _compact_table_views(snapshot: Dict[str, Any], *, row_limit: int = 10, cell_limit: int = 12, scope_only: bool = False) -> List[Dict[str, Any]]:
 ```
 
+When `scope_only=True`, table compaction should not simply keep every row from an intersecting table. It should:
+
+- prefer explicit row/cell/column scope markers collected during raw snapshot capture;
+- keep selected rows as task candidates and keep headers as context;
+- keep selected columns with row identity and column/header context;
+- expand a half-hit cell or row to that smallest useful semantic unit;
+- avoid promoting unselected rows to candidate records unless no selected row/cell evidence is available and diagnostics must explain the failure.
+
 ```python
 def _compact_detail_views(snapshot: Dict[str, Any], *, field_limit: int = 40, scope_only: bool = False) -> List[Dict[str, Any]]:
 ```
@@ -626,10 +660,10 @@ Run:
 
 ```powershell
 $env:PYTHONPATH="RpaClaw"
-python -m pytest RpaClaw/backend/tests/test_rpa_snapshot_compression.py::test_region_scoped_snapshot_expands_only_selected_candidate_regions RpaClaw/backend/tests/test_rpa_snapshot_compression_structured.py::test_region_scoped_snapshot_keeps_selected_table_headers_and_rows -q
+python -m pytest RpaClaw/backend/tests/test_rpa_snapshot_compression.py::test_region_scoped_snapshot_expands_only_selected_candidate_regions RpaClaw/backend/tests/test_rpa_snapshot_compression_structured.py::test_region_scoped_snapshot_keeps_selected_table_headers_and_rows RpaClaw/backend/tests/test_rpa_snapshot_compression_structured.py::test_region_scoped_snapshot_keeps_only_selected_table_rows_with_headers -q
 ```
 
-Expected: 2 passed.
+Expected: 3 passed.
 
 - [ ] **Step 8: Run existing compression regression subset**
 
@@ -640,7 +674,7 @@ $env:PYTHONPATH="RpaClaw"
 python -m pytest RpaClaw/backend/tests/test_rpa_snapshot_compression.py RpaClaw/backend/tests/test_rpa_snapshot_compression_structured.py -q
 ```
 
-Expected: all tests pass. If unrelated existing failures appear, record exact failures in F002 Evidence before proceeding.
+Expected: all tests pass. If unrelated existing failures appear, record exact failures in F011 Evidence before proceeding.
 
 - [ ] **Step 9: Commit Task 3**
 
@@ -928,26 +962,26 @@ git commit -m "test: preserve rpa region selection ui contract"
 ### Task 7: Update Harness Evidence And Run Final Verification
 
 **Files:**
-- Create or Modify: `docs/evidence/EV-002-rpa-region-scoped-snapshot.md`
-- Modify: `docs/features/F002-rpa-region-scoped-snapshot.md`
+- Create or Modify: `docs/evidence/EV-011-rpa-region-scoped-snapshot.md`
+- Modify: `docs/features/F011-rpa-region-scoped-snapshot.md`
 
 - [ ] **Step 1: Create Evidence document**
 
-Create `docs/evidence/EV-002-rpa-region-scoped-snapshot.md`:
+Create `docs/evidence/EV-011-rpa-region-scoped-snapshot.md`:
 
 ```markdown
 ---
 doc_kind: evidence
-id: EV-002
+id: EV-011
 title: RPA Region-Scoped Snapshot Evidence
 status: active
-feature_ids: [F002]
+feature_ids: [F011]
 created: 2026-05-19
 updated: 2026-05-19
 scope: RPA region-scoped snapshot capture and compression
 ---
 
-# EV-002 RPA Region-Scoped Snapshot Evidence
+# EV-011 RPA Region-Scoped Snapshot Evidence
 
 ## Commands
 
@@ -959,7 +993,7 @@ Pending implementation verification.
 
 ## Artifacts
 
-- Feature: `docs/features/F002-rpa-region-scoped-snapshot.md`
+- Feature: `docs/features/F011-rpa-region-scoped-snapshot.md`
 - Spec: `docs/superpowers/specs/2026-05-19-rpa-region-scoped-snapshot-design.md`
 - Plan: `docs/superpowers/plans/2026-05-19-rpa-region-scoped-snapshot.md`
 
@@ -970,11 +1004,11 @@ Implementation must prove that selected-region DOM enters raw capture before glo
 
 - [ ] **Step 2: Link Evidence from Feature**
 
-Update `docs/features/F002-rpa-region-scoped-snapshot.md` frontmatter:
+Update `docs/features/F011-rpa-region-scoped-snapshot.md` frontmatter:
 
 ```yaml
 evidence:
-  - docs/evidence/EV-002-rpa-region-scoped-snapshot.md
+  - docs/evidence/EV-011-rpa-region-scoped-snapshot.md
 ```
 
 - [ ] **Step 3: Run final backend verification**
@@ -1001,7 +1035,7 @@ Expected: pass. If dependencies are missing, record that no frontend verificatio
 
 - [ ] **Step 5: Update Evidence results**
 
-Replace the pending sections in `EV-002` with the commands actually run and their results. Include:
+Replace the pending sections in `EV-011` with the commands actually run and their results. Include:
 
 ```markdown
 ## Commands
@@ -1034,12 +1068,12 @@ Run:
 python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root . --docs-path docs\features
 ```
 
-Expected for changed F002/EV-002: no new F002/EV-002 errors. Existing F001 format errors may remain and should be recorded separately instead of fixed in this feature slice.
+Expected for changed F011/EV-011: no new F011/EV-011 errors. Existing F001 format errors may remain and should be recorded separately instead of fixed in this feature slice.
 
 - [ ] **Step 7: Commit Evidence closeout**
 
 ```powershell
-git add docs/features/F002-rpa-region-scoped-snapshot.md docs/evidence/EV-002-rpa-region-scoped-snapshot.md
+git add docs/features/F011-rpa-region-scoped-snapshot.md docs/evidence/EV-011-rpa-region-scoped-snapshot.md
 git commit -m "docs: record rpa region-scoped snapshot evidence"
 ```
 

@@ -245,6 +245,10 @@ Table views:
 - keep tables/grids that intersect selected region or whose row/cell nodes intersect it;
 - preserve more rows/cells for selected tables than global defaults;
 - keep header context even if header row is slightly outside selected rect, because it is essential to interpret selected rows.
+- Treat geometry as the first signal, not the final unit of inclusion. For tables, the final candidate boundary should be the smallest useful semantic unit: cell, row, column, or row group.
+- If the user selects only several table rows, those rows are task candidates; outside rows should not compete as candidate records, while table headers, row identity, table title, parent container, and frame path may remain as context.
+- If the selected rectangle cuts through a cell or row, expand to the smallest useful semantic unit that explains the selected content. Do not expand to the whole table unless the instruction or evidence requires table-wide reasoning.
+- If the selected rectangle primarily covers a column, keep candidate values from that column and retain row identity plus column/header context.
 
 Detail views:
 
@@ -393,6 +397,7 @@ Backend compression tests:
 
 - scoped compression expands selected-region evidence even when unrelated regions have better instruction text overlap;
 - selected table keeps headers slightly outside rect and rows/cells inside rect;
+- partial table selection keeps only selected rows/cells/columns as candidates while preserving headers and row/table identity as context;
 - selected form keeps nearby labels and controls, excludes unrelated fields;
 - outside region does not appear as candidate in `expanded_regions` or `sampled_regions`;
 - scoped mode omits full-page `region_catalogue`.

@@ -1,9 +1,9 @@
 ---
 doc_kind: feature
-id: F002
+id: F011
 title: RPA Region-Scoped Snapshot
 status: active
-feature_ids: [F002]
+feature_ids: [F011]
 created: 2026-05-19
 updated: 2026-05-19
 specs:
@@ -14,7 +14,7 @@ decisions: []
 evidence: []
 ---
 
-# F002 RPA Region-Scoped Snapshot
+# F011 RPA Region-Scoped Snapshot
 
 ## Goal
 
@@ -69,4 +69,4 @@ No implementation evidence yet. This Feature currently links only the design anc
 
 ## Next Step
 
-Review and approve the design, then create an implementation plan before touching code.
+Implementation plan is approved for development after the semantic-unit clarification: partial table/list/form selections should keep only selected semantic units as candidates while preserving minimal headers, identity, and parent context.
