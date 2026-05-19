@@ -857,6 +857,80 @@ describe('RecorderPage trace timeline convergence', () => {
     app.unmount();
   });
 
+  it('keeps the newer selected region when an older analysis resolves later', async () => {
+    get.mockResolvedValue({ data: { session: { timeline: [] } } });
+    let analyzeCount = 0;
+    let resolveFirst: ((value: unknown) => void) | null = null;
+    let resolveSecond: ((value: unknown) => void) | null = null;
+    post.mockImplementation((url: string) => {
+      if (url === '/rpa/session/start') {
+        return Promise.resolve({
+          data: {
+            status: 'success',
+            session: { id: 'session-1' },
+          },
+        });
+      }
+      if (url === '/rpa/session/session-1/region/analyze') {
+        analyzeCount += 1;
+        return new Promise((resolve) => {
+          if (analyzeCount === 1) {
+            resolveFirst = resolve;
+          } else {
+            resolveSecond = resolve;
+          }
+        });
+      }
+      return Promise.resolve({ data: {} });
+    });
+
+    const { app, root } = await mountRecorderPage();
+    await syncActiveScreencastTab();
+    const canvas = getCanvas(root);
+
+    selectRegionButton(root).click();
+    await flushAsyncUpdates();
+    dispatchCanvasMouse(canvas, 'mousedown', 20, 30);
+    dispatchCanvasMouse(canvas, 'mousemove', 120, 150);
+    dispatchCanvasMouse(canvas, 'mouseup', 120, 150);
+    await flushAsyncUpdates();
+    expect(regionAnalyzeCalls()).toHaveLength(1);
+
+    selectRegionButton(root).click();
+    await flushAsyncUpdates();
+    dispatchCanvasMouse(canvas, 'mousedown', 200, 180);
+    dispatchCanvasMouse(canvas, 'mousemove', 360, 320);
+    dispatchCanvasMouse(canvas, 'mouseup', 360, 320);
+    await flushAsyncUpdates();
+    expect(regionAnalyzeCalls()).toHaveLength(2);
+
+    resolveSecond?.({
+      data: {
+        region_id: 'region-new',
+        summary: 'Newest selected area',
+        inferred_kind: 'list_region',
+      },
+    });
+    await flushAsyncUpdates();
+
+    expect(root.textContent).toContain('Newest selected area');
+    expect(root.textContent).not.toContain('Stale selected area');
+
+    resolveFirst?.({
+      data: {
+        region_id: 'region-old',
+        summary: 'Stale selected area',
+        inferred_kind: 'list_region',
+      },
+    });
+    await flushAsyncUpdates();
+
+    expect(root.textContent).toContain('Newest selected area');
+    expect(root.textContent).not.toContain('Stale selected area');
+
+    app.unmount();
+  });
+
   it('finalizes a valid region when mouseup happens outside the canvas', async () => {
     get.mockResolvedValue({ data: { session: { timeline: [] } } });
     post.mockImplementation((url: string) => {
@@ -910,7 +984,7 @@ describe('RecorderPage trace timeline convergence', () => {
       },
     });
     expect(root.textContent).toContain('Released outside area');
-    expect(root.textContent).not.toContain('Drag to select page region 路 Esc to cancel');
+    expect(root.textContent).not.toContain('Drag to select page region · Esc to cancel');
 
     app.unmount();
   });
