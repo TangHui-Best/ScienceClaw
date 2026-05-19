@@ -715,7 +715,24 @@ def test_recording_runtime_agent_passes_region_context_to_planner():
                 "list_summary": {"item_count": 0},
                 "action_summary": {"controls": [{"text": "Open"}]},
                 "warnings": ["partial-overlap"],
-                "intersecting_elements": [{"text": "raw dom should not be forwarded"}],
+                "intersecting_elements": [
+                    {
+                        "tag": "span",
+                        "text": "Paid",
+                        "nested_locator_candidates": [
+                            {
+                                "kind": "nested",
+                                "locator": {
+                                    "method": "nested",
+                                    "parent": {"method": "text", "value": "Order A"},
+                                    "child": {"method": "text", "value": "Paid"},
+                                },
+                                "source": "region_ancestor_scope",
+                            }
+                        ],
+                    },
+                    *[{"tag": "td", "text": f"cell-{index}"} for index in range(24)],
+                ],
             },
         }
 
@@ -746,7 +763,18 @@ def test_recording_runtime_agent_passes_region_context_to_planner():
         assert compact["rect"] == {"x": 10, "y": 20, "width": 300, "height": 160}
         assert compact["local_text"] == [f"cell-{index}" for index in range(20)]
         assert len(compact["locator_candidates"]) == 10
-        assert "intersecting_elements" not in compact
+        assert len(compact["intersecting_elements"]) == 20
+        assert compact["intersecting_elements"][0]["nested_locator_candidates"] == [
+            {
+                "kind": "nested",
+                "locator": {
+                    "method": "nested",
+                    "parent": {"method": "text", "value": "Order A"},
+                    "child": {"method": "text", "value": "Paid"},
+                },
+                "source": "region_ancestor_scope",
+            }
+        ]
         assert result.trace.region_context == compact
         assert result.trace.signals["region_selection"] == {
             "region_id": "region-1",
