@@ -167,10 +167,11 @@ def _compact_region_scoped_snapshot(
     selected_regions.sort(
         key=lambda region: (-_region_relevance(region, instruction), _region_rank(region), region.get("title", ""))
     )
+    selected_region_ids = {str(region.get("region_id") or "") for region in selected_regions}
     context_regions = [
         region
         for region in regions
-        if region not in selected_regions and _region_is_context_scope(region, snapshot)
+        if str(region.get("region_id") or "") not in selected_region_ids and _region_is_context_scope(region, snapshot)
     ]
 
     return {
@@ -219,7 +220,10 @@ def _scoped_candidate_region(
     region: Dict[str, Any],
     scope_rect: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
-    if _normalize_kind(region.get("kind")) != "label_value_group":
+    kind = _normalize_kind(region.get("kind"))
+    if kind == "action_group":
+        return _scoped_action_group_region(region, scope_rect)
+    if kind != "label_value_group":
         return region
     pairs = list(region.get("pairs") or [])
     scoped_pairs = [pair for pair in pairs if pair.get("scope_relation") == "inside_region"]
@@ -232,6 +236,34 @@ def _scoped_candidate_region(
     scoped_region = dict(region)
     scoped_region["pairs"] = scoped_pairs
     scoped_region["summary"] = " | ".join(f"{pair['label']}={pair['value']}" for pair in scoped_pairs[:4])
+    return scoped_region
+
+
+def _scoped_action_group_region(
+    region: Dict[str, Any],
+    scope_rect: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    texts = list(region.get("texts") or [])
+    actions = list(region.get("actions") or [])
+    scoped_texts = [entry for entry in texts if entry.get("scope_relation") == "inside_region"]
+    scoped_actions = [entry for entry in actions if entry.get("scope_relation") == "inside_region"]
+    if scope_rect:
+        if not scoped_texts:
+            scoped_texts = [entry for entry in texts if _rects_intersect(entry.get("bbox") or {}, scope_rect)]
+        if not scoped_actions:
+            scoped_actions = [entry for entry in actions if _rects_intersect(entry.get("bbox") or {}, scope_rect)]
+    if not scoped_texts and not scoped_actions:
+        if any(entry.get("scope_relation") for entry in texts + actions):
+            return None
+        return region
+
+    scoped_region = dict(region)
+    scoped_region["actions"] = scoped_actions
+    scoped_region["selected_texts"] = scoped_texts
+    summary_parts = [_clean_text(scoped_region.get("title") or "")]
+    summary_parts.extend(_clean_text(entry.get("text") or "") for entry in scoped_texts[:4])
+    summary_parts.extend(_clean_text(entry.get("label") or "") for entry in scoped_actions[:4])
+    scoped_region["summary"] = " | ".join(part for part in summary_parts if part)
     return scoped_region
 
 
@@ -633,6 +665,7 @@ def _build_region(
             "title": title or container.get("name") or "actions",
             "summary": summary,
             "actions": _extract_actions(nodes),
+            "texts": _extract_text_entries(nodes),
             "frame_path": frame_path,
             "container_kind": container.get("container_kind", ""),
         }
@@ -874,9 +907,31 @@ def _extract_actions(nodes: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 {
                     "label": _clean_text(node.get("name") or node.get("text") or ""),
                     "locator": node.get("locator") or _best_locator(node),
+                    "scope_relation": _node_scope_relation(node),
+                    "bbox": dict(node.get("bbox") or {}),
                 }
             )
     return actions
+
+
+def _extract_text_entries(nodes: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    texts: List[Dict[str, Any]] = []
+    for node in _sort_nodes(nodes):
+        if _is_action_node(node):
+            continue
+        text = _clean_text(node.get("text") or node.get("name") or "")
+        if not text:
+            continue
+        texts.append(
+            {
+                "text": text,
+                "locator": node.get("locator") or _best_locator(node),
+                "scope_relation": _node_scope_relation(node),
+                "bbox": dict(node.get("bbox") or {}),
+                "semantic_kind": node.get("semantic_kind") or "",
+            }
+        )
+    return texts
 
 
 def _extract_record_list_items(container: Dict[str, Any], nodes: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1085,6 +1140,17 @@ def _region_evidence(region: Dict[str, Any], *, limit: Optional[int]) -> Dict[st
         }
 
     if kind == "action_group":
+        texts = []
+        text_items = list(region.get("selected_texts") or [])
+        if limit is not None:
+            text_items = text_items[:limit]
+        for item in text_items:
+            texts.append(
+                {
+                    "text": item.get("text", ""),
+                    "locator": item.get("locator") or {},
+                }
+            )
         actions = []
         action_items = list(region.get("actions") or [])
         if limit is not None:
@@ -1096,7 +1162,10 @@ def _region_evidence(region: Dict[str, Any], *, limit: Optional[int]) -> Dict[st
                     "locator": action.get("locator") or {},
                 }
             )
-        return {"actions": actions}
+        evidence = {"actions": actions}
+        if texts:
+            evidence["texts"] = texts
+        return evidence
 
     excerpt = _clean_text(region.get("summary") or region.get("title") or "")
     if excerpt:
