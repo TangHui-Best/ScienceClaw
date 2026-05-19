@@ -110,6 +110,8 @@ Guidelines:
 - Mark parameters as required only if they appear in every sample or seem essential
 - Infer response schema from the captured response bodies
 - host and basePath should be extracted from the URL: "https://api.example.com/v1/users" -> host: api.example.com, basePath: /v1
+- paths keys MUST be relative to basePath. For example, if basePath is /v1 then paths should contain /users, not /v1/users.
+- basePath + paths key MUST equal the captured endpoint path exactly. Never put the full endpoint path in both basePath and paths.
 - Only return valid YAML, no markdown fences, no extra commentary
 
 DOM Context Guidelines:

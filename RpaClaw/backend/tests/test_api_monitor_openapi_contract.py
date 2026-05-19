@@ -175,6 +175,29 @@ class TestParseOpenApiValidation:
         contract = parse_api_monitor_tool_yaml(yaml_str)
         assert not contract.valid
 
+    def test_path_must_be_relative_to_base_path(self):
+        yaml_str = """\
+swagger: "2.0"
+info:
+  title: query_contract_information
+  version: "1.0"
+host: isales.huawei.com
+basePath: /isales/ssdmdoc/services/api/solr/contractsearch/query/contract/information
+paths:
+  /isales/ssdmdoc/services/api/solr/contractsearch/query/contract/information:
+    post:
+      operationId: query_contract_information
+      responses:
+        "200":
+          description: Success
+"""
+        contract = parse_api_monitor_tool_yaml(yaml_str)
+        assert not contract.valid
+        assert (
+            "OpenAPI path must be relative to basePath; do not repeat basePath in paths"
+            in contract.validation_errors
+        )
+
 
 class TestLegacyFormatFallback:
     def test_legacy_format_still_works(self):
