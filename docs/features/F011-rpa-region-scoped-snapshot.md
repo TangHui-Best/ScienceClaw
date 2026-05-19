@@ -63,10 +63,11 @@ Active implementation slice. RegionScope conversion, region-prioritized raw snap
 ## Patch History
 
 - 2026-05-19: Implemented RegionScope conversion, scoped raw snapshot capture, `region_scoped_snapshot` compression, RecordingRuntimeAgent wiring, trace scope evidence, and focused backend regression coverage. Full readiness remains blocked by local verification dependencies documented in EV-011.
+- 2026-05-19: Added generic planner failure debug dumps for initial/repair planner contract failures so invalid JSON/code responses persist with compact snapshot summary, raw-vs-compact presence comparison, and LLM call summary. Independent review requested repair-path coverage; direct initial and repair tests now cover the artifact path. This is diagnostic-only and does not change planner, prompt, selector, UI, or replay behavior.
 
 ## Evidence
 
-- `docs/evidence/EV-011-rpa-region-scoped-snapshot.md`
+- [EV-011 RPA Region-Scoped Snapshot Evidence](../evidence/EV-011-rpa-region-scoped-snapshot.md)
 
 ## Next Step
 
