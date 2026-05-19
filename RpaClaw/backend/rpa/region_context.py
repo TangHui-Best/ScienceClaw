@@ -616,9 +616,16 @@ def _is_oversized_ancestor_record(record: Dict[str, Any], selected_rect: Dict[st
 
 
 def _has_oversized_scope_text(record: Dict[str, Any], selected_rect: Dict[str, float]) -> bool:
+    return any(
+        _has_oversized_scope_field(record, field_name, selected_rect)
+        for field_name in ("text", "name")
+    )
+
+
+def _has_oversized_scope_field(record: Dict[str, Any], field_name: str, selected_rect: Dict[str, float]) -> bool:
     record_area = _rect_area(_record_rect(record))
     selected_area = _rect_area(selected_rect)
-    text_length = len(str(record.get("text") or record.get("name") or "").strip())
+    text_length = len(str(record.get(field_name) or "").strip())
     return selected_area > 0 and record_area > selected_area * 4 and text_length > 120
 
 
@@ -632,9 +639,9 @@ def _sanitize_oversized_scope_text(record: Dict[str, Any], selected_rect: Dict[s
             for ancestor in ancestor_chain
         ]
 
-    if _has_oversized_scope_text(sanitized, selected_rect):
-        sanitized["text"] = ""
-        sanitized["name"] = ""
+    for field_name in ("text", "name"):
+        if _has_oversized_scope_field(sanitized, field_name, selected_rect):
+            sanitized[field_name] = ""
     return sanitized
 
 
@@ -650,6 +657,10 @@ def _dedupe_text(values: List[Any], limit: int = 20) -> List[str]:
         if len(deduped) >= limit:
             break
     return deduped
+
+
+def _record_local_text_values(record: Dict[str, Any]) -> List[Any]:
+    return [record.get("text"), record.get("name")]
 
 
 def prune_region_evidence(raw: Dict[str, Any]) -> Dict[str, Any]:
@@ -678,9 +689,10 @@ def prune_region_evidence(raw: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(elements, list):
         evidence["local_text"] = _dedupe_text(
             [
-                record.get("text") or record.get("name")
+                value
                 for record in remaining_elements
                 if isinstance(record, dict)
+                for value in _record_local_text_values(record)
             ]
         )
     else:

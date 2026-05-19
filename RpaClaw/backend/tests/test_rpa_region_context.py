@@ -309,6 +309,56 @@ def test_region_evidence_pruning_sanitizes_oversized_stable_ancestor_chain_text(
     assert pruned["local_text"] == ["Pay now"]
 
 
+def test_region_evidence_pruning_sanitizes_oversized_stable_name_with_short_text():
+    oversized_name = " ".join(["Checkout panel accessible name"] * 8)
+    raw = {
+        "rect": {"x": 100, "y": 100, "width": 200, "height": 100},
+        "intersecting_elements": [
+            {
+                "tag": "div",
+                "text": "Pay now",
+                "name": oversized_name,
+                "rect": {"x": 0, "y": 0, "width": 1200, "height": 900},
+                "locator_candidates": [
+                    {
+                        "kind": "testid",
+                        "locator": {"method": "testid", "value": "checkout-panel"},
+                    }
+                ],
+                "ancestor_chain": [
+                    {
+                        "tag": "div",
+                        "text": "Stable panel",
+                        "name": oversized_name,
+                        "rect": {"x": 0, "y": 0, "width": 1200, "height": 900},
+                        "locator_candidates": [
+                            {
+                                "kind": "testid",
+                                "locator": {"method": "testid", "value": "ancestor-panel"},
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+        "local_text": [oversized_name, "Pay now"],
+    }
+
+    pruned = prune_region_evidence(raw)
+
+    record = pruned["intersecting_elements"][0]
+    assert record["locator_candidates"][0]["locator"]["value"] == "checkout-panel"
+    assert record["text"] == "Pay now"
+    assert record["name"] == ""
+    assert oversized_name not in record.get("name", "")
+    ancestor = record["ancestor_chain"][0]
+    assert ancestor["locator_candidates"][0]["locator"]["value"] == "ancestor-panel"
+    assert ancestor["text"] == "Stable panel"
+    assert ancestor["name"] == ""
+    assert oversized_name not in ancestor.get("name", "")
+    assert pruned["local_text"] == ["Pay now"]
+
+
 async def _collect_sse_events(response):
     events = []
     chunks = []
