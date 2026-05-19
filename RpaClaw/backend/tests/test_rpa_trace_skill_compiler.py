@@ -1,3 +1,4 @@
+import ast
 import asyncio
 from datetime import datetime, timedelta
 
@@ -28,6 +29,11 @@ def _load_execute_skill(script: str):
     namespace = {"__name__": "compiled_skill_test"}
     exec(script[:end], namespace)
     return namespace["execute_skill"]
+
+
+def _assert_script_loads(script: str):
+    ast.parse(script)
+    return _load_execute_skill(script)
 
 
 class _FakeTracePage:
@@ -1417,6 +1423,7 @@ def test_region_single_value_extract_compiles_to_inner_text_result_key():
     )
 
     script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    _assert_script_loads(script)
     body = _execute_body(script)
 
     assert "inner_text()" in body
@@ -1446,6 +1453,7 @@ def test_region_table_extract_compiles_to_deterministic_row_arrays():
     )
 
     script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    _assert_script_loads(script)
     body = _execute_body(script)
 
     assert trace_requires_runtime_ai_replay(trace) is False
@@ -1465,7 +1473,7 @@ def test_region_list_sample_extract_compiles_to_repeated_item_texts():
             "inferred_kind": "list_sample",
             "list_summary": {
                 "item_count": 3,
-                "item_selector": ".card",
+                "item_selector": "li[data-title=\"Owner's card\"]",
                 "container_locator_candidates": [
                     {
                         "selected": True,
@@ -1477,10 +1485,11 @@ def test_region_list_sample_extract_compiles_to_repeated_item_texts():
     )
 
     script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    _assert_script_loads(script)
     body = _execute_body(script)
 
     assert trace_requires_runtime_ai_replay(trace) is False
-    assert ".locator('.card').evaluate_all" in body
+    assert ".locator('li[data-title=\"Owner\\'s card\"]').evaluate_all" in body
     assert "_results['cards'] = _result" in body
     assert "_execute_runtime_ai_instruction" not in body
 
@@ -1495,13 +1504,18 @@ def test_region_table_missing_locator_preserves_runtime_ai_replay():
             "inferred_kind": "table_region",
             "table_summary": {"headers": ["Order"], "sample_rows": [["A-1"]]},
         },
+        ai_execution=RPAAIExecution(
+            code="async def run(page, results):\n    return [['embedded']]",
+        ),
     )
 
     script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    _assert_script_loads(script)
     body = _execute_body(script)
 
     assert trace_requires_runtime_ai_replay(trace) is True
     assert "_execute_runtime_ai_instruction" in body
+    assert "await run(current_page, _results)" not in body
 
 
 def test_region_list_missing_selector_preserves_runtime_ai_replay():
@@ -1522,13 +1536,18 @@ def test_region_list_missing_selector_preserves_runtime_ai_replay():
                 ],
             },
         },
+        ai_execution=RPAAIExecution(
+            code="async def run(page, results):\n    return ['embedded']",
+        ),
     )
 
     script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    _assert_script_loads(script)
     body = _execute_body(script)
 
     assert trace_requires_runtime_ai_replay(trace) is True
     assert "_execute_runtime_ai_instruction" in body
+    assert "await run(current_page, _results)" not in body
 
 
 def test_navigation_after_selected_project_uses_dynamic_result_url():

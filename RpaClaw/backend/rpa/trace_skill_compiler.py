@@ -810,6 +810,9 @@ class TraceSkillCompiler:
         region_lines = self._render_region_extract_trace(index, trace, used_output_keys)
         if region_lines:
             return region_lines
+        region_runtime_requirement = _trace_region_runtime_ai_requirement(trace)
+        if region_runtime_requirement is True:
+            return self._render_runtime_ai_instruction_trace(index, trace, used_output_keys)
         if _should_preserve_runtime_ai_instruction(trace):
             return self._render_runtime_ai_instruction_trace(index, trace, used_output_keys)
         if _embedded_ai_code_has_weak_empty_extract_evidence(trace):
@@ -1367,6 +1370,27 @@ def _trace_region_value_locator_candidates(
     return list(trace.locator_candidates or []) + list(region_context.get("locator_candidates") or [])
 
 
+def _trace_region_runtime_ai_requirement(trace: RPAAcceptedTrace) -> Optional[bool]:
+    region_kind = _trace_region_kind(trace)
+    region_context = _trace_region_context(trace)
+    if region_kind == "single_value":
+        candidates = _trace_region_value_locator_candidates(trace, region_context)
+        return not bool(TraceSkillCompiler()._best_locator(candidates))
+    if region_kind == "table_region":
+        table_summary = (
+            region_context.get("table_summary") if isinstance(region_context.get("table_summary"), dict) else {}
+        )
+        return not bool(TraceSkillCompiler()._best_locator(list(table_summary.get("locator_candidates") or [])))
+    if region_kind in {"list_sample", "list_region"}:
+        list_summary = (
+            region_context.get("list_summary") if isinstance(region_context.get("list_summary"), dict) else {}
+        )
+        item_selector = str(list_summary.get("item_selector") or "").strip()
+        locator = TraceSkillCompiler()._best_locator(list(list_summary.get("container_locator_candidates") or []))
+        return not bool(locator and item_selector)
+    return None
+
+
 def _xpath_literal(value: str) -> str:
     text = str(value)
     if "'" not in text:
@@ -1468,24 +1492,9 @@ def trace_requires_runtime_ai_replay(trace: RPAAcceptedTrace) -> bool:
         return False
     if _trace_signal(trace, "extract_snapshot") and TraceSkillCompiler._has_usable_snapshot_extract_fields(trace):
         return False
-    region_kind = _trace_region_kind(trace)
-    region_context = _trace_region_context(trace)
-    if region_kind == "single_value":
-        candidates = _trace_region_value_locator_candidates(trace, region_context)
-        if TraceSkillCompiler()._best_locator(candidates):
-            return False
-    if region_kind == "table_region":
-        table_summary = (
-            region_context.get("table_summary") if isinstance(region_context.get("table_summary"), dict) else {}
-        )
-        return not bool(TraceSkillCompiler()._best_locator(list(table_summary.get("locator_candidates") or [])))
-    if region_kind in {"list_sample", "list_region"}:
-        list_summary = (
-            region_context.get("list_summary") if isinstance(region_context.get("list_summary"), dict) else {}
-        )
-        item_selector = str(list_summary.get("item_selector") or "").strip()
-        locator = TraceSkillCompiler()._best_locator(list(list_summary.get("container_locator_candidates") or []))
-        return not bool(locator and item_selector)
+    region_runtime_requirement = _trace_region_runtime_ai_requirement(trace)
+    if region_runtime_requirement is not None:
+        return region_runtime_requirement
     if _should_preserve_runtime_ai_instruction(trace):
         return True
     if _embedded_ai_code_has_weak_empty_extract_evidence(trace):
