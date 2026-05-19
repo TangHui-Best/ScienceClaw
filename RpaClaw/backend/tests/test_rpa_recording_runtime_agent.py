@@ -12,6 +12,7 @@ from backend.rpa.recording_runtime_agent import (
     RecordingRuntimeAgent,
     RECORDING_RUNTIME_SYSTEM_PROMPT,
     _classify_recording_failure,
+    _compact_region_context,
     _ensure_expected_effect,
     _parse_json_object,
     _resolve_recording_snapshot_debug_dir,
@@ -66,6 +67,61 @@ class _FakeLocator:
 
     async def click(self):
         return None
+
+
+def test_compact_region_context_forwards_scope_and_nested_locators():
+    compact = _compact_region_context(
+        {
+            "region_id": "region-1",
+            "tab_id": "tab-1",
+            "evidence": {
+                "inferred_kind": "single_value",
+                "scope_candidates": [
+                    {
+                        "kind": "text",
+                        "locator": {"method": "text", "value": "Order A"},
+                        "source": "dominant_scope",
+                    }
+                ],
+                "intersecting_elements": [
+                    {
+                        "tag": "span",
+                        "text": "Paid",
+                        "nested_locator_candidates": [
+                            {
+                                "kind": "nested",
+                                "locator": {
+                                    "method": "nested",
+                                    "parent": {"method": "text", "value": "Order A"},
+                                    "child": {"method": "text", "value": "Paid"},
+                                },
+                                "source": "region_ancestor_scope",
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
+    )
+
+    assert compact["scope_candidates"] == [
+        {
+            "kind": "text",
+            "locator": {"method": "text", "value": "Order A"},
+            "source": "dominant_scope",
+        }
+    ]
+    assert compact["intersecting_elements"][0]["nested_locator_candidates"] == [
+        {
+            "kind": "nested",
+            "locator": {
+                "method": "nested",
+                "parent": {"method": "text", "value": "Order A"},
+                "child": {"method": "text", "value": "Paid"},
+            },
+            "source": "region_ancestor_scope",
+        }
+    ]
 
 
 class _FakeListPage(_FakePage):

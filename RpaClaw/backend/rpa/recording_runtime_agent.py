@@ -2080,6 +2080,8 @@ def _compact_region_context(region_context: Optional[Dict[str, Any]]) -> Dict[st
     _set_if_present(compact, "local_text", _compact_list(evidence.get("local_text"), limit=20))
     _set_if_present(compact, "dominant_container", evidence.get("dominant_container"))
     _set_if_present(compact, "locator_candidates", _compact_list(evidence.get("locator_candidates"), limit=10))
+    _set_if_present(compact, "scope_candidates", _compact_list(evidence.get("scope_candidates"), limit=10))
+    _set_if_present(compact, "intersecting_elements", _compact_list(evidence.get("intersecting_elements"), limit=20))
     _set_if_present(compact, "table_summary", evidence.get("table_summary"))
     _set_if_present(compact, "list_summary", evidence.get("list_summary"))
     _set_if_present(compact, "action_summary", evidence.get("action_summary"))

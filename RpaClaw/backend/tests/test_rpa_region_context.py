@@ -52,6 +52,72 @@ def _context(
     )
 
 
+def test_region_evidence_model_preserves_scope_locator_hierarchy():
+    evidence = RPARegionEvidence(
+        url="https://example.test/orders",
+        title="Orders",
+        rect={"x": 10, "y": 20, "width": 200, "height": 80},
+        scope_candidates=[
+            {
+                "kind": "text",
+                "locator": {"method": "text", "value": "Order A"},
+                "source": "dominant_scope",
+            }
+        ],
+        intersecting_elements=[
+            {
+                "tag": "span",
+                "text": "Paid",
+                "ancestor_chain": [
+                    {
+                        "tag": "article",
+                        "role": "article",
+                        "text": "Order A Paid",
+                        "locator_candidates": [
+                            {"kind": "text", "locator": {"method": "text", "value": "Order A"}}
+                        ],
+                    }
+                ],
+                "nested_locator_candidates": [
+                    {
+                        "kind": "nested",
+                        "locator": {
+                            "method": "nested",
+                            "parent": {"method": "text", "value": "Order A"},
+                            "child": {"method": "text", "value": "Paid"},
+                        },
+                        "source": "region_ancestor_scope",
+                    }
+                ],
+            }
+        ],
+    )
+
+    dumped = evidence.model_dump(mode="json")
+
+    assert dumped["scope_candidates"] == [
+        {
+            "kind": "text",
+            "locator": {"method": "text", "value": "Order A"},
+            "source": "dominant_scope",
+        }
+    ]
+    assert dumped["intersecting_elements"][0]["ancestor_chain"][0]["locator_candidates"] == [
+        {"kind": "text", "locator": {"method": "text", "value": "Order A"}}
+    ]
+    assert dumped["intersecting_elements"][0]["nested_locator_candidates"] == [
+        {
+            "kind": "nested",
+            "locator": {
+                "method": "nested",
+                "parent": {"method": "text", "value": "Order A"},
+                "child": {"method": "text", "value": "Paid"},
+            },
+            "source": "region_ancestor_scope",
+        }
+    ]
+
+
 async def _collect_sse_events(response):
     events = []
     chunks = []

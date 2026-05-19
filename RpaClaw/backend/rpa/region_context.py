@@ -170,7 +170,15 @@ REGION_COLLECTOR_JS = """
     return fallbackLocatorCandidates(el);
   }
 
-  function elementRecord(el, rect) {
+  function locatorPayload(candidate) {
+    if (!candidate || typeof candidate !== 'object') return null;
+    if (candidate.locator && typeof candidate.locator === 'object') return candidate.locator;
+    if (candidate.method) return candidate;
+    return null;
+  }
+
+  function compactAncestorRecord(el) {
+    const rect = rectFromDomRect(el.getBoundingClientRect());
     return {
       tag: (el.tagName || '').toLowerCase(),
       role: roleOf(el),
@@ -178,6 +186,58 @@ REGION_COLLECTOR_JS = """
       text: norm(el.textContent).slice(0, 240),
       rect,
       locator_candidates: locatorCandidates(el).slice(0, 5)
+    };
+  }
+
+  function isScopeCandidate(el) {
+    if (!el || !el.tagName) return false;
+    const tag = (el.tagName || '').toLowerCase();
+    const role = roleOf(el);
+    if (['article', 'section', 'form', 'table', 'ul', 'ol', 'li'].includes(tag)) return true;
+    if (['article', 'group', 'region', 'row', 'listitem', 'table', 'grid', 'list', 'form'].includes(role)) return true;
+    return Boolean(
+      el.getAttribute &&
+      (norm(el.getAttribute('data-testid')) || norm(el.getAttribute('data-test')) || norm(el.getAttribute('aria-label')))
+    );
+  }
+
+  function ancestorChain(el) {
+    const chain = [];
+    let cur = el && el.parentElement;
+    while (cur && cur !== document.body && cur !== document.documentElement && chain.length < 5) {
+      if (isScopeCandidate(cur)) {
+        chain.push(compactAncestorRecord(cur));
+      }
+      cur = cur.parentElement;
+    }
+    return chain;
+  }
+
+  function nestedLocatorCandidates(el) {
+    const ancestors = ancestorChain(el);
+    if (!ancestors.length) return [];
+    const parent = locatorPayload((ancestors[0].locator_candidates || [])[0]);
+    const child = locatorPayload(locatorCandidates(el)[0]);
+    if (!parent || !child) return [];
+    return [
+      {
+        kind: 'nested',
+        locator: {method: 'nested', parent, child},
+        source: 'region_ancestor_scope'
+      }
+    ];
+  }
+
+  function elementRecord(el, rect) {
+    return {
+      tag: (el.tagName || '').toLowerCase(),
+      role: roleOf(el),
+      name: nameOf(el),
+      text: norm(el.textContent).slice(0, 240),
+      rect,
+      locator_candidates: locatorCandidates(el).slice(0, 5),
+      ancestor_chain: ancestorChain(el),
+      nested_locator_candidates: nestedLocatorCandidates(el)
     };
   }
 
@@ -303,6 +363,7 @@ REGION_COLLECTOR_JS = """
     local_text: localText,
     dominant_container: dominantElement ? elementRecord(dominantElement, dominantRect) : {},
     locator_candidates: dominantElement ? locatorCandidates(dominantElement).slice(0, 8) : [],
+    scope_candidates: dominantElement ? locatorCandidates(dominantElement).slice(0, 8) : [],
     table_summary: tableSummary(hits),
     list_summary: listSummary(hits),
     action_summary: actionSummary(hits),
@@ -352,6 +413,7 @@ class RPARegionEvidence(BaseModel):
     dominant_container: Dict[str, Any] = Field(default_factory=dict)
     intersecting_elements: List[Dict[str, Any]] = Field(default_factory=list)
     locator_candidates: List[Dict[str, Any]] = Field(default_factory=list)
+    scope_candidates: List[Dict[str, Any]] = Field(default_factory=list)
     local_text: List[str] = Field(default_factory=list)
     inferred_kind: str = "unknown"
     table_summary: Optional[Dict[str, Any]] = None
@@ -553,6 +615,7 @@ def _normalize_evidence(raw: Dict[str, Any], *, page: Any, rect: Dict[str, float
     evidence["dominant_container"] = evidence.get("dominant_container") if isinstance(evidence.get("dominant_container"), dict) else {}
     evidence["intersecting_elements"] = evidence.get("intersecting_elements") if isinstance(evidence.get("intersecting_elements"), list) else []
     evidence["locator_candidates"] = evidence.get("locator_candidates") if isinstance(evidence.get("locator_candidates"), list) else []
+    evidence["scope_candidates"] = evidence.get("scope_candidates") if isinstance(evidence.get("scope_candidates"), list) else []
     evidence["local_text"] = evidence.get("local_text") if isinstance(evidence.get("local_text"), list) else []
     evidence["table_summary"] = evidence.get("table_summary") if isinstance(evidence.get("table_summary"), dict) else None
     evidence["list_summary"] = evidence.get("list_summary") if isinstance(evidence.get("list_summary"), dict) else None

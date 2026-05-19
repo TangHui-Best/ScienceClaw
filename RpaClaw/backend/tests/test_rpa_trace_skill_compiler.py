@@ -1432,6 +1432,37 @@ def test_region_single_value_extract_compiles_to_inner_text_result_key():
     assert "_execute_runtime_ai_instruction" not in body
 
 
+def test_region_single_value_prefers_nested_scope_locator():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        user_instruction="Extract order status from the selected region",
+        description="Extract selected order status",
+        output_key="order_status",
+        region_context={
+            "inferred_kind": "single_value",
+            "locator_candidates": [
+                {
+                    "selected": True,
+                    "kind": "nested",
+                    "locator": {
+                        "method": "nested",
+                        "parent": {"method": "text", "value": "Order A"},
+                        "child": {"method": "text", "value": "Paid"},
+                    },
+                    "source": "region_ancestor_scope",
+                }
+            ],
+        },
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    _assert_script_loads(script)
+    body = _execute_body(script)
+
+    assert "get_by_text('Order A').get_by_text('Paid')" in body
+    assert "_results['order_status'] = _result" in body
+
+
 def test_region_table_extract_compiles_to_deterministic_row_arrays():
     trace = RPAAcceptedTrace(
         trace_type=RPATraceType.AI_OPERATION,
