@@ -1774,11 +1774,14 @@ class ApiMonitorSessionManager:
                     model_config=model_config,
                 )
 
-                name, description = self._parse_yaml_metadata(yaml_def)
-
                 from backend.rpa.api_monitor_mcp_contract import parse_api_monitor_tool_yaml
 
                 contract = parse_api_monitor_tool_yaml(yaml_def)
+                name, description = _metadata_from_contract(
+                    contract,
+                    method=method,
+                    url_pattern=url_pattern,
+                )
                 validation_status = "valid" if contract.valid else "invalid"
                 validation_errors = contract.validation_errors if contract.validation_errors else []
 
@@ -2342,7 +2345,14 @@ class ApiMonitorSessionManager:
             session.updated_at = datetime.now()
             return None
 
-        name, description = self._parse_yaml_metadata(yaml_def)
+        from backend.rpa.api_monitor_mcp_contract import parse_api_monitor_tool_yaml
+
+        contract = parse_api_monitor_tool_yaml(yaml_def)
+        name, description = _metadata_from_contract(
+            contract,
+            method=candidate.method,
+            url_pattern=candidate.url_pattern,
+        )
 
         existing = next(
             (tool for tool in session.tool_definitions if tool.generation_candidate_id == candidate.id),
@@ -2371,6 +2381,8 @@ class ApiMonitorSessionManager:
             tool.source_calls = [call.id for call in samples]
             tool.updated_at = datetime.now()
 
+        tool.validation_status = "valid" if contract.valid else "invalid"
+        tool.validation_errors = contract.validation_errors if contract.validation_errors else []
         tool.confidence = confidence_result.confidence
         tool.score = confidence_result.score
         tool.selected = True
@@ -2551,8 +2563,12 @@ class ApiMonitorSessionManager:
             model_config=model_config,
         )
 
-        name, description = self._parse_yaml_metadata(yaml_def)
         contract = parse_api_monitor_tool_yaml(yaml_def)
+        name, description = _metadata_from_contract(
+            contract,
+            method=tool.method,
+            url_pattern=tool.url_pattern,
+        )
 
         tool.yaml_definition = yaml_def
         tool.name = name
@@ -2907,37 +2923,30 @@ class ApiMonitorSessionManager:
             "frame_url": stack_record.get("frameUrl") or page.url,
         }
 
-    @staticmethod
-    def _parse_yaml_metadata(yaml_str: str) -> tuple:
-        """Extract name and description from generated YAML (OpenAPI or legacy).
 
-        Returns (name, description). Falls back to defaults on parse failure.
-        """
-        import yaml as _yaml
+def _metadata_from_contract(contract, *, method: str, url_pattern: str) -> tuple[str, str]:
+    name = str(getattr(contract, "name", "") or "").strip()
+    description = str(getattr(contract, "description", "") or "").strip()
+    if not name:
+        name = _fallback_tool_name(method, url_pattern)
+    if not description:
+        description = (
+            "Generated API tool (YAML validation failed)"
+            if not getattr(contract, "valid", False)
+            else "Generated API tool"
+        )
+    return name, description
 
-        name = "unnamed_tool"
-        description = "Auto-generated API tool"
 
-        try:
-            data = _yaml.safe_load(yaml_str)
-            if isinstance(data, dict):
-                if data.get("swagger") == "2.0":
-                    paths = data.get("paths", {})
-                    for path_item in paths.values():
-                        for method_key in ("get", "post", "put", "patch", "delete"):
-                            if method_key in path_item:
-                                op = path_item[method_key]
-                                name = op.get("operationId", name)
-                                description = op.get("summary", description)
-                                break
-                        break
-                else:
-                    name = data.get("name", name)
-                    description = data.get("description", description)
-        except Exception:
-            pass
-
-        return name, description
+def _fallback_tool_name(method: str, url_pattern: str) -> str:
+    path = str(url_pattern or "").split("?", 1)[0]
+    parts = [str(method or "").lower(), *re.findall(r"[A-Za-z0-9]+", path)]
+    name = re.sub(r"_+", "_", "_".join(part for part in parts if part)).strip("_").lower()
+    if not name:
+        return "api_tool"
+    if name[0].isdigit():
+        return f"api_{name}"
+    return name
 
 
 # ── Global singleton ─────────────────────────────────────────────────

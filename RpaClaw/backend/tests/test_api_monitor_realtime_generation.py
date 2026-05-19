@@ -304,6 +304,58 @@ class TestGenerateToolForCandidate(unittest.IsolatedAsyncioTestCase):
         assert candidate.error == "bad yaml"
         assert session.captured_calls == [call]
 
+    async def test_candidate_generation_marks_invalid_yaml_contract(self):
+        manager, session_id = _manager_with_session()
+        session = manager.sessions[session_id]
+        call = _call("call-1")
+        call.source_evidence = {
+            "action_window_matched": True,
+            "initiator_urls": ["https://example.com/app"],
+            "js_stack_urls": [],
+            "frame_url": "https://example.com/app",
+        }
+        session.captured_calls.append(call)
+        candidate, _ = manager._upsert_generation_candidate(session_id, call)
+
+        async def fake_generate_tool_definition(**kwargs):
+            return (
+                'swagger: "2.0"\n'
+                "info:\n"
+                "  title: search_completed_contracts\n"
+                "  description: Search contracts\n"
+                '  version: "1.0"\n'
+                "paths:\n"
+                "  /contracts/search:\n"
+                "    post:\n"
+                "      operationId: search_completed_contracts\n"
+                "      summary: Search contracts\n"
+                "      parameters:\n"
+                "        - name: body\n"
+                "          in: body\n"
+                "          schema:\n"
+                "            type: object\n"
+                "            properties:\n"
+                "              contractType:\n"
+                "                type: string\n"
+                "                description: Contract type filter, placeholder: 合同类型\n"
+                "      responses:\n"
+                '        "200":\n'
+                "          description: Success\n"
+            )
+
+        with patch(
+            "backend.rpa.api_monitor.manager.generate_tool_definition",
+            fake_generate_tool_definition,
+        ):
+            tool = await manager._generate_tool_for_candidate(session_id, candidate.id)
+
+        assert tool is not None
+        assert tool.name == "get_api_orders"
+        assert tool.description == "Generated API tool (YAML validation failed)"
+        assert tool.validation_status == "invalid"
+        assert any("Invalid YAML" in error for error in tool.validation_errors)
+        assert candidate.status == "generated"
+
     async def test_running_candidate_regenerates_when_new_sample_marks_stale(self):
         manager, session_id = _manager_with_session()
         session = manager.sessions[session_id]
