@@ -713,6 +713,77 @@ def test_recording_runtime_agent_passes_region_context_to_planner():
     asyncio.run(run_test())
 
 
+def test_recording_runtime_agent_uses_region_scoped_snapshot_for_region_planner(monkeypatch):
+    async def run_test():
+        async def fake_snapshot(_page):
+            return {"url": "https://example.test/start", "title": "Example"}
+
+        def fake_compact_snapshot(_snapshot, _instruction):
+            return {
+                "url": "https://example.test/start",
+                "title": "Example",
+                "actionable_nodes": [{"text": "Full page action"}],
+                "frames": [{"frame_hint": "main"}],
+                "table_views": [{"title": "Full table"}],
+                "detail_views": [{"title": "Full detail"}],
+                "form_views": [{"title": "Full form"}],
+                "expanded_regions": [{"region_id": "full-region"}],
+                "sampled_regions": [{"region_id": "sample-region"}],
+                "region_catalogue": [{"region_id": "catalogue-region"}],
+            }
+
+        planner_calls = []
+        runtime_results = {"previous_order": {"id": "A"}}
+        region_context = {
+            "region_id": "region-1",
+            "evidence": {
+                "local_text": ["Order A", "$10"],
+            },
+        }
+
+        async def planner(payload):
+            planner_calls.append(payload)
+            return {
+                "description": "Extract selected region",
+                "action_type": "run_python",
+                "output_key": "selected_region",
+                "code": "async def run(page, results):\n    return {'ok': True}",
+            }
+
+        monkeypatch.setattr(recording_runtime_agent, "_safe_page_snapshot", fake_snapshot)
+        monkeypatch.setattr(recording_runtime_agent, "_compact_snapshot", fake_compact_snapshot)
+
+        result = await RecordingRuntimeAgent(planner=planner).run(
+            page=_FakePage(),
+            instruction="extract selected region",
+            runtime_results=runtime_results,
+            region_context=region_context,
+        )
+
+        assert result.success is True
+        payload = planner_calls[0]
+        snapshot = payload["snapshot"]
+        assert payload["context_scope"] == "selected_region"
+        assert payload["region_context"]["region_id"] == "region-1"
+        assert snapshot["mode"] == "selected_region_snapshot"
+        assert snapshot["selected_region"]["local_text"] == ["Order A", "$10"]
+        assert snapshot["url"] == "https://example.test/start"
+        assert payload["runtime_results"] == runtime_results
+        for key in (
+            "actionable_nodes",
+            "frames",
+            "table_views",
+            "detail_views",
+            "form_views",
+            "expanded_regions",
+            "sampled_regions",
+            "region_catalogue",
+        ):
+            assert key not in snapshot
+
+    asyncio.run(run_test())
+
+
 def test_recording_runtime_agent_omits_region_context_when_absent():
     async def run_test():
         planner_calls = []

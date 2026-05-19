@@ -174,14 +174,13 @@ class RecordingRuntimeAgent:
         compact_snapshot = _compact_snapshot(snapshot, instruction)
         compact_region_context = _compact_region_context(region_context)
         raw_region_evidence = _raw_region_evidence(region_context)
-        payload = {
-            "instruction": instruction,
-            "page": before.model_dump(mode="json"),
-            "snapshot": compact_snapshot,
-            "runtime_results": runtime_results,
-        }
-        if compact_region_context:
-            payload["region_context"] = compact_region_context
+        payload = _build_recording_planner_payload(
+            instruction=instruction,
+            page_state=before,
+            compact_snapshot=compact_snapshot,
+            runtime_results=runtime_results,
+            compact_region_context=compact_region_context,
+        )
         snapshot_extra: Dict[str, Any] = {}
         if raw_region_evidence:
             snapshot_extra["raw_region_evidence"] = raw_region_evidence
@@ -2079,6 +2078,52 @@ def _compact_region_context(region_context: Optional[Dict[str, Any]]) -> Dict[st
     _set_if_present(compact, "action_summary", evidence.get("action_summary"))
     _set_if_present(compact, "warnings", _compact_list(evidence.get("warnings")))
     return _safe_jsonable(compact) if compact else {}
+
+
+def _selected_region_snapshot(
+    compact_snapshot: Dict[str, Any],
+    page_state: RPAPageState,
+    region_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    return {
+        "mode": "selected_region_snapshot",
+        "url": str(compact_snapshot.get("url") or page_state.url or ""),
+        "title": str(compact_snapshot.get("title") or page_state.title or ""),
+        "selected_region": region_context,
+        "scope_note": (
+            "The user selected this page region for the current command. "
+            "Plan extraction or action targeting from selected_region evidence first."
+        ),
+    }
+
+
+def _build_recording_planner_payload(
+    *,
+    instruction: str,
+    page_state: RPAPageState,
+    compact_snapshot: Dict[str, Any],
+    runtime_results: Dict[str, Any],
+    compact_region_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    if compact_region_context:
+        return {
+            "instruction": instruction,
+            "page": {
+                "url": page_state.url,
+                "title": page_state.title,
+            },
+            "context_scope": "selected_region",
+            "snapshot": _selected_region_snapshot(compact_snapshot, page_state, compact_region_context),
+            "region_context": compact_region_context,
+            "runtime_results": runtime_results,
+        }
+    return {
+        "instruction": instruction,
+        "page": page_state.model_dump(mode="json"),
+        "context_scope": "full_page",
+        "snapshot": compact_snapshot,
+        "runtime_results": runtime_results,
+    }
 
 
 def _raw_region_evidence(region_context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
