@@ -713,6 +713,60 @@ def test_recording_runtime_agent_passes_region_context_to_planner():
     asyncio.run(run_test())
 
 
+def test_recording_runtime_agent_does_not_use_full_page_ordinal_overlay_with_region_context(monkeypatch):
+    async def run_test():
+        planner_calls = []
+        region_context = {
+            "region_id": "region-1",
+            "page_url": "https://example.test/start",
+            "page_title": "Example",
+            "evidence": {
+                "inferred_kind": "table_region",
+                "rect": {"x": 10, "y": 20, "width": 300, "height": 160},
+                "local_text": ["Name", "Price", "alpha", "$1"],
+                "table_summary": {"headers": ["Name", "Price"], "row_count": 1},
+            },
+        }
+
+        def wrong_full_page_overlay_plan(_instruction, _snapshot):
+            return {
+                "description": "Wrong full-page extraction",
+                "action_type": "run_python",
+                "expected_effect": "extract",
+                "output_key": "wrong_full_page",
+                "code": "async def run(page, results):\n    return {'wrong': True}",
+            }
+
+        async def planner(payload):
+            planner_calls.append(payload)
+            return {
+                "description": "Extract selected region first row",
+                "action_type": "run_python",
+                "expected_effect": "extract",
+                "output_key": "region_value",
+                "code": "async def run(page, results):\n    return {'region': True}",
+            }
+
+        monkeypatch.setattr(
+            "backend.rpa.recording_runtime_agent._build_table_ordinal_overlay_plan",
+            wrong_full_page_overlay_plan,
+        )
+
+        result = await RecordingRuntimeAgent(planner=planner).run(
+            page=_FakePage(),
+            instruction="extract the first row from this selected area",
+            runtime_results={},
+            region_context=region_context,
+        )
+
+        assert result.success is True
+        assert result.output_key == "region_value"
+        assert result.output == {"region": True}
+        assert len(planner_calls) == 1
+
+    asyncio.run(run_test())
+
+
 def test_recording_runtime_agent_uses_region_scoped_snapshot_for_region_planner(monkeypatch):
     async def run_test():
         async def fake_snapshot(_page):

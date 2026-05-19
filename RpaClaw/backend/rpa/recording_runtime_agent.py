@@ -198,9 +198,11 @@ class RecordingRuntimeAgent:
             extra=snapshot_extra or None,
         )
 
-        first_plan = _build_table_ordinal_overlay_plan(instruction, snapshot)
-        if not first_plan:
-            first_plan = _build_ordinal_overlay_plan(instruction, snapshot)
+        first_plan = None
+        if not compact_region_context:
+            first_plan = _build_table_ordinal_overlay_plan(instruction, snapshot)
+            if not first_plan:
+                first_plan = _build_ordinal_overlay_plan(instruction, snapshot)
         first_planner_call_index = len(self._planner_llm_calls)
         if not first_plan:
             try:
