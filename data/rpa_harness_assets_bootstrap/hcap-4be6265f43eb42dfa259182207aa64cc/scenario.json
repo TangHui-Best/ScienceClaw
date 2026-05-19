@@ -22,17 +22,19 @@
   "governance": {
     "promotion_status": "candidate",
     "runner_modes": [
-      "offline_core_chain"
+      "offline_core_chain",
+      "skill_replay_e2e"
     ],
     "core_chain_coverage": [
       "html_to_raw_snapshot",
       "raw_to_compact_snapshot",
       "planner_action_selection",
-      "trace_to_skill"
+      "trace_to_skill",
+      "skill_replay"
     ],
     "expected_signals_reviewed": true,
     "sensitivity_reviewed": true,
-    "review_notes": "Promoted to candidate after F004 governed regression report excluded it only for missing governance metadata. Public GitHub capture reviewed as repo-safe baseline evidence."
+    "review_notes": "Promoted to candidate after F004 governed regression report excluded it only for missing governance metadata. Public GitHub capture reviewed as repo-safe baseline evidence. F008.1 enables skill_replay_e2e only through captured HTML controlled replay, not live GitHub."
   },
   "step_checkpoints": [
     {

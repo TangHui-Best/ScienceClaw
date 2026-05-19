@@ -8,6 +8,23 @@ updated: 2026-05-18
 
 ## Active
 
+### F008 Skill Replay E2E Runner
+
+- Feature: `docs/features/F008-skill-replay-e2e-runner.md`
+- Evidence: `docs/evidence/EV-008-skill-replay-e2e-runner.md`
+- Status: active; implementation verified and commit closeout pending.
+- Current slice: F008.0 Replay Runner Contract / Fixture Harness and F008.1
+  Real Governed Candidate Asset Replay are closed.
+- Goal: compile trace evidence into a generated Skill, execute it against a
+  controlled replay fixture, validate expected replay signals, and surface the
+  result as an independent governed runner signal.
+- Boundaries: do not restore direct Agent chat, do not touch live GitHub, do
+  not expand the asset set, and do not fix planner/compiler behavior unless a
+  separate owner Feature is opened.
+- Next step: commit and close out F008, then decide whether the next Feature
+  should strengthen replay from per-step controlled HTML replay into full SOP
+  stateful replay.
+
 ### Post-F002 RPA Harness Follow-ups
 
 - Source Feature: `docs/features/F002-rpa-harness-v0.md`

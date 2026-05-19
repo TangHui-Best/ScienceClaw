@@ -162,6 +162,9 @@ def test_governed_offline_regression_exposes_observability_contract(tmp_path: Pa
     }
     assert observability["runner_signals"]["snapshot_failure_categories"] == {}
     assert observability["runner_signals"]["compiler_failure_categories"] == {}
+    assert observability["runner_signals"]["skill_replay_checked"] == 0
+    assert observability["runner_signals"]["skill_replay_failed"] == 0
+    assert observability["runner_signals"]["skill_replay_failure_categories"] == {}
     assert observability["runner_signals"]["snapshot_quality"] == {
         "source": "production-dom-snapshot-v1",
         "checked_steps": 1,
@@ -175,6 +178,28 @@ def test_governed_offline_regression_exposes_observability_contract(tmp_path: Pa
     }
     assert observability["runner_signals"]["snapshot_quality"]["average_compression_ratio"] > 0
     assert observability["confidence"]["risks"] == ["single-candidate-asset-baseline"]
+
+
+def test_governed_offline_regression_exposes_skill_replay_runner_signal(tmp_path: Path):
+    _write_asset(
+        tmp_path,
+        asset_id="candidate-ready",
+        runner_modes=["offline_core_chain", "skill_replay_e2e"],
+        core_chain_coverage=[
+            "html_to_raw_snapshot",
+            "raw_to_compact_snapshot",
+            "trace_to_skill",
+            "skill_replay",
+        ],
+    )
+
+    report = run_governed_offline_regression(tmp_path)
+
+    assert report["skill_replay"]["schema_version"] == "rpa-harness-skill-replay-e2e-v0"
+    assert report["skill_replay"]["summary"]["total"] == 1
+    assert report["summary"]["skill_replay_failed"] == 0
+    assert report["observability"]["runner_signals"]["skill_replay_checked"] == 1
+    assert report["observability"]["runner_signals"]["skill_replay_failed"] == 0
 
 
 def test_governed_offline_regression_marks_selected_runner_failures_as_blocking(tmp_path: Path):

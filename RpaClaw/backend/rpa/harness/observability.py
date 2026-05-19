@@ -130,6 +130,11 @@ def build_observability_contract(report: dict[str, Any]) -> dict[str, Any]:
             "snapshot_quality": _snapshot_quality(report),
             "compiler_failed": int(summary.get("compiler_failed") or 0),
             "compiler_failure_categories": _failure_categories(report, "compiler"),
+            "skill_replay_checked": int(
+                report.get("skill_replay", {}).get("summary", {}).get("total") or 0
+            ),
+            "skill_replay_failed": int(summary.get("skill_replay_failed") or 0),
+            "skill_replay_failure_categories": _failure_categories(report, "skill_replay"),
         },
         "blast_radius": {
             "status": str(blast_summary.get("status") or "unknown"),
@@ -235,6 +240,11 @@ def render_human_summary(report: dict[str, Any]) -> str:
             f"validation blocking={runner_signals['validation_blocking_issue_count']}, "
             f"snapshot failed={runner_signals['snapshot_failed']}, "
             f"compiler failed={runner_signals['compiler_failed']}"
+        ),
+        (
+            "Skill replay: "
+            f"checked={runner_signals['skill_replay_checked']}, "
+            f"failed={runner_signals['skill_replay_failed']}"
         ),
         (
             "Snapshot quality: "

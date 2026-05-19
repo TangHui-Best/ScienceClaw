@@ -14,6 +14,9 @@
   },
   "state_signals": {
     "output_key": "fork_count",
+    "must_contain_text": [
+      "Fork 1.3k"
+    ],
     "observed_output_shape": {
       "type": "str"
     }

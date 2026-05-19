@@ -10,6 +10,7 @@ from .catalog import build_harness_catalog
 from .compiler_regression import run_compiler_regression
 from .observability import build_observability_contract
 from .snapshot_regression import run_snapshot_regression
+from .skill_replay import run_skill_replay_e2e
 
 
 _GOVERNED_PROMOTIONS = {"candidate", "golden"}
@@ -79,6 +80,7 @@ def _report_status(
     validation: dict[str, Any],
     snapshot: dict[str, Any],
     compiler: dict[str, Any],
+    skill_replay: dict[str, Any],
     blast_radius: dict[str, Any],
 ) -> str:
     if selected_capture_count == 0:
@@ -86,6 +88,8 @@ def _report_status(
     if validation["summary"]["blocking_issue_count"]:
         return "failed"
     if snapshot["summary"]["failed"] or compiler["summary"]["failed"]:
+        return "failed"
+    if skill_replay["summary"]["failed"]:
         return "failed"
     if blast_radius["summary"]["status"] == "failed":
         return "failed"
@@ -107,6 +111,7 @@ def run_governed_offline_regression(assets_root: str | Path) -> dict[str, Any]:
     validation = validate_harness_assets(root, asset_ids=selected_id_set)
     snapshot = run_snapshot_regression(root, asset_ids=selected_id_set)
     compiler = run_compiler_regression(root, asset_ids=selected_id_set)
+    skill_replay = run_skill_replay_e2e(root, asset_ids=selected_id_set)
     blast_radius = build_blast_radius_report(
         snapshot_report=snapshot,
         compiler_report=compiler,
@@ -119,6 +124,7 @@ def run_governed_offline_regression(assets_root: str | Path) -> dict[str, Any]:
         validation=validation,
         snapshot=snapshot,
         compiler=compiler,
+        skill_replay=skill_replay,
         blast_radius=blast_radius,
     )
     failure_category = ""
@@ -130,6 +136,8 @@ def run_governed_offline_regression(assets_root: str | Path) -> dict[str, Any]:
         failure_category = "snapshot-regression-failed"
     elif compiler["summary"]["failed"]:
         failure_category = "compiler-regression-failed"
+    elif skill_replay["summary"]["failed"]:
+        failure_category = "skill-replay-e2e-failed"
     elif blast_radius["summary"]["status"] == "failed":
         failure_category = "blast-radius-failed"
     report = {
@@ -161,12 +169,14 @@ def run_governed_offline_regression(assets_root: str | Path) -> dict[str, Any]:
             "validation_blocking_issue_count": validation["summary"]["blocking_issue_count"],
             "snapshot_failed": snapshot["summary"]["failed"],
             "compiler_failed": compiler["summary"]["failed"],
+            "skill_replay_failed": skill_replay["summary"]["failed"],
         },
         "selection": selection,
         "catalog": governed_catalog,
         "validation": validation,
         "snapshot": snapshot,
         "compiler": compiler,
+        "skill_replay": skill_replay,
         "blast_radius": blast_radius,
     }
     report["observability"] = build_observability_contract(report)
