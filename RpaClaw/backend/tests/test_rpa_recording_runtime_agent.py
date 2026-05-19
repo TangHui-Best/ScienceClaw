@@ -728,14 +728,8 @@ def test_recording_runtime_agent_does_not_use_full_page_ordinal_overlay_with_reg
             },
         }
 
-        def wrong_full_page_overlay_plan(_instruction, _snapshot):
-            return {
-                "description": "Wrong full-page extraction",
-                "action_type": "run_python",
-                "expected_effect": "extract",
-                "output_key": "wrong_full_page",
-                "code": "async def run(page, results):\n    return {'wrong': True}",
-            }
+        def fail_if_overlay_builder_called(_instruction, _snapshot):
+            raise AssertionError("full-page overlay builders should not run with region context")
 
         async def planner(payload):
             planner_calls.append(payload)
@@ -749,7 +743,11 @@ def test_recording_runtime_agent_does_not_use_full_page_ordinal_overlay_with_reg
 
         monkeypatch.setattr(
             "backend.rpa.recording_runtime_agent._build_table_ordinal_overlay_plan",
-            wrong_full_page_overlay_plan,
+            fail_if_overlay_builder_called,
+        )
+        monkeypatch.setattr(
+            "backend.rpa.recording_runtime_agent._build_ordinal_overlay_plan",
+            fail_if_overlay_builder_called,
         )
 
         result = await RecordingRuntimeAgent(planner=planner).run(
