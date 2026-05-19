@@ -459,6 +459,141 @@ def test_region_scoped_snapshot_expands_selected_region_when_outside_text_overla
     assert [region["summary"] for region in compact["region_catalogue"]] == ["Line Items"]
 
 
+def test_region_scoped_snapshot_keeps_selected_text_in_action_group_and_filters_outside_actions():
+    snapshot = {
+        "url": "https://github.com/trending",
+        "title": "Trending repositories",
+        "content_nodes": [
+            {
+                "node_id": "daily-stars",
+                "container_id": "repo-card",
+                "semantic_kind": "text",
+                "text": "1,027 stars today",
+                "bbox": {"x": 874, "y": 576, "width": 109, "height": 18},
+                "scope_relation": "inside_region",
+                "locator": {"method": "text", "value": "1,027 stars today"},
+            },
+            {
+                "node_id": "repo-heading",
+                "container_id": "repo-card",
+                "semantic_kind": "heading",
+                "text": "HKUDS / CLI-Anything",
+                "bbox": {"x": 37, "y": 517, "width": 220, "height": 26},
+                "scope_relation": "ancestor_context",
+                "locator": {"method": "text", "value": "HKUDS / CLI-Anything"},
+            },
+        ],
+        "actionable_nodes": [
+            {
+                "node_id": "total-stars",
+                "container_id": "repo-card",
+                "role": "link",
+                "name": "star 37,451",
+                "text": "37,451",
+                "bbox": {"x": 105, "y": 556, "width": 55, "height": 18},
+                "scope_relation": "outside_context",
+                "locator": {"method": "role", "role": "link", "name": "star 37,451"},
+            },
+            {
+                "node_id": "star-button",
+                "container_id": "repo-card",
+                "role": "link",
+                "name": "You must be signed in to star a repository",
+                "text": "Star",
+                "bbox": {"x": 908, "y": 517, "width": 75, "height": 28},
+                "scope_relation": "ancestor_context",
+                "locator": {"method": "role", "role": "link", "name": "You must be signed in to star a repository"},
+            },
+        ],
+        "containers": [
+            {
+                "container_id": "repo-card",
+                "container_kind": "card_group",
+                "summary": "Star HKUDS / CLI-Anything Python 37,451 3,590 Built by 1,027 stars today",
+                "bbox": {"x": 21, "y": 500, "width": 978, "height": 116},
+            }
+        ],
+        "frames": [],
+        "table_views": [],
+        "detail_views": [],
+        "region_scope": {
+            "region_id": "region-1",
+            "tab_id": "tab-1",
+            "frame_path": [],
+            "frame_rect": {"x": 845, "y": 561, "width": 130, "height": 44},
+        },
+    }
+
+    compact = compact_recording_snapshot(snapshot, "get star count", char_budget=1)
+
+    assert compact["mode"] == "region_scoped_snapshot"
+    assert len(compact["expanded_regions"]) == 1
+    expanded = compact["expanded_regions"][0]
+    assert expanded["title"] == "HKUDS / CLI-Anything"
+    assert "1,027 stars today" in expanded["summary"]
+    assert [item["text"] for item in expanded["evidence"]["texts"]] == ["1,027 stars today"]
+    assert "37,451" not in str(expanded)
+
+
+def test_region_scoped_snapshot_keeps_selected_action_group_text_by_geometry_when_scope_relation_missing():
+    snapshot = {
+        "url": "https://github.com/trending",
+        "title": "Trending repositories",
+        "content_nodes": [
+            {
+                "node_id": "daily-stars",
+                "container_id": "repo-card",
+                "semantic_kind": "text",
+                "text": "1,027 stars today",
+                "bbox": {"x": 874, "y": 576, "width": 109, "height": 18},
+                "locator": {"method": "text", "value": "1,027 stars today"},
+            },
+            {
+                "node_id": "repo-heading",
+                "container_id": "repo-card",
+                "semantic_kind": "heading",
+                "text": "HKUDS / CLI-Anything",
+                "bbox": {"x": 37, "y": 517, "width": 220, "height": 26},
+                "locator": {"method": "text", "value": "HKUDS / CLI-Anything"},
+            },
+        ],
+        "actionable_nodes": [
+            {
+                "node_id": "total-stars",
+                "container_id": "repo-card",
+                "role": "link",
+                "name": "star 37,451",
+                "text": "37,451",
+                "bbox": {"x": 105, "y": 556, "width": 55, "height": 18},
+                "locator": {"method": "role", "role": "link", "name": "star 37,451"},
+            }
+        ],
+        "containers": [
+            {
+                "container_id": "repo-card",
+                "container_kind": "card_group",
+                "summary": "Star HKUDS / CLI-Anything Python 37,451 3,590 Built by 1,027 stars today",
+                "bbox": {"x": 21, "y": 500, "width": 978, "height": 116},
+            }
+        ],
+        "frames": [],
+        "table_views": [],
+        "detail_views": [],
+        "region_scope": {
+            "region_id": "region-1",
+            "tab_id": "tab-1",
+            "frame_path": [],
+            "frame_rect": {"x": 845, "y": 561, "width": 130, "height": 44},
+        },
+    }
+
+    compact = compact_recording_snapshot(snapshot, "get star count", char_budget=1)
+
+    expanded = compact["expanded_regions"][0]
+    assert [item["text"] for item in expanded["evidence"]["texts"]] == ["1,027 stars today"]
+    assert "37,451" not in str(expanded)
+
+
 def test_region_scope_argument_empty_dict_wins_over_snapshot_region_scope():
     snapshot = _build_snapshot()
     snapshot["region_scope"] = {

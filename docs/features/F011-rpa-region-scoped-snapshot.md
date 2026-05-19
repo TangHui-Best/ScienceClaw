@@ -64,6 +64,7 @@ Active implementation slice. RegionScope conversion, region-prioritized raw snap
 
 - 2026-05-19: Implemented RegionScope conversion, scoped raw snapshot capture, `region_scoped_snapshot` compression, RecordingRuntimeAgent wiring, trace scope evidence, and focused backend regression coverage. Full readiness remains blocked by local verification dependencies documented in EV-011.
 - 2026-05-19: Added generic planner failure debug dumps for initial/repair planner contract failures so invalid JSON/code responses persist with compact snapshot summary, raw-vs-compact presence comparison, and LLM call summary. Independent review requested repair-path coverage; direct initial and repair tests now cover the artifact path. This is diagnostic-only and does not change planner, prompt, selector, UI, or replay behavior.
+- 2026-05-19: Fixed region-scoped action-group compression after manual validation showed selected standalone text (`1,027 stars today`) was present in raw snapshot but missing from compact expanded evidence, while an outside same-card action (`star 37,451`) remained available as a candidate. Scoped action groups now preserve selected text evidence and filter outside actions from expanded candidates.
 
 ## Evidence
 
