@@ -1553,7 +1553,9 @@ def test_selected_region_local_text_extract_compiles_to_scoped_runtime_ai():
 
     assert "_execute_runtime_ai_instruction(current_page, _results, kwargs, '获取框选区域的模型数量', 'model_count'," in body
     assert "'region_id': 'region-1'" in body
+    assert "'local_text': ['Total 99 models']" in body
     assert "aui-form-item" not in body
+    assert trace_requires_runtime_ai_replay(trace) is True
 
 
 def test_region_table_extract_filters_to_selected_row_indexes():

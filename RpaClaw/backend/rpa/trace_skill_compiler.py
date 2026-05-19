@@ -1575,6 +1575,8 @@ def _should_preserve_runtime_ai_instruction(trace: RPAAcceptedTrace) -> bool:
 def trace_requires_runtime_ai_replay(trace: RPAAcceptedTrace) -> bool:
     if trace.trace_type != RPATraceType.AI_OPERATION:
         return False
+    if _is_selected_region_local_text_extract(trace):
+        return True
     if _trace_signal(trace, "extract_snapshot") and TraceSkillCompiler._has_usable_snapshot_extract_fields(trace):
         return False
     region_runtime_requirement = _trace_region_runtime_ai_requirement(trace)

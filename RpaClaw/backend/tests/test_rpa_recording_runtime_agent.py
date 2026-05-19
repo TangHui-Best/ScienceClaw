@@ -124,6 +124,22 @@ def test_compact_region_context_forwards_scope_and_nested_locators():
     ]
 
 
+def test_compact_region_context_preserves_flat_trace_region_evidence():
+    compact = _compact_region_context(
+        {
+            "region_id": "region-1",
+            "inferred_kind": "text_region",
+            "local_text": ["Order No. AB-123"],
+            "locator_candidates": [{"kind": "css", "locator": {"method": "css", "value": "[data-order]"}}],
+        }
+    )
+
+    assert compact["region_id"] == "region-1"
+    assert compact["inferred_kind"] == "text_region"
+    assert compact["local_text"] == ["Order No. AB-123"]
+    assert compact["locator_candidates"][0]["locator"]["value"] == "[data-order]"
+
+
 class _FakeListPage(_FakePage):
     def __init__(self):
         self.url = "https://github.com/trending"
@@ -903,13 +919,13 @@ def test_recording_runtime_agent_uses_region_scoped_snapshot_for_region_planner(
         assert payload["region_context"]["region_id"] == "region-1"
         assert snapshot["mode"] == "selected_region_snapshot"
         assert snapshot["selected_region"]["local_text"] == ["Order A", "$10"]
+        assert snapshot["detail_views"][0]["source"] == "selected_region.local_text"
         assert snapshot["url"] == "https://example.test/start"
         assert payload["runtime_results"] == runtime_results
         for key in (
             "actionable_nodes",
             "frames",
             "table_views",
-            "detail_views",
             "form_views",
             "expanded_regions",
             "sampled_regions",
@@ -1141,7 +1157,7 @@ async def test_recording_runtime_agent_preserves_extract_snapshot_frame_path(mon
     assert result.trace.signals["extract_snapshot"]["frame_path"] == ["iframe[title='detail']"]
 
 
-def test_recording_runtime_agent_fills_region_extract_snapshot_from_local_text(monkeypatch):
+def test_recording_runtime_agent_does_not_synthesize_region_extract_fields_from_local_text(monkeypatch):
     async def run_test():
         async def fake_build_page_snapshot(_page, _build_frame_path):
             return {
@@ -1188,11 +1204,70 @@ def test_recording_runtime_agent_fills_region_extract_snapshot_from_local_text(m
             },
         )
 
+        assert result.success is False
+        assert result.message == "Recording command failed after one repair."
+        assert "extract_snapshot plan produced no visible non-empty fields" in result.diagnostics[-1].message
+
+    asyncio.run(run_test())
+
+
+def test_recording_runtime_agent_accepts_planner_selected_region_extract_field(monkeypatch):
+    async def run_test():
+        captured_payloads = []
+
+        async def fake_build_page_snapshot(_page, _build_frame_path):
+            return {
+                "url": "https://example.test/orders",
+                "title": "Orders",
+                "frames": [],
+                "actionable_nodes": [],
+                "content_nodes": [],
+                "containers": [],
+                "detail_views": [],
+            }
+
+        async def planner(payload):
+            captured_payloads.append(payload)
+            return {
+                "description": "Extract order number from selected region",
+                "action_type": "extract_snapshot",
+                "expected_effect": "extract",
+                "output_key": "order_number",
+                "source": "selected_region.local_text",
+                "fields": [
+                    {
+                        "label": "order_number",
+                        "value": "AB-123",
+                        "visible": True,
+                        "value_kind": "text",
+                    }
+                ],
+            }
+
+        monkeypatch.setattr("backend.rpa.recording_runtime_agent.build_page_snapshot", fake_build_page_snapshot)
+
+        result = await RecordingRuntimeAgent(planner=planner).run(
+            page=_FakePage(),
+            instruction="Get the selected region order number",
+            runtime_results={},
+            region_context={
+                "region_id": "region-1",
+                "page_url": "https://example.test/orders",
+                "evidence": {
+                    "inferred_kind": "text_region",
+                    "local_text": ["Order No. AB-123"],
+                    "rect": {"x": 10, "y": 20, "width": 160, "height": 34},
+                },
+            },
+        )
+
         assert result.success is True
-        assert result.output == {"模型数量": "99"}
+        assert result.output == {"order_number": "AB-123"}
         assert result.trace.signals["extract_snapshot"]["source"] == "selected_region.local_text"
-        assert result.trace.signals["extract_snapshot"]["fields"][0]["value"] == "99"
-        assert result.trace.region_context["local_text"] == ["Total 99 models"]
+        assert captured_payloads[0]["context_scope"] == "selected_region"
+        selected_snapshot = captured_payloads[0]["snapshot"]
+        assert selected_snapshot["detail_views"][0]["source"] == "selected_region.local_text"
+        assert selected_snapshot["detail_views"][0]["fields"][0]["value"] == "Order No. AB-123"
 
     asyncio.run(run_test())
 

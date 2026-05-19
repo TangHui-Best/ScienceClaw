@@ -220,7 +220,6 @@ class RecordingRuntimeAgent:
                     ],
                     message="Recording planner failed to return a valid plan.",
                 )
-        first_plan = _prepare_region_extract_snapshot_plan(first_plan, compact_region_context, instruction)
         first_llm_call = self._planner_llm_call_since(first_planner_call_index)
         first_result = await self.executor(page, first_plan, runtime_results)
         first_result = await _ensure_expected_effect(
@@ -358,7 +357,6 @@ class RecordingRuntimeAgent:
                 diagnostics=diagnostics,
                 message="Recording planner failed to return a valid repair plan.",
             )
-        repair_plan = _prepare_region_extract_snapshot_plan(repair_plan, compact_region_context, instruction)
         repair_llm_call = self._planner_llm_call_since(repair_planner_call_index)
         repair_result = await self.executor(page, repair_plan, runtime_results)
         repair_result = await _ensure_expected_effect(
@@ -726,39 +724,6 @@ def _snapshot_plan_fields(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
     return []
 
 
-def _prepare_region_extract_snapshot_plan(
-    plan: Dict[str, Any],
-    region_context: Dict[str, Any],
-    instruction: str,
-) -> Dict[str, Any]:
-    if str(plan.get("action_type") or "").strip() != "extract_snapshot":
-        return plan
-    if not region_context or _extract_snapshot_plan_has_visible_value(plan):
-        return plan
-
-    local_text = [str(item or "").strip() for item in list(region_context.get("local_text") or [])]
-    local_text = [item for item in local_text if item]
-    if not local_text:
-        return plan
-
-    value, value_kind = _selected_region_local_text_value(instruction, plan, local_text)
-    if value == "":
-        return plan
-
-    label = _selected_region_extract_label(instruction, plan)
-    prepared = dict(plan)
-    prepared["source"] = "selected_region.local_text"
-    prepared["fields"] = [
-        {
-            "label": label,
-            "value": value,
-            "visible": True,
-            "value_kind": value_kind,
-        }
-    ]
-    return prepared
-
-
 def _extract_snapshot_plan_has_visible_value(plan: Dict[str, Any]) -> bool:
     include_hidden = _normalize_bool(plan.get("include_hidden"))
     include_empty = _normalize_bool(plan.get("include_empty"))
@@ -771,52 +736,6 @@ def _extract_snapshot_plan_has_visible_value(plan: Dict[str, Any]) -> bool:
             continue
         return True
     return False
-
-
-def _selected_region_extract_label(instruction: str, plan: Dict[str, Any]) -> str:
-    for field in _snapshot_plan_fields(plan):
-        label = str(field.get("label") or "").strip()
-        if label:
-            return label
-    output_key = str(plan.get("output_key") or "").strip()
-    if output_key:
-        return output_key
-    return "selected_region_value" if not instruction.strip() else instruction.strip()[:80]
-
-
-def _selected_region_local_text_value(
-    instruction: str,
-    plan: Dict[str, Any],
-    local_text: List[str],
-) -> tuple[str, str]:
-    combined = " ".join(local_text).strip()
-    if not combined:
-        return "", "empty"
-
-    label_text = " ".join(
-        str(field.get("label") or "")
-        for field in _snapshot_plan_fields(plan)
-        if isinstance(field, dict)
-    )
-    if _asks_for_numeric_region_value(f"{instruction} {label_text}"):
-        numbers = re.findall(r"(?<![\w.])-?\d+(?:\.\d+)?(?![\w.])", combined)
-        if len(numbers) == 1:
-            return numbers[0], "number"
-    return combined, "text"
-
-
-def _asks_for_numeric_region_value(text: str) -> bool:
-    normalized = text.lower()
-    markers = (
-        "数量",
-        "个数",
-        "总数",
-        "多少",
-        "count",
-        "number",
-        "total",
-    )
-    return any(marker in normalized for marker in markers)
 
 
 def _extract_snapshot_preview_code(plan: Dict[str, Any]) -> str:
@@ -2162,6 +2081,25 @@ async def _safe_page_snapshot(page: Any) -> Dict[str, Any]:
 def _compact_region_context(region_context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     context = _object_dict(region_context)
     evidence = _object_dict(context.get("evidence"))
+    if not evidence:
+        evidence = {
+            key: context.get(key)
+            for key in (
+                "inferred_kind",
+                "frame_path",
+                "rect",
+                "local_text",
+                "dominant_container",
+                "locator_candidates",
+                "scope_candidates",
+                "intersecting_elements",
+                "table_summary",
+                "list_summary",
+                "action_summary",
+                "warnings",
+            )
+            if key in context
+        }
     if not context and not evidence:
         return {}
 
@@ -2190,7 +2128,7 @@ def _selected_region_snapshot(
     page_state: RPAPageState,
     region_context: Dict[str, Any],
 ) -> Dict[str, Any]:
-    return {
+    snapshot = {
         "mode": "selected_region_snapshot",
         "url": str(compact_snapshot.get("url") or page_state.url or ""),
         "title": str(compact_snapshot.get("title") or page_state.title or ""),
@@ -2200,6 +2138,43 @@ def _selected_region_snapshot(
             "Plan extraction or action targeting from selected_region evidence first."
         ),
     }
+    detail_views = _selected_region_detail_views(region_context)
+    if detail_views:
+        snapshot["detail_views"] = detail_views
+    return snapshot
+
+
+def _selected_region_detail_views(region_context: Dict[str, Any]) -> List[Dict[str, Any]]:
+    local_text = [str(item or "").strip() for item in list(region_context.get("local_text") or [])]
+    local_text = [item for item in local_text if item]
+    if not local_text:
+        return []
+    fields: List[Dict[str, Any]] = []
+    if len(local_text) > 1:
+        fields.append(
+            {
+                "label": "selected_region_text",
+                "value": "\n".join(local_text),
+                "visible": True,
+                "value_kind": "text",
+            }
+        )
+    fields.extend(
+        {
+            "label": f"selected_region_text_{index}",
+            "value": text,
+            "visible": True,
+            "value_kind": "text",
+        }
+        for index, text in enumerate(local_text, start=1)
+    )
+    return [
+        {
+            "source": "selected_region.local_text",
+            "section_title": "Selected region text",
+            "fields": fields,
+        }
+    ]
 
 
 def _build_recording_planner_payload(
