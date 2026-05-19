@@ -8,7 +8,8 @@ created: 2026-05-19
 updated: 2026-05-19
 specs:
   - docs/superpowers/specs/2026-05-19-rpa-region-scoped-snapshot-design.md
-plans: []
+plans:
+  - docs/superpowers/plans/2026-05-19-rpa-region-scoped-snapshot.md
 decisions: []
 evidence: []
 ---
