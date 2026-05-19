@@ -210,7 +210,7 @@ Accepted trace semantics:
 
 - Feature: F009 completed.
 - Evidence level: exhaustive planned.
-- Implementation commit: pending.
+- Implementation commit: `649515ab338c080b373b6d5378f5d9be2874b9d0`.
 - Reviewer status: independent Vision Gate Entry passed. Independent Exit reviewer returned `needs revision`; the two P1 code findings and P2 documentation inconsistency were addressed with tests and Evidence updates. Follow-up re-review confirmed the code findings are addressed and only the documentation status inconsistency remained before this final update.
 - Readiness: pass.
 - Completion claim: allowed.
