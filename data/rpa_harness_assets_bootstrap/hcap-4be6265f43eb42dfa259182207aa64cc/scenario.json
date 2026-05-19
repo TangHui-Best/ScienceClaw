@@ -23,18 +23,20 @@
     "promotion_status": "candidate",
     "runner_modes": [
       "offline_core_chain",
-      "skill_replay_e2e"
+      "skill_replay_e2e",
+      "stateful_sop_capture_to_skill"
     ],
     "core_chain_coverage": [
       "html_to_raw_snapshot",
       "raw_to_compact_snapshot",
       "planner_action_selection",
       "trace_to_skill",
-      "skill_replay"
+      "skill_replay",
+      "stateful_capture_to_skill"
     ],
     "expected_signals_reviewed": true,
     "sensitivity_reviewed": true,
-    "review_notes": "Promoted to candidate after F004 governed regression report excluded it only for missing governance metadata. Public GitHub capture reviewed as repo-safe baseline evidence. F008.1 enables skill_replay_e2e only through captured HTML controlled replay, not live GitHub."
+    "review_notes": "Promoted to candidate after F004 governed regression report excluded it only for missing governance metadata. Public GitHub capture reviewed as repo-safe baseline evidence. F008.1 enables skill_replay_e2e only through captured HTML controlled replay, not live GitHub. F009 enables stateful_sop_capture_to_skill after the Full SOP asset drove session-style accepted trace generation, full SOP Skill compilation, and controlled replay without live GitHub."
   },
   "step_checkpoints": [
     {

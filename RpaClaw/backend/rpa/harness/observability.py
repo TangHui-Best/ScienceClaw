@@ -135,6 +135,11 @@ def build_observability_contract(report: dict[str, Any]) -> dict[str, Any]:
             ),
             "skill_replay_failed": int(summary.get("skill_replay_failed") or 0),
             "skill_replay_failure_categories": _failure_categories(report, "skill_replay"),
+            "stateful_sop_checked": int(
+                report.get("stateful_sop", {}).get("summary", {}).get("total") or 0
+            ),
+            "stateful_sop_failed": int(summary.get("stateful_sop_failed") or 0),
+            "stateful_sop_failure_categories": _failure_categories(report, "stateful_sop"),
         },
         "blast_radius": {
             "status": str(blast_summary.get("status") or "unknown"),
@@ -245,6 +250,11 @@ def render_human_summary(report: dict[str, Any]) -> str:
             "Skill replay: "
             f"checked={runner_signals['skill_replay_checked']}, "
             f"failed={runner_signals['skill_replay_failed']}"
+        ),
+        (
+            "Stateful SOP: "
+            f"checked={runner_signals['stateful_sop_checked']}, "
+            f"failed={runner_signals['stateful_sop_failed']}"
         ),
         (
             "Snapshot quality: "

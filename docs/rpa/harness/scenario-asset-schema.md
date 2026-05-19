@@ -112,8 +112,8 @@ act, not a recorder side effect.
 | Field | Required | Notes |
 | --- | --- | --- |
 | `promotion_status` | yes | `captured`, `candidate`, `golden`, or `rejected`. |
-| `runner_modes` | yes | Supported values: `offline_core_chain`, `skill_replay_e2e`. |
-| `core_chain_coverage` | yes | Covered segments such as `html_to_raw_snapshot`, `raw_to_compact_snapshot`, `planner_action_selection`, `trace_to_skill`, and `skill_replay`. |
+| `runner_modes` | yes | Supported values: `offline_core_chain`, `skill_replay_e2e`, `stateful_sop_capture_to_skill`. |
+| `core_chain_coverage` | yes | Covered segments such as `html_to_raw_snapshot`, `raw_to_compact_snapshot`, `planner_action_selection`, `trace_to_skill`, `skill_replay`, and `stateful_capture_to_skill`. |
 | `expected_signals_reviewed` | yes | Whether expected signals were reviewed before promotion. |
 | `sensitivity_reviewed` | yes | Whether local/sanitized/repo-safe/sensitive classification was reviewed. |
 | `review_notes` | optional | Short promotion or rejection note. |
@@ -129,6 +129,12 @@ eligible for `offline_core_chain`, declare core-chain coverage, and have both
 expected-signal and sensitivity review completed. Assets outside that set remain
 available for analysis, validation, recapture decisions, and future promotion,
 but they do not form the default blocking baseline.
+
+`stateful_sop_capture_to_skill` is an opt-in runner mode for governed Full SOP
+assets. It means the asset may be used as a controlled recording input provider
+to rebuild session-style accepted traces, compile the full SOP Skill, and
+optionally replay that generated Skill against captured HTML without live URLs
+or direct Agent chat.
 
 ## Step `checkpoint.json`
 

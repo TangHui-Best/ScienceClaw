@@ -12,13 +12,14 @@ Sensitivity = Literal["local-only", "sanitized", "repo-safe", "sensitive"]
 RuntimeStatus = Literal["success", "failed", "skipped"]
 RecordingMode = Literal["natural_language", "manual", "unknown"]
 PromotionStatus = Literal["captured", "candidate", "golden", "rejected"]
-RunnerMode = Literal["offline_core_chain", "skill_replay_e2e"]
+RunnerMode = Literal["offline_core_chain", "skill_replay_e2e", "stateful_sop_capture_to_skill"]
 CoreChainCoverage = Literal[
     "html_to_raw_snapshot",
     "raw_to_compact_snapshot",
     "planner_action_selection",
     "trace_to_skill",
     "skill_replay",
+    "stateful_capture_to_skill",
 ]
 
 

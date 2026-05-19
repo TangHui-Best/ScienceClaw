@@ -202,6 +202,48 @@ def test_governed_offline_regression_exposes_skill_replay_runner_signal(tmp_path
     assert report["observability"]["runner_signals"]["skill_replay_failed"] == 0
 
 
+def test_governed_offline_regression_exposes_stateful_sop_runner_signal(tmp_path: Path):
+    _write_asset(
+        tmp_path,
+        asset_id="candidate-ready",
+        runner_modes=["offline_core_chain", "stateful_sop_capture_to_skill"],
+        core_chain_coverage=[
+            "html_to_raw_snapshot",
+            "raw_to_compact_snapshot",
+            "trace_to_skill",
+            "stateful_capture_to_skill",
+        ],
+    )
+    trace_path = tmp_path / "candidate-ready" / "steps" / "001" / "trace_events.json"
+    trace_path.write_text(
+        json.dumps(
+            [
+                {
+                    "trace_id": "trace-candidate-ready",
+                    "trace_type": "navigation",
+                    "source": "manual",
+                    "action": "navigate",
+                    "description": "Open repository",
+                    "before_page": {"url": "", "title": ""},
+                    "after_page": {"url": "https://example.test/repo", "title": "Repo"},
+                    "accepted": True,
+                    "started_at": "2026-05-19T10:00:00",
+                    "ended_at": "2026-05-19T10:00:00",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = run_governed_offline_regression(tmp_path)
+
+    assert report["stateful_sop"]["schema_version"] == "rpa-harness-stateful-sop-capture-to-skill-v0"
+    assert report["stateful_sop"]["summary"]["eligible_capture_count"] == 1
+    assert report["stateful_sop"]["summary"]["failed"] == 0
+    assert report["observability"]["runner_signals"]["stateful_sop_checked"] == 1
+    assert report["observability"]["runner_signals"]["stateful_sop_failed"] == 0
+
+
 def test_governed_offline_regression_marks_selected_runner_failures_as_blocking(tmp_path: Path):
     _write_asset(tmp_path, asset_id="candidate-broken", step_text="Expected text")
     expected_path = tmp_path / "candidate-broken" / "steps" / "001" / "expected.json"

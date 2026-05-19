@@ -30,6 +30,21 @@ Next actions:
 
 ## Recently Completed
 
+### F009 Stateful SOP Capture-to-Skill Regression Runner
+
+- Feature: `docs/features/F009-stateful-sop-capture-to-skill-regression-runner.md`
+- Evidence: `docs/evidence/EV-009-stateful-sop-capture-to-skill-regression-runner.md`
+- Status: completed.
+- Result: governed regression now includes a `stateful_sop` runner that uses a
+  governed Full SOP asset as the recording input boundary, rebuilds
+  session-style accepted traces, compiles one full SOP Skill, and replays it
+  through controlled captured HTML without live GitHub or direct Agent chat.
+- Real bootstrap signal: `stateful_sop_checked=1`, `stateful_sop_failed=0`,
+  `accepted_trace_count=3`, `fork_count=Fork 1.3k`.
+- Residual risk: baseline remains one candidate asset; Harness v1
+  infrastructure should pause expansion and shift to user asset recording plus
+  RPA Agent core fixes validated by assets.
+
 ### F008 Skill Replay E2E Runner
 
 - Feature: `docs/features/F008-skill-replay-e2e-runner.md`

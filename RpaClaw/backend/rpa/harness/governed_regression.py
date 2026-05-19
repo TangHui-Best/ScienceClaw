@@ -11,6 +11,7 @@ from .compiler_regression import run_compiler_regression
 from .observability import build_observability_contract
 from .snapshot_regression import run_snapshot_regression
 from .skill_replay import run_skill_replay_e2e
+from .stateful_sop import run_stateful_sop_capture_to_skill
 
 
 _GOVERNED_PROMOTIONS = {"candidate", "golden"}
@@ -81,6 +82,7 @@ def _report_status(
     snapshot: dict[str, Any],
     compiler: dict[str, Any],
     skill_replay: dict[str, Any],
+    stateful_sop: dict[str, Any],
     blast_radius: dict[str, Any],
 ) -> str:
     if selected_capture_count == 0:
@@ -90,6 +92,8 @@ def _report_status(
     if snapshot["summary"]["failed"] or compiler["summary"]["failed"]:
         return "failed"
     if skill_replay["summary"]["failed"]:
+        return "failed"
+    if stateful_sop["summary"]["failed"]:
         return "failed"
     if blast_radius["summary"]["status"] == "failed":
         return "failed"
@@ -112,6 +116,7 @@ def run_governed_offline_regression(assets_root: str | Path) -> dict[str, Any]:
     snapshot = run_snapshot_regression(root, asset_ids=selected_id_set)
     compiler = run_compiler_regression(root, asset_ids=selected_id_set)
     skill_replay = run_skill_replay_e2e(root, asset_ids=selected_id_set)
+    stateful_sop = run_stateful_sop_capture_to_skill(root, asset_ids=selected_id_set)
     blast_radius = build_blast_radius_report(
         snapshot_report=snapshot,
         compiler_report=compiler,
@@ -125,6 +130,7 @@ def run_governed_offline_regression(assets_root: str | Path) -> dict[str, Any]:
         snapshot=snapshot,
         compiler=compiler,
         skill_replay=skill_replay,
+        stateful_sop=stateful_sop,
         blast_radius=blast_radius,
     )
     failure_category = ""
@@ -138,6 +144,8 @@ def run_governed_offline_regression(assets_root: str | Path) -> dict[str, Any]:
         failure_category = "compiler-regression-failed"
     elif skill_replay["summary"]["failed"]:
         failure_category = "skill-replay-e2e-failed"
+    elif stateful_sop["summary"]["failed"]:
+        failure_category = "stateful-sop-capture-to-skill-failed"
     elif blast_radius["summary"]["status"] == "failed":
         failure_category = "blast-radius-failed"
     report = {
@@ -170,6 +178,7 @@ def run_governed_offline_regression(assets_root: str | Path) -> dict[str, Any]:
             "snapshot_failed": snapshot["summary"]["failed"],
             "compiler_failed": compiler["summary"]["failed"],
             "skill_replay_failed": skill_replay["summary"]["failed"],
+            "stateful_sop_failed": stateful_sop["summary"]["failed"],
         },
         "selection": selection,
         "catalog": governed_catalog,
@@ -177,6 +186,7 @@ def run_governed_offline_regression(assets_root: str | Path) -> dict[str, Any]:
         "snapshot": snapshot,
         "compiler": compiler,
         "skill_replay": skill_replay,
+        "stateful_sop": stateful_sop,
         "blast_radius": blast_radius,
     }
     report["observability"] = build_observability_contract(report)
