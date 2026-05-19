@@ -9,6 +9,34 @@ from pydantic import BaseModel, Field, field_validator
 from .frame_selectors import build_frame_path
 
 
+_SEMANTIC_CONTAINER_TAGS = {
+    "article",
+    "section",
+    "form",
+    "table",
+    "ul",
+    "ol",
+    "li",
+    "tr",
+    "tbody",
+    "fieldset",
+}
+_SEMANTIC_CONTAINER_ROLES = {
+    "article",
+    "group",
+    "region",
+    "row",
+    "listitem",
+    "table",
+    "grid",
+    "list",
+    "listbox",
+    "menu",
+    "dialog",
+    "form",
+}
+
+
 REGION_COLLECTOR_JS = """
 (rectArg) => {
   const warnings = [];
@@ -528,6 +556,81 @@ def _rect_area(rect: Dict[str, float]) -> float:
     return max(0.0, float(rect.get("width", 0) or 0) * float(rect.get("height", 0) or 0))
 
 
+def _record_rect(record: Dict[str, Any]) -> Dict[str, float]:
+    rect = record.get("rect") if isinstance(record, dict) else {}
+    if isinstance(rect, dict):
+        return _rect_dict(rect)
+    return {"x": 0.0, "y": 0.0, "width": 0.0, "height": 0.0}
+
+
+def _is_semantic_region_container(record: Dict[str, Any]) -> bool:
+    if not isinstance(record, dict):
+        return False
+    tag = str(record.get("tag") or "").lower()
+    role = str(record.get("role") or "").lower()
+    return tag in _SEMANTIC_CONTAINER_TAGS or role in _SEMANTIC_CONTAINER_ROLES
+
+
+def _is_oversized_ancestor_record(record: Dict[str, Any], selected_rect: Dict[str, float]) -> bool:
+    if _is_semantic_region_container(record):
+        return False
+    record_area = _rect_area(_record_rect(record))
+    selected_area = _rect_area(selected_rect)
+    text_length = len(str(record.get("text") or record.get("name") or "").strip())
+    return selected_area > 0 and record_area > selected_area * 4 and text_length > 120
+
+
+def _dedupe_text(values: List[Any], limit: int = 20) -> List[str]:
+    deduped: List[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        deduped.append(text)
+        if len(deduped) >= limit:
+            break
+    return deduped
+
+
+def prune_region_evidence(raw: Dict[str, Any]) -> Dict[str, Any]:
+    evidence = dict(raw or {})
+    selected_rect = _rect_dict(evidence.get("rect") or {})
+    elements = evidence.get("intersecting_elements")
+    remaining_elements = (
+        [
+            record
+            for record in elements
+            if isinstance(record, dict) and not _is_oversized_ancestor_record(record, selected_rect)
+        ]
+        if isinstance(elements, list)
+        else []
+    )
+
+    if isinstance(elements, list):
+        evidence["intersecting_elements"] = remaining_elements
+
+    dominant_container = evidence.get("dominant_container")
+    if isinstance(dominant_container, dict) and _is_oversized_ancestor_record(dominant_container, selected_rect):
+        evidence["dominant_container"] = remaining_elements[0] if remaining_elements else {}
+
+    if remaining_elements:
+        evidence["local_text"] = _dedupe_text(
+            [
+                record.get("text") or record.get("name")
+                for record in remaining_elements
+                if isinstance(record, dict)
+            ]
+        )
+    else:
+        evidence["local_text"] = _dedupe_text(
+            evidence.get("local_text") if isinstance(evidence.get("local_text"), list) else []
+        )
+
+    return evidence
+
+
 def _areas_nearly_equal(left: float, right: float) -> bool:
     tolerance = max(1e-6, max(abs(left), abs(right)) * 1e-9)
     return abs(left - right) <= tolerance
@@ -612,6 +715,7 @@ def _normalize_evidence(raw: Dict[str, Any], *, page: Any, rect: Dict[str, float
     evidence["title"] = str(evidence.get("title") or "")
     evidence["frame_path"] = list(frame_path)
     evidence["rect"] = _rect_dict(evidence.get("rect") or rect)
+    evidence = prune_region_evidence(evidence)
     evidence["dominant_container"] = evidence.get("dominant_container") if isinstance(evidence.get("dominant_container"), dict) else {}
     evidence["intersecting_elements"] = evidence.get("intersecting_elements") if isinstance(evidence.get("intersecting_elements"), list) else []
     evidence["locator_candidates"] = evidence.get("locator_candidates") if isinstance(evidence.get("locator_candidates"), list) else []

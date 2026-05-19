@@ -17,6 +17,7 @@ from backend.rpa.region_context import (
     RPARegionViewport,
     analyze_region_on_page,
     classify_region_evidence,
+    prune_region_evidence,
 )
 
 
@@ -116,6 +117,75 @@ def test_region_evidence_model_preserves_scope_locator_hierarchy():
             "source": "region_ancestor_scope",
         }
     ]
+
+
+def test_region_evidence_pruning_drops_oversized_ancestor_text():
+    oversized_text = " ".join(["Oversized checkout content"] * 12)
+    raw = {
+        "rect": {"x": 100, "y": 100, "width": 200, "height": 100},
+        "intersecting_elements": [
+            {
+                "tag": "main",
+                "text": oversized_text,
+                "rect": {"x": 0, "y": 0, "width": 1200, "height": 800},
+            },
+            {
+                "tag": "span",
+                "text": "Selected Price",
+                "rect": {"x": 120, "y": 120, "width": 90, "height": 20},
+            },
+        ],
+        "local_text": [oversized_text, "Selected Price"],
+        "dominant_container": {
+            "tag": "main",
+            "text": oversized_text,
+            "rect": {"x": 0, "y": 0, "width": 1200, "height": 800},
+        },
+        "scope_candidates": [
+            {
+                "kind": "css",
+                "locator": {"method": "css", "value": "article.order-card"},
+            }
+        ],
+    }
+
+    pruned = prune_region_evidence(raw)
+
+    assert [item.get("text") for item in pruned["intersecting_elements"]] == ["Selected Price"]
+    assert pruned["local_text"] == ["Selected Price"]
+    assert pruned["dominant_container"]["tag"] == "span"
+    assert pruned["scope_candidates"][0]["locator"]["value"] == "article.order-card"
+
+
+def test_region_evidence_pruning_keeps_semantic_table_container():
+    raw = {
+        "rect": {"x": 0, "y": 0, "width": 500, "height": 250},
+        "intersecting_elements": [
+            {
+                "tag": "table",
+                "role": "table",
+                "text": "Name Price A 10",
+                "rect": {"x": 0, "y": 0, "width": 1000, "height": 600},
+            },
+            {
+                "tag": "td",
+                "text": "A",
+                "rect": {"x": 20, "y": 40, "width": 80, "height": 30},
+            },
+        ],
+        "dominant_container": {
+            "tag": "table",
+            "role": "table",
+            "text": "Name Price A 10",
+            "rect": {"x": 0, "y": 0, "width": 1000, "height": 600},
+        },
+        "local_text": ["Name Price A 10", "A"],
+    }
+
+    pruned = prune_region_evidence(raw)
+
+    assert pruned["dominant_container"]["tag"] == "table"
+    assert pruned["local_text"][0] == "Name Price A 10"
 
 
 async def _collect_sse_events(response):
