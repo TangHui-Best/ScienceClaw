@@ -184,7 +184,11 @@ def _trace_summary(trace: RPAAcceptedTrace, title: str) -> str:
     signals = trace.signals if isinstance(trace.signals, dict) else {}
     region_selection = signals.get("region_selection") if isinstance(signals, dict) else None
     if isinstance(region_selection, dict):
-        output_key = str(region_selection.get("output_key") or "").strip()
+        output_key = str(trace.output_key or "").strip()
+        if output_key:
+            return output_key
+        decision = signals.get("region_context_decision")
+        output_key = str(decision.get("output_key") or "").strip() if isinstance(decision, dict) else ""
         if output_key:
             return output_key
     return trace.description or title

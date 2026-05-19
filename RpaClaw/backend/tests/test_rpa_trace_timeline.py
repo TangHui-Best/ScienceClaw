@@ -198,9 +198,14 @@ def test_trace_timeline_projects_region_backed_trace_evidence():
             "region_selection": {
                 "region_id": "region-123",
                 "inferred_kind": "list_region",
-                "output_key": "selected_results",
+            },
+            "region_context_decision": {
+                "region_id": "region-123",
+                "used_as": "extraction",
+                "output_key": "pricing_table",
             },
         },
+        output_key="pricing_table",
         region_context={
             "region_id": "region-123",
             "summary": "Search results area",
@@ -210,8 +215,11 @@ def test_trace_timeline_projects_region_backed_trace_evidence():
 
     [item] = build_trace_timeline_items(traces=[trace], trace_diagnostics=[])
 
-    assert item.summary == "selected_results"
+    assert item.summary == "pricing_table"
     assert item.raw_trace["signals"]["region_selection"]["region_id"] == "region-123"
+    assert "output_key" not in item.raw_trace["signals"]["region_selection"]
+    assert item.raw_trace["signals"]["region_context_decision"]["output_key"] == "pricing_table"
+    assert item.raw_trace["output_key"] == "pricing_table"
     assert item.raw_trace["region_context"] == {
         "region_id": "region-123",
         "summary": "Search results area",
