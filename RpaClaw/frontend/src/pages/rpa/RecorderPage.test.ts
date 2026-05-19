@@ -551,4 +551,104 @@ describe('RecorderPage trace timeline convergence', () => {
 
     app.unmount();
   });
+
+  it('does not clear a later selected region when an earlier region chat completes', async () => {
+    get.mockResolvedValue({ data: { session: { timeline: [] } } });
+    let firstRead: (() => Promise<{ done: boolean; value?: Uint8Array }>) | null = null;
+    const encoder = new TextEncoder();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        body: {
+          getReader: () => {
+            let readCount = 0;
+            return {
+              read: () => {
+                if (readCount > 0) return Promise.resolve({ done: true, value: undefined });
+                readCount += 1;
+                return firstRead!();
+              },
+            };
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        body: {
+          getReader: () => {
+            let done = false;
+            return {
+              read: () => {
+                if (done) return Promise.resolve({ done: true, value: undefined });
+                done = true;
+                return Promise.resolve({
+                  done: false,
+                  value: encoder.encode('event: agent_done\ndata: {"message":"Task completed","trace_count":1}\n\n'),
+                });
+              },
+            };
+          },
+        },
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { app, root } = await mountRecorderPage();
+    dispatchSelectedRegion(root, {
+      regionId: 'region-a',
+      kind: 'page_region',
+      summary: 'Initial selected area',
+    });
+    await flushAsyncUpdates();
+
+    const textarea = root.querySelector<HTMLTextAreaElement>('textarea');
+    expect(textarea).not.toBeNull();
+    textarea!.value = 'run with region a';
+    textarea!.dispatchEvent(new Event('input'));
+    await flushAsyncUpdates();
+
+    let resolveFirstRead: ((result: { done: boolean; value?: Uint8Array }) => void) | null = null;
+    firstRead = () => new Promise((resolve) => {
+      resolveFirstRead = resolve;
+    });
+
+    root.querySelector<HTMLButtonElement>('button.flex.h-8.w-8')?.click();
+    await flushAsyncUpdates();
+
+    const [, firstInit] = fetchMock.mock.calls[0];
+    expect(JSON.parse(String((firstInit as RequestInit).body))).toMatchObject({
+      message: 'run with region a',
+      mode: 'trace_first',
+      region_id: 'region-a',
+    });
+
+    dispatchSelectedRegion(root, {
+      regionId: 'region-b',
+      kind: 'page_region',
+      summary: 'Replacement selected area',
+    });
+    await flushAsyncUpdates();
+    expect(root.textContent).toContain('Replacement selected area');
+
+    resolveFirstRead!({
+      done: false,
+      value: encoder.encode('event: agent_done\ndata: {"message":"Task completed","trace_count":1}\n\n'),
+    });
+    await flushAsyncUpdates();
+
+    textarea!.value = 'run with region b';
+    textarea!.dispatchEvent(new Event('input'));
+    await flushAsyncUpdates();
+
+    root.querySelector<HTMLButtonElement>('button.flex.h-8.w-8')?.click();
+    await flushAsyncUpdates();
+
+    const [, secondInit] = fetchMock.mock.calls[1];
+    expect(JSON.parse(String((secondInit as RequestInit).body))).toMatchObject({
+      message: 'run with region b',
+      mode: 'trace_first',
+      region_id: 'region-b',
+    });
+
+    app.unmount();
+  });
 });
