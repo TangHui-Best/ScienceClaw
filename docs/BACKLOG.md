@@ -1,29 +1,12 @@
 ---
 doc_kind: backlog
 status: active
-updated: 2026-05-18
+updated: 2026-05-19
 ---
 
 # Backlog
 
 ## Active
-
-### F008 Skill Replay E2E Runner
-
-- Feature: `docs/features/F008-skill-replay-e2e-runner.md`
-- Evidence: `docs/evidence/EV-008-skill-replay-e2e-runner.md`
-- Status: active; implementation verified and commit closeout pending.
-- Current slice: F008.0 Replay Runner Contract / Fixture Harness and F008.1
-  Real Governed Candidate Asset Replay are closed.
-- Goal: compile trace evidence into a generated Skill, execute it against a
-  controlled replay fixture, validate expected replay signals, and surface the
-  result as an independent governed runner signal.
-- Boundaries: do not restore direct Agent chat, do not touch live GitHub, do
-  not expand the asset set, and do not fix planner/compiler behavior unless a
-  separate owner Feature is opened.
-- Next step: commit and close out F008, then decide whether the next Feature
-  should strengthen replay from per-step controlled HTML replay into full SOP
-  stateful replay.
 
 ### Post-F002 RPA Harness Follow-ups
 
@@ -46,6 +29,21 @@ Next actions:
 - Route `compiler-hardcoded-observed-value` to a separate RPA Agent / `TraceSkillCompiler` generalization feature; do not count it as unfinished F002 Harness infrastructure.
 
 ## Recently Completed
+
+### F008 Skill Replay E2E Runner
+
+- Feature: `docs/features/F008-skill-replay-e2e-runner.md`
+- Evidence: `docs/evidence/EV-008-skill-replay-e2e-runner.md`
+- Status: completed.
+- Result: governed regression now compiles trace evidence into generated Skills,
+  executes them against controlled captured-HTML replay pages/providers, and
+  reports `skill_replay_checked=3` plus `skill_replay_failed=0` for the real
+  bootstrap candidate asset.
+- Implementation commit:
+  `5afab4f876daf7e5d8ef392ff9c6ac0fdb97ab01`.
+- Residual risk: replay is still per-step captured HTML replay, not full
+  stateful SOP replay; baseline remains one candidate asset and still reports
+  `single-candidate-asset-baseline`.
 
 ### F007 Production Snapshot Core-chain Regression
 

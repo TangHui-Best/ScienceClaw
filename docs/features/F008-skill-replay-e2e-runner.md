@@ -1,9 +1,9 @@
 ---
 id: F008
 doc_kind: feature
-status: active
+status: completed
 created: 2026-05-18
-updated: 2026-05-18
+updated: 2026-05-19
 ---
 
 # F008: Skill Replay E2E Runner
@@ -44,8 +44,9 @@ and compare the replay result with expected signals.
 
 ## Current Status
 
-Active. F008.0 and F008.1 are implemented and verified; commit closeout remains
-pending.
+Completed. Governed regression now includes the first Skill Replay E2E runner
+signal, and the real bootstrap candidate asset replays through captured HTML
+controlled replay without live GitHub or direct Agent chat.
 
 ## Links
 
@@ -93,6 +94,6 @@ See [EV-008 Skill Replay E2E Runner Evidence](../evidence/EV-008-skill-replay-e2
 
 ## Next Step
 
-Commit and close out F008, then decide whether the next Feature should
-strengthen replay from per-step controlled HTML replay into full SOP stateful
-replay.
+Decide whether the next Feature should strengthen replay from per-step
+controlled HTML replay into full SOP stateful replay, or keep F008 as the
+minimal governed Skill Replay baseline while expanding candidate assets.

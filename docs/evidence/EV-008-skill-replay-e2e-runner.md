@@ -6,7 +6,7 @@ status: active
 scope: project
 feature_ids: [F008]
 created: 2026-05-18
-updated: 2026-05-18
+updated: 2026-05-19
 evidence_level: exhaustive
 ---
 
@@ -16,7 +16,7 @@ evidence_level: exhaustive
 
 Evidence for F008: add the first governed Skill Replay E2E runner slice.
 
-Current slice:
+Final slice:
 
 ```text
 F008.1: Real Governed Candidate Asset Replay
@@ -167,7 +167,7 @@ F008.1 Skill Replay plus governed regression tests:
 F008.1 focused Harness regression:
 
 ```text
-45 passed in 35.33s
+45 passed in 24.01s
 ```
 
 F008.1 real governed JSON Skill Replay signal:
@@ -183,6 +183,18 @@ skill_replay.assets[2].output_key=fork_count
 skill_replay.assets[2].actual_output=Fork 1.3k
 observability.runner_signals.skill_replay_checked=3
 observability.runner_signals.skill_replay_failed=0
+```
+
+Fresh closeout verification after implementation commit:
+
+```text
+implementation_commit=5afab4f876daf7e5d8ef392ff9c6ac0fdb97ab01
+focused_harness_regression=45 passed in 24.01s
+real_governed_summary_status=passed
+real_governed_core_chain_includes_skill_replay=1
+real_governed_skill_replay_checked=3
+real_governed_skill_replay_failed=0
+knowledge_check=Errors 0, Warnings 0
 ```
 
 F008.1 real governed Chinese summary:
@@ -230,11 +242,11 @@ Snapshot 质量：source=production-dom-snapshot-v1，检查步骤=3，raw signa
 
 ## Closeout Status
 
-- Feature: F008 implementation slices F008.0 and F008.1 are implemented and
-  verified; commit closeout remains pending.
+- Feature: F008 completed.
 - Evidence level: exhaustive for the F008 governed Skill Replay E2E runner
   slice.
-- Implementation commit: pending.
+- Implementation commit:
+  `5afab4f876daf7e5d8ef392ff9c6ac0fdb97ab01`.
 - Reviewer status: self-review for F008.0. Independent review is recommended
   before broadening to F008.1 real-asset replay or treating Skill Replay E2E as
   a release/CI gate.
@@ -242,11 +254,10 @@ Snapshot 质量：source=production-dom-snapshot-v1，检查步骤=3，raw signa
   implementation path and confirmed the route-provider approach. Self-review
   plus explorer review is sufficient for implementation handoff; independent
   review is recommended before promoting Skill Replay to a CI/release gate.
-- Readiness: conditional. Implementation verification and knowledge validation
-  pass, but implementation commit hash is pending because this session has not
-  created a commit.
-- Completion claim: allowed only as `implementation done, commit closeout
-  pending`.
+- Readiness: pass for Feature closeout. Focused Harness regression, real
+  governed JSON, real governed Chinese summary, strict Harness knowledge
+  validation, and implementation commit hash are recorded above.
+- Completion claim: allowed after this closeout record is committed.
 - Vision Gate Exit: pass. The deliverable matches the original F008.0 intent:
   a controlled fixture replay runner plus governed runner signal, without live
   GitHub, direct Agent chat, planner fixes, or asset expansion.
@@ -259,3 +270,38 @@ Snapshot 质量：source=production-dom-snapshot-v1，检查步骤=3，raw signa
   test fixture issue was local to the new test and corrected before closeout.
 - Patch Churn Review: not triggered. F008 starts a new Feature slice and has no
   patch history.
+
+## Final Harness Closeout
+
+Closeout verdict: pass
+
+Completion claim allowed: yes after this closeout record is committed.
+
+Backlog/Handoff: updated `docs/BACKLOG.md`; F008 moved from Active to Recently
+Completed.
+
+Plan lifecycle: not triggered; no separate implementation plan document was
+created for F008.
+
+Readiness: pass for Feature closeout; independent review remains recommended
+before promoting Skill Replay E2E to a CI or release gate.
+
+Vision Gate Exit: pass; F008 stayed within controlled captured-HTML replay and
+did not touch live GitHub, direct Agent chat, planner fixes, or asset expansion.
+
+Patch Churn Review: not triggered; F008 has no patch history.
+
+ADR: not triggered; F008 applies ADR-003 rather than changing the golden
+evaluation decision.
+
+Lesson: not triggered; no recurring failure mode or process miss required a new
+Lesson.
+
+Evidence: recorded in this EV-008 document.
+
+Evidence level: exhaustive
+
+Feature: updated `docs/features/F008-skill-replay-e2e-runner.md`; status is
+completed.
+
+Check: passed; `knowledge_check.py --strict` reported Errors 0, Warnings 0.
