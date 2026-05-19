@@ -1484,6 +1484,107 @@ def test_region_single_value_prefers_nested_scope_locator():
     assert "_results['order_status'] = _result" in body
 
 
+def test_region_single_value_falls_back_when_first_nested_locator_is_invalid():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        user_instruction="Extract order status from the selected region",
+        description="Extract selected order status",
+        output_key="order_status",
+        region_context={
+            "inferred_kind": "single_value",
+            "locator_candidates": [
+                {
+                    "kind": "css",
+                    "locator": {"method": "css", "value": "[data-field='status']"},
+                    "source": "dominant_scope",
+                }
+            ],
+            "intersecting_elements": [
+                {
+                    "tag": "span",
+                    "text": "Paid",
+                    "nested_locator_candidates": [
+                        {
+                            "kind": "nested",
+                            "locator": {
+                                "method": "nested",
+                                "parent": {"method": "text", "value": ""},
+                                "child": {"method": "text", "value": "Paid"},
+                            },
+                            "source": "region_ancestor_scope",
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    _assert_script_loads(script)
+    body = _execute_body(script)
+
+    assert "locator(\"[data-field='status']\")" in body
+    assert "_execute_runtime_ai_instruction" not in body
+
+
+def test_region_table_extract_filters_to_selected_row_indexes():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        user_instruction="Extract the selected table row",
+        description="Extract selected row from selected region",
+        output_key="selected_row",
+        region_context={
+            "inferred_kind": "table_region",
+            "table_summary": {
+                "headers": ["Name", "Price"],
+                "selected_row_indexes": [2],
+                "sample_rows": [["Beta", "$2"]],
+                "row_count": 1,
+                "locator_candidates": [
+                    {"kind": "css", "locator": {"method": "css", "value": "table.orders"}}
+                ],
+            },
+        },
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    _assert_script_loads(script)
+    body = _execute_body(script)
+
+    assert "const selectedIndexes = new Set([2])" in body
+    assert ".filter((row, index) => selectedIndexes.has(index))" in body
+    assert "_execute_runtime_ai_instruction" not in body
+
+
+def test_region_list_extract_filters_to_selected_item_indexes():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        user_instruction="Extract selected list items",
+        description="Extract selected list region",
+        output_key="selected_items",
+        region_context={
+            "inferred_kind": "list_region",
+            "list_summary": {
+                "item_selector": "li",
+                "selected_item_indexes": [1, 3],
+                "sample_items": ["Second", "Fourth"],
+                "item_count": 2,
+                "container_locator_candidates": [
+                    {"kind": "css", "locator": {"method": "css", "value": "ul.results"}}
+                ],
+            },
+        },
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    _assert_script_loads(script)
+    body = _execute_body(script)
+
+    assert "const selectedIndexes = new Set([1, 3])" in body
+    assert ".filter((item, index) => selectedIndexes.has(index))" in body
+    assert "_execute_runtime_ai_instruction" not in body
+
+
 def test_region_table_extract_compiles_to_deterministic_row_arrays():
     trace = RPAAcceptedTrace(
         trace_type=RPATraceType.AI_OPERATION,

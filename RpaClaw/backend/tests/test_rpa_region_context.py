@@ -15,6 +15,7 @@ from backend.rpa.region_context import (
     RPARegionEvidence,
     RPARegionRect,
     RPARegionViewport,
+    REGION_COLLECTOR_JS,
     analyze_region_on_page,
     classify_region_evidence,
     prune_region_evidence,
@@ -357,6 +358,59 @@ def test_region_evidence_pruning_sanitizes_oversized_stable_name_with_short_text
     assert ancestor["name"] == ""
     assert oversized_name not in ancestor.get("name", "")
     assert pruned["local_text"] == ["Pay now"]
+
+
+def test_region_evidence_pruning_sanitizes_action_summary_ancestor_text():
+    oversized_text = " ".join(["Full checkout panel content"] * 8)
+    raw = {
+        "rect": {"x": 100, "y": 100, "width": 180, "height": 80},
+        "intersecting_elements": [
+            {
+                "tag": "button",
+                "text": "Pay now",
+                "rect": {"x": 120, "y": 120, "width": 80, "height": 30},
+            }
+        ],
+        "action_summary": {
+            "controls": [
+                {
+                    "tag": "button",
+                    "text": "Pay now",
+                    "rect": {"x": 120, "y": 120, "width": 80, "height": 30},
+                    "ancestor_chain": [
+                        {
+                            "tag": "div",
+                            "text": oversized_text,
+                            "name": oversized_text,
+                            "rect": {"x": 0, "y": 0, "width": 1200, "height": 800},
+                            "locator_candidates": [
+                                {
+                                    "kind": "css",
+                                    "selector": "#checkout-panel",
+                                    "locator": {"method": "css", "value": "#checkout-panel"},
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        },
+        "local_text": ["Pay now", oversized_text],
+    }
+
+    pruned = prune_region_evidence(raw)
+
+    ancestor = pruned["action_summary"]["controls"][0]["ancestor_chain"][0]
+    assert ancestor["locator_candidates"][0]["selector"] == "#checkout-panel"
+    assert ancestor.get("text") == ""
+    assert ancestor.get("name") == ""
+    assert pruned["local_text"] == ["Pay now"]
+
+
+def test_region_collector_records_selected_table_and_list_indexes():
+    assert "selected_row_indexes" in REGION_COLLECTOR_JS
+    assert "selected_item_indexes" in REGION_COLLECTOR_JS
+    assert "hits.some(hit => hit.el === row || row.contains(hit.el))" in REGION_COLLECTOR_JS
 
 
 async def _collect_sse_events(response):

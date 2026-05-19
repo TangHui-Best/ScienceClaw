@@ -890,9 +890,18 @@ class TraceSkillCompiler:
         lines = ["", f"    # trace {index}: {trace.description or 'region table extract'}"]
         scope_lines, scope_var = self._frame_scope_lines(_trace_region_frame_path(trace, region_context))
         lines.extend(scope_lines)
+        table_summary = region_context.get("table_summary") if isinstance(region_context.get("table_summary"), dict) else {}
+        selected_indexes = _selected_indexes(table_summary.get("selected_row_indexes"))
+        row_source = "Array.from(table.querySelectorAll('tr'))"
+        if selected_indexes:
+            row_source = (
+                f"(() => {{const selectedIndexes = new Set({json.dumps(selected_indexes)});"
+                "return Array.from(table.querySelectorAll('tr'))"
+                ".filter((row, index) => selectedIndexes.has(index));}})()"
+            )
         lines.append(
             f"    _result = await {_locator_expression(scope_var, locator)}.evaluate("
-            "\"\"\"(table) => Array.from(table.querySelectorAll('tr'))"
+            f"\"\"\"(table) => {row_source}"
             ".map((row) => Array.from(row.querySelectorAll('th,td'))"
             ".map((cell) => (cell.innerText || cell.textContent || '').trim())"
             ".filter(Boolean))"
@@ -914,9 +923,17 @@ class TraceSkillCompiler:
         lines = ["", f"    # trace {index}: {trace.description or 'region list extract'}"]
         scope_lines, scope_var = self._frame_scope_lines(_trace_region_frame_path(trace, region_context))
         lines.extend(scope_lines)
+        list_summary = region_context.get("list_summary") if isinstance(region_context.get("list_summary"), dict) else {}
+        selected_indexes = _selected_indexes(list_summary.get("selected_item_indexes"))
+        item_source = "items"
+        if selected_indexes:
+            item_source = (
+                f"(() => {{const selectedIndexes = new Set({json.dumps(selected_indexes)});"
+                "return items.filter((item, index) => selectedIndexes.has(index));}})()"
+            )
         lines.append(
             f"    _result = await {_locator_expression(scope_var, locator)}.locator({item_selector!r}).evaluate_all("
-            "\"\"\"(items) => items.map((item) => (item.innerText || item.textContent || '').trim()).filter(Boolean)\"\"\")"
+            f"\"\"\"(items) => {item_source}.map((item) => (item.innerText || item.textContent || '').trim()).filter(Boolean)\"\"\")"
         )
         lines.append(f"    _results[{key!r}] = _result")
         return lines
@@ -1119,10 +1136,14 @@ class TraceSkillCompiler:
     def _best_locator(self, candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
         if not candidates:
             return {}
-        selected = next((item for item in candidates if item.get("selected")), candidates[0])
-        locator = selected.get("locator") if isinstance(selected, dict) else None
-        normalized = normalize_locator(locator if isinstance(locator, dict) else selected)
-        return normalized if has_valid_locator(normalized) else {}
+        ordered = [item for item in candidates if item.get("selected")]
+        ordered.extend(item for item in candidates if not item.get("selected"))
+        for candidate in ordered:
+            locator = candidate.get("locator") if isinstance(candidate, dict) else None
+            normalized = normalize_locator(locator if isinstance(locator, dict) else candidate)
+            if has_valid_locator(normalized):
+                return normalized
+        return {}
 
     def _preferred_locator_for_trace(self, trace: RPAAcceptedTrace, candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
         locator = self._best_locator(candidates)
@@ -1367,6 +1388,23 @@ def _locator_candidate_dicts(value: Any) -> List[Dict[str, Any]]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, dict)]
+
+
+def _selected_indexes(value: Any) -> List[int]:
+    if not isinstance(value, list):
+        return []
+    indexes: List[int] = []
+    seen: set[int] = set()
+    for item in value:
+        try:
+            index = int(item)
+        except Exception:
+            continue
+        if index < 0 or index in seen:
+            continue
+        seen.add(index)
+        indexes.append(index)
+    return indexes
 
 
 def _prioritized_region_locator_candidates(*groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

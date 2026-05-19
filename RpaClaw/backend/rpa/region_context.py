@@ -293,20 +293,25 @@ REGION_COLLECTOR_JS = """
   function tableSummary(elements) {
     const table = findTable(elements);
     if (!table) return null;
-    const rows = Array.from(table.querySelectorAll('tr')).slice(0, 8);
+    const hits = elements;
+    const rows = Array.from(table.querySelectorAll('tr'));
     let headers = Array.from(table.querySelectorAll('th')).map(th => norm(th.textContent)).filter(Boolean);
     if (!headers.length && rows.length) {
       headers = Array.from(rows[0].querySelectorAll('th,td')).map(cell => norm(cell.textContent)).filter(Boolean);
     }
-    const dataRows = rows
-      .slice(headers.length ? 1 : 0)
-      .map(row => Array.from(row.querySelectorAll('th,td')).map(cell => norm(cell.textContent)).filter(Boolean))
+    const selectedRows = rows
+      .map((row, index) => ({row, index}))
+      .filter(({row}) => hits.some(hit => hit.el === row || row.contains(hit.el)))
+      .slice(0, 8);
+    const dataRows = selectedRows
+      .map(entry => Array.from(entry.row.querySelectorAll('th,td')).map(cell => norm(cell.textContent)).filter(Boolean))
       .filter(row => row.length)
       .slice(0, 5);
     return {
       headers,
       sample_rows: dataRows,
-      row_count: rows.length,
+      row_count: selectedRows.length,
+      selected_row_indexes: selectedRows.map(entry => entry.index),
       locator_candidates: locatorCandidates(table).slice(0, 5)
     };
   }
@@ -328,10 +333,15 @@ REGION_COLLECTOR_JS = """
       items = Array.from(list.children || []);
       itemSelector = ':scope > *';
     }
+    const selectedItems = items
+      .map((item, index) => ({item, index}))
+      .filter(({item}) => elements.some(entry => entry.el === item || item.contains(entry.el)))
+      .slice(0, 8);
     return {
-      item_count: items.length,
+      item_count: selectedItems.length,
       item_selector: itemSelector,
-      sample_items: items.map(item => norm(item.textContent)).filter(Boolean).slice(0, 8),
+      selected_item_indexes: selectedItems.map(entry => entry.index),
+      sample_items: selectedItems.map(entry => norm(entry.item.textContent)).filter(Boolean).slice(0, 8),
       container_locator_candidates: locatorCandidates(list).slice(0, 5)
     };
   }
@@ -663,6 +673,19 @@ def _record_local_text_values(record: Dict[str, Any]) -> List[Any]:
     return [record.get("text"), record.get("name")]
 
 
+def _sanitize_action_summary(value: Any, selected_rect: Dict[str, float]) -> Optional[Dict[str, Any]]:
+    if not isinstance(value, dict):
+        return None
+    sanitized = dict(value)
+    controls = sanitized.get("controls")
+    if isinstance(controls, list):
+        sanitized["controls"] = [
+            _sanitize_oversized_scope_text(control, selected_rect) if isinstance(control, dict) else control
+            for control in controls
+        ]
+    return sanitized
+
+
 def prune_region_evidence(raw: Dict[str, Any]) -> Dict[str, Any]:
     evidence = dict(raw or {})
     selected_rect = _rect_dict(evidence.get("rect") or {})
@@ -685,6 +708,10 @@ def prune_region_evidence(raw: Dict[str, Any]) -> Dict[str, Any]:
         evidence["dominant_container"] = remaining_elements[0] if remaining_elements else {}
     elif isinstance(dominant_container, dict):
         evidence["dominant_container"] = _sanitize_oversized_scope_text(dominant_container, selected_rect)
+
+    action_summary = _sanitize_action_summary(evidence.get("action_summary"), selected_rect)
+    if action_summary is not None:
+        evidence["action_summary"] = action_summary
 
     if isinstance(elements, list):
         evidence["local_text"] = _dedupe_text(
