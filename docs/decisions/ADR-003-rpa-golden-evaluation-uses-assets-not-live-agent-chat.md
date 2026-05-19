@@ -6,7 +6,7 @@ scope: project
 feature_ids: [F002]
 decision_area: rpa-golden-evaluation
 created: 2026-05-18
-updated: 2026-05-18
+updated: 2026-05-19
 ---
 
 # ADR-003: RPA Golden Evaluation Uses Scenario Assets, Not Direct Agent Chat
@@ -47,7 +47,11 @@ The primary execution modes are:
 1. Offline Core-Chain Regression: consume captured HTML, step intent, trace,
    snapshot baselines, compiler baselines, and expected signals without opening
    the live website.
-2. Skill Replay E2E: compile captured SOP or trace evidence into a Skill,
+2. Stateful SOP Capture-to-Skill Regression: consume governed scenario assets
+   as a controlled recording input provider so the RPA Agent core still sees an
+   equivalent recording session, produces accepted trace evidence, and compiles
+   a Skill without requiring live human UI operation during every evaluation.
+3. Skill Replay E2E: compile captured SOP or trace evidence into a Skill,
    execute that Skill in a controlled replay environment, and compare final
    results with expected signals.
 
@@ -86,6 +90,10 @@ scenario assets.
   existing direct Agent chat runner.
 - Captured HTML, step intent, trace, expected signals, and baselines become the
   durable unit of golden evaluation.
+- Stateful Capture-to-Skill work should aim for internal equivalence: asset
+  replay differs from human recording at the outer input boundary, while the
+  RPA Agent recording, trace, compiler, and optional replay chain remains the
+  same product path.
 - `rpa-eval-app` should be treated as a reusable scenario service, not as the
   owner of the golden evaluation architecture.
 - Compiler issues such as hard-coded observed values should be exposed by

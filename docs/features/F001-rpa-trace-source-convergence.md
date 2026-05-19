@@ -45,6 +45,10 @@ Active. 2026-05-16 已完成公共 session projection、generate/test/save compi
 
 Primary verification and reviewer records live in [EV-001 RPA Trace Source Convergence Evidence](../evidence/EV-001-rpa-trace-source-convergence.md). ADR context lives in [ADR-001](../decisions/ADR-001-rpa-trace-is-single-accepted-timeline.md) and [ADR-002](../decisions/ADR-002-trace-evidence-driven-compiler-strategy.md).
 
+## Patch History
+
+- 2026-05-18: Restored this Feature page to the current Harness artifact shape and kept status active pending final release-readiness evidence.
+
 ## Next Step
 
 Continue F001 closeout from `EV-001`: confirm remaining migration risks, rerun targeted backend/frontend checks, and only mark F001 completed after the evidence record contains the final knowledge-check result and release-readiness proof.

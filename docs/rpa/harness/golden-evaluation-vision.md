@@ -69,6 +69,52 @@ This mode is fast, deterministic, and suitable for frequent local or CI use. It
 does not prove the entire business task succeeds, but it does expose whether the
 core chain still preserves and transforms the facts captured in real scenarios.
 
+### Stateful SOP Capture-to-Skill Regression
+
+Stateful SOP Capture-to-Skill Regression is the target mode for simulating the
+real recording product path without requiring a human to operate the product UI
+during every evaluation run.
+
+The goal is internal equivalence:
+
+```text
+Human recording path:
+  human opens pages / clicks / describes intent
+  -> RPA Agent captures trace
+  -> TraceSkillCompiler generates Skill
+
+Harness replay path:
+  governed scenario asset provides captured URL / HTML / step intent / actions
+  -> RPA Agent receives equivalent recording inputs
+  -> RPA Agent captures trace
+  -> TraceSkillCompiler generates Skill
+```
+
+For the RPA Agent core, the Harness-driven path should be as indistinguishable
+as possible from a normal recording session. The difference should live at the
+outer input boundary: pages and user actions come from captured scenario
+assets instead of live human interaction. The inner product chain should still
+exercise recording session state, accepted trace generation, trace
+normalization, compiler input, Skill compilation, and optional Skill replay.
+
+This mode exists because Live Agent E2E is too noisy as the foundation, while
+plain Skill Replay E2E starts too late in the chain. Stateful
+Capture-to-Skill regression should answer whether historical captured assets
+can drive the same internal RPA recording pipeline that real users trigger.
+
+Typical checks:
+
+- session starts with a controlled scenario asset provider
+- each SOP step advances through captured page state and recorded intent
+- manual steps preserve action type, locator evidence, URL transition, and
+  trace events
+- natural-language steps preserve user intent and runtime result evidence
+- accepted trace count, ordering, step type, output keys, and expected signals
+  match the governed asset
+- `TraceSkillCompiler` compiles the resulting accepted trace
+- generated Skill can optionally be replayed against controlled HTML or a
+  controlled business page
+
 ### Skill Replay E2E
 
 Skill Replay E2E is the main end-to-end direction for golden evaluation.
@@ -85,6 +131,11 @@ The replay target may be:
 
 This mode is closer to the real product path than direct Agent chat because it
 tests the SOP to trace to Skill to replay chain.
+
+Skill Replay E2E remains valuable, but it is downstream of
+Capture-to-Skill regression. It proves that generated Skills can run; it does
+not by itself prove that the recording-time SOP capture path still produces the
+right trace evidence.
 
 ### Live Agent E2E
 
@@ -160,6 +211,24 @@ reuse the good ideas from that runner, such as case ids, tags, expected
 signals, assertions, and reports, while changing the execution foundation to
 captured assets.
 
+## F009 Direction
+
+F009 should treat Stateful SOP Capture-to-Skill Regression as the next coherent
+capability target after F008.
+
+The immediate objective should be to use one governed Full SOP asset as a
+stateful scenario provider that can drive the recording/trace/compiler path
+without live human UI operation. The runner should simulate the recording input
+boundary, not bypass the product core by compiling existing trace files only.
+
+F009 should not:
+
+- expand the candidate asset set as part of feature implementation
+- restore direct Agent chat as the oracle
+- require live external websites as the source of truth
+- implement a nested agent that clicks through the RPA product UI
+- hide planner, compiler, or extraction bugs inside Harness-specific fixes
+
 ## Success Shape
 
 The Harness program is on track when core-chain changes can be evaluated by
@@ -168,6 +237,8 @@ asking:
 - Which golden assets passed or failed?
 - Which page patterns were affected?
 - Which runner mode exposed the change?
+- Did the historical asset drive the same internal recording-to-Skill path that
+  a real user would have triggered?
 - Did the output improve, degrade, or intentionally change?
 - Is this a Harness capture/asset issue or an RPA Agent component issue?
 

@@ -19,6 +19,8 @@ RpaClaw is a privacy-first personal research assistant with a local RPA skill re
 - Source: `docs/lessons/LL-001-harness-feature-evidence-closeout-miss.md`.
 - Rationale: prevents code-only progress from replacing recoverable project memory.
 
+## Project Stack
+
 - **Backend**: FastAPI, Python, Pydantic v2, LangGraph/DeepAgents, MongoDB.
 - **Frontend**: Vue 3, TypeScript, Vite, Tailwind CSS.
 - **RPA runtime**: Playwright, local CDP screencast mode, Docker/VNC mode.
@@ -38,6 +40,7 @@ python -m uvicorn backend.main:app --app-dir .\RpaClaw --host 0.0.0.0 --port 800
 Frontend:
 
 ```powershell
+cd .\RpaClaw\frontend
 $env:BACKEND_URL = "http://localhost:8000"
 npm run dev
 ```
@@ -87,8 +90,9 @@ Default local/desktop mode opens as the bootstrap admin without login. Set `AUTH
 
 RPA architecture docs:
 
-- [Trace-first architecture](docs/rpa/trace-first-architecture.md)
-- [Failure repair policy](docs/rpa/failure-repair-policy.md)
+- [Trace single accepted timeline ADR](docs/decisions/ADR-001-rpa-trace-is-single-accepted-timeline.md)
+- [RPA Harness v0 design](docs/rpa/harness/rpa-harness-v0-design.md)
+- [RPA Harness regression strategy](docs/rpa/harness/regression-strategy.md)
 - [TraceSkillCompiler generalization](docs/rpa/trace-skill-compiler-generalization.md)
 
 ## Key RPA Files
@@ -114,11 +118,11 @@ RPA architecture docs:
 ## Common Pitfalls
 
 - **Pydantic v2**: use `model_dump()`, not `.dict()`.
-- **Sandbox processes**: browser services have `autorestart=true`; use `supervisorctl stop/start`, not `pkill`.
+- **Sandbox/container processes**: browser services may have `autorestart=true`; in that environment use `supervisorctl stop/start`, not `pkill`.
 - **Playwright event loop**: use `page.wait_for_timeout(N)`, not `time.sleep(N)` inside async scripts.
 - **Frontend API double prefix**: `apiClient` already includes `/api/v1`.
 - **Local mode RPA**: set `STORAGE_BACKEND=local`; local mode uses CDP screencast, not VNC.
 - **Docker VNC mode**: use noVNC via port `18080`, not raw VNC port `16080`.
-- **Long-running sandbox scripts**: use `nohup` plus sentinel-file polling; MCP shell calls kill child process trees when the call returns.
+- **Long-running sandbox/container scripts**: use `nohup` plus sentinel-file polling in Linux sandbox/container environments; do not assume this applies to Windows local shells.
 - **Skills discovery**: `SKILL.md` must include YAML front matter.
 - **Desktop tools in local mode**: host tool library lives under `TOOLS_DIR`; `/app/Tools` is the sandbox-visible mount path.
