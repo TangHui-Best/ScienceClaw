@@ -99,6 +99,14 @@ const flushAsyncUpdates = async () => {
   await nextTick();
 };
 
+const createDeferred = <T = unknown>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((innerResolve) => {
+    resolve = innerResolve;
+  });
+  return { promise, resolve };
+};
+
 const mountRecorderPage = async () => {
   const { default: RecorderPage } = await import('./RecorderPage.vue');
   const root = document.createElement('div');
@@ -811,7 +819,7 @@ describe('RecorderPage trace timeline convergence', () => {
 
   it('only analyzes once when mouseup is delivered repeatedly before the first analysis resolves', async () => {
     get.mockResolvedValue({ data: { session: { timeline: [] } } });
-    let resolveAnalyze: ((value: unknown) => void) | null = null;
+    const analyzeDeferred = createDeferred<unknown>();
     post.mockImplementation((url: string) => {
       if (url === '/rpa/session/start') {
         return Promise.resolve({
@@ -822,9 +830,7 @@ describe('RecorderPage trace timeline convergence', () => {
         });
       }
       if (url === '/rpa/session/session-1/region/analyze') {
-        return new Promise((resolve) => {
-          resolveAnalyze = resolve;
-        });
+        return analyzeDeferred.promise;
       }
       return Promise.resolve({ data: {} });
     });
@@ -843,7 +849,7 @@ describe('RecorderPage trace timeline convergence', () => {
 
     expect(regionAnalyzeCalls()).toHaveLength(1);
 
-    resolveAnalyze?.({
+    analyzeDeferred.resolve({
       data: {
         region_id: 'region-once',
         summary: 'Single analyzed area',
@@ -860,8 +866,8 @@ describe('RecorderPage trace timeline convergence', () => {
   it('keeps the newer selected region when an older analysis resolves later', async () => {
     get.mockResolvedValue({ data: { session: { timeline: [] } } });
     let analyzeCount = 0;
-    let resolveFirst: ((value: unknown) => void) | null = null;
-    let resolveSecond: ((value: unknown) => void) | null = null;
+    const firstAnalyze = createDeferred<unknown>();
+    const secondAnalyze = createDeferred<unknown>();
     post.mockImplementation((url: string) => {
       if (url === '/rpa/session/start') {
         return Promise.resolve({
@@ -873,13 +879,7 @@ describe('RecorderPage trace timeline convergence', () => {
       }
       if (url === '/rpa/session/session-1/region/analyze') {
         analyzeCount += 1;
-        return new Promise((resolve) => {
-          if (analyzeCount === 1) {
-            resolveFirst = resolve;
-          } else {
-            resolveSecond = resolve;
-          }
-        });
+        return analyzeCount === 1 ? firstAnalyze.promise : secondAnalyze.promise;
       }
       return Promise.resolve({ data: {} });
     });
@@ -904,7 +904,7 @@ describe('RecorderPage trace timeline convergence', () => {
     await flushAsyncUpdates();
     expect(regionAnalyzeCalls()).toHaveLength(2);
 
-    resolveSecond?.({
+    secondAnalyze.resolve({
       data: {
         region_id: 'region-new',
         summary: 'Newest selected area',
@@ -916,7 +916,7 @@ describe('RecorderPage trace timeline convergence', () => {
     expect(root.textContent).toContain('Newest selected area');
     expect(root.textContent).not.toContain('Stale selected area');
 
-    resolveFirst?.({
+    firstAnalyze.resolve({
       data: {
         region_id: 'region-old',
         summary: 'Stale selected area',
