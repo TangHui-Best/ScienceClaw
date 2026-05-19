@@ -612,10 +612,30 @@ def _has_stable_scope_locator_candidate(record: Dict[str, Any]) -> bool:
 def _is_oversized_ancestor_record(record: Dict[str, Any], selected_rect: Dict[str, float]) -> bool:
     if _is_semantic_region_container(record) or _has_stable_scope_locator_candidate(record):
         return False
+    return _has_oversized_scope_text(record, selected_rect)
+
+
+def _has_oversized_scope_text(record: Dict[str, Any], selected_rect: Dict[str, float]) -> bool:
     record_area = _rect_area(_record_rect(record))
     selected_area = _rect_area(selected_rect)
     text_length = len(str(record.get("text") or record.get("name") or "").strip())
     return selected_area > 0 and record_area > selected_area * 4 and text_length > 120
+
+
+def _sanitize_oversized_scope_text(record: Dict[str, Any], selected_rect: Dict[str, float]) -> Dict[str, Any]:
+    sanitized = dict(record)
+
+    ancestor_chain = sanitized.get("ancestor_chain")
+    if isinstance(ancestor_chain, list):
+        sanitized["ancestor_chain"] = [
+            _sanitize_oversized_scope_text(ancestor, selected_rect) if isinstance(ancestor, dict) else ancestor
+            for ancestor in ancestor_chain
+        ]
+
+    if _has_oversized_scope_text(sanitized, selected_rect):
+        sanitized["text"] = ""
+        sanitized["name"] = ""
+    return sanitized
 
 
 def _dedupe_text(values: List[Any], limit: int = 20) -> List[str]:
@@ -638,7 +658,7 @@ def prune_region_evidence(raw: Dict[str, Any]) -> Dict[str, Any]:
     elements = evidence.get("intersecting_elements")
     remaining_elements = (
         [
-            record
+            _sanitize_oversized_scope_text(record, selected_rect)
             for record in elements
             if isinstance(record, dict) and not _is_oversized_ancestor_record(record, selected_rect)
         ]
@@ -652,6 +672,8 @@ def prune_region_evidence(raw: Dict[str, Any]) -> Dict[str, Any]:
     dominant_container = evidence.get("dominant_container")
     if isinstance(dominant_container, dict) and _is_oversized_ancestor_record(dominant_container, selected_rect):
         evidence["dominant_container"] = remaining_elements[0] if remaining_elements else {}
+    elif isinstance(dominant_container, dict):
+        evidence["dominant_container"] = _sanitize_oversized_scope_text(dominant_container, selected_rect)
 
     if isinstance(elements, list):
         evidence["local_text"] = _dedupe_text(

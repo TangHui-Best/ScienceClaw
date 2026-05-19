@@ -260,8 +260,53 @@ def test_region_evidence_pruning_keeps_oversized_container_with_stable_locator()
     pruned = prune_region_evidence(raw)
 
     assert [item.get("tag") for item in pruned["intersecting_elements"]] == ["div"]
+    assert pruned["intersecting_elements"][0]["locator_candidates"][0]["selector"] == "#order-card"
+    assert len(pruned["intersecting_elements"][0].get("text", "")) <= 120
+    assert oversized_text not in pruned["intersecting_elements"][0].get("text", "")
     assert pruned["dominant_container"]["tag"] == "div"
-    assert pruned["local_text"] == [oversized_text]
+    assert pruned["dominant_container"]["locator_candidates"][0]["locator"]["value"] == "order-card"
+    assert len(pruned["dominant_container"].get("text", "")) <= 120
+    assert oversized_text not in pruned["dominant_container"].get("text", "")
+    assert pruned["local_text"] == []
+
+
+def test_region_evidence_pruning_sanitizes_oversized_stable_ancestor_chain_text():
+    oversized_text = " ".join(["Checkout panel stable ancestor content"] * 8)
+    raw = {
+        "rect": {"x": 100, "y": 100, "width": 200, "height": 100},
+        "intersecting_elements": [
+            {
+                "tag": "button",
+                "text": "Pay now",
+                "rect": {"x": 120, "y": 120, "width": 80, "height": 32},
+                "ancestor_chain": [
+                    {
+                        "tag": "div",
+                        "text": oversized_text,
+                        "name": oversized_text,
+                        "rect": {"x": 0, "y": 0, "width": 1200, "height": 900},
+                        "locator_candidates": [
+                            {
+                                "kind": "testid",
+                                "locator": {"method": "testid", "value": "checkout-panel"},
+                            }
+                        ],
+                    }
+                ],
+            },
+        ],
+        "local_text": [oversized_text, "Pay now"],
+    }
+
+    pruned = prune_region_evidence(raw)
+
+    ancestor = pruned["intersecting_elements"][0]["ancestor_chain"][0]
+    assert ancestor["locator_candidates"][0]["locator"]["value"] == "checkout-panel"
+    assert len(ancestor.get("text", "")) <= 120
+    assert len(ancestor.get("name", "")) <= 120
+    assert oversized_text not in ancestor.get("text", "")
+    assert oversized_text not in ancestor.get("name", "")
+    assert pruned["local_text"] == ["Pay now"]
 
 
 async def _collect_sse_events(response):
