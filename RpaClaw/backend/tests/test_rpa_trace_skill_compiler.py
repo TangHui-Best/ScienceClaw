@@ -11,7 +11,11 @@ from backend.rpa.trace_models import (
     RPATargetField,
     RPATraceType,
 )
-from backend.rpa.trace_skill_compiler import TraceSkillCompiler, traces_require_runtime_ai_replay
+from backend.rpa.trace_skill_compiler import (
+    TraceSkillCompiler,
+    trace_requires_runtime_ai_replay,
+    traces_require_runtime_ai_replay,
+)
 
 
 def _execute_body(script: str) -> str:
@@ -1395,6 +1399,136 @@ def test_manual_fill_without_valid_locator_raises_clear_runtime_error():
 
     assert "Recorded fill action is missing a valid target locator" in body
     assert "locator('body')" not in body
+
+
+def test_region_single_value_extract_compiles_to_inner_text_result_key():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        user_instruction="Extract the selected total value",
+        description="Extract selected total",
+        output_key="total_due",
+        region_context={"inferred_kind": "single_value"},
+        locator_candidates=[
+            {
+                "selected": True,
+                "locator": {"method": "css", "value": "[data-field='total']"},
+            }
+        ],
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    body = _execute_body(script)
+
+    assert "inner_text()" in body
+    assert ".strip()" in body
+    assert "_results['total_due'] = _result" in body
+    assert "_execute_runtime_ai_instruction" not in body
+
+
+def test_region_table_extract_compiles_to_deterministic_row_arrays():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        user_instruction="Extract the visible table rows",
+        description="Extract table rows from selected region",
+        output_key="order_rows",
+        region_context={
+            "inferred_kind": "table_region",
+            "table_summary": {
+                "headers": ["Order", "Status"],
+                "locator_candidates": [
+                    {
+                        "selected": True,
+                        "locator": {"method": "css", "value": "table.orders"},
+                    }
+                ],
+            },
+        },
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    body = _execute_body(script)
+
+    assert trace_requires_runtime_ai_replay(trace) is False
+    assert "querySelectorAll('tr')" in body
+    assert "querySelectorAll('th,td')" in body
+    assert "_results['order_rows'] = _result" in body
+    assert "_execute_runtime_ai_instruction" not in body
+
+
+def test_region_list_sample_extract_compiles_to_repeated_item_texts():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        user_instruction="Extract the selected cards",
+        description="Extract list sample from selected region",
+        output_key="cards",
+        region_context={
+            "inferred_kind": "list_sample",
+            "list_summary": {
+                "item_count": 3,
+                "item_selector": ".card",
+                "container_locator_candidates": [
+                    {
+                        "selected": True,
+                        "locator": {"method": "css", "value": ".card-list"},
+                    }
+                ],
+            },
+        },
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    body = _execute_body(script)
+
+    assert trace_requires_runtime_ai_replay(trace) is False
+    assert ".locator('.card').evaluate_all" in body
+    assert "_results['cards'] = _result" in body
+    assert "_execute_runtime_ai_instruction" not in body
+
+
+def test_region_table_missing_locator_preserves_runtime_ai_replay():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        user_instruction="Extract the visible table rows",
+        description="Extract table rows from selected region",
+        output_key="order_rows",
+        region_context={
+            "inferred_kind": "table_region",
+            "table_summary": {"headers": ["Order"], "sample_rows": [["A-1"]]},
+        },
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    body = _execute_body(script)
+
+    assert trace_requires_runtime_ai_replay(trace) is True
+    assert "_execute_runtime_ai_instruction" in body
+
+
+def test_region_list_missing_selector_preserves_runtime_ai_replay():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        user_instruction="Extract the selected cards",
+        description="Extract list sample from selected region",
+        output_key="cards",
+        region_context={
+            "inferred_kind": "list_sample",
+            "list_summary": {
+                "item_count": 3,
+                "container_locator_candidates": [
+                    {
+                        "selected": True,
+                        "locator": {"method": "css", "value": ".card-list"},
+                    }
+                ],
+            },
+        },
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    body = _execute_body(script)
+
+    assert trace_requires_runtime_ai_replay(trace) is True
+    assert "_execute_runtime_ai_instruction" in body
 
 
 def test_navigation_after_selected_project_uses_dynamic_result_url():
