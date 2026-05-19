@@ -271,10 +271,14 @@ const applyPendingRegionAttachment = (attachment: PendingRegionAttachment) => {
   regionError.value = '';
 };
 
-const clearPendingRegion = (regionId?: string) => {
-  if (regionId && pendingRegion.value?.regionId !== regionId) return;
+const clearPendingRegion = () => {
   pendingRegion.value = null;
   regionError.value = '';
+};
+
+const clearPendingRegionIfMatches = (regionId?: string | null) => {
+  if (!regionId || pendingRegion.value?.regionId !== regionId) return;
+  clearPendingRegion();
 };
 
 const handlePendingRegionAttachmentEvent = (event: Event) => {
@@ -977,7 +981,7 @@ const sendMessage = async () => {
               chatMessages.value[msgIdx].text += `\nTask completed, accepted ${completedCount} trace(s).`;
               agentRunning.value = false;
               pendingConfirm.value = null;
-              clearPendingRegion(regionAttachment?.regionId);
+              clearPendingRegionIfMatches(regionAttachment?.regionId);
             } else if (eventType === 'agent_aborted') {
               chatMessages.value[msgIdx].status = 'error';
               chatMessages.value[msgIdx].text += `\n⚠️ Agent 已停止：${data.reason || ''}`;
