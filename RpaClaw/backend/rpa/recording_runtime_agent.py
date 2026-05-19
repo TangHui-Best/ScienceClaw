@@ -259,6 +259,11 @@ class RecordingRuntimeAgent:
         failed_page = await _page_state(page)
         failed_snapshot = await _safe_page_snapshot(page)
         compact_failed_snapshot = _compact_snapshot(failed_snapshot, instruction)
+        repair_snapshot = (
+            _selected_region_snapshot(compact_failed_snapshot, failed_page, compact_region_context)
+            if compact_region_context
+            else compact_failed_snapshot
+        )
         first_error = str(first_result.get("error") or "recording command failed")
         first_error_type = str(first_result.get("error_type") or "").strip()
         first_traceback = str(first_result.get("traceback") or "").strip()
@@ -301,7 +306,7 @@ class RecordingRuntimeAgent:
             "plan": _safe_jsonable(first_plan),
             "result": _safe_jsonable(first_result),
             "page_after_failure": failed_page.model_dump(mode="json"),
-            "snapshot_after_failure": _safe_jsonable(compact_failed_snapshot),
+            "snapshot_after_failure": _safe_jsonable(repair_snapshot),
         }
         if first_llm_call:
             diagnostic_raw["llm_call"] = _safe_jsonable(first_llm_call)
@@ -323,7 +328,7 @@ class RecordingRuntimeAgent:
             "error": first_error,
             "failed_plan": first_plan,
             "page_after_failure": failed_page.model_dump(mode="json"),
-            "snapshot_after_failure": compact_failed_snapshot,
+            "snapshot_after_failure": repair_snapshot,
         }
         if first_error_type:
             repair_context["error_type"] = first_error_type

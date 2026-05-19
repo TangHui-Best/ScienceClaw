@@ -836,6 +836,70 @@ def test_recording_runtime_agent_uses_region_scoped_snapshot_for_region_planner(
     asyncio.run(run_test())
 
 
+def test_recording_runtime_agent_region_repair_payload_excludes_full_page_snapshot(monkeypatch):
+    async def run_test():
+        async def fake_snapshot(_page):
+            return {"url": "https://example.test/start", "title": "Example"}
+
+        def fake_compact_snapshot(_snapshot, _instruction):
+            return {
+                "url": "https://example.test/start",
+                "title": "Example",
+                "actionable_nodes": [{"text": "Full page action"}],
+                "frames": [{"frame_hint": "main"}],
+            }
+
+        planner_calls = []
+        plans = [
+            {
+                "description": "Broken selected region extraction",
+                "action_type": "run_python",
+                "code": "async def run(page, results):\n    raise Exception('locator failed')",
+            },
+            {
+                "description": "Fixed selected region extraction",
+                "action_type": "run_python",
+                "output_key": "selected_region",
+                "code": "async def run(page, results):\n    return {'ok': True}",
+            },
+        ]
+        region_context = {
+            "region_id": "region-1",
+            "page_url": "https://example.test/start",
+            "page_title": "Example",
+            "evidence": {
+                "local_text": ["Order A", "$10"],
+                "rect": {"x": 10, "y": 20, "width": 300, "height": 160},
+            },
+        }
+
+        async def planner(payload):
+            planner_calls.append(payload)
+            return plans.pop(0)
+
+        monkeypatch.setattr(recording_runtime_agent, "_safe_page_snapshot", fake_snapshot)
+        monkeypatch.setattr(recording_runtime_agent, "_compact_snapshot", fake_compact_snapshot)
+
+        result = await RecordingRuntimeAgent(planner=planner).run(
+            page=_FakePage(),
+            instruction="extract selected region",
+            runtime_results={},
+            region_context=region_context,
+        )
+
+        assert result.success is True
+        assert len(planner_calls) == 2
+        repair_payload = planner_calls[1]
+        assert repair_payload["context_scope"] == "selected_region"
+        assert repair_payload["snapshot"]["mode"] == "selected_region_snapshot"
+        assert repair_payload["repair"]["snapshot_after_failure"]["mode"] == "selected_region_snapshot"
+        assert repair_payload["repair"]["page_after_failure"]["url"] == "https://example.test/start"
+        assert "actionable_nodes" not in repair_payload["repair"]["snapshot_after_failure"]
+        assert "frames" not in repair_payload["repair"]["snapshot_after_failure"]
+
+    asyncio.run(run_test())
+
+
 def test_recording_runtime_agent_omits_region_context_when_absent():
     async def run_test():
         planner_calls = []
