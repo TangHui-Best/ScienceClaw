@@ -9,6 +9,7 @@ import pytest
 
 import backend.rpa.recording_runtime_agent as recording_runtime_agent
 from backend.rpa.recording_runtime_agent import (
+    RecordingPlannerContractError,
     RecordingRuntimeAgent,
     RECORDING_RUNTIME_SYSTEM_PROMPT,
     _classify_recording_failure,
@@ -1477,6 +1478,177 @@ async def test_recording_runtime_agent_dumps_repair_snapshot_after_first_failure
     assert failed_attempt["execution_result"]["success"] is False
     assert failed_attempt["failure_analysis"]["type"] == "selector_timeout"
     for file in files + attempt_files + code_files:
+        file.unlink()
+
+
+@pytest.mark.asyncio
+async def test_recording_runtime_agent_dumps_planner_failure_when_debug_dir_is_enabled(monkeypatch):
+    raw_snapshot = {
+        "url": "https://github.com/trending",
+        "title": "Trending",
+        "content_nodes": [{"text": "stars 13,680"}],
+        "actionable_nodes": [],
+        "containers": [],
+        "frames": [],
+    }
+    compact_snapshot = {
+        "mode": "region_scoped_snapshot",
+        "url": "https://github.com/trending",
+        "title": "Trending",
+        "region_scope": {"region_id": "region-1"},
+        "expanded_regions": [{"title": "academic-research-skills", "summary": "stars 13,680"}],
+        "sampled_regions": [],
+        "region_catalogue": [],
+    }
+
+    async def fake_build_page_snapshot(*_args, **_kwargs):
+        return raw_snapshot
+
+    def fake_compact_recording_snapshot(_snapshot, _instruction, *, char_budget=20000):
+        return compact_snapshot
+
+    async def bad_planner(_payload):
+        exc = RecordingPlannerContractError(
+            "Recording planner must return Python code defining async def run(page, results)",
+            raw_output='{"description":"Extract stars","action_type":"run_python","code":"return 13680"}',
+        )
+        exc.llm_call = {
+            "request": {"total_message_chars": 1234, "effective_model": {"model_name": "glm-4.7"}},
+            "response": {"chars": 76, "preview": '{"description":"Extract stars"}', "truncated": False},
+        }
+        raise exc
+
+    debug_dir = Path(__file__).resolve().parents[1] / "recording_debug_test_output"
+    debug_dir.mkdir(exist_ok=True)
+    for pattern in ("*-snapshot-*.json", "*-attempt-*.json", "*-code-*.py", "*-planner_failure-*.json"):
+        for existing in debug_dir.glob(pattern):
+            existing.unlink()
+
+    monkeypatch.setenv("RPA_RECORDING_DEBUG_SNAPSHOT_DIR", str(debug_dir))
+    monkeypatch.setattr("backend.rpa.recording_runtime_agent.build_page_snapshot", fake_build_page_snapshot)
+    monkeypatch.setattr("backend.rpa.recording_runtime_agent.compact_recording_snapshot", fake_compact_recording_snapshot)
+
+    result = await RecordingRuntimeAgent(planner=bad_planner, model_config={"model_name": "glm-4.7"}).run(
+        page=_FakePage(),
+        instruction="stars",
+        runtime_results={},
+    )
+
+    failure_files = sorted(debug_dir.glob("*-planner_failure-*.json"))
+    snapshot_files = sorted(debug_dir.glob("*-snapshot-*.json"))
+
+    assert result.success is False
+    assert len(snapshot_files) == 1
+    assert len(failure_files) == 1
+    assert failure_files[0].name == "002-initial-planner_failure-stars.json"
+
+    payload = json.loads(failure_files[0].read_text(encoding="utf-8"))
+    assert payload["stage"] == "initial"
+    assert payload["instruction"] == "stars"
+    assert payload["exception"]["type"] == "RecordingPlannerContractError"
+    assert "async def run" in payload["exception"]["message"]
+    assert payload["planner_raw_output"]["preview"].startswith('{"description":"Extract stars"')
+    assert payload["llm_call"]["request"]["effective_model"]["model_name"] == "glm-4.7"
+    assert payload["compact_snapshot_summary"]["mode"] == "region_scoped_snapshot"
+    assert payload["compact_snapshot_summary"]["expanded_region_titles"] == ["academic-research-skills"]
+    assert payload["snapshot_comparison"]["classification"] == "present_in_both"
+
+    for file in failure_files + snapshot_files:
+        file.unlink()
+
+
+@pytest.mark.asyncio
+async def test_recording_runtime_agent_dumps_repair_planner_failure_when_debug_dir_is_enabled(monkeypatch):
+    raw_snapshots = [
+        {
+            "url": "https://github.com/trending",
+            "title": "Trending",
+            "content_nodes": [{"text": "stars 13,680"}],
+            "actionable_nodes": [],
+            "containers": [],
+            "frames": [],
+        },
+        {
+            "url": "https://github.com/trending",
+            "title": "Trending",
+            "content_nodes": [{"text": "stars 13,680 after failed click"}],
+            "actionable_nodes": [],
+            "containers": [],
+            "frames": [],
+        },
+    ]
+
+    async def fake_build_page_snapshot(*_args, **_kwargs):
+        return raw_snapshots.pop(0)
+
+    def fake_compact_recording_snapshot(snapshot, _instruction, *, char_budget=20000):
+        return {
+            "mode": "region_scoped_snapshot",
+            "url": snapshot.get("url", ""),
+            "title": snapshot.get("title", ""),
+            "region_scope": {"region_id": "region-1"},
+            "expanded_regions": [{"title": "academic-research-skills", "summary": "stars 13,680"}],
+            "sampled_regions": [],
+            "region_catalogue": [],
+        }
+
+    async def planner(payload):
+        if "repair" not in payload:
+            return {
+                "description": "Broken stars strategy",
+                "action_type": "run_python",
+                "expected_effect": "none",
+                "code": "async def run(page, results):\n    raise TimeoutError('Locator.click: Timeout 60000ms exceeded')",
+            }
+        exc = RecordingPlannerContractError(
+            "Recording planner must return Python code defining async def run(page, results)",
+            raw_output='{"description":"Repair stars","action_type":"run_python","code":"return 13680"}',
+        )
+        exc.llm_call = {
+            "request": {"total_message_chars": 2222, "effective_model": {"model_name": "glm-4.7"}},
+            "response": {"chars": 75, "preview": '{"description":"Repair stars"}', "truncated": False},
+        }
+        raise exc
+
+    debug_dir = Path(__file__).resolve().parents[1] / "recording_debug_test_output"
+    debug_dir.mkdir(exist_ok=True)
+    for pattern in ("*-snapshot-*.json", "*-attempt-*.json", "*-code-*.py", "*-planner_failure-*.json"):
+        for existing in debug_dir.glob(pattern):
+            existing.unlink()
+
+    monkeypatch.setenv("RPA_RECORDING_DEBUG_SNAPSHOT_DIR", str(debug_dir))
+    monkeypatch.setattr("backend.rpa.recording_runtime_agent.build_page_snapshot", fake_build_page_snapshot)
+    monkeypatch.setattr("backend.rpa.recording_runtime_agent.compact_recording_snapshot", fake_compact_recording_snapshot)
+
+    result = await RecordingRuntimeAgent(planner=planner, model_config={"model_name": "glm-4.7"}).run(
+        page=_FakePage(),
+        instruction="stars",
+        runtime_results={},
+    )
+
+    failure_files = sorted(debug_dir.glob("*-planner_failure-*.json"))
+    snapshot_files = sorted(debug_dir.glob("*-snapshot-*.json"))
+    attempt_files = sorted(debug_dir.glob("*-attempt-*.json"))
+    code_files = sorted(debug_dir.glob("*-code-*.py"))
+
+    assert result.success is False
+    assert result.message == "Recording planner failed to return a valid repair plan."
+    assert len(snapshot_files) == 2
+    assert len(attempt_files) == 1
+    assert len(code_files) == 1
+    assert len(failure_files) == 1
+    assert failure_files[0].name == "004-repair-planner_failure-stars.json"
+
+    payload = json.loads(failure_files[0].read_text(encoding="utf-8"))
+    assert payload["stage"] == "repair"
+    assert payload["instruction"] == "stars"
+    assert payload["exception"]["type"] == "RecordingPlannerContractError"
+    assert payload["planner_raw_output"]["preview"].startswith('{"description":"Repair stars"')
+    assert payload["llm_call"]["request"]["total_message_chars"] == 2222
+    assert payload["compact_snapshot_summary"]["mode"] == "region_scoped_snapshot"
+    assert payload["snapshot_comparison"]["classification"] == "present_in_both"
+
+    for file in failure_files + snapshot_files + attempt_files + code_files:
         file.unlink()
 
 

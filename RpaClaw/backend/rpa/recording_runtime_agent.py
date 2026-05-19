@@ -213,6 +213,16 @@ class RecordingRuntimeAgent:
             try:
                 first_plan = await self.planner(payload)
             except Exception as exc:
+                _write_recording_planner_failure_debug(
+                    "initial",
+                    instruction=instruction,
+                    page_state=before.model_dump(mode="json"),
+                    raw_snapshot=snapshot,
+                    compact_snapshot=compact_snapshot,
+                    exception=exc,
+                    model_config=self.model_config,
+                    debug_context=debug_context,
+                )
                 return RecordingAgentResult(
                     success=False,
                     diagnostics=[
@@ -352,6 +362,16 @@ class RecordingRuntimeAgent:
         try:
             repair_plan = await self.planner(repair_payload)
         except Exception as exc:
+            _write_recording_planner_failure_debug(
+                "repair",
+                instruction=instruction,
+                page_state=failed_page.model_dump(mode="json"),
+                raw_snapshot=failed_snapshot,
+                compact_snapshot=compact_failed_snapshot,
+                exception=exc,
+                model_config=self.model_config,
+                debug_context=debug_context,
+            )
             diagnostics.append(
                 _planner_contract_diagnostic(
                     exc,
@@ -2336,6 +2356,71 @@ def _write_recording_attempt_debug(
         return
 
 
+def _write_recording_planner_failure_debug(
+    stage: str,
+    *,
+    instruction: str,
+    page_state: Dict[str, Any],
+    raw_snapshot: Optional[Dict[str, Any]],
+    compact_snapshot: Dict[str, Any],
+    exception: BaseException,
+    model_config: Optional[Dict[str, Any]] = None,
+    debug_context: Optional[Dict[str, Any]] = None,
+) -> None:
+    debug_dir = _resolve_recording_snapshot_debug_dir()
+    if not debug_dir:
+        return
+
+    try:
+        debug_context = dict(debug_context or {})
+        target_dir = _resolve_recording_snapshot_debug_path(debug_dir, debug_context=debug_context)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        sequence = _next_debug_sequence(target_dir)
+        json_path = target_dir / _debug_filename(
+            sequence=sequence,
+            stage=stage,
+            kind="planner_failure",
+            label=instruction or stage,
+            extension="json",
+        )
+        raw_output = str(getattr(exception, "raw_output", "") or "")
+        llm_call = getattr(exception, "llm_call", None)
+        raw_snapshot = raw_snapshot or {}
+        payload: Dict[str, Any] = {
+            "stage": stage,
+            "debug_context": debug_context,
+            "instruction": instruction,
+            "page": page_state,
+            "exception": {
+                "type": type(exception).__name__,
+                "message": str(exception),
+            },
+            "model_config": _model_config_summary(model_config),
+            "compact_snapshot_summary": _compact_snapshot_debug_summary(compact_snapshot),
+            "snapshot_comparison": _compare_instruction_snapshot_presence(
+                instruction,
+                raw_snapshot,
+                compact_snapshot,
+            ),
+        }
+        if raw_snapshot:
+            payload["raw_snapshot_summary"] = _build_snapshot_debug_metrics(raw_snapshot, compact_snapshot)[
+                "raw_snapshot"
+            ]
+        if raw_output:
+            payload["planner_raw_output"] = _text_diagnostic(raw_output, limit=12000)
+        if isinstance(llm_call, dict) and llm_call:
+            payload["llm_call"] = _safe_jsonable(llm_call)
+        json_path.write_text(
+            json.dumps(_safe_jsonable(payload), ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
+        logger.info("[RPA-DIAG] planner failure dump written stage=%s path=%s", stage, json_path)
+    except Exception:
+        logger.warning("[RPA-DIAG] planner failure dump failed stage=%s", stage, exc_info=True)
+        return
+
+
 def _build_snapshot_debug_metrics(raw_snapshot: Dict[str, Any], compact_snapshot: Dict[str, Any]) -> Dict[str, Any]:
     content_nodes = list(raw_snapshot.get("content_nodes") or [])
     actionable_nodes = list(raw_snapshot.get("actionable_nodes") or [])
@@ -2374,6 +2459,37 @@ def _build_snapshot_debug_metrics(raw_snapshot: Dict[str, Any], compact_snapshot
             ],
             "region_kind_counts": _count_by_key(expanded_regions + sampled_regions + catalogue, "kind"),
         },
+    }
+
+
+def _compact_snapshot_debug_summary(compact_snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    expanded_regions = list(compact_snapshot.get("expanded_regions") or [])
+    sampled_regions = list(compact_snapshot.get("sampled_regions") or [])
+    catalogue = list(compact_snapshot.get("region_catalogue") or [])
+    table_views = list(compact_snapshot.get("table_views") or [])
+    detail_views = list(compact_snapshot.get("detail_views") or [])
+    form_views = list(compact_snapshot.get("form_views") or [])
+    return {
+        "mode": compact_snapshot.get("mode", ""),
+        "url": compact_snapshot.get("url", ""),
+        "title": compact_snapshot.get("title", ""),
+        "region_scope": _safe_jsonable(compact_snapshot.get("region_scope") or {}),
+        "char_size": len(json.dumps(_safe_jsonable(compact_snapshot), ensure_ascii=False, sort_keys=True, default=str)),
+        "expanded_region_count": len(expanded_regions),
+        "sampled_region_count": len(sampled_regions),
+        "catalogue_region_count": len(catalogue),
+        "table_view_count": len(table_views),
+        "detail_view_count": len(detail_views),
+        "form_view_count": len(form_views),
+        "expanded_region_titles": _region_titles(expanded_regions),
+        "sampled_region_titles": _region_titles(sampled_regions),
+        "catalogue_region_titles": _region_titles(catalogue),
+        "table_view_titles": _region_titles(table_views),
+        "detail_view_titles": [
+            str(view.get("section_title") or view.get("title") or "").strip()[:120]
+            for view in detail_views[:20]
+            if str(view.get("section_title") or view.get("title") or "").strip()
+        ],
     }
 
 
@@ -2477,7 +2593,16 @@ def _resolve_recording_snapshot_debug_path(debug_dir: str, *, debug_context: Opt
 
 def _next_debug_sequence(target_dir: Path) -> int:
     max_seen = 0
-    for pattern in ("*-snapshot-*.json", "*-attempt-*.json", "*-code-*.py", "snapshot-*.json", "attempt-*.json", "code-*.py"):
+    for pattern in (
+        "*-snapshot-*.json",
+        "*-attempt-*.json",
+        "*-planner_failure-*.json",
+        "*-code-*.py",
+        "snapshot-*.json",
+        "attempt-*.json",
+        "planner_failure-*.json",
+        "code-*.py",
+    ):
         for path in target_dir.glob(pattern):
             match = re.match(r"^(?:snapshot|attempt|code)-(\d+)-|^(\d+)-", path.name)
             if match:
