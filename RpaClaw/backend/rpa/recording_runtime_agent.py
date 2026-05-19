@@ -68,6 +68,7 @@ Rules:
 - Use action_type="extract_snapshot" only when the requested extract-only data is already present in snapshot.detail_views fields.
 - For extract_snapshot, return the relevant observed detail fields in the plan itself, including the detail view frame_path when present; do not generate Python code and do not reference `snapshot` inside `run()`.
 - For snapshot.mode="selected_region_snapshot", selected_region evidence is the authoritative scope. If you use extract_snapshot, fields must contain visible non-empty values copied from selected_region evidence; otherwise use run_python with selected region locator evidence.
+- If payload.plan_validation is present, correct the failed plan contract issue before execution; do not repeat a failed extract_snapshot plan without fields.
 - `snapshot` is planner-only evidence. Generated Python can access only `page` and `results`.
 - 结果返回规则：
   - `results` 是普通 Python dict，只包含之前已成功步骤的输出结果。
@@ -220,6 +221,24 @@ class RecordingRuntimeAgent:
                     ],
                     message="Recording planner failed to return a valid plan.",
                 )
+        if compact_region_context:
+            plan_validation_error = _selected_region_extract_plan_validation_error(first_plan)
+            if plan_validation_error:
+                validation_payload = _build_region_plan_validation_payload(payload, first_plan, plan_validation_error)
+                try:
+                    first_plan = await self.planner(validation_payload)
+                except Exception as exc:
+                    return RecordingAgentResult(
+                        success=False,
+                        diagnostics=[
+                            _planner_contract_diagnostic(
+                                exc,
+                                stage="initial_plan_validation",
+                                model_config=self.model_config,
+                            )
+                        ],
+                        message="Recording planner failed to correct an invalid selected-region plan.",
+                    )
         first_llm_call = self._planner_llm_call_since(first_planner_call_index)
         first_result = await self.executor(page, first_plan, runtime_results)
         first_result = await _ensure_expected_effect(
@@ -357,6 +376,29 @@ class RecordingRuntimeAgent:
                 diagnostics=diagnostics,
                 message="Recording planner failed to return a valid repair plan.",
             )
+        if compact_region_context:
+            repair_plan_validation_error = _selected_region_extract_plan_validation_error(repair_plan)
+            if repair_plan_validation_error:
+                validation_payload = _build_region_plan_validation_payload(
+                    repair_payload,
+                    repair_plan,
+                    repair_plan_validation_error,
+                )
+                try:
+                    repair_plan = await self.planner(validation_payload)
+                except Exception as exc:
+                    diagnostics.append(
+                        _planner_contract_diagnostic(
+                            exc,
+                            stage="repair_plan_validation",
+                            model_config=self.model_config,
+                        )
+                    )
+                    return RecordingAgentResult(
+                        success=False,
+                        diagnostics=diagnostics,
+                        message="Recording planner failed to correct an invalid selected-region repair plan.",
+                    )
         repair_llm_call = self._planner_llm_call_since(repair_planner_call_index)
         repair_result = await self.executor(page, repair_plan, runtime_results)
         repair_result = await _ensure_expected_effect(
@@ -736,6 +778,38 @@ def _extract_snapshot_plan_has_visible_value(plan: Dict[str, Any]) -> bool:
             continue
         return True
     return False
+
+
+def _selected_region_extract_plan_validation_error(plan: Dict[str, Any]) -> str:
+    if str(plan.get("action_type") or "").strip() != "extract_snapshot":
+        return ""
+    fields = _snapshot_plan_fields(plan)
+    if not fields:
+        return "extract_snapshot plan missing fields"
+    if not _normalize_bool(plan.get("allow_empty_output")) and not _extract_snapshot_plan_has_visible_value(plan):
+        return "extract_snapshot plan produced no visible non-empty fields"
+    return ""
+
+
+def _build_region_plan_validation_payload(
+    payload: Dict[str, Any],
+    failed_plan: Dict[str, Any],
+    error: str,
+) -> Dict[str, Any]:
+    return {
+        **payload,
+        "plan_validation": {
+            "error": error,
+            "failed_plan": _safe_jsonable(failed_plan),
+            "snapshot": _safe_jsonable(payload.get("snapshot")),
+            "requirement": (
+                "The failed selected-region plan was not executable. "
+                "If using extract_snapshot, return fields with labels and visible non-empty values "
+                "from snapshot.detail_views or selected_region evidence. Otherwise return run_python "
+                "using selected-region locator evidence."
+            ),
+        },
+    }
 
 
 def _extract_snapshot_preview_code(plan: Dict[str, Any]) -> str:

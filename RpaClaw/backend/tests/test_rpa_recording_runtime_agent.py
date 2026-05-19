@@ -1272,6 +1272,152 @@ def test_recording_runtime_agent_accepts_planner_selected_region_extract_field(m
     asyncio.run(run_test())
 
 
+def test_recording_runtime_agent_reasks_planner_when_region_extract_snapshot_missing_fields(monkeypatch):
+    async def run_test():
+        captured_payloads = []
+
+        async def fake_build_page_snapshot(_page, _build_frame_path):
+            return {
+                "url": "https://example.test/pricing",
+                "title": "Pricing",
+                "frames": [],
+                "actionable_nodes": [],
+                "content_nodes": [],
+                "containers": [],
+                "detail_views": [],
+            }
+
+        async def planner(payload):
+            captured_payloads.append(payload)
+            if len(captured_payloads) == 1:
+                return {
+                    "description": "Extract selected region",
+                    "action_type": "extract_snapshot",
+                    "expected_effect": "extract",
+                    "output_key": "selected_value",
+                    "source": "selected_region.local_text",
+                }
+            return {
+                "description": "Extract selected region value",
+                "action_type": "extract_snapshot",
+                "expected_effect": "extract",
+                "output_key": "selected_value",
+                "source": "selected_region.local_text",
+                "fields": [
+                    {
+                        "label": "selected_value",
+                        "value": "Total 99 models",
+                        "visible": True,
+                        "value_kind": "text",
+                    }
+                ],
+            }
+
+        monkeypatch.setattr("backend.rpa.recording_runtime_agent.build_page_snapshot", fake_build_page_snapshot)
+
+        result = await RecordingRuntimeAgent(planner=planner).run(
+            page=_FakePage(),
+            instruction="Get data from selected region",
+            runtime_results={},
+            region_context={
+                "region_id": "region-1",
+                "page_url": "https://example.test/pricing",
+                "evidence": {
+                    "inferred_kind": "text_region",
+                    "local_text": ["Total 99 models"],
+                    "rect": {"x": 10, "y": 20, "width": 110, "height": 34},
+                },
+            },
+        )
+
+        assert result.success is True
+        assert result.output == {"selected_value": "Total 99 models"}
+        assert len(captured_payloads) == 2
+        validation = captured_payloads[1]["plan_validation"]
+        assert validation["error"] == "extract_snapshot plan missing fields"
+        assert validation["failed_plan"]["action_type"] == "extract_snapshot"
+        assert validation["snapshot"]["detail_views"][0]["source"] == "selected_region.local_text"
+
+    asyncio.run(run_test())
+
+
+def test_recording_runtime_agent_reasks_repair_planner_when_region_extract_snapshot_missing_fields(monkeypatch):
+    async def run_test():
+        captured_payloads = []
+
+        async def fake_build_page_snapshot(_page, _build_frame_path):
+            return {
+                "url": "https://example.test/pricing",
+                "title": "Pricing",
+                "frames": [],
+                "actionable_nodes": [],
+                "content_nodes": [],
+                "containers": [],
+                "detail_views": [],
+            }
+
+        async def planner(payload):
+            captured_payloads.append(payload)
+            if len(captured_payloads) == 1:
+                return {
+                    "description": "First attempt fails",
+                    "action_type": "run_python",
+                    "expected_effect": "extract",
+                    "output_key": "selected_value",
+                    "code": "async def run(page, results):\n    raise RuntimeError('temporary extraction failure')",
+                }
+            if len(captured_payloads) == 2:
+                return {
+                    "description": "Repair extracts selected region",
+                    "action_type": "extract_snapshot",
+                    "expected_effect": "extract",
+                    "output_key": "selected_value",
+                    "source": "selected_region.local_text",
+                }
+            return {
+                "description": "Corrected repair extracts selected region",
+                "action_type": "extract_snapshot",
+                "expected_effect": "extract",
+                "output_key": "selected_value",
+                "source": "selected_region.local_text",
+                "fields": [
+                    {
+                        "label": "selected_value",
+                        "value": "Total 99 models",
+                        "visible": True,
+                        "value_kind": "text",
+                    }
+                ],
+            }
+
+        monkeypatch.setattr("backend.rpa.recording_runtime_agent.build_page_snapshot", fake_build_page_snapshot)
+
+        result = await RecordingRuntimeAgent(planner=planner).run(
+            page=_FakePage(),
+            instruction="Get data from selected region",
+            runtime_results={},
+            region_context={
+                "region_id": "region-1",
+                "page_url": "https://example.test/pricing",
+                "evidence": {
+                    "inferred_kind": "text_region",
+                    "local_text": ["Total 99 models"],
+                    "rect": {"x": 10, "y": 20, "width": 110, "height": 34},
+                },
+            },
+        )
+
+        assert result.success is True
+        assert result.output == {"selected_value": "Total 99 models"}
+        assert len(captured_payloads) == 3
+        assert "repair" in captured_payloads[1]
+        validation = captured_payloads[2]["plan_validation"]
+        assert validation["error"] == "extract_snapshot plan missing fields"
+        assert "repair" in captured_payloads[2]
+
+    asyncio.run(run_test())
+
+
 @pytest.mark.asyncio
 async def test_recording_runtime_agent_attaches_locator_stability_metadata_when_available():
     async def planner(_payload):
