@@ -283,6 +283,25 @@ def test_stateful_sop_rebuilds_session_traces_compiles_full_skill_and_replays(tm
     ]
 
 
+def test_stateful_sop_can_observe_candidate_lite_without_blocking_governance_review(tmp_path: Path):
+    assets = _write_stateful_asset(tmp_path)
+    scenario_path = assets / "asset-stateful" / "scenario.json"
+    scenario = json.loads(scenario_path.read_text(encoding="utf-8"))
+    scenario["asset_status"] = "draft"
+    scenario["governance"]["promotion_status"] = "candidate-lite"
+    scenario["governance"]["expected_signals_reviewed"] = False
+    scenario["governance"]["sensitivity_reviewed"] = False
+    scenario_path.write_text(json.dumps(scenario), encoding="utf-8")
+
+    default_report = run_stateful_sop_capture_to_skill(assets)
+    observation_report = run_stateful_sop_capture_to_skill(assets, include_candidate_lite=True)
+
+    assert default_report["summary"]["eligible_capture_count"] == 0
+    assert observation_report["summary"]["status"] == "passed"
+    assert observation_report["summary"]["eligible_capture_count"] == 1
+    assert observation_report["assets"][0]["asset_id"] == "asset-stateful"
+
+
 def test_stateful_sop_reports_controlled_replay_signal_mismatch(tmp_path: Path):
     assets = _write_stateful_asset(tmp_path, expected_text="Fork 9.9k")
 

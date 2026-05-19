@@ -24,6 +24,7 @@ from .skill_replay import _install_controlled_replay_routes, _load_execute_skill
 
 
 _GOVERNED_PROMOTIONS = {"candidate", "golden"}
+_CANDIDATE_LITE_PROMOTION = "candidate-lite"
 _RUNNER_MODE = "stateful_sop_capture_to_skill"
 
 
@@ -75,8 +76,18 @@ def _normalize_url(url: str) -> str:
     return str(url or "").split("#", 1)[0].rstrip("/")
 
 
-def _asset_is_eligible(scenario: HarnessScenarioAsset) -> bool:
+def _asset_is_eligible(
+    scenario: HarnessScenarioAsset,
+    *,
+    include_candidate_lite: bool = False,
+) -> bool:
     governance = scenario.governance
+    if (
+        include_candidate_lite
+        and scenario.capture_scope == "full_sop"
+        and governance.promotion_status == _CANDIDATE_LITE_PROMOTION
+    ):
+        return _RUNNER_MODE in set(governance.runner_modes or [])
     return (
         scenario.capture_scope == "full_sop"
         and scenario.asset_status == "active"
@@ -479,6 +490,7 @@ def run_stateful_sop_capture_to_skill(
     assets_root: str | Path,
     *,
     asset_ids: set[str] | None = None,
+    include_candidate_lite: bool = False,
 ) -> dict[str, Any]:
     root = Path(assets_root)
     eligible: list[tuple[Path, HarnessScenarioAsset]] = []
@@ -493,7 +505,7 @@ def run_stateful_sop_capture_to_skill(
             continue
         if asset_ids is not None and scenario.asset_id not in asset_ids:
             continue
-        if _asset_is_eligible(scenario):
+        if _asset_is_eligible(scenario, include_candidate_lite=include_candidate_lite):
             eligible.append((asset_dir, scenario))
 
     async def run_all() -> list[dict[str, Any]]:

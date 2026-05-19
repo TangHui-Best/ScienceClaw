@@ -11,7 +11,7 @@ AssetStatus = Literal["draft", "active", "flaky", "archived", "superseded"]
 Sensitivity = Literal["local-only", "sanitized", "repo-safe", "sensitive"]
 RuntimeStatus = Literal["success", "failed", "skipped"]
 RecordingMode = Literal["natural_language", "manual", "unknown"]
-PromotionStatus = Literal["captured", "candidate", "golden", "rejected"]
+PromotionStatus = Literal["captured", "candidate-lite", "candidate", "golden", "rejected"]
 RunnerMode = Literal["offline_core_chain", "skill_replay_e2e", "stateful_sop_capture_to_skill"]
 CoreChainCoverage = Literal[
     "html_to_raw_snapshot",

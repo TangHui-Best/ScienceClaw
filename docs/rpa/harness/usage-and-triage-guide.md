@@ -114,6 +114,46 @@ $env:PYTHONPATH='RpaClaw'
 python -m backend.rpa.harness.run_compiler_regression --assets data\rpa_harness_assets_bootstrap
 ```
 
+### 新录制资产 Review Packet
+
+新录制的 `draft/captured` 资产不应要求用户或其它 Agent 直接阅读原始
+HTML、trace、checkpoint 和 expected JSON。先生成 Review Packet：
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m backend.rpa.harness.run_asset_review --assets data\rpa_harness_assets_bootstrap --asset-id <asset_id>
+```
+
+输出会写入：
+
+```text
+data/rpa_harness_assets_bootstrap/<asset_id>/review.md
+```
+
+Review Packet 应先回答场景身份、Human SOP、每一步页面变化、最终输出字段和值、
+自动检查结果、人工 review 问题，以及建议的升级层级。它只读取 captured facts，
+不访问 live URL，不恢复 direct Agent chat。
+
+如果人工确认该资产值得进入非阻塞观察层，可以升级为 `candidate-lite`：
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m backend.rpa.harness.run_asset_promote --assets data\rpa_harness_assets_bootstrap --asset-id <asset_id> --level candidate-lite
+```
+
+`candidate-lite` 会进入 governed regression 的 warning-only observation。
+它可以运行 validation、snapshot、compiler、Skill Replay 和 Stateful SOP 观察，但不会进入
+blocking candidate/golden baseline，也不会自动确认 `expected_signals_reviewed` 或
+`sensitivity_reviewed`。
+
+只有在 expected signals 和 sensitivity 都被显式确认后，才可以考虑 blocking
+`candidate` 或 `golden`：
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m backend.rpa.harness.run_asset_promote --assets data\rpa_harness_assets_bootstrap --asset-id <asset_id> --level candidate --confirm-expected --confirm-sensitivity
+```
+
 ## 如何阅读 governed report
 
 先看 `summary.failure_category`。
@@ -326,4 +366,3 @@ record real asset -> review/promote asset -> run Harness -> expose failure
 - 当前任务是诊断、修 RPA core、重新录制资产，还是 promoted 资产。
 
 如果这些输入缺失，Agent 应先追问，不要靠猜测定位。
-

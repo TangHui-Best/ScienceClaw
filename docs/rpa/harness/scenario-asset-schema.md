@@ -106,12 +106,12 @@ Example:
 
 `governance` turns a raw captured directory into a promotable scenario asset
 without changing the trace-first recording path. Fresh captures default to
-`promotion_status=captured`; promotion to `candidate` or `golden` is a review
-act, not a recorder side effect.
+`promotion_status=captured`; promotion to `candidate-lite`, `candidate`, or
+`golden` is a review act, not a recorder side effect.
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `promotion_status` | yes | `captured`, `candidate`, `golden`, or `rejected`. |
+| `promotion_status` | yes | `captured`, `candidate-lite`, `candidate`, `golden`, or `rejected`. |
 | `runner_modes` | yes | Supported values: `offline_core_chain`, `skill_replay_e2e`, `stateful_sop_capture_to_skill`. |
 | `core_chain_coverage` | yes | Covered segments such as `html_to_raw_snapshot`, `raw_to_compact_snapshot`, `planner_action_selection`, `trace_to_skill`, `skill_replay`, and `stateful_capture_to_skill`. |
 | `expected_signals_reviewed` | yes | Whether expected signals were reviewed before promotion. |
@@ -122,6 +122,14 @@ Candidate and golden assets must declare runner and core-chain coverage and
 must have expected-signal and sensitivity review. Golden assets must also be
 `asset_status=active`, because they are intended to affect blocking regression
 judgment.
+
+`candidate-lite` is a warning-only promotion level for reviewed-by-human
+triage before blocking expected-signal and sensitivity confirmations are
+complete. Candidate-lite assets may opt into runner observation through
+`runner_modes`, but their validation or runner failures must be reported as
+warnings and must not affect the default blocking candidate/golden baseline.
+Promotion to candidate-lite must not set `expected_signals_reviewed` or
+`sensitivity_reviewed` implicitly.
 
 The default governed offline regression pool is stricter than raw promotion
 metadata. It selects only active `candidate` or `golden` assets that are
@@ -413,6 +421,9 @@ site-specific rules.
 ### Promotion Status
 
 - `captured`: raw Harness capture, not yet reviewed for promotion.
+- `candidate-lite`: human-triaged, warning-only observation asset; does not
+  affect the blocking candidate/golden baseline and does not imply expected or
+  sensitivity review.
 - `candidate`: under review for golden regression use.
 - `golden`: reviewed asset used as a governed regression fixture.
 - `rejected`: retained as history or diagnosis, not used as a golden fixture.

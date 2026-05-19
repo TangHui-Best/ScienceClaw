@@ -15,6 +15,7 @@ from .stateful_sop import run_stateful_sop_capture_to_skill
 
 
 _GOVERNED_PROMOTIONS = {"candidate", "golden"}
+_CANDIDATE_LITE_PROMOTION = "candidate-lite"
 
 
 def _counter_dict(values: list[str]) -> dict[str, int]:
@@ -75,6 +76,110 @@ def _selection(catalog: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     }
 
 
+def _candidate_lite_observed_captures(catalog: dict[str, Any]) -> list[dict[str, Any]]:
+    observed: list[dict[str, Any]] = []
+    for capture in catalog.get("captures", []):
+        if not isinstance(capture, dict):
+            continue
+        governance = capture.get("governance") or {}
+        if governance.get("promotion_status") != _CANDIDATE_LITE_PROMOTION:
+            continue
+        runner_modes = list(governance.get("runner_modes") or [])
+        if not runner_modes:
+            continue
+        observed.append(
+            {
+                "asset_id": capture.get("asset_id") or "",
+                "asset_status": capture.get("asset_status") or "unknown",
+                "promotion_status": _CANDIDATE_LITE_PROMOTION,
+                "runner_modes": runner_modes,
+                "core_chain_coverage": list(governance.get("core_chain_coverage") or []),
+                "page_patterns": list(capture.get("page_patterns") or []),
+            }
+        )
+    return sorted(observed, key=lambda item: str(item["asset_id"]))
+
+
+def _empty_candidate_lite_observation() -> dict[str, Any]:
+    return {
+        "schema_version": "rpa-harness-candidate-lite-observation-v0",
+        "summary": {
+            "status": "skipped",
+            "observed_capture_count": 0,
+            "observed_asset_ids": [],
+            "warning_count": 0,
+            "validation_issue_count": 0,
+            "snapshot_failed": 0,
+            "compiler_failed": 0,
+            "skill_replay_failed": 0,
+            "stateful_sop_failed": 0,
+        },
+        "selection": {"observed_captures": []},
+        "catalog": {},
+        "validation": {},
+        "snapshot": {},
+        "compiler": {},
+        "skill_replay": {},
+        "stateful_sop": {},
+    }
+
+
+def _candidate_lite_observation(root: Path, catalog: dict[str, Any]) -> dict[str, Any]:
+    observed_captures = _candidate_lite_observed_captures(catalog)
+    observed_asset_ids = [
+        str(capture["asset_id"])
+        for capture in observed_captures
+        if capture.get("asset_id")
+    ]
+    if not observed_asset_ids:
+        return _empty_candidate_lite_observation()
+
+    observed_id_set = set(observed_asset_ids)
+    offline_id_set = {
+        str(capture["asset_id"])
+        for capture in observed_captures
+        if "offline_core_chain" in set(capture.get("runner_modes") or [])
+    }
+    observed_catalog = build_harness_catalog(root, asset_ids=observed_id_set)
+    validation = validate_harness_assets(root, asset_ids=observed_id_set)
+    snapshot = run_snapshot_regression(root, asset_ids=offline_id_set)
+    compiler = run_compiler_regression(root, asset_ids=offline_id_set)
+    skill_replay = run_skill_replay_e2e(root, asset_ids=observed_id_set)
+    stateful_sop = run_stateful_sop_capture_to_skill(
+        root,
+        asset_ids=observed_id_set,
+        include_candidate_lite=True,
+    )
+    warning_count = (
+        validation["summary"]["issue_count"]
+        + snapshot["summary"]["failed"]
+        + compiler["summary"]["failed"]
+        + skill_replay["summary"]["failed"]
+        + stateful_sop["summary"]["failed"]
+    )
+    return {
+        "schema_version": "rpa-harness-candidate-lite-observation-v0",
+        "summary": {
+            "status": "warning" if warning_count else "passed",
+            "observed_capture_count": len(observed_captures),
+            "observed_asset_ids": observed_asset_ids,
+            "warning_count": warning_count,
+            "validation_issue_count": validation["summary"]["issue_count"],
+            "snapshot_failed": snapshot["summary"]["failed"],
+            "compiler_failed": compiler["summary"]["failed"],
+            "skill_replay_failed": skill_replay["summary"]["failed"],
+            "stateful_sop_failed": stateful_sop["summary"]["failed"],
+        },
+        "selection": {"observed_captures": observed_captures},
+        "catalog": observed_catalog,
+        "validation": validation,
+        "snapshot": snapshot,
+        "compiler": compiler,
+        "skill_replay": skill_replay,
+        "stateful_sop": stateful_sop,
+    }
+
+
 def _report_status(
     *,
     selected_capture_count: int,
@@ -104,6 +209,7 @@ def run_governed_offline_regression(assets_root: str | Path) -> dict[str, Any]:
     root = Path(assets_root)
     full_catalog = build_harness_catalog(root)
     selection = _selection(full_catalog)
+    candidate_lite_observation = _candidate_lite_observation(root, full_catalog)
     selected_asset_ids = [
         str(capture["asset_id"])
         for capture in selection["selected_captures"]
@@ -179,8 +285,15 @@ def run_governed_offline_regression(assets_root: str | Path) -> dict[str, Any]:
             "compiler_failed": compiler["summary"]["failed"],
             "skill_replay_failed": skill_replay["summary"]["failed"],
             "stateful_sop_failed": stateful_sop["summary"]["failed"],
+            "candidate_lite_observed_count": candidate_lite_observation["summary"][
+                "observed_capture_count"
+            ],
+            "candidate_lite_warning_count": candidate_lite_observation["summary"][
+                "warning_count"
+            ],
         },
         "selection": selection,
+        "candidate_lite_observation": candidate_lite_observation,
         "catalog": governed_catalog,
         "validation": validation,
         "snapshot": snapshot,

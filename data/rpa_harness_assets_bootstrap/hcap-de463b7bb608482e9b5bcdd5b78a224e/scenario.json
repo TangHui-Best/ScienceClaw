@@ -1,0 +1,49 @@
+{
+  "schema_version": "rpa-harness-scenario-v0",
+  "asset_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e",
+  "capture_scope": "full_sop",
+  "sop_intent": "",
+  "source": {
+    "recording_id": "864e9835-eaf6-474f-b32f-0873119781c0",
+    "captured_at": "2026-05-19T14:14:17.089702",
+    "capture_mode": "harness",
+    "capture_trigger": "full_sop"
+  },
+  "environment": {},
+  "asset_status": "active",
+  "sensitivity": "local-only",
+  "page_patterns": [],
+  "governance": {
+    "promotion_status": "candidate",
+    "runner_modes": [
+      "offline_core_chain",
+      "skill_replay_e2e",
+      "stateful_sop_capture_to_skill"
+    ],
+    "core_chain_coverage": [
+      "html_to_raw_snapshot",
+      "raw_to_compact_snapshot",
+      "planner_action_selection",
+      "trace_to_skill",
+      "skill_replay",
+      "stateful_capture_to_skill"
+    ],
+    "expected_signals_reviewed": true,
+    "sensitivity_reviewed": true,
+    "review_notes": ""
+  },
+  "step_checkpoints": [
+    {
+      "step_index": 1,
+      "checkpoint_path": "steps/001/checkpoint.json"
+    },
+    {
+      "step_index": 2,
+      "checkpoint_path": "steps/002/checkpoint.json"
+    },
+    {
+      "step_index": 3,
+      "checkpoint_path": "steps/003/checkpoint.json"
+    }
+  ]
+}

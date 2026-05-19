@@ -264,6 +264,62 @@ def test_governed_offline_regression_marks_selected_runner_failures_as_blocking(
     assert report["blast_radius"]["affected_steps"][0]["asset_id"] == "candidate-broken"
 
 
+def test_candidate_lite_runner_failures_are_reported_as_non_blocking_warnings(tmp_path: Path):
+    _write_asset(tmp_path, asset_id="candidate-ready")
+    _write_asset(
+        tmp_path,
+        asset_id="candidate-lite-broken",
+        asset_status="draft",
+        promotion_status="candidate-lite",
+        expected_signals_reviewed=False,
+        sensitivity_reviewed=False,
+        step_text="Expected text",
+    )
+    expected_path = tmp_path / "candidate-lite-broken" / "steps" / "001" / "expected.json"
+    expected_path.write_text(
+        json.dumps({"snapshot_signals": {"must_contain_text": ["Missing text"]}}),
+        encoding="utf-8",
+    )
+
+    report = run_governed_offline_regression(tmp_path)
+
+    assert report["summary"]["status"] == "passed"
+    assert report["summary"]["selected_asset_ids"] == ["candidate-ready"]
+    assert report["summary"]["candidate_lite_observed_count"] == 1
+    assert report["summary"]["candidate_lite_warning_count"] == 1
+    assert report["summary"]["snapshot_failed"] == 0
+    assert report["candidate_lite_observation"]["summary"]["status"] == "warning"
+    assert report["candidate_lite_observation"]["summary"]["observed_asset_ids"] == ["candidate-lite-broken"]
+    assert report["candidate_lite_observation"]["summary"]["snapshot_failed"] == 1
+    assert report["candidate_lite_observation"]["snapshot"]["summary"]["failed"] == 1
+    excluded = {item["asset_id"]: item["reasons"] for item in report["selection"]["excluded_captures"]}
+    assert excluded["candidate-lite-broken"] == [
+        "asset-status-draft",
+        "promotion-status-candidate-lite",
+        "expected-signals-not-reviewed",
+        "sensitivity-not-reviewed",
+    ]
+
+
+def test_candidate_lite_does_not_satisfy_blocking_governed_baseline(tmp_path: Path):
+    _write_asset(
+        tmp_path,
+        asset_id="candidate-lite-only",
+        asset_status="draft",
+        promotion_status="candidate-lite",
+        expected_signals_reviewed=False,
+        sensitivity_reviewed=False,
+    )
+
+    report = run_governed_offline_regression(tmp_path)
+
+    assert report["summary"]["status"] == "failed"
+    assert report["summary"]["failure_category"] == "no-governed-offline-assets"
+    assert report["summary"]["selected_capture_count"] == 0
+    assert report["summary"]["candidate_lite_observed_count"] == 1
+    assert report["candidate_lite_observation"]["summary"]["status"] == "passed"
+
+
 def test_governed_offline_regression_fails_when_no_governed_assets_exist(tmp_path: Path):
     _write_asset(tmp_path, asset_id="draft-captured", asset_status="draft", promotion_status="captured")
 

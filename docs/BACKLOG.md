@@ -30,6 +30,25 @@ Next actions:
 
 ## Recently Completed
 
+### F010 Assisted Asset Review And Promotion Pipeline
+
+- Feature: `docs/features/F010-assisted-asset-review-and-promotion-pipeline.md`
+- Evidence: `docs/evidence/EV-010-assisted-asset-review-and-promotion-pipeline.md`
+- Plan: `docs/rpa/harness/f010-assisted-asset-review-and-promotion-plan.md`
+- Target asset: `data/rpa_harness_assets_bootstrap/hcap-de463b7bb608482e9b5bcdd5b78a224e`
+- Status: completed; F010 commit/push is being handled from the current branch.
+- Result: new captures can generate Chinese-first `review.md` Review Packets,
+  start as non-blocking `candidate-lite`, and move to active blocking
+  `candidate` after explicit human expected/sensitivity confirmation.
+- Real bootstrap signal: blocking governed baseline now selects both
+  `hcap-4be6265f43eb42dfa259182207aa64cc` and
+  `hcap-de463b7bb608482e9b5bcdd5b78a224e`; latest governed regression has
+  `snapshot_failed=0`, `compiler_failed=0`, `skill_replay_failed=0`, and
+  `stateful_sop_failed=0`.
+- Residual risk: the new asset's sensitivity label remains `local-only` even
+  though sensitivity review is confirmed; changing the sensitivity
+  classification itself should be a separate explicit workflow if needed.
+
 ### F009 Stateful SOP Capture-to-Skill Regression Runner
 
 - Feature: `docs/features/F009-stateful-sop-capture-to-skill-regression-runner.md`
