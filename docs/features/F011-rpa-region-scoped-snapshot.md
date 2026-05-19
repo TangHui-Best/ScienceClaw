@@ -11,7 +11,8 @@ specs:
 plans:
   - docs/superpowers/plans/2026-05-19-rpa-region-scoped-snapshot.md
 decisions: []
-evidence: []
+evidence:
+  - docs/evidence/EV-011-rpa-region-scoped-snapshot.md
 ---
 
 # F011 RPA Region-Scoped Snapshot
@@ -38,7 +39,7 @@ evidence: []
 
 ## Current Status
 
-Active design anchor. Implementation has not started.
+Active implementation slice. RegionScope conversion, region-prioritized raw snapshot capture, scoped compression, RecordingRuntimeAgent planner wiring, and trace scope evidence are implemented. Final readiness remains conditional on environment-complete verification because this worktree is missing `langchain_openai` and frontend `node_modules`.
 
 ## Links
 
@@ -61,12 +62,12 @@ Active design anchor. Implementation has not started.
 
 ## Patch History
 
-No implementation patches yet.
+- 2026-05-19: Implemented RegionScope conversion, scoped raw snapshot capture, `region_scoped_snapshot` compression, RecordingRuntimeAgent wiring, trace scope evidence, and focused backend regression coverage. Full readiness remains blocked by local verification dependencies documented in EV-011.
 
 ## Evidence
 
-No implementation evidence yet. This Feature currently links only the design anchor.
+- `docs/evidence/EV-011-rpa-region-scoped-snapshot.md`
 
 ## Next Step
 
-Implementation plan is approved for development after the semantic-unit clarification: partial table/list/form selections should keep only selected semantic units as candidates while preserving minimal headers, identity, and parent context.
+Resolve local verification environment gaps (`langchain_openai`, frontend dependencies) or rerun the blocked route/default-planner/frontend checks in a provisioned environment before marking F011 ready.

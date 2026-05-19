@@ -367,6 +367,416 @@ def test_compact_snapshot_projects_form_label_to_fillable_control_without_replac
     assert field["confidence"] == "high"
 
 
+def test_region_scoped_snapshot_expands_selected_region_when_outside_text_overlaps_instruction():
+    snapshot = {
+        "url": "https://example.test/page",
+        "title": "Scoped Page",
+        "content_nodes": [
+            {
+                "node_id": "outside-title",
+                "container_id": "outside",
+                "semantic_kind": "text",
+                "text": "Invoice Price Total",
+                "bbox": {"x": 20, "y": 20, "width": 220, "height": 20},
+                "scope_relation": "outside_context",
+            },
+            {
+                "node_id": "inside-label",
+                "container_id": "inside",
+                "semantic_kind": "label",
+                "text": "SKU",
+                "bbox": {"x": 100, "y": 100, "width": 60, "height": 20},
+                "scope_relation": "inside_region",
+                "element_snapshot": {"tag": "label", "text": "SKU"},
+            },
+            {
+                "node_id": "inside-value",
+                "container_id": "inside",
+                "semantic_kind": "field_value",
+                "text": "A-001",
+                "bbox": {"x": 170, "y": 100, "width": 80, "height": 20},
+                "scope_relation": "inside_region",
+                "element_snapshot": {"tag": "span", "text": "A-001", "class": "field-value"},
+            },
+            {
+                "node_id": "ancestor-heading",
+                "container_id": "ancestor",
+                "semantic_kind": "heading",
+                "text": "Line Items",
+                "bbox": {"x": 80, "y": 70, "width": 120, "height": 20},
+                "scope_relation": "ancestor_context",
+                "element_snapshot": {"tag": "h2", "text": "Line Items"},
+            },
+        ],
+        "actionable_nodes": [],
+        "containers": [
+            {
+                "container_id": "outside",
+                "summary": "Invoice Price Total",
+                "bbox": {"x": 0, "y": 0, "width": 400, "height": 80},
+            },
+            {
+                "container_id": "inside",
+                "summary": "SKU A-001",
+                "bbox": {"x": 90, "y": 90, "width": 200, "height": 80},
+            },
+            {
+                "container_id": "ancestor",
+                "summary": "Line Items",
+                "bbox": {"x": 80, "y": 70, "width": 200, "height": 40},
+            },
+        ],
+        "frames": [],
+        "table_views": [],
+        "detail_views": [],
+        "region_scope": {
+            "region_id": "region-1",
+            "tab_id": "tab-from-snapshot",
+            "frame_path": [],
+            "frame_rect": {"x": 90, "y": 90, "width": 220, "height": 120},
+        },
+    }
+
+    compact = compact_recording_snapshot(
+        snapshot,
+        "extract invoice price total",
+        char_budget=1,
+        region_scope={
+            "region_id": "argument-region",
+            "tab_id": "explicit-tab",
+            "frame_path": [],
+            "frame_rect": {"x": 90, "y": 90, "width": 220, "height": 120},
+        },
+    )
+
+    assert compact["mode"] == "region_scoped_snapshot"
+    assert compact["region_scope"]["region_id"] == "argument-region"
+    assert compact["region_scope"]["tab_id"] == "explicit-tab"
+    assert [region["summary"] for region in compact["expanded_regions"]] == ["SKU=A-001"]
+    assert compact["sampled_regions"] == []
+    assert all("Invoice Price Total" not in str(region) for region in compact["expanded_regions"])
+    assert all("Invoice Price Total" not in str(region) for region in compact["sampled_regions"])
+    assert [region["summary"] for region in compact["region_catalogue"]] == ["Line Items"]
+
+
+def test_region_scope_argument_empty_dict_wins_over_snapshot_region_scope():
+    snapshot = _build_snapshot()
+    snapshot["region_scope"] = {
+        "region_id": "snapshot-region",
+        "frame_path": [],
+        "frame_rect": {"x": 0, "y": 0, "width": 10, "height": 10},
+    }
+
+    compact = compact_recording_snapshot(snapshot, "extract details", char_budget=100000, region_scope={})
+
+    assert compact["mode"] == "clean_snapshot"
+
+
+def test_region_scoped_snapshot_uses_geometry_when_scope_relation_is_missing():
+    snapshot = {
+        "url": "https://example.test/page",
+        "title": "Scoped Page",
+        "content_nodes": [
+            {
+                "node_id": "outside-title",
+                "container_id": "outside",
+                "semantic_kind": "text",
+                "text": "Invoice Price Total",
+                "bbox": {"x": 20, "y": 20, "width": 220, "height": 20},
+            },
+            {
+                "node_id": "inside-label",
+                "container_id": "inside",
+                "semantic_kind": "label",
+                "text": "Part",
+                "bbox": {"x": 100, "y": 100, "width": 60, "height": 20},
+                "element_snapshot": {"tag": "label", "text": "Part"},
+            },
+            {
+                "node_id": "inside-value",
+                "container_id": "inside",
+                "semantic_kind": "field_value",
+                "text": "Motor",
+                "bbox": {"x": 170, "y": 100, "width": 80, "height": 20},
+                "element_snapshot": {"tag": "span", "text": "Motor", "class": "field-value"},
+            },
+        ],
+        "actionable_nodes": [],
+        "containers": [
+            {
+                "container_id": "outside",
+                "summary": "Invoice Price Total",
+                "bbox": {"x": 0, "y": 0, "width": 400, "height": 80},
+            },
+            {
+                "container_id": "inside",
+                "summary": "Part Motor",
+                "bbox": {"x": 90, "y": 90, "width": 200, "height": 80},
+            },
+        ],
+        "frames": [],
+        "table_views": [],
+        "detail_views": [],
+        "region_scope": {
+            "region_id": "geometry-region",
+            "frame_path": [],
+            "frame_rect": {"x": 90, "y": 90, "width": 220, "height": 120},
+        },
+    }
+
+    compact = compact_recording_snapshot(snapshot, "extract invoice price total", char_budget=1)
+
+    assert compact["mode"] == "region_scoped_snapshot"
+    assert [region["summary"] for region in compact["expanded_regions"]] == ["Part=Motor"]
+    assert "Invoice Price Total" not in str(compact["expanded_regions"])
+
+
+def test_region_scoped_snapshot_filters_outside_pairs_in_selected_container():
+    snapshot = {
+        "url": "https://example.test/detail",
+        "title": "Scoped Detail",
+        "content_nodes": [
+            {
+                "node_id": "selected-label",
+                "container_id": "mixed",
+                "semantic_kind": "label",
+                "text": "SKU:",
+                "bbox": {"x": 100, "y": 100, "width": 60, "height": 20},
+                "scope_relation": "inside_region",
+                "element_snapshot": {"tag": "label", "text": "SKU:"},
+            },
+            {
+                "node_id": "selected-value",
+                "container_id": "mixed",
+                "semantic_kind": "field_value",
+                "text": "A-001",
+                "bbox": {"x": 170, "y": 100, "width": 80, "height": 20},
+                "scope_relation": "inside_region",
+                "element_snapshot": {"tag": "span", "text": "A-001", "class": "field-value"},
+            },
+            {
+                "node_id": "outside-label",
+                "container_id": "mixed",
+                "semantic_kind": "label",
+                "text": "Secret:",
+                "bbox": {"x": 100, "y": 220, "width": 60, "height": 20},
+                "scope_relation": "outside_context",
+                "element_snapshot": {"tag": "label", "text": "Secret:"},
+            },
+            {
+                "node_id": "outside-value",
+                "container_id": "mixed",
+                "semantic_kind": "field_value",
+                "text": "Do Not Use",
+                "bbox": {"x": 170, "y": 220, "width": 100, "height": 20},
+                "scope_relation": "outside_context",
+                "element_snapshot": {"tag": "span", "text": "Do Not Use", "class": "field-value"},
+            },
+        ],
+        "actionable_nodes": [],
+        "containers": [
+            {
+                "container_id": "mixed",
+                "container_kind": "detail_section",
+                "summary": "SKU A-001 Secret Do Not Use",
+                "bbox": {"x": 80, "y": 80, "width": 320, "height": 240},
+            }
+        ],
+        "frames": [],
+        "table_views": [],
+        "detail_views": [],
+        "region_scope": {
+            "region_id": "region-mixed",
+            "frame_path": [],
+            "frame_rect": {"x": 90, "y": 90, "width": 220, "height": 60},
+        },
+    }
+
+    compact = compact_recording_snapshot(snapshot, "extract selected sku", char_budget=1)
+
+    assert [pair["label"] for pair in compact["expanded_regions"][0]["evidence"]["pairs"]] == ["SKU:"]
+    assert [pair["value"] for pair in compact["expanded_regions"][0]["evidence"]["pairs"]] == ["A-001"]
+    assert "Secret" not in str(compact["expanded_regions"])
+    assert "Do Not Use" not in str(compact["expanded_regions"])
+
+
+def test_region_scoped_snapshot_does_not_fallback_to_outside_pairs_when_container_has_inside_node():
+    snapshot = {
+        "url": "https://example.test/detail",
+        "title": "Scoped Detail",
+        "content_nodes": [
+            {
+                "node_id": "selected-heading",
+                "container_id": "mixed",
+                "semantic_kind": "heading",
+                "text": "Selected Area",
+                "bbox": {"x": 100, "y": 100, "width": 160, "height": 20},
+                "scope_relation": "inside_region",
+                "element_snapshot": {"tag": "h2", "text": "Selected Area"},
+            },
+            {
+                "node_id": "outside-label",
+                "container_id": "mixed",
+                "semantic_kind": "label",
+                "text": "Secret:",
+                "bbox": {"x": 100, "y": 220, "width": 60, "height": 20},
+                "scope_relation": "outside_context",
+                "element_snapshot": {"tag": "label", "text": "Secret:"},
+            },
+            {
+                "node_id": "outside-value",
+                "container_id": "mixed",
+                "semantic_kind": "field_value",
+                "text": "Do Not Use",
+                "bbox": {"x": 170, "y": 220, "width": 100, "height": 20},
+                "scope_relation": "outside_context",
+                "element_snapshot": {"tag": "span", "text": "Do Not Use", "class": "field-value"},
+            },
+        ],
+        "actionable_nodes": [],
+        "containers": [
+            {
+                "container_id": "mixed",
+                "container_kind": "detail_section",
+                "summary": "Selected Area Secret Do Not Use",
+                "bbox": {"x": 80, "y": 80, "width": 320, "height": 240},
+            }
+        ],
+        "frames": [],
+        "table_views": [],
+        "detail_views": [],
+        "region_scope": {
+            "region_id": "region-mixed-heading",
+            "frame_path": [],
+            "frame_rect": {"x": 90, "y": 90, "width": 220, "height": 60},
+        },
+    }
+
+    compact = compact_recording_snapshot(snapshot, "extract selected area", char_budget=1)
+
+    assert "Secret" not in str(compact["expanded_regions"])
+    assert "Do Not Use" not in str(compact["expanded_regions"])
+
+
+def test_region_scoped_snapshot_filters_pairs_by_geometry_when_scope_relation_missing():
+    snapshot = {
+        "url": "https://example.test/detail",
+        "title": "Scoped Detail",
+        "content_nodes": [
+            {
+                "node_id": "selected-label",
+                "container_id": "mixed",
+                "semantic_kind": "label",
+                "text": "SKU:",
+                "bbox": {"x": 100, "y": 100, "width": 60, "height": 20},
+                "element_snapshot": {"tag": "label", "text": "SKU:"},
+            },
+            {
+                "node_id": "selected-value",
+                "container_id": "mixed",
+                "semantic_kind": "field_value",
+                "text": "A-001",
+                "bbox": {"x": 170, "y": 100, "width": 80, "height": 20},
+                "element_snapshot": {"tag": "span", "text": "A-001", "class": "field-value"},
+            },
+            {
+                "node_id": "outside-label",
+                "container_id": "mixed",
+                "semantic_kind": "label",
+                "text": "Secret:",
+                "bbox": {"x": 100, "y": 220, "width": 60, "height": 20},
+                "element_snapshot": {"tag": "label", "text": "Secret:"},
+            },
+            {
+                "node_id": "outside-value",
+                "container_id": "mixed",
+                "semantic_kind": "field_value",
+                "text": "Do Not Use",
+                "bbox": {"x": 170, "y": 220, "width": 100, "height": 20},
+                "element_snapshot": {"tag": "span", "text": "Do Not Use", "class": "field-value"},
+            },
+        ],
+        "actionable_nodes": [],
+        "containers": [
+            {
+                "container_id": "mixed",
+                "container_kind": "detail_section",
+                "summary": "SKU A-001 Secret Do Not Use",
+                "bbox": {"x": 80, "y": 80, "width": 320, "height": 240},
+            }
+        ],
+        "frames": [],
+        "table_views": [],
+        "detail_views": [],
+        "region_scope": {
+            "region_id": "region-mixed-geometry",
+            "frame_path": [],
+            "frame_rect": {"x": 90, "y": 90, "width": 220, "height": 60},
+        },
+    }
+
+    compact = compact_recording_snapshot(snapshot, "extract selected sku", char_budget=1)
+
+    assert [pair["value"] for pair in compact["expanded_regions"][0]["evidence"]["pairs"]] == ["A-001"]
+    assert "Secret" not in str(compact["expanded_regions"])
+    assert "Do Not Use" not in str(compact["expanded_regions"])
+
+
+def test_region_scoped_snapshot_keeps_nearby_heading_as_context_not_candidate():
+    snapshot = {
+        "url": "https://example.test/detail",
+        "title": "Scoped Detail",
+        "content_nodes": [
+            {
+                "node_id": "heading",
+                "container_id": "heading",
+                "semantic_kind": "heading",
+                "text": "Line Items",
+                "bbox": {"x": 90, "y": 60, "width": 160, "height": 24},
+                "scope_relation": "ancestor_context",
+                "element_snapshot": {"tag": "h2", "text": "Line Items"},
+            },
+            {
+                "node_id": "selected-label",
+                "container_id": "inside",
+                "semantic_kind": "label",
+                "text": "SKU:",
+                "bbox": {"x": 100, "y": 100, "width": 60, "height": 20},
+                "scope_relation": "inside_region",
+                "element_snapshot": {"tag": "label", "text": "SKU:"},
+            },
+            {
+                "node_id": "selected-value",
+                "container_id": "inside",
+                "semantic_kind": "field_value",
+                "text": "A-001",
+                "bbox": {"x": 170, "y": 100, "width": 80, "height": 20},
+                "scope_relation": "inside_region",
+                "element_snapshot": {"tag": "span", "text": "A-001", "class": "field-value"},
+            },
+        ],
+        "actionable_nodes": [],
+        "containers": [
+            {"container_id": "heading", "summary": "Line Items", "bbox": {"x": 90, "y": 60, "width": 160, "height": 24}},
+            {"container_id": "inside", "summary": "SKU A-001", "bbox": {"x": 90, "y": 90, "width": 220, "height": 80}},
+        ],
+        "frames": [],
+        "table_views": [],
+        "detail_views": [],
+        "region_scope": {
+            "region_id": "region-heading",
+            "frame_path": [],
+            "frame_rect": {"x": 90, "y": 90, "width": 220, "height": 80},
+        },
+    }
+
+    compact = compact_recording_snapshot(snapshot, "extract selected sku", char_budget=1)
+
+    assert [region["summary"] for region in compact["expanded_regions"]] == ["SKU:=A-001"]
+    assert [region["summary"] for region in compact["region_catalogue"]] == ["Line Items"]
+    assert "Line Items" not in str(compact["expanded_regions"])
+
+
 def test_default_char_budget_keeps_medium_detail_snapshot_clean():
     snapshot = _build_snapshot()
     for index in range(50):
