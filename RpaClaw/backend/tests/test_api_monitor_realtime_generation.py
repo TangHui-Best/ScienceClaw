@@ -424,8 +424,71 @@ class TestGenerateToolForCandidate(unittest.IsolatedAsyncioTestCase):
         assert candidate.status == "failed"
         assert candidate.error == "parse exploded"
 
+    async def test_candidate_generation_updates_tool_id_target(self):
+        manager, session_id = _manager_with_session()
+        session = manager.sessions[session_id]
+        call = _call("call-1", path="/api/orders")
+        call.source_evidence = {
+            "action_window_matched": True,
+            "initiator_urls": ["https://example.com/app"],
+            "js_stack_urls": [],
+            "frame_url": "https://example.com/app",
+        }
+        session.captured_calls.append(call)
+        candidate, _ = manager._upsert_generation_candidate(
+            session_id,
+            call,
+            dom_context={"forms": [{"action": "/api/orders", "inputs": []}]},
+            page_url="https://example.com/app",
+        )
+        original_tool = ApiToolDefinition(
+            id="tool-existing",
+            session_id=session_id,
+            name="old_orders",
+            description="Old description",
+            method="GET",
+            url_pattern="/api/orders",
+            yaml_definition="name: old_orders",
+            source_calls=["call-1"],
+            selected=False,
+            generation_candidate_id=None,
+        )
+        session.tool_definitions.append(original_tool)
+        candidate.tool_id = original_tool.id
 
-# ── Processing helper tests ───────────────────────────────────────────────
+        async def fake_generate_tool_definition(**kwargs):
+            assert kwargs["dom_context"] != "{}"
+            return (
+                'swagger: "2.0"\n'
+                "info:\n"
+                "  title: list_orders\n"
+                '  version: "1.0"\n'
+                "host: api.example.com\n"
+                "paths:\n"
+                "  /api/orders:\n"
+                "    get:\n"
+                "      operationId: list_orders\n"
+                "      responses:\n"
+                '        "200":\n'
+                "          description: Success\n"
+            )
+
+        with patch(
+            "backend.rpa.api_monitor.manager.generate_tool_definition",
+            fake_generate_tool_definition,
+        ):
+            tool = await manager._generate_tool_for_candidate(
+                session_id,
+                candidate.id,
+                skip_filter=True,
+            )
+
+        assert tool is original_tool
+        assert [item.id for item in session.tool_definitions] == ["tool-existing"]
+        assert tool.name == "list_orders"
+        assert tool.generation_candidate_id == candidate.id
+        assert candidate.tool_id == "tool-existing"
+        assert tool.selected is False
 
 
 class TestProcessCapturedCalls(unittest.IsolatedAsyncioTestCase):

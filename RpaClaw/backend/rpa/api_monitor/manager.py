@@ -2354,10 +2354,17 @@ class ApiMonitorSessionManager:
             url_pattern=candidate.url_pattern,
         )
 
-        existing = next(
-            (tool for tool in session.tool_definitions if tool.generation_candidate_id == candidate.id),
-            None,
-        )
+        existing = None
+        if candidate.tool_id:
+            existing = next(
+                (tool for tool in session.tool_definitions if tool.id == candidate.tool_id),
+                None,
+            )
+        if existing is None:
+            existing = next(
+                (tool for tool in session.tool_definitions if tool.generation_candidate_id == candidate.id),
+                None,
+            )
         if existing is None:
             tool = ApiToolDefinition(
                 session_id=session_id,
@@ -2373,19 +2380,23 @@ class ApiMonitorSessionManager:
             session.tool_definitions.append(tool)
         else:
             tool = existing
+            previous_selected = tool.selected
             tool.name = name
             tool.description = description
             tool.method = candidate.method
             tool.url_pattern = candidate.url_pattern
             tool.yaml_definition = yaml_def
             tool.source_calls = [call.id for call in samples]
+            tool.generation_candidate_id = candidate.id
+            tool.selected = previous_selected
             tool.updated_at = datetime.now()
 
         tool.validation_status = "valid" if contract.valid else "invalid"
         tool.validation_errors = contract.validation_errors if contract.validation_errors else []
         tool.confidence = confidence_result.confidence
         tool.score = confidence_result.score
-        tool.selected = True
+        if existing is None:
+            tool.selected = True
         tool.confidence_reasons = confidence_result.reasons
         tool.source_evidence = confidence_result.evidence_summary
         new_tools = [tool]
