@@ -220,6 +220,7 @@ WORKSPACE_DIR=C:\Users\...\workspace
 - **API routes**: kebab-case paths
 - **Frontend API calls**: use `apiClient` from `@/api/client` (handles auth token). Base URL is `/api/v1` — use relative paths like `/rpa/session/...`, not `/api/v1/rpa/...`
 - **i18n**: Both Chinese and English supported. UI strings in `src/locales/en.ts` and `zh.ts`
+- **Spec documents**: Design/spec documents under `docs/superpowers/specs/` must be written in Chinese by default unless the user explicitly requests another language.
 - **Commit messages**: Chinese or English, prefixed with type: `feat:`, `fix:`, `refactor:`, `chore:`
 
 ## Common Pitfalls
