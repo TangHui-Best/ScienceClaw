@@ -2224,7 +2224,7 @@ class ApiMonitorSessionManager:
                 (item for item in (session.generation_candidates if session else []) if item.id == candidate_id),
                 None,
             )
-            if followup_requested and candidate and candidate.status in ("pending", "stale", "failed", "confidence_rejected", "intent_filtered"):
+            if followup_requested and candidate and candidate.status in ("pending", "stale", "failed", "confidence_rejected", "intent_filtered", "intent_review"):
                 self._enqueue_generation_candidate(session_id, candidate_id, model_config=model_config, skip_filter=skip_filter)
 
     def _mark_generation_candidate_failed(
@@ -2606,8 +2606,15 @@ class ApiMonitorSessionManager:
         tool.validation_errors = contract.validation_errors if contract.validation_errors else []
         tool.confidence = confidence_result.confidence
         tool.score = confidence_result.score
+        reserve = candidate.intent_group == "supporting" or (skip_filter and candidate.intent_group in ("uncertain", "adjacent", "bootstrap", "noise"))
+        tool.is_reserve = reserve
+        tool.intent_group = candidate.intent_group
+        tool.intent_reason = candidate.intent_reason or candidate.intent_filter_reason
+        tool.intent_score = candidate.intent_score
         if existing is None:
-            tool.selected = True
+            tool.selected = not reserve
+        elif reserve:
+            tool.selected = False
         tool.confidence_reasons = confidence_result.reasons
         tool.source_evidence = confidence_result.evidence_summary
         new_tools = [tool]
@@ -2749,7 +2756,7 @@ class ApiMonitorSessionManager:
 
         for call in session.captured_calls:
             candidate, created = self._upsert_generation_candidate(session_id, call)
-            if created or candidate.status in ("pending", "failed", "rate_limited", "stale", "confidence_rejected", "intent_filtered"):
+            if created or candidate.status in ("pending", "failed", "rate_limited", "stale", "confidence_rejected", "intent_filtered", "intent_review"):
                 changed.append(candidate)
 
         if enqueue:
@@ -2891,8 +2898,8 @@ class ApiMonitorSessionManager:
         )
         if candidate is None:
             raise ValueError("Generation candidate not found")
-        if candidate.status not in ("confidence_rejected", "intent_filtered"):
-            raise ValueError("Only rejected/filtered candidates can be force-generated")
+        if candidate.status not in ("confidence_rejected", "intent_filtered", "intent_review"):
+            raise ValueError("Only rejected/filtered/review candidates can be force-generated")
         candidate.status = "pending"
         candidate.error = ""
         candidate.retry_after = None

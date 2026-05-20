@@ -1064,3 +1064,68 @@ class TestRealtimeBuffer(unittest.IsolatedAsyncioTestCase):
         assert len(changed) == 1
         assert enqueued == []
         assert manager._intent_prune_buffers[session.id] == {changed[0].id}
+
+
+# ── Reserve generation and force flow tests ────────────────────────────────
+
+
+class TestReserveGeneration(unittest.IsolatedAsyncioTestCase):
+
+    async def test_supporting_candidate_generates_reserve_tool(self):
+        manager = ApiMonitorSessionManager()
+        session = ApiMonitorSession(
+            id="session_1",
+            user_id="user_1",
+            sandbox_session_id="sandbox_1",
+            intent="查询订单列表",
+        )
+        manager.sessions[session.id] = session
+        call = _call(
+            "status_1",
+            method="GET",
+            path="/api/order/status-options",
+        )
+        call.source_evidence = {
+            "action_window_matched": True,
+            "initiator_urls": ["https://example.com/app.js"],
+        }
+        call.response.body = '{"options":["paid"]}'
+        session.captured_calls.append(call)
+        candidate, _ = manager._upsert_generation_candidate(session.id, call)
+        candidate.intent_group = "supporting"
+        candidate.intent_reason = "订单查询筛选条件。"
+        candidate.intent_score = 75
+
+        async def fake_generate_tool_definition(**kwargs):
+            return 'swagger: "2.0"\ninfo:\n  title: list_order_statuses\n  version: "1.0"\npaths:\n  /api/order/status-options:\n    get:\n      operationId: list_order_statuses\n      responses:\n        "200":\n          description: OK\n'
+
+        with patch(
+            "backend.rpa.api_monitor.manager.generate_tool_definition",
+            fake_generate_tool_definition,
+        ):
+            tool = await manager._generate_tool_for_candidate(session.id, candidate.id, skip_filter=True)
+
+        assert tool is not None
+        assert tool.selected is False
+        assert tool.is_reserve is True
+        assert tool.intent_group == "supporting"
+        assert tool.intent_reason == "订单查询筛选条件。"
+
+
+def test_force_generate_allows_intent_review_candidate():
+    manager = ApiMonitorSessionManager()
+    session = ApiMonitorSession(id="session_1", user_id="user_1", sandbox_session_id="sandbox_1")
+    candidate = ApiToolGenerationCandidate(
+        session_id="session_1",
+        dedup_key="GET /api/unknown",
+        method="GET",
+        url_pattern="/api/unknown",
+        status="intent_review",
+        intent_group="uncertain",
+    )
+    session.generation_candidates.append(candidate)
+    manager.sessions[session.id] = session
+
+    manager.force_generate_candidate(session.id, candidate.id)
+
+    assert candidate.status == "pending"
