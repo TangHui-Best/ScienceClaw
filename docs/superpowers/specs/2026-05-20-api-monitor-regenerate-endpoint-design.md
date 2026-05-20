@@ -13,7 +13,7 @@ API Monitor MCP 现在有两类相关问题：
 
 - 重新生成工具复用实时工具生成主链路，避免两套逻辑长期分叉。
 - 重新生成时保留原工具卡片身份，不产生重复工具。
-- OpenAPI YAML 中不再依赖 `basePath` 表达 endpoint，`paths` 的唯一 key 直接是捕获到的完整 endpoint path。
+- OpenAPI YAML 中不再输出 `basePath`，`paths` 的唯一 key 直接是捕获到的完整 endpoint path。
 - 移除“必须校验 `basePath + path == endpoint`”这个需求，用更简单的“path 就是 endpoint”规则规避模型拆分错误。
 
 ## 非目标
@@ -83,11 +83,11 @@ API Monitor MCP 现在有两类相关问题：
 
 重新生成不做 DOM 补采。DOM context 是捕获 API 时的事实上下文，如果重新生成时无法从 candidate 或历史生成上下文中找到 DOM，应返回明确错误，提示该工具缺失生成上下文。这比从当前页面临时扫描更可靠，因为当前页面可能已经与原 API 触发场景不一致。
 
-### 2. YAML 生成禁用有效 basePath
+### 2. YAML 生成不携带 basePath
 
 LLM prompt 调整为：
 
-- `basePath` 固定输出为空字符串 `""` 或 `/`；
+- 不输出 `basePath` 字段；
 - `paths` 只能包含一个 key；
 - 这个 key 必须是捕获 endpoint 的完整 path，不含 scheme、host、query；
 - 不允许把 endpoint 拆到 `basePath`；
@@ -96,7 +96,6 @@ LLM prompt 调整为：
 ```yaml
 swagger: "2.0"
 host: api.example.com
-basePath: ""
 paths:
   /v1/users/{user_id}:
     get:
@@ -111,8 +110,8 @@ paths:
 
 新规则：
 
-- 当 `basePath` 为空、缺失或 `/` 时，`contract.url = path_url`。
-- 新生成 YAML 应满足上述情况。
+- 当 `basePath` 缺失时，`contract.url = path_url`。
+- 新生成 YAML 不应包含 `basePath`。
 - 为兼容历史 YAML，解析器可以继续接受非空 `basePath` 并按 OpenAPI 规则组合，但新 prompt 不再生成这种形式。
 - 移除或放宽“path must be relative to basePath”的强拒绝校验，因为新规则不再依赖 basePath/path 拆分。
 
@@ -138,7 +137,6 @@ POST /api-monitor/session/{session_id}/tools/{tool_id}/regenerate
 Captured URL: https://api.example.com/isales/ssdmdoc/services/api/query
 Prompt endpoint path: /isales/ssdmdoc/services/api/query
 Generated YAML:
-  basePath: ""
   paths:
     /isales/ssdmdoc/services/api/query:
 Contract url:
@@ -166,7 +164,7 @@ Runtime final URL:
 - 重新生成显式跳过 confidence/intent 阻断，但刷新 confidence 展示字段。
 - `_generate_tool_for_candidate()` 优先按 `candidate.tool_id` 更新目标工具。
 - `generate_tool_definition()` prompt 不再包含启发式 `basePath: /前两段` 提示。
-- OpenAPI YAML 使用 `basePath: ""` 和完整 endpoint path 时，`contract.url` 等于 endpoint path。
+- OpenAPI YAML 省略 `basePath` 且使用完整 endpoint path 时，`contract.url` 等于 endpoint path。
 - 调整现有 `path must be relative to basePath` 测试，避免它与新规则冲突。
 
 ### 集成测试
