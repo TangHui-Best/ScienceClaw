@@ -67,7 +67,7 @@ Rules:
 - If code is returned, it must define async def run(page, results).
 - Use action_type="extract_snapshot" only when the requested extract-only data is already present in snapshot.detail_views fields.
 - For extract_snapshot, return the relevant observed detail fields in the plan itself, including the detail view frame_path when present; do not generate Python code and do not reference `snapshot` inside `run()`.
-- For snapshot.mode="selected_region_snapshot", selected_region evidence is the authoritative scope. If you use extract_snapshot, fields must contain visible non-empty values copied from selected_region evidence; otherwise use run_python with selected region locator evidence.
+- For snapshot.mode="selected_region_snapshot", selected_region evidence is the authoritative scope. If you use extract_snapshot, fields must contain labels copied from selected_region evidence; empty values are valid unless the field is explicitly required or the user's task requires non-empty output.
 - If payload.plan_validation is present, correct the failed plan contract issue before execution; do not repeat a failed extract_snapshot plan without fields.
 - `snapshot` is planner-only evidence. Generated Python can access only `page` and `results`.
 - 结果返回规则：
@@ -116,8 +116,8 @@ Rules:
 - Do not include a separate done-check.
 - For run_python click/fill commands, return action evidence such as `{"action_performed": True, "action_type": "fill", "filled_value": value}` after the Playwright action completes.
 - If extracting data, return structured JSON-serializable Python values.
-- For extract-only commands, do not return null/empty output unless the user explicitly allows empty results.
-- Set allow_empty_output=true only when the user explicitly says no result, empty list, or empty output is acceptable.
+- For extract-only commands, preserve empty strings, empty lists, and empty tables as factual outputs unless the user explicitly requires non-empty results.
+- Set allow_empty_output=false only when the user explicitly requires a non-empty result; otherwise empty strings, empty lists, and empty tables may be valid extract outputs.
 - During repair, treat raw error logs and current page facts as authoritative. Any failure_analysis.hint is advisory only.
 - 修复规则：
   - 修复时必须优先参考原始错误日志、异常类型、traceback 行号和当前页面事实。
@@ -731,7 +731,6 @@ def _execute_extract_snapshot_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
     output: Dict[str, Any] = {}
     selected_fields: List[Dict[str, Any]] = []
     include_hidden = _normalize_bool(plan.get("include_hidden"))
-    include_empty = _normalize_bool(plan.get("include_empty"))
     for field in fields:
         label = str(field.get("label") or "").strip()
         if not label:
@@ -739,8 +738,6 @@ def _execute_extract_snapshot_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
         visible = bool(field.get("visible", True))
         value = field.get("value")
         if not visible and not include_hidden:
-            continue
-        if value == "" and not include_empty:
             continue
         output[label] = value
         selected_fields.append(
@@ -754,7 +751,16 @@ def _execute_extract_snapshot_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
             }
         )
 
-    if not output and not _normalize_bool(plan.get("allow_empty_output")):
+    empty_required_label = _empty_required_snapshot_field_label(plan)
+    if empty_required_label:
+        return {
+            "success": False,
+            "error": "extract_snapshot required field has empty value",
+            "output": "",
+            "diagnostics": {"field": empty_required_label},
+        }
+
+    if _requires_non_empty_extract_snapshot_output(plan) and not _extract_snapshot_plan_has_visible_value(plan):
         return {
             "success": False,
             "error": "extract_snapshot plan produced no visible non-empty fields",
@@ -810,13 +816,39 @@ def _extract_snapshot_plan_has_visible_value(plan: Dict[str, Any]) -> bool:
     return False
 
 
+def _empty_required_snapshot_field_label(plan: Dict[str, Any]) -> str:
+    include_hidden = _normalize_bool(plan.get("include_hidden"))
+    for field in _snapshot_plan_fields(plan):
+        label = str(field.get("label") or "").strip()
+        if not label or not _normalize_bool(field.get("required")):
+            continue
+        if not bool(field.get("visible", True)) and not include_hidden:
+            continue
+        value = field.get("value")
+        if value in (None, ""):
+            return label
+        if isinstance(value, (list, dict)) and not value:
+            return label
+    return ""
+
+
+def _requires_non_empty_extract_snapshot_output(plan: Dict[str, Any]) -> bool:
+    if plan.get("_allow_empty_output_explicit") is False:
+        return False
+    if "allow_empty_output" not in plan:
+        return False
+    return not _normalize_bool(plan.get("allow_empty_output"))
+
+
 def _selected_region_extract_plan_validation_error(plan: Dict[str, Any]) -> str:
     if str(plan.get("action_type") or "").strip() != "extract_snapshot":
         return ""
     fields = _snapshot_plan_fields(plan)
     if not fields:
         return "extract_snapshot plan missing fields"
-    if not _normalize_bool(plan.get("allow_empty_output")) and not _extract_snapshot_plan_has_visible_value(plan):
+    if _empty_required_snapshot_field_label(plan):
+        return "extract_snapshot required field has empty value"
+    if _requires_non_empty_extract_snapshot_output(plan) and not _extract_snapshot_plan_has_visible_value(plan):
         return "extract_snapshot plan produced no visible non-empty fields"
     return ""
 
@@ -834,8 +866,9 @@ def _build_region_plan_validation_payload(
             "snapshot": _safe_jsonable(payload.get("snapshot")),
             "requirement": (
                 "The failed selected-region plan was not executable. "
-                "If using extract_snapshot, return fields with labels and visible non-empty values "
-                "from snapshot.detail_views or selected_region evidence. Otherwise return run_python "
+                "If using extract_snapshot, return a fields array with labels copied from "
+                "snapshot.detail_views or selected-region evidence. Empty values are allowed "
+                "unless the field is required or the plan explicitly disallows empty output. Otherwise return run_python "
                 "using selected-region locator evidence."
             ),
         },
@@ -927,6 +960,7 @@ def _coerce_recording_plan(parsed: Any) -> Dict[str, Any]:
         raise ValueError("Recording planner must return a JSON object")
     parsed.setdefault("action_type", "run_python")
     parsed["expected_effect"] = _normalize_expected_effect(parsed.get("expected_effect"))
+    parsed["_allow_empty_output_explicit"] = "allow_empty_output" in parsed
     parsed["allow_empty_output"] = _normalize_bool(parsed.get("allow_empty_output"))
     if parsed.get("action_type") == "run_python":
         code = str(parsed.get("code") or "")

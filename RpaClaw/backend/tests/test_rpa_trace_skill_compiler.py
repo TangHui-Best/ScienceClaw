@@ -1527,7 +1527,7 @@ def test_region_single_value_falls_back_when_first_nested_locator_is_invalid():
     assert "_execute_runtime_ai_instruction" not in body
 
 
-def test_selected_region_local_text_extract_compiles_to_scoped_runtime_ai():
+def test_selected_region_local_text_extract_with_fields_uses_snapshot_extract_not_runtime_ai():
     trace = RPAAcceptedTrace(
         trace_type=RPATraceType.AI_OPERATION,
         user_instruction="获取框选区域的模型数量",
@@ -1551,10 +1551,37 @@ def test_selected_region_local_text_extract_compiles_to_scoped_runtime_ai():
     _assert_script_loads(script)
     body = _execute_body(script)
 
-    assert "_execute_runtime_ai_instruction(current_page, _results, kwargs, '获取框选区域的模型数量', 'model_count'," in body
-    assert "'region_id': 'region-1'" in body
-    assert "'local_text': ['Total 99 models']" in body
-    assert "aui-form-item" not in body
+    assert "_execute_runtime_ai_instruction" not in body
+    assert "'region_id': 'region-1'" not in body
+    assert "Total 99 models" not in body
+    assert "_results['model_count'] = _result" in body
+    assert trace_requires_runtime_ai_replay(trace) is False
+
+
+def test_selected_region_local_text_without_fields_does_not_inject_recorded_region_context():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        user_instruction="Extract the selected model count",
+        description="Extract selected model count",
+        output_key="model_count",
+        output={"model_count": "99"},
+        signals={"extract_snapshot": {"source": "selected_region.local_text", "fields": []}},
+        region_context={
+            "region_id": "region-1",
+            "inferred_kind": "text_region",
+            "local_text": ["Total 99 models"],
+            "rect": {"x": 10, "y": 20, "width": 120, "height": 30},
+        },
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    _assert_script_loads(script)
+    body = _execute_body(script)
+
+    assert "_execute_runtime_ai_instruction(current_page, _results, kwargs, 'Extract the selected model count', 'model_count')" in body
+    assert "'region_id': 'region-1'" not in body
+    assert "Total 99 models" not in body
+    assert "'rect':" not in body
     assert trace_requires_runtime_ai_replay(trace) is True
 
 

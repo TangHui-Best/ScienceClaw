@@ -666,6 +666,121 @@ def test_region_scoped_snapshot_uses_geometry_when_scope_relation_is_missing():
     assert "Invoice Price Total" not in str(compact["expanded_regions"])
 
 
+def test_region_scoped_snapshot_geometry_fallback_requires_matching_frame_path():
+    snapshot = {
+        "url": "https://example.test/page",
+        "title": "Scoped Frames",
+        "content_nodes": [
+            {
+                "node_id": "wrong-label",
+                "container_id": "wrong-frame",
+                "semantic_kind": "label",
+                "text": "Part",
+                "bbox": {"x": 100, "y": 100, "width": 60, "height": 20},
+                "frame_path": ["iframe.wrong"],
+                "element_snapshot": {"tag": "label", "text": "Part"},
+            },
+            {
+                "node_id": "wrong-value",
+                "container_id": "wrong-frame",
+                "semantic_kind": "field_value",
+                "text": "Wrong Frame",
+                "bbox": {"x": 170, "y": 100, "width": 100, "height": 20},
+                "frame_path": ["iframe.wrong"],
+                "element_snapshot": {"tag": "span", "text": "Wrong Frame", "class": "field-value"},
+            },
+            {
+                "node_id": "right-label",
+                "container_id": "right-frame",
+                "semantic_kind": "label",
+                "text": "Part",
+                "bbox": {"x": 100, "y": 100, "width": 60, "height": 20},
+                "frame_path": ["iframe.right"],
+                "element_snapshot": {"tag": "label", "text": "Part"},
+            },
+            {
+                "node_id": "right-value",
+                "container_id": "right-frame",
+                "semantic_kind": "field_value",
+                "text": "Right Frame",
+                "bbox": {"x": 170, "y": 100, "width": 100, "height": 20},
+                "frame_path": ["iframe.right"],
+                "element_snapshot": {"tag": "span", "text": "Right Frame", "class": "field-value"},
+            },
+        ],
+        "actionable_nodes": [],
+        "containers": [
+            {
+                "container_id": "wrong-frame",
+                "summary": "Part Wrong Frame",
+                "bbox": {"x": 90, "y": 90, "width": 220, "height": 80},
+                "frame_path": ["iframe.wrong"],
+            },
+            {
+                "container_id": "right-frame",
+                "summary": "Part Right Frame",
+                "bbox": {"x": 90, "y": 90, "width": 220, "height": 80},
+                "frame_path": ["iframe.right"],
+            },
+        ],
+        "frames": [],
+        "table_views": [],
+        "detail_views": [],
+        "region_scope": {
+            "region_id": "region-right-frame",
+            "frame_path": ["iframe.right"],
+            "frame_rect": {"x": 90, "y": 90, "width": 220, "height": 120},
+        },
+    }
+
+    compact = compact_recording_snapshot(snapshot, "extract part", char_budget=1)
+
+    assert [region["summary"] for region in compact["expanded_regions"]] == ["Part=Right Frame"]
+    assert "Wrong Frame" not in str(compact["expanded_regions"])
+
+
+def test_region_scoped_snapshot_budget_trims_low_priority_context_and_long_text():
+    snapshot = _build_snapshot()
+    snapshot["region_scope"] = {
+        "region_id": "budget-region",
+        "tab_id": "tab-1",
+        "frame_path": [],
+        "frame_rect": {"x": 20, "y": 60, "width": 280, "height": 80},
+    }
+    snapshot["content_nodes"][1]["scope_relation"] = "inside_region"
+    snapshot["content_nodes"][2]["scope_relation"] = "inside_region"
+    snapshot["containers"][0]["scope_relation"] = "inside_region"
+    for index in range(30):
+        snapshot["content_nodes"].append(
+            {
+                "node_id": f"noise-{index}",
+                "container_id": f"noise-{index}",
+                "semantic_kind": "text",
+                "text": "NOISE-" + ("x" * 200),
+                "bbox": {"x": 400, "y": 400 + index * 20, "width": 200, "height": 18},
+                "scope_relation": "ancestor_context",
+            }
+        )
+        snapshot["containers"].append(
+            {
+                "container_id": f"noise-{index}",
+                "summary": "NOISE-" + ("x" * 200),
+                "bbox": {"x": 400, "y": 400 + index * 20, "width": 200, "height": 18},
+            }
+        )
+
+    compact = compact_recording_snapshot(snapshot, "extract selected buyer", char_budget=900)
+    serialized = str(compact)
+
+    assert compact["mode"] == "region_scoped_snapshot"
+    assert compact["url"] == snapshot["url"]
+    assert compact["title"] == snapshot["title"]
+    assert compact["region_scope"]["region_id"] == "budget-region"
+    assert compact["expanded_regions"]
+    assert "NOISE-" not in serialized
+    assert len(serialized) < 1600
+
+
 def test_region_scoped_snapshot_filters_outside_pairs_in_selected_container():
     snapshot = {
         "url": "https://example.test/detail",

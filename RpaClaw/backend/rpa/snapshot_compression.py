@@ -174,7 +174,7 @@ def _compact_region_scoped_snapshot(
         if str(region.get("region_id") or "") not in selected_region_ids and _region_is_context_scope(region, snapshot)
     ]
 
-    return {
+    payload = {
         "mode": "region_scoped_snapshot",
         "url": snapshot.get("url", ""),
         "title": snapshot.get("title", ""),
@@ -187,6 +187,7 @@ def _compact_region_scoped_snapshot(
         "sampled_regions": [],
         "region_catalogue": [_summary_region(region) for region in context_regions[:4]],
     }
+    return _trim_region_scoped_snapshot_to_budget(payload, char_budget)
 
 
 def _node_scope_relation(node: Dict[str, Any]) -> str:
@@ -293,8 +294,11 @@ def _regions_intersecting_scope(
     scope_rect = region_scope.get("frame_rect") or region_scope.get("viewport_rect") or {}
     if not isinstance(scope_rect, dict) or not scope_rect:
         return []
+    scope_frame_path = _normalized_frame_path(region_scope.get("frame_path"))
     scoped_regions: List[Dict[str, Any]] = []
     for region in regions:
+        if scope_frame_path and _region_frame_path(region, snapshot) != scope_frame_path:
+            continue
         if not _rects_intersect(_region_rect(region, snapshot), scope_rect):
             continue
         scoped_region = _scoped_candidate_region(region, scope_rect)
@@ -314,6 +318,114 @@ def _region_rect(region: Dict[str, Any], snapshot: Dict[str, Any]) -> Dict[str, 
         if str(node.get("container_id") or "") == container_id and isinstance(node.get("bbox"), dict)
     ]
     return _union_rect([node.get("bbox") or {} for node in nodes])
+
+
+def _region_frame_path(region: Dict[str, Any], snapshot: Dict[str, Any]) -> List[str]:
+    region_frame_path = _normalized_frame_path(region.get("frame_path"))
+    if region_frame_path:
+        return region_frame_path
+    container_id = str(region.get("container_id") or "")
+    for container in snapshot.get("containers") or []:
+        if str(container.get("container_id") or "") == container_id:
+            container_frame_path = _normalized_frame_path(container.get("frame_path"))
+            if container_frame_path:
+                return container_frame_path
+    nodes = [
+        node
+        for node in list(snapshot.get("content_nodes") or []) + list(snapshot.get("actionable_nodes") or [])
+        if str(node.get("container_id") or "") == container_id
+    ]
+    return _first_frame_path(nodes)
+
+
+def _normalized_frame_path(value: Any) -> List[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item or "").strip()]
+
+
+def _json_size(payload: Dict[str, Any]) -> int:
+    return len(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+
+
+def _trim_region_scoped_snapshot_to_budget(payload: Dict[str, Any], char_budget: int) -> Dict[str, Any]:
+    if char_budget <= 0 or _json_size(payload) <= char_budget:
+        return payload
+    if char_budget < _minimum_region_scoped_snapshot_size(payload):
+        return payload
+
+    trimmed = dict(payload)
+    page_context = dict(trimmed.get("page_context") or {})
+    page_context["context_regions"] = []
+    trimmed["page_context"] = page_context
+    trimmed["region_catalogue"] = []
+    trimmed = _truncate_snapshot_strings(trimmed, limit=160)
+    if _json_size(trimmed) <= char_budget:
+        return trimmed
+
+    trimmed["expanded_regions"] = [
+        _sample_expanded_region_for_budget(region)
+        for region in list(trimmed.get("expanded_regions") or [])[:2]
+        if isinstance(region, dict)
+    ]
+    if _json_size(trimmed) <= char_budget:
+        return trimmed
+
+    trimmed["expanded_regions"] = [
+        _sample_expanded_region_for_budget(region)
+        for region in list(trimmed.get("expanded_regions") or [])[:1]
+        if isinstance(region, dict)
+    ]
+    if _json_size(trimmed) <= char_budget:
+        return trimmed
+
+    trimmed["table_views"] = list(trimmed.get("table_views") or [])[:1]
+    trimmed["detail_views"] = list(trimmed.get("detail_views") or [])[:1]
+    trimmed["form_views"] = list(trimmed.get("form_views") or [])[:1]
+    return _truncate_snapshot_strings(trimmed, limit=80)
+
+
+def _minimum_region_scoped_snapshot_size(payload: Dict[str, Any]) -> int:
+    minimum_payload = {
+        "mode": payload.get("mode", "region_scoped_snapshot"),
+        "url": payload.get("url", ""),
+        "title": payload.get("title", ""),
+        "region_scope": payload.get("region_scope") or {},
+        "page_context": {
+            "url": (payload.get("page_context") or {}).get("url", ""),
+            "title": (payload.get("page_context") or {}).get("title", ""),
+            "context_regions": [],
+        },
+        "table_views": [],
+        "detail_views": [],
+        "form_views": [],
+        "expanded_regions": [],
+        "sampled_regions": [],
+        "region_catalogue": [],
+    }
+    return _json_size(minimum_payload)
+
+
+def _truncate_snapshot_strings(value: Any, *, limit: int) -> Any:
+    if isinstance(value, str):
+        return value if len(value) <= limit else value[:limit]
+    if isinstance(value, list):
+        return [_truncate_snapshot_strings(item, limit=limit) for item in value]
+    if isinstance(value, dict):
+        return {key: _truncate_snapshot_strings(item, limit=limit) for key, item in value.items()}
+    return value
+
+
+def _sample_expanded_region_for_budget(region: Dict[str, Any]) -> Dict[str, Any]:
+    sampled = dict(region)
+    evidence = sampled.get("evidence")
+    if isinstance(evidence, dict):
+        sampled_evidence: Dict[str, Any] = {}
+        for key, value in evidence.items():
+            sampled_evidence[key] = value[:2] if isinstance(value, list) else value
+        sampled["evidence"] = sampled_evidence
+    sampled["mode"] = "expanded"
+    return sampled
 
 
 def _union_rect(rects: Sequence[Dict[str, Any]]) -> Dict[str, Any]:

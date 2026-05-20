@@ -39,7 +39,7 @@ evidence:
 
 ## Current Status
 
-Ready for review / readiness pass. RegionScope conversion, region-prioritized raw snapshot capture, scoped compression, RecordingRuntimeAgent planner wiring, and trace scope evidence are implemented. Backend F011 verification passes in the provisioned Python 3.12 environment, F011 frontend region-selection tests pass after installing worktree dependencies, production frontend build passes, and the user has manually validated the local service flow. Remaining failures are pre-existing project-level frontend type debt / npm audit debt, not F011 scoped snapshot blockers.
+Ready for review after PR #55 follow-up. RegionScope conversion, region-prioritized raw snapshot capture, scoped compression, RecordingRuntimeAgent planner wiring, and trace scope evidence are implemented. The review blockers are resolved: compiled replay no longer injects recorded `region_context`, geometry fallback is frame-safe, `region_scoped_snapshot` enforces budget trimming above the minimum identity payload, and empty extract values are valid by default unless explicitly required/non-empty. Backend F011 verification passes in the shared Python 3.12 environment.
 
 ## Links
 
@@ -66,6 +66,8 @@ Ready for review / readiness pass. RegionScope conversion, region-prioritized ra
 - 2026-05-19: Added generic planner failure debug dumps for initial/repair planner contract failures so invalid JSON/code responses persist with compact snapshot summary, raw-vs-compact presence comparison, and LLM call summary. Independent review requested repair-path coverage; direct initial and repair tests now cover the artifact path. This is diagnostic-only and does not change planner, prompt, selector, UI, or replay behavior.
 - 2026-05-19: Fixed region-scoped action-group compression after manual validation showed selected standalone text (`1,027 stars today`) was present in raw snapshot but missing from compact expanded evidence, while an outside same-card action (`star 37,451`) remained available as a candidate. Scoped action groups now preserve selected text evidence and filter outside actions from expanded candidates.
 - 2026-05-19: Fixed planner contract handling after manual validation showed raw and compact region-scoped snapshots both contained the selected repository star text (`3,184 stars today`), but the planner returned a valid JSON plan whose `code` field was top-level Playwright Python lacking `async def run(page, results)`. The runtime now narrowly wraps top-level `run_python` code only when it references recording runtime context (`page`, `await`, or `results`), leaving non-runtime or invalid code as planner contract failures.
+- 2026-05-20: PR #55 blocking review follow-up opened. Accepted review findings: compiled replay must not inject recorded `region_context`; geometry fallback must respect `frame_path`; `region_scoped_snapshot` must enforce `char_budget` while keeping identity and selected evidence; extract-snapshot empty values must be diagnostics by default, failing only for explicit required/non-empty contracts.
+- 2026-05-20: PR #55 follow-up fixed and re-verified. Compiler/replay now treats selected-region local text as snapshot field evidence when fields exist and as plain runtime semantic replay without recorded region context otherwise; scoped geometry fallback rejects same-coordinate regions in other iframes; scoped compression trims low-priority context under budget; extract_snapshot no longer treats empty outputs as failure unless a field is required or non-empty output is explicit.
 
 ## Patch Churn Review
 
@@ -77,4 +79,4 @@ Ready for review / readiness pass. RegionScope conversion, region-prioritized ra
 
 ## Next Step
 
-Open review against upstream `master`. Keep the strict-mode locator repair issue as a separate follow-up because it belongs to runtime repair/locator disambiguation, not region-scoped snapshot capture or compression.
+Keep PR #55 open against upstream `master` for reviewer confirmation. Keep the strict-mode locator repair issue as a separate follow-up because it belongs to runtime repair/locator disambiguation, not region-scoped snapshot capture or compression.

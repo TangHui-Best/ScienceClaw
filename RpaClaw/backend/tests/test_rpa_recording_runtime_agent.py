@@ -15,9 +15,11 @@ from backend.rpa.recording_runtime_agent import (
     _classify_recording_failure,
     _compact_region_context,
     _ensure_expected_effect,
+    _execute_extract_snapshot_plan,
     _parse_json_object,
     _resolve_recording_snapshot_debug_dir,
     _resolve_recording_snapshot_debug_path,
+    _selected_region_extract_plan_validation_error,
 )
 from backend.rpa.trace_models import RPAPageState
 
@@ -1172,6 +1174,39 @@ async def test_recording_runtime_agent_preserves_extract_snapshot_frame_path(mon
     assert result.trace.signals["extract_snapshot"]["frame_path"] == ["iframe[title='detail']"]
 
 
+def test_extract_snapshot_plan_validation_allows_empty_fields_by_default():
+    plan = {
+        "action_type": "extract_snapshot",
+        "fields": [{"label": "Optional note", "value": "", "visible": True}],
+    }
+
+    assert _selected_region_extract_plan_validation_error(plan) == ""
+
+
+def test_execute_extract_snapshot_plan_allows_empty_output_by_default():
+    result = _execute_extract_snapshot_plan(
+        {
+            "action_type": "extract_snapshot",
+            "output_key": "optional_note",
+            "source": "detail_views",
+            "fields": [{"label": "Optional note", "value": "", "visible": True}],
+        }
+    )
+
+    assert result["success"] is True
+    assert result["output"] == {"Optional note": ""}
+    assert result["signals"]["extract_snapshot"]["fields"][0]["value"] == ""
+
+
+def test_extract_snapshot_plan_validation_rejects_empty_required_field():
+    plan = {
+        "action_type": "extract_snapshot",
+        "fields": [{"label": "Total", "value": "", "visible": True, "required": True}],
+    }
+
+    assert _selected_region_extract_plan_validation_error(plan) == "extract_snapshot required field has empty value"
+
+
 def test_recording_runtime_agent_does_not_synthesize_region_extract_fields_from_local_text(monkeypatch):
     async def run_test():
         async def fake_build_page_snapshot(_page, _build_frame_path):
@@ -1219,9 +1254,9 @@ def test_recording_runtime_agent_does_not_synthesize_region_extract_fields_from_
             },
         )
 
-        assert result.success is False
-        assert result.message == "Recording command failed after one repair."
-        assert "extract_snapshot plan produced no visible non-empty fields" in result.diagnostics[-1].message
+        assert result.success is True
+        assert result.output == {"模型数量": ""}
+        assert result.trace.signals["extract_snapshot"]["fields"][0]["value"] == ""
 
     asyncio.run(run_test())
 
