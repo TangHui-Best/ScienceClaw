@@ -2,10 +2,10 @@
 doc_kind: evidence
 id: EV-011
 title: RPA Region-Scoped Snapshot Evidence
-status: active
+status: ready_for_review
 feature_ids: [F011]
 created: 2026-05-19
-updated: 2026-05-19
+updated: 2026-05-20
 scope: RPA region-scoped snapshot capture and compression
 ---
 
@@ -43,6 +43,13 @@ scope: RPA region-scoped snapshot capture and compression
 - `python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root . --docs-path docs`
 - `Test-Path 'RpaClaw\frontend\node_modules'`
 - `git diff --check`
+- `$env:PYTHONPATH='RpaClaw'; E:\Work-Project\OtherWork\ScienceClaw\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_recording_runtime_agent_uses_region_scoped_snapshot_for_region_planner RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_recording_runtime_agent_region_repair_payload_excludes_full_page_snapshot RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_recording_runtime_agent_accepts_planner_selected_region_extract_field RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_recording_runtime_agent_reasks_planner_when_region_extract_snapshot_missing_fields -q`
+- `$env:PYTHONPATH='RpaClaw'; E:\Work-Project\OtherWork\ScienceClaw\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_region_context.py RpaClaw/backend/tests/test_rpa_assistant_snapshot_runtime.py RpaClaw/backend/tests/test_rpa_snapshot_compression.py RpaClaw/backend/tests/test_rpa_snapshot_compression_structured.py RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py RpaClaw/backend/tests/test_rpa_trace_models.py -q`
+- `npm.cmd ci`
+- `npm.cmd run test`
+- `npm.cmd run test -- src/utils/rpaRegionSelection.test.ts src/pages/rpa/RecorderPage.test.ts --testTimeout 15000`
+- `npm.cmd run build`
+- `npm.cmd run type-check`
 
 ## Results
 
@@ -69,9 +76,17 @@ scope: RPA region-scoped snapshot capture and compression
 - Runtime planner/debug focused subset after contract wrapper: `4 passed`.
 - Full `test_rpa_recording_runtime_agent.py` after planner contract wrapper: `62 passed, 4 failed`. The remaining failures are blocked by missing optional dependency `langchain_openai` while importing `backend.deepagent.engine` for default planner tests.
 - Requested backend target set after final review fixes: `114 passed, 11 failed`. Six `test_rpa_region_context.py` route tests and four default planner tests are blocked by missing `langchain_openai`; one lazy-import assertion is polluted by the earlier failed route import in the same pytest process. The focused F011 model/capture/compression/runtime tests passed.
+- Readiness environment update (2026-05-20): the PR worktree venv install timed out, but the shared project Python 3.12 environment at `E:\Work-Project\OtherWork\ScienceClaw\.venv\Scripts\python.exe` contains `langchain-openai`, `pytest`, `fastapi`, and `playwright`; this interpreter was used for final backend verification against the PR worktree sources.
+- Runtime scoped planner compatibility subset: initial RED showed two upstream `selected_region_snapshot/context_scope` tests were still asserting the old preview/debug payload path, while F011 requires planner main input to be `region_scoped_snapshot`. After updating the tests to assert scoped snapshot mode and no top-level `region_context/context_scope`, GREEN `4 passed`.
+- Backend F011 target set: GREEN `149 passed` for `test_rpa_region_context.py`, `test_rpa_assistant_snapshot_runtime.py`, `test_rpa_snapshot_compression.py`, `test_rpa_snapshot_compression_structured.py`, `test_rpa_recording_runtime_agent.py`, and `test_rpa_trace_models.py`.
 - Harness feature check: `6 errors` from pre-existing `F001-rpa-trace-source-convergence.md` missing required sections; F011 produced no feature-structure error.
 - Harness all-docs check: `23 errors, 3 warnings` from pre-existing ADR-001/ADR-002, EV-001, and F001 structure/link debt. The earlier F011 evidence backlink warning was removed by changing the Feature evidence entry to a Markdown link.
-- Frontend verification: skipped because `RpaClaw\frontend\node_modules` is missing in this worktree. No frontend files were modified.
+- Frontend dependency installation: `npm.cmd ci` succeeded in the PR worktree. It reported `25 vulnerabilities` via npm audit and deprecation warnings; these are existing dependency-maintenance issues, not F011 implementation changes.
+- Frontend full test run: `npm.cmd run test` produced `219 passed, 3 timed out`. The failures were timeouts in existing RPA page tests under the default 5000 ms per-test limit, not assertion failures in F011 region selection.
+- Frontend F011-relevant test subset: GREEN `25 passed` for `src/utils/rpaRegionSelection.test.ts` and `src/pages/rpa/RecorderPage.test.ts` with `--testTimeout 15000`, including pending region id forwarding, selected-region retention, canvas event isolation, valid drag analysis, stale analysis ordering, Escape cancel, and tiny-selection cancellation.
+- Frontend production build: `npm.cmd run build` succeeded. Build warnings remain for existing duplicate locale keys, browserslist age, CSS syntax warnings, and chunk size.
+- Frontend type-check: `npm.cmd run type-check` remains blocked by broad pre-existing TypeScript debt across unrelated components/locales/utils. No F011 files were modified to address this project-level debt.
+- User manual validation: user reported local service verification passed for the region-scoped snapshot feature after selecting GitHub Trending row fields and extracting scoped values.
 - Whitespace check: `git diff --check` passed.
 
 ## Artifacts

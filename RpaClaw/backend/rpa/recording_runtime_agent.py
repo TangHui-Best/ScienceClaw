@@ -173,12 +173,8 @@ class RecordingRuntimeAgent:
         debug_context = dict(debug_context or {})
         before = await _page_state(page)
         region_scope = _region_scope_from_context(region_context)
-        snapshot = (
-            await _safe_page_snapshot(page, region_scope=region_scope)
-            if region_scope
-            else await _safe_page_snapshot(page)
-        )
-        compact_snapshot = _compact_snapshot(snapshot, instruction, region_scope=region_scope or None)
+        snapshot = await _capture_page_snapshot(page, region_scope=region_scope)
+        compact_snapshot = _compact_snapshot_for_runtime(snapshot, instruction, region_scope=region_scope or None)
         compact_region_context = _compact_region_context(region_context)
         raw_region_evidence = _raw_region_evidence(region_context)
         payload = {
@@ -295,12 +291,12 @@ class RecordingRuntimeAgent:
             )
 
         failed_page = await _page_state(page)
-        failed_snapshot = (
-            await _safe_page_snapshot(page, region_scope=region_scope)
-            if region_scope
-            else await _safe_page_snapshot(page)
+        failed_snapshot = await _capture_page_snapshot(page, region_scope=region_scope)
+        compact_failed_snapshot = _compact_snapshot_for_runtime(
+            failed_snapshot,
+            instruction,
+            region_scope=region_scope or None,
         )
-        compact_failed_snapshot = _compact_snapshot(failed_snapshot, instruction, region_scope=region_scope or None)
         repair_snapshot = compact_failed_snapshot
         first_error = str(first_result.get("error") or "recording command failed")
         first_error_type = str(first_result.get("error_type") or "").strip()
@@ -2212,13 +2208,54 @@ def _build_locator_stability_metadata(
 async def _safe_page_snapshot(page: Any, region_scope: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     try:
         if region_scope:
-            return await build_page_snapshot(page, build_frame_path, region_scope=region_scope)
+            try:
+                return await build_page_snapshot(page, build_frame_path, region_scope=region_scope)
+            except TypeError as exc:
+                if "region_scope" not in str(exc):
+                    raise
+                payload = await build_page_snapshot(page, build_frame_path)
+                if isinstance(payload, dict):
+                    payload.setdefault("region_scope", dict(region_scope))
+                return payload
         return await build_page_snapshot(page, build_frame_path)
     except Exception:
         payload = {"url": getattr(page, "url", ""), "title": "", "frames": []}
         if region_scope:
             payload["region_scope"] = dict(region_scope)
         return payload
+
+
+async def _capture_page_snapshot(page: Any, *, region_scope: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    if not region_scope:
+        return await _safe_page_snapshot(page)
+    try:
+        return await _safe_page_snapshot(page, region_scope=region_scope)
+    except TypeError as exc:
+        if "region_scope" not in str(exc):
+            raise
+        snapshot = await _safe_page_snapshot(page)
+        if isinstance(snapshot, dict):
+            snapshot.setdefault("region_scope", dict(region_scope))
+        return snapshot
+
+
+def _compact_snapshot_for_runtime(
+    snapshot: Dict[str, Any],
+    instruction: str,
+    *,
+    region_scope: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    if not region_scope:
+        return _compact_snapshot(snapshot, instruction)
+    try:
+        return _compact_snapshot(snapshot, instruction, region_scope=region_scope)
+    except TypeError as exc:
+        if "region_scope" not in str(exc):
+            raise
+        compact = _compact_snapshot(snapshot, instruction)
+        if isinstance(compact, dict):
+            compact.setdefault("region_scope", dict(region_scope))
+        return compact
 
 
 def _region_scope_from_context(region_context: Optional[Dict[str, Any]]) -> Dict[str, Any]:

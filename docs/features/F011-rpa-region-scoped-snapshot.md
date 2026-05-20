@@ -2,10 +2,10 @@
 doc_kind: feature
 id: F011
 title: RPA Region-Scoped Snapshot
-status: active
+status: ready_for_review
 feature_ids: [F011]
 created: 2026-05-19
-updated: 2026-05-19
+updated: 2026-05-20
 specs:
   - docs/superpowers/specs/2026-05-19-rpa-region-scoped-snapshot-design.md
 plans:
@@ -39,7 +39,7 @@ evidence:
 
 ## Current Status
 
-Active implementation slice. RegionScope conversion, region-prioritized raw snapshot capture, scoped compression, RecordingRuntimeAgent planner wiring, and trace scope evidence are implemented. Final readiness remains conditional on environment-complete verification because this worktree is missing `langchain_openai` and frontend `node_modules`.
+Ready for review / readiness pass. RegionScope conversion, region-prioritized raw snapshot capture, scoped compression, RecordingRuntimeAgent planner wiring, and trace scope evidence are implemented. Backend F011 verification passes in the provisioned Python 3.12 environment, F011 frontend region-selection tests pass after installing worktree dependencies, production frontend build passes, and the user has manually validated the local service flow. Remaining failures are pre-existing project-level frontend type debt / npm audit debt, not F011 scoped snapshot blockers.
 
 ## Links
 
@@ -77,4 +77,4 @@ Active implementation slice. RegionScope conversion, region-prioritized raw snap
 
 ## Next Step
 
-Resolve local verification environment gaps (`langchain_openai`, frontend dependencies) or rerun the blocked route/default-planner/frontend checks in a provisioned environment before marking F011 ready.
+Open review against upstream `master`. Keep the strict-mode locator repair issue as a separate follow-up because it belongs to runtime repair/locator disambiguation, not region-scoped snapshot capture or compression.

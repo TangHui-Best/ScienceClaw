@@ -611,6 +611,9 @@ async def test_recording_runtime_agent_uses_ordinal_overlay_without_planner(monk
 
 def test_backend_rpa_package_import_is_lazy():
     module = importlib.import_module("backend.rpa")
+    for exported_name in module.__all__:
+        module.__dict__.pop(exported_name, None)
+    module = importlib.reload(module)
 
     assert "rpa_manager" not in module.__dict__
     assert "RPASession" not in module.__dict__
@@ -875,21 +878,30 @@ def test_recording_runtime_agent_does_not_use_full_page_ordinal_overlay_with_reg
 
 def test_recording_runtime_agent_uses_region_scoped_snapshot_for_region_planner(monkeypatch):
     async def run_test():
-        async def fake_snapshot(_page):
+        async def fake_snapshot(_page, region_scope=None):
             return {"url": "https://example.test/start", "title": "Example"}
 
-        def fake_compact_snapshot(_snapshot, _instruction):
+        def fake_compact_snapshot(_snapshot, _instruction, region_scope=None):
+            assert region_scope["region_id"] == "region-1"
             return {
+                "mode": "region_scoped_snapshot",
                 "url": "https://example.test/start",
                 "title": "Example",
-                "actionable_nodes": [{"text": "Full page action"}],
-                "frames": [{"frame_hint": "main"}],
-                "table_views": [{"title": "Full table"}],
-                "detail_views": [{"title": "Full detail"}],
-                "form_views": [{"title": "Full form"}],
-                "expanded_regions": [{"region_id": "full-region"}],
-                "sampled_regions": [{"region_id": "sample-region"}],
-                "region_catalogue": [{"region_id": "catalogue-region"}],
+                "region_scope": region_scope,
+                "page_context": {"url": "https://example.test/start", "title": "Example"},
+                "expanded_regions": [
+                    {
+                        "kind": "text_region",
+                        "title": "region-1",
+                        "summary": "Order A | $10",
+                        "evidence": {
+                            "texts": [
+                                {"text": "Order A"},
+                                {"text": "$10"},
+                            ]
+                        },
+                    }
+                ],
             }
 
         planner_calls = []
@@ -923,38 +935,32 @@ def test_recording_runtime_agent_uses_region_scoped_snapshot_for_region_planner(
         assert result.success is True
         payload = planner_calls[0]
         snapshot = payload["snapshot"]
-        assert payload["context_scope"] == "selected_region"
-        assert payload["region_context"]["region_id"] == "region-1"
-        assert snapshot["mode"] == "selected_region_snapshot"
-        assert snapshot["selected_region"]["local_text"] == ["Order A", "$10"]
-        assert snapshot["detail_views"][0]["source"] == "selected_region.local_text"
+        assert "context_scope" not in payload
+        assert "region_context" not in payload
+        assert snapshot["mode"] == "region_scoped_snapshot"
+        assert snapshot["region_scope"]["region_id"] == "region-1"
+        assert snapshot["expanded_regions"][0]["summary"] == "Order A | $10"
         assert snapshot["url"] == "https://example.test/start"
         assert payload["runtime_results"] == runtime_results
-        for key in (
-            "actionable_nodes",
-            "frames",
-            "table_views",
-            "form_views",
-            "expanded_regions",
-            "sampled_regions",
-            "region_catalogue",
-        ):
-            assert key not in snapshot
 
     asyncio.run(run_test())
 
 
 def test_recording_runtime_agent_region_repair_payload_excludes_full_page_snapshot(monkeypatch):
     async def run_test():
-        async def fake_snapshot(_page):
+        async def fake_snapshot(_page, region_scope=None):
             return {"url": "https://example.test/start", "title": "Example"}
 
-        def fake_compact_snapshot(_snapshot, _instruction):
+        def fake_compact_snapshot(_snapshot, _instruction, region_scope=None):
+            assert region_scope["region_id"] == "region-1"
             return {
+                "mode": "region_scoped_snapshot",
                 "url": "https://example.test/start",
                 "title": "Example",
-                "actionable_nodes": [{"text": "Full page action"}],
-                "frames": [{"frame_hint": "main"}],
+                "region_scope": region_scope,
+                "expanded_regions": [
+                    {"title": "region-1", "summary": "Order A | $10", "evidence": {"texts": [{"text": "Order A"}]}}
+                ],
             }
 
         planner_calls = []
@@ -998,12 +1004,12 @@ def test_recording_runtime_agent_region_repair_payload_excludes_full_page_snapsh
         assert result.success is True
         assert len(planner_calls) == 2
         repair_payload = planner_calls[1]
-        assert repair_payload["context_scope"] == "selected_region"
-        assert repair_payload["snapshot"]["mode"] == "selected_region_snapshot"
-        assert repair_payload["repair"]["snapshot_after_failure"]["mode"] == "selected_region_snapshot"
+        assert "context_scope" not in repair_payload
+        assert "region_context" not in repair_payload
+        assert repair_payload["snapshot"]["mode"] == "region_scoped_snapshot"
+        assert repair_payload["repair"]["snapshot_after_failure"]["mode"] == "region_scoped_snapshot"
         assert repair_payload["repair"]["page_after_failure"]["url"] == "https://example.test/start"
-        assert "actionable_nodes" not in repair_payload["repair"]["snapshot_after_failure"]
-        assert "frames" not in repair_payload["repair"]["snapshot_after_failure"]
+        assert repair_payload["repair"]["snapshot_after_failure"]["region_scope"]["region_id"] == "region-1"
 
     asyncio.run(run_test())
 
@@ -1224,15 +1230,33 @@ def test_recording_runtime_agent_accepts_planner_selected_region_extract_field(m
     async def run_test():
         captured_payloads = []
 
-        async def fake_build_page_snapshot(_page, _build_frame_path):
+        async def fake_snapshot(_page, region_scope=None):
             return {
                 "url": "https://example.test/orders",
                 "title": "Orders",
-                "frames": [],
-                "actionable_nodes": [],
-                "content_nodes": [],
-                "containers": [],
-                "detail_views": [],
+                "region_scope": region_scope,
+            }
+
+        def fake_compact_snapshot(_snapshot, _instruction, region_scope=None):
+            return {
+                "mode": "region_scoped_snapshot",
+                "url": "https://example.test/orders",
+                "title": "Orders",
+                "region_scope": region_scope,
+                "detail_views": [
+                    {
+                        "source": "region_scoped_snapshot",
+                        "section_title": "Selected region",
+                        "fields": [
+                            {
+                                "label": "order_number",
+                                "value": "Order No. AB-123",
+                                "visible": True,
+                                "value_kind": "text",
+                            }
+                        ],
+                    }
+                ],
             }
 
         async def planner(payload):
@@ -1242,7 +1266,7 @@ def test_recording_runtime_agent_accepts_planner_selected_region_extract_field(m
                 "action_type": "extract_snapshot",
                 "expected_effect": "extract",
                 "output_key": "order_number",
-                "source": "selected_region.local_text",
+                "source": "region_scoped_snapshot",
                 "fields": [
                     {
                         "label": "order_number",
@@ -1253,7 +1277,8 @@ def test_recording_runtime_agent_accepts_planner_selected_region_extract_field(m
                 ],
             }
 
-        monkeypatch.setattr("backend.rpa.recording_runtime_agent.build_page_snapshot", fake_build_page_snapshot)
+        monkeypatch.setattr("backend.rpa.recording_runtime_agent._safe_page_snapshot", fake_snapshot)
+        monkeypatch.setattr("backend.rpa.recording_runtime_agent._compact_snapshot", fake_compact_snapshot)
 
         result = await RecordingRuntimeAgent(planner=planner).run(
             page=_FakePage(),
@@ -1272,10 +1297,13 @@ def test_recording_runtime_agent_accepts_planner_selected_region_extract_field(m
 
         assert result.success is True
         assert result.output == {"order_number": "AB-123"}
-        assert result.trace.signals["extract_snapshot"]["source"] == "selected_region.local_text"
-        assert captured_payloads[0]["context_scope"] == "selected_region"
+        assert result.trace.signals["extract_snapshot"]["source"] == "region_scoped_snapshot"
+        assert "context_scope" not in captured_payloads[0]
+        assert "region_context" not in captured_payloads[0]
         selected_snapshot = captured_payloads[0]["snapshot"]
-        assert selected_snapshot["detail_views"][0]["source"] == "selected_region.local_text"
+        assert selected_snapshot["mode"] == "region_scoped_snapshot"
+        assert selected_snapshot["region_scope"]["region_id"] == "region-1"
+        assert selected_snapshot["detail_views"][0]["source"] == "region_scoped_snapshot"
         assert selected_snapshot["detail_views"][0]["fields"][0]["value"] == "Order No. AB-123"
 
     asyncio.run(run_test())
@@ -1285,15 +1313,33 @@ def test_recording_runtime_agent_reasks_planner_when_region_extract_snapshot_mis
     async def run_test():
         captured_payloads = []
 
-        async def fake_build_page_snapshot(_page, _build_frame_path):
+        async def fake_snapshot(_page, region_scope=None):
             return {
                 "url": "https://example.test/pricing",
                 "title": "Pricing",
-                "frames": [],
-                "actionable_nodes": [],
-                "content_nodes": [],
-                "containers": [],
-                "detail_views": [],
+                "region_scope": region_scope,
+            }
+
+        def fake_compact_snapshot(_snapshot, _instruction, region_scope=None):
+            return {
+                "mode": "region_scoped_snapshot",
+                "url": "https://example.test/pricing",
+                "title": "Pricing",
+                "region_scope": region_scope,
+                "detail_views": [
+                    {
+                        "source": "region_scoped_snapshot",
+                        "section_title": "Selected region",
+                        "fields": [
+                            {
+                                "label": "selected_value",
+                                "value": "Total 99 models",
+                                "visible": True,
+                                "value_kind": "text",
+                            }
+                        ],
+                    }
+                ],
             }
 
         async def planner(payload):
@@ -1304,14 +1350,14 @@ def test_recording_runtime_agent_reasks_planner_when_region_extract_snapshot_mis
                     "action_type": "extract_snapshot",
                     "expected_effect": "extract",
                     "output_key": "selected_value",
-                    "source": "selected_region.local_text",
+                    "source": "region_scoped_snapshot",
                 }
             return {
                 "description": "Extract selected region value",
                 "action_type": "extract_snapshot",
                 "expected_effect": "extract",
                 "output_key": "selected_value",
-                "source": "selected_region.local_text",
+                "source": "region_scoped_snapshot",
                 "fields": [
                     {
                         "label": "selected_value",
@@ -1322,7 +1368,8 @@ def test_recording_runtime_agent_reasks_planner_when_region_extract_snapshot_mis
                 ],
             }
 
-        monkeypatch.setattr("backend.rpa.recording_runtime_agent.build_page_snapshot", fake_build_page_snapshot)
+        monkeypatch.setattr("backend.rpa.recording_runtime_agent._safe_page_snapshot", fake_snapshot)
+        monkeypatch.setattr("backend.rpa.recording_runtime_agent._compact_snapshot", fake_compact_snapshot)
 
         result = await RecordingRuntimeAgent(planner=planner).run(
             page=_FakePage(),
@@ -1345,7 +1392,9 @@ def test_recording_runtime_agent_reasks_planner_when_region_extract_snapshot_mis
         validation = captured_payloads[1]["plan_validation"]
         assert validation["error"] == "extract_snapshot plan missing fields"
         assert validation["failed_plan"]["action_type"] == "extract_snapshot"
-        assert validation["snapshot"]["detail_views"][0]["source"] == "selected_region.local_text"
+        assert validation["snapshot"]["mode"] == "region_scoped_snapshot"
+        assert validation["snapshot"]["region_scope"]["region_id"] == "region-1"
+        assert validation["snapshot"]["detail_views"][0]["source"] == "region_scoped_snapshot"
 
     asyncio.run(run_test())
 
