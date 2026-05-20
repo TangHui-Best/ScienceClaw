@@ -90,9 +90,9 @@ const filteredCandidates = computed(() =>
 );
 const adoptedToolCount = computed(() => adoptedTools.value.length);
 const toolGroups = computed(() => [
-  { key: 'adopted', title: '采用', items: adoptedTools.value },
-  { key: 'not-adopted', title: '不采用', items: notAdoptedTools.value },
-  { key: 'filtered-candidates', title: '未生成/过滤候选', items: filteredCandidates.value },
+  { key: 'adopted', title: '采用', items: adoptedTools.value as any[] },
+  { key: 'not-adopted', title: '不采用', items: notAdoptedTools.value as any[] },
+  { key: 'filtered-candidates', title: '未生成/过滤候选', items: filteredCandidates.value as any[] },
 ]);
 const terminalLines = ref<{ html: string }[]>([]);
 type ActionModeKey = 'record' | AnalysisModeKey;
