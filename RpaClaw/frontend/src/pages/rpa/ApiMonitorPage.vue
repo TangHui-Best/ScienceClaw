@@ -74,23 +74,25 @@ let generationRefreshTimer: number | null = null;
 let analysisCleanup: (() => void) | null = null;
 const visibleGenerationCandidates = computed(() =>
   generationCandidates.value.filter((candidate) =>
-    candidate.status !== 'generated' && candidate.status !== 'confidence_rejected' && candidate.status !== 'intent_filtered',
+    candidate.status !== 'generated' && candidate.status !== 'confidence_rejected' && candidate.status !== 'intent_filtered' && candidate.status !== 'intent_review',
   ),
 );
 const hasActiveGenerationCandidates = computed(() =>
   generationCandidates.value.some((candidate) => ['pending', 'running', 'stale'].includes(candidate.status)),
 );
 const detectedItemCount = computed(() => tools.value.length + visibleGenerationCandidates.value.length);
-const adoptedTools = computed(() => tools.value.filter((tool) => tool.selected));
-const notAdoptedTools = computed(() => tools.value.filter((tool) => !tool.selected));
-const reserveCandidates = computed(() =>
-  generationCandidates.value.filter((c) => c.status === 'confidence_rejected' || c.status === 'intent_filtered'),
+const adoptedTools = computed(() => tools.value.filter((tool) => tool.selected && !tool.is_reserve));
+const notAdoptedTools = computed(() => tools.value.filter((tool) => !tool.selected || tool.is_reserve));
+const filteredCandidates = computed(() =>
+  generationCandidates.value.filter((c) =>
+    c.status === 'confidence_rejected' || c.status === 'intent_filtered' || c.status === 'intent_review',
+  ),
 );
 const adoptedToolCount = computed(() => adoptedTools.value.length);
 const toolGroups = computed(() => [
   { key: 'adopted', title: '采用', items: adoptedTools.value },
-  { key: 'reserve', title: '候补', items: reserveCandidates.value },
   { key: 'not-adopted', title: '不采用', items: notAdoptedTools.value },
+  { key: 'filtered-candidates', title: '未生成/过滤候选', items: filteredCandidates.value },
 ]);
 const terminalLines = ref<{ html: string }[]>([]);
 type ActionModeKey = 'record' | AnalysisModeKey;
@@ -624,6 +626,7 @@ const startAnalysis = async () => {
       case 'api_candidate_rate_limited':
       case 'api_candidate_confidence_rejected':
       case 'api_candidate_intent_filtered':
+      case 'api_candidate_intent_review':
       case 'api_tool_generation_failed':
         upsertGenerationCandidate({
           id: data.candidate_id,
@@ -644,6 +647,11 @@ const startAnalysis = async () => {
           capture_dom_digest: '',
           rejection_reason: data.rejection_reason,
           intent_filter_reason: data.intent_filter_reason,
+          intent_group: data.intent_group,
+          intent_reason: data.intent_reason,
+          intent_score: data.intent_score,
+          intent_rank: data.intent_rank,
+          intent_batch_id: data.intent_batch_id,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         });
@@ -728,7 +736,7 @@ const toggleRecording = async () => {
       await refreshGenerationState();
       addLog(
         'INFO',
-        `录制已停止。${adoptedTools.value.length} 个正式工具，${reserveCandidates.value.length} 个候补工具${visibleGenerationCandidates.value.length ? `，${visibleGenerationCandidates.value.length} 个仍在生成` : ''}。`,
+        `录制已停止。${adoptedTools.value.length} 个正式工具，${filteredCandidates.value.length} 个候补工具${visibleGenerationCandidates.value.length ? `，${visibleGenerationCandidates.value.length} 个仍在生成` : ''}。`,
       );
     } catch (err: any) {
       addLog('ERROR', `停止录制失败: ${err.message}`);
@@ -1064,6 +1072,7 @@ const getCandidateStatusLabel = (status: ApiToolGenerationCandidate['status']) =
   if (status === 'stale') return '等待更新';
   if (status === 'confidence_rejected') return '置信度不足';
   if (status === 'intent_filtered') return 'AI 过滤';
+  if (status === 'intent_review') return '需确认';
   return '已生成';
 };
 
@@ -1073,6 +1082,7 @@ const getCandidateStatusClass = (status: ApiToolGenerationCandidate['status']) =
   if (status === 'failed') return 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300';
   if (status === 'confidence_rejected') return 'border-orange-200 bg-orange-50 text-orange-700 dark:border-orange-500/30 dark:bg-orange-500/10 dark:text-orange-300';
   if (status === 'intent_filtered') return 'border-purple-200 bg-purple-50 text-purple-700 dark:border-purple-500/30 dark:bg-purple-500/10 dark:text-purple-300';
+  if (status === 'intent_review') return 'border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300';
   return 'border-slate-200 bg-slate-50 text-slate-600 dark:border-white/10 dark:bg-white/5 dark:text-slate-300';
 };
 
@@ -1410,9 +1420,9 @@ onBeforeUnmount(() => {
                   </div>
 
                   <!-- Extra details: Reason, Error, Buttons -->
-                  <div v-if="candidate.rejection_reason || candidate.intent_filter_reason || candidate.error || candidate.status === 'failed' || candidate.status === 'rate_limited' || candidate.status === 'confidence_rejected' || candidate.status === 'intent_filtered'" class="mt-2 flex flex-col gap-2 border-t border-slate-100 dark:border-white/10 pt-2">
-                    <div v-if="candidate.rejection_reason || candidate.intent_filter_reason" class="text-[10px] text-orange-600 dark:text-orange-400 break-words line-clamp-2" :title="candidate.rejection_reason || candidate.intent_filter_reason || undefined">
-                      {{ candidate.rejection_reason || candidate.intent_filter_reason }}
+                  <div v-if="candidate.rejection_reason || candidate.intent_filter_reason || candidate.intent_reason || candidate.error || candidate.status === 'failed' || candidate.status === 'rate_limited' || candidate.status === 'confidence_rejected' || candidate.status === 'intent_filtered'" class="mt-2 flex flex-col gap-2 border-t border-slate-100 dark:border-white/10 pt-2">
+                    <div v-if="candidate.rejection_reason || candidate.intent_filter_reason || candidate.intent_reason" class="text-[10px] text-orange-600 dark:text-orange-400 break-words line-clamp-2" :title="candidate.rejection_reason || candidate.intent_filter_reason || candidate.intent_reason || undefined">
+                      {{ candidate.rejection_reason || candidate.intent_filter_reason || candidate.intent_reason }}
                     </div>
                     <div v-else-if="candidate.error" class="text-[10px] text-red-500 break-words line-clamp-2" :title="candidate.error">
                       {{ candidate.error }}
@@ -1437,7 +1447,7 @@ onBeforeUnmount(() => {
                           重试
                         </button>
                         <button
-                          v-if="candidate.status === 'confidence_rejected' || candidate.status === 'intent_filtered'"
+                          v-if="candidate.status === 'confidence_rejected' || candidate.status === 'intent_filtered' || candidate.status === 'intent_review'"
                           class="rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 font-bold text-blue-600 transition hover:bg-blue-100 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-300"
                           @click="handleForceGenerate(candidate)"
                         >
@@ -1457,8 +1467,8 @@ onBeforeUnmount(() => {
                   <span>{{ group.title }}</span>
                   <span>{{ group.items.length }}</span>
                 </div>
-                <!-- Reserve candidates (confidence_rejected / intent_filtered) -->
-                <template v-if="group.key === 'reserve'">
+                <!-- Filtered candidates (confidence_rejected / intent_filtered / intent_review) -->
+                <template v-if="group.key === 'filtered-candidates'">
                   <div
                     v-for="candidate in group.items"
                     :key="candidate.id"
@@ -1475,8 +1485,8 @@ onBeforeUnmount(() => {
                         {{ getCandidateStatusLabel(candidate.status) }}
                       </span>
                     </div>
-                    <div v-if="candidate.rejection_reason || candidate.intent_filter_reason" class="mt-1.5 text-[10px] text-orange-600 dark:text-orange-400">
-                      {{ candidate.rejection_reason || candidate.intent_filter_reason }}
+                    <div v-if="candidate.rejection_reason || candidate.intent_filter_reason || candidate.intent_reason" class="mt-1.5 text-[10px] text-orange-600 dark:text-orange-400">
+                      {{ candidate.rejection_reason || candidate.intent_filter_reason || candidate.intent_reason }}
                     </div>
                     <div class="mt-2 flex items-center justify-between gap-3 text-[10px] text-[var(--text-tertiary)]">
                       <span>样本 {{ candidate.source_call_ids?.length || 0 }}</span>
@@ -1527,6 +1537,12 @@ onBeforeUnmount(() => {
                       class="shrink-0 rounded-md border border-red-300 bg-red-50 px-2 py-0.5 text-[10px] font-bold text-red-600 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-400"
                     >
                       YAML 无效
+                    </span>
+                    <span
+                      v-if="tool.is_reserve"
+                      class="shrink-0 rounded-md border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300"
+                    >
+                      候补
                     </span>
                     <ChevronDown :size="16" class="text-[var(--text-tertiary)] transition-transform" :class="expandedToolId === tool.id ? 'rotate-180' : ''" />
                   </div>
