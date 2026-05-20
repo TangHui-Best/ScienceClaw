@@ -67,7 +67,7 @@ API Monitor MCP 现在有两类相关问题：
    - dedup key 使用现有 `_candidate_dedup_key()` / `dedup_key()` 规则；
    - `method` 和 `url_pattern` 优先沿用 tool；
    - `sample_call_ids` 来自 `tool.source_calls` 中最多 5 个仍存在的 call；
-   - `capture_dom_context` 尽量复用当前页面扫描结果；扫描失败时使用空对象；
+   - `capture_dom_context` 必须来自已有生成上下文，不能在重新生成时从当前页面补采；
    - 补建后把 `tool.generation_candidate_id` 绑定到 candidate。
 4. 调用 `_generate_tool_for_candidate()` 重新生成。
 5. 重新生成必须覆盖原工具，而不是追加新工具。
@@ -80,6 +80,8 @@ API Monitor MCP 现在有两类相关问题：
 - 保留原 `tool.id`、`selected` 和用户可见卡片身份。
 
 重新生成属于用户显式操作，应跳过置信度/意图过滤，避免一个已采用工具因为当前过滤规则变化而无法重新生成。置信度可以重新计算并写回展示字段，但不阻断生成。
+
+重新生成不做 DOM 补采。DOM context 是捕获 API 时的事实上下文，如果重新生成时无法从 candidate 或历史生成上下文中找到 DOM，应返回明确错误，提示该工具缺失生成上下文。这比从当前页面临时扫描更可靠，因为当前页面可能已经与原 API 触发场景不一致。
 
 ### 2. YAML 生成禁用有效 basePath
 
@@ -123,7 +125,7 @@ paths:
 ```text
 POST /api-monitor/session/{session_id}/tools/{tool_id}/regenerate
   -> manager.regenerate_tool()
-  -> 查找/补建 ApiToolGenerationCandidate
+  -> 查找/补建 ApiToolGenerationCandidate（必须带历史 DOM context）
   -> candidate.tool_id = tool_id
   -> _generate_tool_for_candidate(skip_filter=True)
   -> 更新原 ApiToolDefinition
@@ -149,7 +151,7 @@ Runtime final URL:
 
 - 找不到 session 或 tool：保持现有 `ValueError`，route 转为 404。
 - tool 没有可用 source calls：返回明确错误，不生成空工具。
-- 补建 candidate 时 DOM 扫描失败：记录 warning，使用空 context 继续。
+- 重新生成时找不到历史 DOM context：返回明确错误，不从当前页面补采。
 - LLM 失败或限流：复用 `_generate_tool_for_candidate()` 的 failed/rate_limited 状态。
 - YAML 无效：仍保留工具并设置 `validation_status=invalid`、`validation_errors`，便于用户编辑或再次生成。
 
@@ -158,7 +160,8 @@ Runtime final URL:
 ### 单元测试
 
 - `regenerate_tool()` 使用已有 `generation_candidate_id` 时，调用主链路并更新原 tool。
-- 旧工具没有 `generation_candidate_id` 时，能从 `source_calls` 补建 candidate，并绑定回原 tool。
+- 旧工具没有 `generation_candidate_id` 但存在历史 DOM context 时，能从 `source_calls` 补建 candidate，并绑定回原 tool。
+- 重新生成时缺失历史 DOM context，返回明确错误，不调用当前页面 DOM 扫描。
 - 重新生成不新增重复 tool，原 `tool.id` 不变。
 - 重新生成显式跳过 confidence/intent 阻断，但刷新 confidence 展示字段。
 - `_generate_tool_for_candidate()` 优先按 `candidate.tool_id` 更新目标工具。
@@ -178,4 +181,3 @@ Runtime final URL:
 1. 先调整 prompt 和 OpenAPI parser 测试，确定 “path 就是 endpoint” 的 contract。
 2. 再改 regenerate candidate-first 链路。
 3. 最后补 runtime/publish 回归测试，确认最终 URL 不回退。
-
