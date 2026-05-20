@@ -34,7 +34,7 @@ $env:BACKEND_URL = "http://localhost:8000"
 npm run dev
 ```
 
-Default local/desktop mode opens as the bootstrap admin without login. Set `AUTH_PROVIDER=local` to enable login; the bootstrap admin is `admin` / `admin123` unless overridden.
+Default local/desktop mode opens as the bootstrap admin without login. Set `AUTH_PROVIDER=local` to enable login; configure bootstrap credentials through local environment settings.
 
 ## RPA/Agent 架构专项军规
 
@@ -101,6 +101,7 @@ RPA architecture docs:
 - **API paths**: kebab-case.
 - **Frontend API calls**: use `apiClient`; paths are relative to `/api/v1`, so do not prefix `/api/v1` again.
 - **i18n**: update both `src/locales/en.ts` and `src/locales/zh.ts` when touching UI strings.
+- **Sensitive information**: never commit credentials, tokens, API keys, private endpoints, personal data, or usable default passwords; use environment variables or private local configuration instead.
 - **Commits**: use prefixes such as `feat:`, `fix:`, `refactor:`, `chore:`.
 
 ## Common Pitfalls
