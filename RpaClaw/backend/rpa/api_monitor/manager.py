@@ -54,6 +54,8 @@ logger = logging.getLogger(__name__)
 
 PAGE_TIMEOUT_MS = 60_000
 DOM_CONTEXT_SCAN_TIMEOUT_S = 2.0
+INTENT_PRUNE_DEBOUNCE_SECONDS = 3.0
+INTENT_PRUNE_MAX_BATCH_SIZE = 8
 
 # ── Interactive element scanner ──────────────────────────────────────
 
@@ -483,6 +485,8 @@ class ApiMonitorSessionManager:
         self._generation_followups: Set[tuple[str, str]] = set()
         self._generation_semaphore = asyncio.Semaphore(2)
         self._analysis_event_sinks: Dict[str, Callable[[str, dict], None]] = {}
+        self._intent_prune_buffers: Dict[str, set[str]] = defaultdict(set)
+        self._intent_prune_tasks: Dict[str, asyncio.Task] = {}
 
     def _emit_analysis_event(self, session_id: str, event: str, data: dict) -> None:
         sink = self._analysis_event_sinks.get(session_id)
@@ -923,6 +927,7 @@ class ApiMonitorSessionManager:
             new_calls,
             model_config=model_config,
         )
+        await self._flush_intent_prune_buffer(session_id, model_config=model_config)
         self._last_recording_calls[session_id] = list(new_calls)
         session.status = "idle"
         session.updated_at = datetime.now()
@@ -2327,6 +2332,109 @@ class ApiMonitorSessionManager:
         candidate.updated_at = datetime.now()
         session.updated_at = datetime.now()
 
+    def _schedule_intent_prune_flush(
+        self,
+        session_id: str,
+        *,
+        model_config: Optional[Dict] = None,
+        immediate: bool = False,
+    ) -> None:
+        existing = self._intent_prune_tasks.get(session_id)
+        if existing and not existing.done():
+            if not immediate:
+                return
+            existing.cancel()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        task = loop.create_task(
+            self._delayed_intent_prune_flush(
+                session_id,
+                model_config=model_config,
+                delay=0 if immediate else INTENT_PRUNE_DEBOUNCE_SECONDS,
+            )
+        )
+        self._intent_prune_tasks[session_id] = task
+
+    async def _delayed_intent_prune_flush(
+        self,
+        session_id: str,
+        *,
+        model_config: Optional[Dict] = None,
+        delay: float = INTENT_PRUNE_DEBOUNCE_SECONDS,
+    ) -> None:
+        try:
+            if delay > 0:
+                await asyncio.sleep(delay)
+            await self._flush_intent_prune_buffer(session_id, model_config=model_config)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            current = asyncio.current_task()
+            if self._intent_prune_tasks.get(session_id) is current:
+                self._intent_prune_tasks.pop(session_id, None)
+
+    async def _flush_intent_prune_buffer(
+        self,
+        session_id: str,
+        *,
+        model_config: Optional[Dict] = None,
+    ) -> None:
+        session = self.sessions.get(session_id)
+        if session is None:
+            self._intent_prune_buffers.pop(session_id, None)
+            return
+        candidate_ids = list(self._intent_prune_buffers.pop(session_id, set()))
+        candidates = [
+            candidate
+            for candidate in session.generation_candidates
+            if candidate.id in candidate_ids and candidate.status in ("pending", "stale", "failed")
+        ]
+        if not candidates:
+            return
+        intent = (session.intent or "").strip()
+        if not intent:
+            for candidate in candidates:
+                self._enqueue_generation_candidate(session_id, candidate.id, model_config=model_config)
+            return
+
+        confidence_by_id = {}
+        prune_candidates = []
+        for candidate in candidates:
+            samples = self._calls_for_candidate(session, candidate)
+            if not samples:
+                continue
+            confidence_result = score_api_candidate(
+                samples,
+                action_context=candidate.step_metadata[-1] if candidate.step_metadata else None,
+            )
+            confidence_by_id[candidate.id] = confidence_result
+            if confidence_result.score < 80:
+                candidate.status = "confidence_rejected"
+                candidate.rejection_reason = summarize_rejection_reasons(confidence_result)
+                self._emit_analysis_event(session_id, "api_candidate_confidence_rejected", self._candidate_event_payload(candidate))
+                continue
+            prune_candidates.append(self._intent_prune_candidate(session, candidate, confidence_result))
+
+        if not prune_candidates:
+            return
+        prune_result = await prune_candidates_by_intent(
+            prune_candidates,
+            intent,
+            page_context=session.target_url or "",
+            model_config=model_config,
+        )
+        by_key = {item.candidate_key: item for item in prune_result.items}
+        for candidate in candidates:
+            item = by_key.get(self._candidate_key_for_prune(candidate))
+            if item is None:
+                continue
+            self._apply_prune_item_to_candidate(session, candidate, item, batch_id=prune_result.batch_id)
+            self._emit_analysis_event(session_id, "api_candidate_intent_pruned", self._candidate_event_payload(candidate))
+            if candidate.status not in ("intent_filtered", "intent_review"):
+                self._enqueue_generation_candidate(session_id, candidate.id, model_config=model_config)
+
     def _is_rate_limit_error(self, exc: Exception) -> bool:
         text = str(exc).lower()
         return "429" in text or "rate limit" in text or "too many requests" in text
@@ -2583,7 +2691,15 @@ class ApiMonitorSessionManager:
             self._emit_analysis_event(session_id, event_name, self._candidate_event_payload(candidate))
             changed.append(candidate)
             if candidate.status in ("pending", "stale", "failed"):
-                self._enqueue_generation_candidate(session_id, candidate.id, model_config=model_config)
+                if (session.intent or "").strip():
+                    self._intent_prune_buffers[session_id].add(candidate.id)
+                    self._schedule_intent_prune_flush(
+                        session_id,
+                        model_config=model_config,
+                        immediate=len(self._intent_prune_buffers[session_id]) >= INTENT_PRUNE_MAX_BATCH_SIZE,
+                    )
+                else:
+                    self._enqueue_generation_candidate(session_id, candidate.id, model_config=model_config)
         return changed
 
     def _store_evidence_calls(

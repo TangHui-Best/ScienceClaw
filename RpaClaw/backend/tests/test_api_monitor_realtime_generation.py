@@ -4,6 +4,8 @@ from datetime import datetime
 
 from unittest.mock import patch
 
+import pytest
+
 from backend.rpa.api_monitor.models import (
     ApiMonitorSession,
     ApiToolDefinition,
@@ -1027,3 +1029,38 @@ class TestBatchIntentPruning(unittest.IsolatedAsyncioTestCase):
         assert len(filtered) == 1
         assert filtered[0].intent_group == "bootstrap"
         assert filtered[0].intent_filter_reason == "菜单初始化接口。"
+
+
+# ── Realtime buffer tests ───────────────────────────────────────────────
+
+
+class TestRealtimeBuffer(unittest.IsolatedAsyncioTestCase):
+
+    async def test_process_captured_calls_buffers_high_confidence_candidates_when_intent_exists(self):
+        manager = ApiMonitorSessionManager()
+        session = ApiMonitorSession(
+            id="session_1",
+            user_id="user_1",
+            sandbox_session_id="sandbox_1",
+            intent="查询订单列表",
+        )
+        manager.sessions[session.id] = session
+        enqueued: list[str] = []
+        manager._enqueue_generation_candidate = lambda _sid, candidate_id, **_kw: enqueued.append(candidate_id)
+        manager._schedule_intent_prune_flush = lambda _sid, **_kw: None
+        call = _call(
+            "order_1",
+            method="POST",
+            path="/api/orders/search",
+        )
+        call.source_evidence = {
+            "action_window_matched": True,
+            "initiator_urls": ["https://example.com/app.js"],
+        }
+        call.response.body = '{"items":[{"orderNo":"A001"}]}'
+
+        changed = await manager._process_captured_calls_for_generation(session.id, [call], model_config=None)
+
+        assert len(changed) == 1
+        assert enqueued == []
+        assert manager._intent_prune_buffers[session.id] == {changed[0].id}
