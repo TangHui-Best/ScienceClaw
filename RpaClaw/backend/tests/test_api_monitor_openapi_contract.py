@@ -299,3 +299,23 @@ class TestOpenApiExecutionParts:
         assert parts["query"] == {}
         assert parts["body"] == {}
         assert parts["url"] == "https://api.example.com/api/test"
+
+
+class TestOpenApiPromptContract:
+    def test_tool_generation_prompt_omits_base_path(self):
+        from backend.rpa.api_monitor import llm_analyzer
+
+        assert "basePath:" not in llm_analyzer.TOOL_GEN_SYSTEM
+        assert "basePath should be extracted" not in llm_analyzer.TOOL_GEN_SYSTEM
+        assert "paths keys MUST be relative to basePath" not in llm_analyzer.TOOL_GEN_SYSTEM
+        assert "Do NOT output basePath" in llm_analyzer.TOOL_GEN_SYSTEM
+
+    def test_host_info_does_not_include_inferred_base_path(self):
+        from backend.rpa.api_monitor.llm_analyzer import _host_and_endpoint_path_for_prompt
+
+        host, endpoint_path = _host_and_endpoint_path_for_prompt(
+            "https://api.example.com/isales/ssdmdoc/services/api/query?keyword=a"
+        )
+
+        assert host == "api.example.com"
+        assert endpoint_path == "/isales/ssdmdoc/services/api/query"
