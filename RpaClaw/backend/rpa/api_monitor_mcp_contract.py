@@ -121,14 +121,6 @@ def _parse_openapi_2_spec(data: dict, yaml_str: str) -> ApiMonitorToolContract:
 
     base_path = str(data.get("basePath") or "").rstrip("/")
     path_url = next(iter(paths))
-    if _openapi_path_repeats_base_path(base_path, path_url):
-        return ApiMonitorToolContract(
-            valid=False,
-            yaml_definition=yaml_str,
-            validation_errors=[
-                "OpenAPI path must be relative to basePath; do not repeat basePath in paths"
-            ],
-        )
     full_path = base_path + path_url if base_path else path_url
     path_item = paths[path_url]
     if not isinstance(path_item, dict):
@@ -173,14 +165,6 @@ def _parse_openapi_2_spec(data: dict, yaml_str: str) -> ApiMonitorToolContract:
         openapi_parameters=parameters,
         raw_definition=data,
     )
-
-
-def _openapi_path_repeats_base_path(base_path: str, path_url: str) -> bool:
-    if not base_path or base_path == "/":
-        return False
-    normalized_base = "/" + base_path.strip("/")
-    normalized_path = "/" + str(path_url or "").strip("/")
-    return normalized_path == normalized_base or normalized_path.startswith(f"{normalized_base}/")
 
 
 def _parse_legacy_format(data: dict, yaml_str: str) -> ApiMonitorToolContract:

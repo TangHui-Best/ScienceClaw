@@ -110,7 +110,7 @@ class TestParseOpenApiGet:
         assert contract.name == "search_orders"
         assert contract.description == "Search orders by keyword"
         assert contract.method == "GET"
-        assert contract.url == "/orders"
+        assert contract.url == "/v1/orders"
         assert len(contract.openapi_parameters) == 2
         assert contract.openapi_parameters[0]["name"] == "keyword"
         assert contract.openapi_parameters[0]["in"] == "query"
@@ -150,7 +150,7 @@ class TestParseOpenApiPathParam:
     def test_path_param_in_url(self):
         contract = parse_api_monitor_tool_yaml(PATH_PARAM_YAML)
         assert contract.valid
-        assert contract.url == "/users/{user_id}"
+        assert contract.url == "/v1/users/{user_id}"
         assert contract.openapi_parameters[0]["in"] == "path"
 
 
@@ -175,14 +175,13 @@ class TestParseOpenApiValidation:
         contract = parse_api_monitor_tool_yaml(yaml_str)
         assert not contract.valid
 
-    def test_path_must_be_relative_to_base_path(self):
+    def test_path_key_is_endpoint_when_base_path_is_omitted(self):
         yaml_str = """\
 swagger: "2.0"
 info:
   title: query_contract_information
   version: "1.0"
 host: isales.huawei.com
-basePath: /isales/ssdmdoc/services/api/solr/contractsearch/query/contract/information
 paths:
   /isales/ssdmdoc/services/api/solr/contractsearch/query/contract/information:
     post:
@@ -192,11 +191,40 @@ paths:
           description: Success
 """
         contract = parse_api_monitor_tool_yaml(yaml_str)
-        assert not contract.valid
+
+        assert contract.valid
+        assert contract.method == "POST"
         assert (
-            "OpenAPI path must be relative to basePath; do not repeat basePath in paths"
-            in contract.validation_errors
+            contract.url
+            == "/isales/ssdmdoc/services/api/solr/contractsearch/query/contract/information"
         )
+        assert "basePath" not in contract.openapi_spec
+
+    def test_legacy_base_path_specs_still_parse(self):
+        yaml_str = """\
+swagger: "2.0"
+info:
+  title: get_user
+  version: "1.0"
+host: api.example.com
+basePath: /v1
+paths:
+  /users/{user_id}:
+    get:
+      operationId: get_user
+      parameters:
+        - name: user_id
+          in: path
+          type: string
+          required: true
+      responses:
+        "200":
+          description: Success
+"""
+        contract = parse_api_monitor_tool_yaml(yaml_str)
+
+        assert contract.valid
+        assert contract.url == "/v1/users/{user_id}"
 
 
 class TestLegacyFormatFallback:
