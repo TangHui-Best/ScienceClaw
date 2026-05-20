@@ -13,6 +13,15 @@ def _gen_id() -> str:
 
 ConfidenceLevel = Literal["high", "medium", "low"]
 
+IntentGroup = Literal[
+    "primary",
+    "supporting",
+    "adjacent",
+    "bootstrap",
+    "noise",
+    "uncertain",
+]
+
 
 # ── Captured request/response ────────────────────────────────────────
 
@@ -68,6 +77,10 @@ class ApiToolDefinition(BaseModel):
     confidence: ConfidenceLevel = "medium"
     score: int = 0
     selected: bool = False
+    is_reserve: bool = False
+    intent_group: Optional[IntentGroup] = None
+    intent_reason: Optional[str] = None
+    intent_score: Optional[int] = None
     confidence_reasons: List[str] = Field(default_factory=list)
     source_evidence: Dict = Field(default_factory=dict)
     validation_status: str = "valid"
@@ -89,6 +102,7 @@ GenerationStatus = Literal[
     "stale",
     "confidence_rejected",
     "intent_filtered",
+    "intent_review",
 ]
 
 
@@ -102,7 +116,12 @@ class ApiToolGenerationCandidate(BaseModel):
     sample_call_ids: List[str] = Field(default_factory=list)
     rejection_reason: Optional[str] = None
     intent_filter_reason: Optional[str] = None
-    status: GenerationStatus = "pending"  # pending, running, generated, failed, rate_limited, stale, confidence_rejected, intent_filtered
+    intent_group: Optional[IntentGroup] = None
+    intent_reason: Optional[str] = None
+    intent_score: Optional[int] = None
+    intent_rank: Optional[int] = None
+    intent_batch_id: Optional[str] = None
+    status: GenerationStatus = "pending"  # pending, running, generated, failed, rate_limited, stale, confidence_rejected, intent_filtered, intent_review
     tool_id: Optional[str] = None
     error: str = ""
     retry_after: Optional[datetime] = None

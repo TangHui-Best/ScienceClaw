@@ -516,6 +516,8 @@ async def update_tool_selection(
     for tool in session.tool_definitions:
         if tool.id == tool_id:
             tool.selected = request.selected
+            if request.selected:
+                tool.is_reserve = False
             from datetime import datetime
             tool.updated_at = datetime.now()
             return {"status": "success", "tool": tool.model_dump()}
