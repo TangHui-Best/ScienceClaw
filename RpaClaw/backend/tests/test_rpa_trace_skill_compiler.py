@@ -229,6 +229,99 @@ def test_navigation_trace_with_new_tab_id_activates_materialized_page_for_previe
     assert body.index(activation) < body.index(second_url)
 
 
+def test_iframe_trace_with_new_tab_id_does_not_materialize_page():
+    traces = [
+        RPAAcceptedTrace(
+            trace_id="click-open-panel",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            action="click",
+            description='click text("Open panel")',
+            locator_candidates=[
+                {"locator": {"method": "text", "value": "Open panel", "exact": True}, "selected": True},
+            ],
+            signals={"tab": {"tab_id": "tab-root"}},
+        ),
+        RPAAcceptedTrace(
+            trace_id="fill-iframe-field",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            action="fill",
+            description="fill iframe field",
+            value="contract-001",
+            frame_path=["iframe:nth-of-type(2)"],
+            locator_candidates=[
+                {"locator": {"method": "css", "value": "#c_layout input[name='contract']"}, "selected": True},
+            ],
+            signals={
+                "tab": {"tab_id": "tab-frame-drift"},
+                "reported_frame_path": ["iframe:nth-of-type(2)"],
+            },
+        ),
+    ]
+
+    script = TraceSkillCompiler().generate_script(traces, is_local=True)
+    body = _execute_body(script)
+
+    assert '_ensure_recorded_tab(tabs, current_page, kwargs, "tab-frame-drift")' not in body
+    assert "Materialize recorded tab tab-frame-drift" not in body
+    assert 'frame_scope = current_page.frame_locator("iframe:nth-of-type(2)")' in body
+    assert 'await frame_scope.locator("#c_layout input[name=\'contract\']").first.fill(' in body
+
+
+def test_iframe_frame_signal_with_new_tab_id_does_not_materialize_page():
+    traces = [
+        RPAAcceptedTrace(
+            trace_id="click-root",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            action="click",
+            locator_candidates=[
+                {"locator": {"method": "text", "value": "Open panel", "exact": True}, "selected": True},
+            ],
+            signals={"tab": {"tab_id": "tab-root"}},
+        ),
+        RPAAcceptedTrace(
+            trace_id="iframe-signal-only",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            action="fill",
+            value="contract-001",
+            locator_candidates=[
+                {"locator": {"method": "css", "value": "#c_layout input[name='contract']"}, "selected": True},
+            ],
+            signals={
+                "tab": {"tab_id": "tab-frame-drift"},
+                "frame": {"reported_frame_path": ["iframe:nth-of-type(2)"]},
+            },
+        ),
+    ]
+
+    body = _execute_body(TraceSkillCompiler().generate_script(traces, is_local=True))
+
+    assert '_ensure_recorded_tab(tabs, current_page, kwargs, "tab-frame-drift")' not in body
+    assert "Ignore frame-scoped tab drift tab-frame-drift" in body
+
+
+def test_popup_click_in_frame_still_compiles_to_expect_popup():
+    trace = RPAAcceptedTrace(
+        trace_id="iframe-popup",
+        trace_type=RPATraceType.MANUAL_ACTION,
+        action="click",
+        frame_path=["iframe:nth-of-type(2)"],
+        locator_candidates=[
+            {"locator": {"method": "text", "value": "Export all", "exact": True}, "selected": True},
+        ],
+        signals={
+            "tab": {"tab_id": "tab-root"},
+            "popup": {"source_tab_id": "tab-root", "target_tab_id": "tab-export"},
+        },
+    )
+
+    body = _execute_body(TraceSkillCompiler().generate_script([trace], is_local=True))
+
+    assert 'frame_scope = current_page.frame_locator("iframe:nth-of-type(2)")' in body
+    assert "async with current_page.expect_popup() as popup_info:" in body
+    assert "await frame_scope.get_by_text('Export all', exact=True).click()" in body
+    assert 'tabs["tab-export"] = new_page' in body
+
+
 def test_navigation_url_difference_without_tab_fact_does_not_create_new_page():
     traces = [
         RPAAcceptedTrace(

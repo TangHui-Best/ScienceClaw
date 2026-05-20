@@ -1505,6 +1505,35 @@ class RPASessionManager:
             "event_timestamp_ms": evt.get("timestamp"),
         }
 
+    @staticmethod
+    def _event_has_frame_scope_evidence(evt: Dict[str, Any]) -> bool:
+        frame_path = evt.get("frame_path")
+        if isinstance(frame_path, list) and frame_path:
+            return True
+        signals = evt.get("signals")
+        if not isinstance(signals, dict):
+            return False
+        reported_frame_path = signals.get("reported_frame_path")
+        if isinstance(reported_frame_path, list) and reported_frame_path:
+            return True
+        frame_signal = signals.get("frame")
+        if isinstance(frame_signal, dict):
+            for key in ("frame_path", "reported_frame_path"):
+                value = frame_signal.get(key)
+                if isinstance(value, list) and value:
+                    return True
+        return False
+
+    def _normalize_event_tab_context(self, session_id: str, evt: Dict[str, Any], session: RPASession) -> None:
+        event_tab_id = evt.get("tab_id")
+        if not event_tab_id or event_tab_id in self._tabs.get(session_id, {}):
+            return
+        if not session.active_tab_id:
+            return
+        if not self._event_has_frame_scope_evidence(evt):
+            return
+        evt["tab_id"] = session.active_tab_id
+
     def owns_sandbox_session(self, user_id: str, sandbox_session_id: str) -> bool:
         return any(
             session.user_id == user_id and session.sandbox_session_id == sandbox_session_id
@@ -1518,6 +1547,7 @@ class RPASessionManager:
         if session.status != "recording" or session.paused:
             return
 
+        self._normalize_event_tab_context(session_id, evt, session)
         event_tab_id = evt.get("tab_id")
         if event_tab_id and event_tab_id != session.active_tab_id:
             if event_tab_id in self._tabs.get(session_id, {}):

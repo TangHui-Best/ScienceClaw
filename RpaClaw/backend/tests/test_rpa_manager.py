@@ -743,6 +743,33 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
             ["iframe[name='workspace']", "iframe[title='editor']"],
         )
 
+    async def test_iframe_event_with_unknown_tab_id_inherits_active_tab(self):
+        page = _FakePage("https://example.com", "Example")
+        active_tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "fill",
+                "tab_id": "iframe-pseudo-tab",
+                "tag": "INPUT",
+                "timestamp": 1234567890,
+                "value": "contract-001",
+                "frame_path": ["iframe:nth-of-type(2)"],
+                "signals": {"reported_frame_path": ["iframe:nth-of-type(2)"]},
+                "locator": {"method": "css", "value": "#c_layout input[name='contract']"},
+            },
+        )
+
+        self.assertEqual(self.session.active_tab_id, active_tab_id)
+        self.assertEqual(self.session.steps[-1].tab_id, active_tab_id)
+        self.assertEqual(self.session.traces[-1].signals["tab"]["tab_id"], active_tab_id)
+        self.assertEqual(
+            self.session.traces[-1].signals["reported_frame_path"],
+            ["iframe:nth-of-type(2)"],
+        )
+        self.assertNotIn("iframe-pseudo-tab", self.manager._tabs[self.session.id])
+
     async def test_handle_event_persists_locator_candidates_and_validation(self):
         page = _FakePage("https://example.com", "Example")
         tab_id = await self.manager.register_page(self.session.id, page, make_active=True)

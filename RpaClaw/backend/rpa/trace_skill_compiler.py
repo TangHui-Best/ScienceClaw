@@ -499,12 +499,40 @@ class TraceSkillCompiler:
                 f"    current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, {tab_id_literal})",
             ], tab_id
 
+        if cls._looks_like_iframe_tab_drift(trace):
+            return [
+                "",
+                f"    # Ignore frame-scoped tab drift {tab_id}; iframe actions stay on current_page.",
+            ], current_tab_id
+
         known_tab_ids.add(tab_id)
         return [
             "",
             f"    # Materialize recorded tab {tab_id}; opener/popup evidence was not available.",
             f"    current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, {tab_id_literal})",
         ], tab_id
+
+    @staticmethod
+    def _looks_like_iframe_tab_drift(trace: RPAAcceptedTrace) -> bool:
+        action = str(trace.action or "")
+        if action in {"switch_tab", "close_tab"}:
+            return False
+        if _trace_signal(trace, "popup"):
+            return False
+        if trace.frame_path:
+            return True
+
+        signals = trace.signals if isinstance(trace.signals, dict) else {}
+        reported_frame_path = signals.get("reported_frame_path")
+        if isinstance(reported_frame_path, list) and reported_frame_path:
+            return True
+        frame_signal = signals.get("frame")
+        if isinstance(frame_signal, dict):
+            for key in ("frame_path", "reported_frame_path"):
+                value = frame_signal.get(key)
+                if isinstance(value, list) and value:
+                    return True
+        return False
 
     @staticmethod
     def _record_trace_tab_side_effects(
