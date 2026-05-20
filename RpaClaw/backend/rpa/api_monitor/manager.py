@@ -45,6 +45,7 @@ from .directed_trace import (
 
 from .confidence import dedup_key_for_tool, score_api_candidate, summarize_rejection_reasons
 from .intent_filter import filter_by_intent
+from .intent_pruner import IntentPruneCandidate, IntentPruneItem, prune_candidates_by_intent
 from .llm_analyzer import analyze_elements, generate_tool_definition
 from .models import ApiMonitorSession, ApiToolDefinition, ApiToolGenerationCandidate, CapturedApiCall, DirectedAnalysisTrace
 from .network_capture import NetworkCaptureEngine, dedup_key
@@ -501,6 +502,11 @@ class ApiMonitorSessionManager:
             "retry_after": candidate.retry_after.isoformat() if candidate.retry_after else None,
             "rejection_reason": candidate.rejection_reason,
             "intent_filter_reason": candidate.intent_filter_reason,
+            "intent_group": candidate.intent_group,
+            "intent_reason": candidate.intent_reason,
+            "intent_score": candidate.intent_score,
+            "intent_rank": candidate.intent_rank,
+            "intent_batch_id": candidate.intent_batch_id,
         }
 
     def register_screencast(self, session_id: str, controller: SessionScreencastController) -> None:
@@ -2229,6 +2235,77 @@ class ApiMonitorSessionManager:
         if calls:
             return calls
         return [call for call in session.captured_calls if self._candidate_dedup_key(call) == candidate.dedup_key][:5]
+
+    def _request_summary_for_prune(self, calls: list[CapturedApiCall]) -> str:
+        first = calls[0]
+        body = first.request.body or ""
+        return (body[:500] + "...") if len(body) > 500 else (body or "(无请求体)")
+
+    def _response_summary_for_prune(self, calls: list[CapturedApiCall]) -> str:
+        first = calls[0]
+        if not first.response:
+            return "(无响应)"
+        parts = [f"状态码: {first.response.status}"]
+        if first.response.content_type:
+            parts.append(f"Content-Type: {first.response.content_type}")
+        body = first.response.body or ""
+        if body:
+            parts.append("响应体: " + ((body[:800] + "...") if len(body) > 800 else body))
+        return "\n".join(parts)
+
+    def _step_summary_for_prune(self, candidate: ApiToolGenerationCandidate) -> str:
+        lines = []
+        for item in candidate.step_metadata[:3]:
+            lines.append(
+                f"{item.get('action', '')} {item.get('action_description', '')} "
+                f"on {item.get('page_url', '')}"
+            )
+        return "\n".join(line.strip() for line in lines if line.strip()) or "(无操作摘要)"
+
+    def _candidate_key_for_prune(self, candidate: ApiToolGenerationCandidate) -> str:
+        return candidate.dedup_key or f"{candidate.method.upper()} {candidate.url_pattern}"
+
+    def _intent_prune_candidate(
+        self,
+        session: ApiMonitorSession,
+        candidate: ApiToolGenerationCandidate,
+        confidence_result,
+    ) -> IntentPruneCandidate:
+        calls = self._calls_for_candidate(session, candidate)
+        return IntentPruneCandidate(
+            candidate_key=self._candidate_key_for_prune(candidate),
+            method=candidate.method,
+            url_pattern=candidate.url_pattern,
+            confidence_score=confidence_result.score,
+            confidence_reasons=confidence_result.reasons,
+            request_summary=self._request_summary_for_prune(calls),
+            response_summary=self._response_summary_for_prune(calls),
+            step_summary=self._step_summary_for_prune(candidate),
+            page_url=candidate.capture_page_url or session.target_url or "",
+            title=candidate.capture_title or "",
+        )
+
+    def _apply_prune_item_to_candidate(
+        self,
+        session: ApiMonitorSession,
+        candidate: ApiToolGenerationCandidate,
+        item: IntentPruneItem,
+        *,
+        batch_id: str,
+    ) -> None:
+        candidate.intent_group = item.intent_group
+        candidate.intent_score = item.intent_score
+        candidate.intent_rank = item.intent_rank
+        candidate.intent_reason = item.intent_reason
+        candidate.intent_batch_id = batch_id
+        if item.intent_group in ("adjacent", "bootstrap", "noise"):
+            candidate.status = "intent_filtered"
+            candidate.intent_filter_reason = item.intent_reason
+        elif item.intent_group == "uncertain":
+            candidate.status = "intent_review"
+            candidate.intent_filter_reason = item.intent_reason
+        candidate.updated_at = datetime.now()
+        session.updated_at = datetime.now()
 
     def _is_rate_limit_error(self, exc: Exception) -> bool:
         text = str(exc).lower()

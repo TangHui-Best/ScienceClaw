@@ -894,3 +894,72 @@ def test_retry_generation_candidate_resets_failed_candidate():
     assert result.error == ""
     assert result.retry_after is None
     assert enqueued == [candidate.id]
+
+
+# ── Intent prune helper tests ─────────────────────────────────────────────
+
+
+from backend.rpa.api_monitor.intent_pruner import IntentPruneItem
+from backend.rpa.api_monitor.manager import ApiMonitorSessionManager
+from backend.rpa.api_monitor.models import ApiMonitorSession, ApiToolGenerationCandidate
+
+
+def test_apply_prune_item_sets_filtered_candidate_state():
+    manager = ApiMonitorSessionManager()
+    session = ApiMonitorSession(id="session_1", user_id="user_1", sandbox_session_id="sandbox_1")
+    candidate = ApiToolGenerationCandidate(
+        session_id="session_1",
+        dedup_key="GET /api/menu/tree",
+        method="GET",
+        url_pattern="/api/menu/tree",
+    )
+    session.generation_candidates.append(candidate)
+    manager.sessions[session.id] = session
+
+    manager._apply_prune_item_to_candidate(
+        session,
+        candidate,
+        IntentPruneItem(
+            candidate_key="GET /api/menu/tree",
+            intent_group="bootstrap",
+            intent_score=20,
+            intent_rank=None,
+            intent_reason="菜单初始化接口。",
+        ),
+        batch_id="batch_1",
+    )
+
+    assert candidate.status == "intent_filtered"
+    assert candidate.intent_group == "bootstrap"
+    assert candidate.intent_filter_reason == "菜单初始化接口。"
+    assert candidate.intent_batch_id == "batch_1"
+
+
+def test_apply_prune_item_sets_uncertain_candidate_state():
+    manager = ApiMonitorSessionManager()
+    session = ApiMonitorSession(id="session_1", user_id="user_1", sandbox_session_id="sandbox_1")
+    candidate = ApiToolGenerationCandidate(
+        session_id="session_1",
+        dedup_key="GET /api/unknown",
+        method="GET",
+        url_pattern="/api/unknown",
+    )
+    session.generation_candidates.append(candidate)
+    manager.sessions[session.id] = session
+
+    manager._apply_prune_item_to_candidate(
+        session,
+        candidate,
+        IntentPruneItem(
+            candidate_key="GET /api/unknown",
+            intent_group="uncertain",
+            intent_score=0,
+            intent_rank=None,
+            intent_reason="证据不足。",
+        ),
+        batch_id="batch_2",
+    )
+
+    assert candidate.status == "intent_review"
+    assert candidate.intent_group == "uncertain"
+    assert candidate.intent_reason == "证据不足。"
