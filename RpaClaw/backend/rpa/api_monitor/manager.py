@@ -2543,16 +2543,44 @@ class ApiMonitorSessionManager:
         self.reconcile_generation_candidates(session_id, enqueue=False)
         return list(self._require_session(session_id).generation_candidates)
 
+    def _candidate_has_dom_context(self, candidate: ApiToolGenerationCandidate) -> bool:
+        return bool(candidate.capture_dom_context)
+
+    def _candidate_for_tool_regeneration(
+        self,
+        session: ApiMonitorSession,
+        tool: ApiToolDefinition,
+    ) -> ApiToolGenerationCandidate | None:
+        source_call_ids = set(tool.source_calls)
+        source_calls = [call for call in session.captured_calls if call.id in source_call_ids]
+        if not source_calls:
+            return None
+        dedup_key_value = self._candidate_dedup_key(source_calls[0])
+
+        if tool.generation_candidate_id:
+            candidate = next(
+                (item for item in session.generation_candidates if item.id == tool.generation_candidate_id),
+                None,
+            )
+            if candidate is not None and self._candidate_has_dom_context(candidate):
+                return candidate
+
+        return next(
+            (
+                item
+                for item in session.generation_candidates
+                if item.dedup_key == dedup_key_value and self._candidate_has_dom_context(item)
+            ),
+            None,
+        )
+
     async def regenerate_tool(
         self,
         session_id: str,
         tool_id: str,
         model_config: dict | None = None,
     ):
-        """Regenerate a tool's YAML from its source captured calls."""
-        from backend.rpa.api_monitor.llm_analyzer import generate_tool_definition
-        from backend.rpa.api_monitor_mcp_contract import parse_api_monitor_tool_yaml
-
+        """Regenerate a tool's YAML through the generation-candidate main path."""
         session = self.sessions.get(session_id)
         if not session:
             raise ValueError(f"Session {session_id} not found")
@@ -2565,34 +2593,35 @@ class ApiMonitorSessionManager:
         if not source_calls:
             raise ValueError(f"No source calls found for tool {tool_id}")
 
-        yaml_def = await generate_tool_definition(
-            method=tool.method,
-            url_pattern=tool.url_pattern,
-            samples=source_calls,
-            page_context=session.target_url or "",
-            dom_context="",
+        candidate = self._candidate_for_tool_regeneration(session, tool)
+        if candidate is None:
+            raise ValueError(f"Tool {tool_id} is missing generation candidate context")
+        if not self._candidate_has_dom_context(candidate):
+            raise ValueError(f"Tool {tool_id} is missing historical DOM context")
+
+        candidate.tool_id = tool.id
+        candidate.method = tool.method
+        candidate.url_pattern = tool.url_pattern
+        candidate.source_call_ids = list(dict.fromkeys([*candidate.source_call_ids, *tool.source_calls]))
+        for call_id in tool.source_calls:
+            if call_id not in candidate.sample_call_ids and len(candidate.sample_call_ids) < 5:
+                candidate.sample_call_ids.append(call_id)
+        tool.generation_candidate_id = candidate.id
+        candidate.status = "pending"
+        candidate.error = ""
+        candidate.retry_after = None
+        candidate.updated_at = datetime.now()
+        session.updated_at = datetime.now()
+
+        regenerated = await self._generate_tool_for_candidate(
+            session_id,
+            candidate.id,
             model_config=model_config,
+            skip_filter=True,
         )
-
-        contract = parse_api_monitor_tool_yaml(yaml_def)
-        name, description = _metadata_from_contract(
-            contract,
-            method=tool.method,
-            url_pattern=tool.url_pattern,
-        )
-
-        tool.yaml_definition = yaml_def
-        tool.name = name
-        tool.description = description
-        tool.validation_status = "valid" if contract.valid else "invalid"
-        tool.validation_errors = contract.validation_errors if contract.validation_errors else []
-        tool.updated_at = datetime.now()
-
-        logger.info(
-            "[ApiMonitor] Regenerated tool '%s' (valid=%s)",
-            name, contract.valid,
-        )
-        return tool
+        if regenerated is None:
+            raise ValueError(candidate.error or f"Failed to regenerate tool {tool_id}")
+        return regenerated
 
     def retry_generation_candidate(
         self,

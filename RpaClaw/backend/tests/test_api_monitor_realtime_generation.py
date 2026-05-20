@@ -716,6 +716,157 @@ class TestProcessCapturedCalls(unittest.IsolatedAsyncioTestCase):
         assert any(event["event"] == "analysis_complete" for event in events)
 
 
+class TestRegenerateTool(unittest.IsolatedAsyncioTestCase):
+    async def test_regenerate_tool_reuses_existing_candidate_context(self):
+        manager, session_id = _manager_with_session()
+        session = manager.sessions[session_id]
+        call = _call("call-1", path="/api/orders")
+        session.captured_calls.append(call)
+        candidate, _ = manager._upsert_generation_candidate(
+            session_id,
+            call,
+            dom_context={"forms": [{"action": "/api/orders", "inputs": [{"name": "keyword"}]}]},
+            page_url="https://example.com/app",
+            title="Orders",
+            dom_digest="digest-1",
+        )
+        tool = ApiToolDefinition(
+            id="tool-1",
+            session_id=session_id,
+            name="old_orders",
+            description="Old",
+            method="GET",
+            url_pattern="/api/orders",
+            yaml_definition="name: old_orders",
+            source_calls=["call-1"],
+            selected=False,
+            generation_candidate_id=candidate.id,
+        )
+        session.tool_definitions.append(tool)
+        candidate.tool_id = tool.id
+
+        async def fake_generate_tool_definition(**kwargs):
+            assert '"keyword"' in kwargs["dom_context"]
+            assert kwargs["page_context"] == "https://example.com/app"
+            return (
+                'swagger: "2.0"\n'
+                "info:\n"
+                "  title: list_orders\n"
+                '  version: "1.0"\n'
+                "host: api.example.com\n"
+                "paths:\n"
+                "  /api/orders:\n"
+                "    get:\n"
+                "      operationId: list_orders\n"
+                "      responses:\n"
+                '        "200":\n'
+                "          description: Success\n"
+            )
+
+        with patch(
+            "backend.rpa.api_monitor.manager.generate_tool_definition",
+            fake_generate_tool_definition,
+        ):
+            regenerated = await manager.regenerate_tool(session_id, tool.id)
+
+        assert regenerated is tool
+        assert regenerated.name == "list_orders"
+        assert regenerated.id == "tool-1"
+        assert regenerated.selected is False
+        assert candidate.status == "generated"
+
+    async def test_regenerate_tool_backfills_candidate_from_historical_candidate_context(self):
+        manager, session_id = _manager_with_session()
+        session = manager.sessions[session_id]
+        call = _call("call-1", path="/api/orders")
+        session.captured_calls.append(call)
+        historical_candidate = ApiToolGenerationCandidate(
+            session_id=session_id,
+            dedup_key=manager._candidate_dedup_key(call),
+            method="GET",
+            url_pattern="/api/orders",
+            source_call_ids=["call-1"],
+            sample_call_ids=["call-1"],
+            capture_dom_context={"forms": [{"action": "/api/orders", "inputs": [{"name": "keyword"}]}]},
+            capture_page_url="https://example.com/app",
+            capture_title="Orders",
+            capture_dom_digest="digest-1",
+            status="generated",
+        )
+        session.generation_candidates.append(historical_candidate)
+        tool = ApiToolDefinition(
+            id="tool-legacy",
+            session_id=session_id,
+            name="old_orders",
+            description="Old",
+            method="GET",
+            url_pattern="/api/orders",
+            yaml_definition="name: old_orders",
+            source_calls=["call-1"],
+            selected=True,
+            generation_candidate_id=None,
+        )
+        session.tool_definitions.append(tool)
+
+        async def fake_generate_tool_definition(**kwargs):
+            assert '"keyword"' in kwargs["dom_context"]
+            return (
+                'swagger: "2.0"\n'
+                "info:\n"
+                "  title: list_orders\n"
+                '  version: "1.0"\n'
+                "host: api.example.com\n"
+                "paths:\n"
+                "  /api/orders:\n"
+                "    get:\n"
+                "      operationId: list_orders\n"
+                "      responses:\n"
+                '        "200":\n'
+                "          description: Success\n"
+            )
+
+        with patch(
+            "backend.rpa.api_monitor.manager.generate_tool_definition",
+            fake_generate_tool_definition,
+        ):
+            regenerated = await manager.regenerate_tool(session_id, tool.id)
+
+        assert regenerated is tool
+        assert tool.generation_candidate_id == historical_candidate.id
+        assert historical_candidate.tool_id == "tool-legacy"
+        assert tool.selected is True
+        assert len(session.generation_candidates) == 1
+
+    async def test_regenerate_tool_rejects_missing_historical_dom_context(self):
+        manager, session_id = _manager_with_session()
+        session = manager.sessions[session_id]
+        call = _call("call-1", path="/api/orders")
+        session.captured_calls.append(call)
+        candidate, _ = manager._upsert_generation_candidate(session_id, call)
+        tool = ApiToolDefinition(
+            id="tool-1",
+            session_id=session_id,
+            name="old_orders",
+            description="Old",
+            method="GET",
+            url_pattern="/api/orders",
+            yaml_definition="name: old_orders",
+            source_calls=["call-1"],
+            generation_candidate_id=candidate.id,
+        )
+        session.tool_definitions.append(tool)
+
+        with patch.object(manager, "_capture_generation_dom_context") as capture_dom:
+            try:
+                await manager.regenerate_tool(session_id, tool.id)
+            except ValueError as exc:
+                assert "missing historical DOM context" in str(exc) or "missing generation candidate context" in str(exc)
+            else:
+                raise AssertionError("Expected missing DOM context error")
+
+        capture_dom.assert_not_called()
+
+
 # ── Retry generation candidate tests ───────────────────────────────────
 
 
