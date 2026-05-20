@@ -632,6 +632,14 @@ class ApiMonitorSessionManager:
         self._last_action_at.pop(session_id, None)
         self._stop_recording_tasks.pop(session_id, None)
         await self._stop_recording_drain_task(session_id)
+        self._intent_prune_buffers.pop(session_id, None)
+        prune_task = self._intent_prune_tasks.pop(session_id, None)
+        if prune_task and not prune_task.done():
+            prune_task.cancel()
+            try:
+                await prune_task
+            except asyncio.CancelledError:
+                pass
         self._last_recording_tools.pop(session_id, None)
         self._last_recording_calls.pop(session_id, None)
         # Clean up frame-to-page mapping for all pages in this session
@@ -2399,7 +2407,6 @@ class ApiMonitorSessionManager:
                 self._enqueue_generation_candidate(session_id, candidate.id, model_config=model_config)
             return
 
-        confidence_by_id = {}
         prune_candidates = []
         for candidate in candidates:
             samples = self._calls_for_candidate(session, candidate)
@@ -2409,7 +2416,6 @@ class ApiMonitorSessionManager:
                 samples,
                 action_context=candidate.step_metadata[-1] if candidate.step_metadata else None,
             )
-            confidence_by_id[candidate.id] = confidence_result
             if confidence_result.score < 80:
                 candidate.status = "confidence_rejected"
                 candidate.rejection_reason = summarize_rejection_reasons(confidence_result)
