@@ -1714,14 +1714,15 @@ class ApiMonitorSessionManager:
 
         tools: List[ApiToolDefinition] = []
 
+        # Phase 1: Score each group and collect high-confidence candidates
+        high_confidence: list[tuple[str, list[CapturedApiCall], object, ApiToolGenerationCandidate]] = []
+
         for key, group_calls in groups.items():
-            # Take up to 5 samples per group
             samples = group_calls[:5]
             first = samples[0]
             method = first.request.method
             url_pattern = first.url_pattern or first.request.url
 
-            # Round 1: Rule-based confidence scoring (before LLM generation)
             confidence_result = score_api_candidate(samples)
 
             if confidence_result.score < 80:
@@ -1737,43 +1738,58 @@ class ApiMonitorSessionManager:
                 )
                 continue
 
-            # Round 2: AI intent filter (only when intent is provided)
-            intent = session.intent
-            final_score = confidence_result.score
-            if intent and intent.strip():
-                try:
-                    intent_result = await filter_by_intent(
-                        samples, intent.strip(), confidence_result.reasons,
-                        model_config=model_config,
-                    )
-                    if not intent_result.relevant:
-                        final_score = confidence_result.score - 25
-                        candidate = _create_rejected_candidate(
-                            session_id, key, method, url_pattern, samples,
-                            confidence_result, dom_context=dom_context,
-                            page_url=session.target_url or "",
-                            status="intent_filtered",
-                            intent_filter_reason=intent_result.reason,
-                            adjusted_score=final_score,
-                        )
-                        session.generation_candidates.append(candidate)
-                        self._emit_analysis_event(
-                            session_id, "api_candidate_intent_filtered",
-                            {
-                                **self._candidate_event_payload(candidate),
-                                "score": final_score,
-                                "intent_filter_reason": intent_result.reason,
-                            },
-                        )
-                        continue
-                except Exception as exc:
-                    logger.warning("[ApiMonitor] Intent filter failed for %s: %s", key, exc)
+            candidate = _create_rejected_candidate(
+                session_id, key, method, url_pattern, samples,
+                confidence_result, dom_context=dom_context,
+                page_url=session.target_url or "",
+                status="pending",
+            )
+            candidate.rejection_reason = None
+            session.generation_candidates.append(candidate)
+            high_confidence.append((key, samples, confidence_result, candidate))
 
-            # Generate tool definition via LLM
+        # Phase 2: Batch intent prune all high-confidence candidates together
+        prune_by_key: dict[str, IntentPruneItem] = {}
+        intent = (session.intent or "").strip()
+        if intent and high_confidence:
+            prune_candidates = [
+                self._intent_prune_candidate(session, candidate, confidence_result)
+                for _key, _samples, confidence_result, candidate in high_confidence
+            ]
+            try:
+                prune_result = await prune_candidates_by_intent(
+                    prune_candidates,
+                    intent,
+                    page_context=session.target_url or "",
+                    model_config=model_config,
+                )
+                prune_by_key = {item.candidate_key: item for item in prune_result.items}
+                for _key, _samples, _confidence_result, candidate in high_confidence:
+                    item = prune_by_key.get(self._candidate_key_for_prune(candidate))
+                    if item:
+                        self._apply_prune_item_to_candidate(
+                            session,
+                            candidate,
+                            item,
+                            batch_id=prune_result.batch_id,
+                        )
+                        self._emit_analysis_event(
+                            session_id,
+                            "api_candidate_intent_pruned",
+                            self._candidate_event_payload(candidate),
+                        )
+            except Exception as exc:
+                logger.warning("[ApiMonitor] Batch intent prune failed for session %s: %s", session_id, exc)
+
+        # Phase 3: Generate tools only for candidates that passed pruning
+        for _key, samples, confidence_result, candidate in high_confidence:
+            if candidate.status in ("intent_filtered", "intent_review"):
+                continue
+
             try:
                 yaml_def = await generate_tool_definition(
-                    method=method,
-                    url_pattern=url_pattern,
+                    method=candidate.method,
+                    url_pattern=candidate.url_pattern,
                     samples=samples,
                     page_context=session.target_url or "",
                     dom_context=dom_context,
@@ -1785,8 +1801,8 @@ class ApiMonitorSessionManager:
                 contract = parse_api_monitor_tool_yaml(yaml_def)
                 name, description = _metadata_from_contract(
                     contract,
-                    method=method,
-                    url_pattern=url_pattern,
+                    method=candidate.method,
+                    url_pattern=candidate.url_pattern,
                 )
                 validation_status = "valid" if contract.valid else "invalid"
                 validation_errors = contract.validation_errors if contract.validation_errors else []
@@ -1795,8 +1811,8 @@ class ApiMonitorSessionManager:
                     session_id=session_id,
                     name=name,
                     description=description,
-                    method=method,
-                    url_pattern=url_pattern,
+                    method=candidate.method,
+                    url_pattern=candidate.url_pattern,
                     yaml_definition=yaml_def,
                     source_calls=[c.id for c in samples],
                     source=source,
@@ -1814,13 +1830,13 @@ class ApiMonitorSessionManager:
 
                 logger.info(
                     "[ApiMonitor] Generated tool '%s' for %s %s (score: %d)",
-                    name, method, url_pattern, confidence_result.score,
+                    name, candidate.method, candidate.url_pattern, confidence_result.score,
                 )
 
             except Exception as exc:
                 logger.warning(
                     "[ApiMonitor] Failed to generate tool for %s: %s",
-                    key, exc,
+                    candidate.url_pattern, exc,
                 )
 
         self._dedup_session_tools(session_id, tools)

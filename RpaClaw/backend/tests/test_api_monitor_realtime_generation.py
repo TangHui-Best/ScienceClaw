@@ -963,3 +963,67 @@ def test_apply_prune_item_sets_uncertain_candidate_state():
     assert candidate.status == "intent_review"
     assert candidate.intent_group == "uncertain"
     assert candidate.intent_reason == "证据不足。"
+
+
+# ── Batch intent pruning integration test ─────────────────────────────────
+
+
+from backend.rpa.api_monitor.intent_pruner import IntentPruneResult
+
+
+class TestBatchIntentPruning(unittest.IsolatedAsyncioTestCase):
+
+    async def test_generate_tools_from_calls_uses_batch_intent_pruning(self):
+        manager = ApiMonitorSessionManager()
+        session = ApiMonitorSession(
+            id="session_1",
+            user_id="user_1",
+            sandbox_session_id="sandbox_1",
+            intent="查询订单列表",
+            target_url="https://example.com/orders",
+        )
+        manager.sessions[session.id] = session
+        order_call = _call(
+            "order_1",
+            method="POST",
+            path="/api/orders/search",
+        )
+        order_call.source_evidence = {
+            "action_window_matched": True,
+            "initiator_urls": ["https://example.com/app.js"],
+        }
+        order_call.response.body = '{"items":[{"orderNo":"A001"}]}'
+        menu_call = _call(
+            "menu_1",
+            method="GET",
+            path="/api/menu/tree",
+        )
+        menu_call.source_evidence = {
+            "action_window_matched": True,
+            "initiator_urls": ["https://example.com/app.js"],
+        }
+        menu_call.response.body = '{"menus":[]}'
+
+        async def fake_prune(candidates, intent, page_context="", model_config=None):
+            assert intent == "查询订单列表"
+            return IntentPruneResult(
+                batch_id="batch_1",
+                items=[
+                    IntentPruneItem(candidates[0].candidate_key, "primary", 95, 1, "订单查询主接口。"),
+                    IntentPruneItem(candidates[1].candidate_key, "bootstrap", 20, None, "菜单初始化接口。"),
+                ],
+            )
+
+        async def fake_generate_tool_definition(**kwargs):
+            return 'swagger: "2.0"\ninfo:\n  title: list_orders\n  version: "1.0"\npaths:\n  /api/orders/search:\n    post:\n      operationId: list_orders\n      responses:\n        "200":\n          description: OK\n'
+
+        with patch("backend.rpa.api_monitor.manager.prune_candidates_by_intent", side_effect=fake_prune):
+            with patch("backend.rpa.api_monitor.manager.generate_tool_definition", side_effect=fake_generate_tool_definition):
+                tools = await manager._generate_tools_from_calls(session.id, [order_call, menu_call], model_config=None)
+
+        assert [tool.url_pattern for tool in tools] == [order_call.url_pattern or order_call.request.url]
+        assert session.tool_definitions[0].selected is True
+        filtered = [candidate for candidate in session.generation_candidates if candidate.status == "intent_filtered"]
+        assert len(filtered) == 1
+        assert filtered[0].intent_group == "bootstrap"
+        assert filtered[0].intent_filter_reason == "菜单初始化接口。"
