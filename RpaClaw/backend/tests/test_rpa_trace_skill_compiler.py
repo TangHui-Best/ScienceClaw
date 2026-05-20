@@ -67,6 +67,50 @@ class _FakeTraceContext:
         return page
 
 
+class _FakeFrameTarget:
+    def __init__(self, scope: "_FakeFrameScope", selector: str) -> None:
+        self.scope = scope
+        self.selector = selector
+        self.first = self
+
+    async def wait_for(self, state: str = "", timeout: int = 0) -> None:
+        self.scope.probes.append((self.selector, state, timeout))
+        if not self.scope.has_target:
+            raise TimeoutError(f"{self.scope.selector} missing {self.selector}")
+
+    async def fill(self, value: str) -> None:
+        self.scope.fills.append((self.selector, value))
+
+
+class _FakeFrameScope:
+    def __init__(self, page: "_FakeFrameResolverPage", selector: str, has_target: bool) -> None:
+        self.page = page
+        self.selector = selector
+        self.has_target = has_target
+        self.probes = []
+        self.fills = []
+
+    def frame_locator(self, selector: str) -> "_FakeFrameScope":
+        return self.page.frame_locator(selector)
+
+    def locator(self, selector: str) -> _FakeFrameTarget:
+        return _FakeFrameTarget(self, selector)
+
+
+class _FakeFrameResolverPage(_FakeTracePage):
+    def __init__(self, target_by_selector: dict[str, bool]) -> None:
+        super().__init__("resolver-page")
+        self.target_by_selector = target_by_selector
+        self.frame_selectors = []
+        self.frame_scopes: dict[str, _FakeFrameScope] = {}
+
+    def frame_locator(self, selector: str) -> _FakeFrameScope:
+        self.frame_selectors.append(selector)
+        scope = _FakeFrameScope(self, selector, self.target_by_selector.get(selector, False))
+        self.frame_scopes[selector] = scope
+        return scope
+
+
 def test_compiler_renders_navigation_trace():
     script = TraceSkillCompiler().generate_script(
         [
@@ -263,8 +307,128 @@ def test_iframe_trace_with_new_tab_id_does_not_materialize_page():
 
     assert '_ensure_recorded_tab(tabs, current_page, kwargs, "tab-frame-drift")' not in body
     assert "Materialize recorded tab tab-frame-drift" not in body
-    assert 'frame_scope = current_page.frame_locator("iframe:nth-of-type(2)")' in body
+    assert "frame_scope = await _resolve_frame_scope(" in body
+    assert '["iframe:nth-of-type(2)"]' in body
     assert 'await frame_scope.locator("#c_layout input[name=\'contract\']").first.fill(' in body
+
+
+def test_iframe_trace_prefers_reported_frame_path_candidates_before_nth_fallback():
+    trace = RPAAcceptedTrace(
+        trace_id="fill-iframe-field",
+        trace_type=RPATraceType.MANUAL_ACTION,
+        action="fill",
+        value="contract-001",
+        frame_path=["iframe:nth-of-type(2)"],
+        locator_candidates=[
+            {"locator": {"method": "css", "value": "#c_layout input[name='contract']"}, "selected": True},
+        ],
+        signals={
+            "reported_frame_path": [
+                'iframe[src="https://kweweb-b4.example.com/pr/shoppingcar/index.html?sourceSystemAppId=abc#cart"]'
+            ],
+        },
+    )
+
+    body = _execute_body(TraceSkillCompiler().generate_script([trace], is_local=True))
+
+    path_candidate = '["iframe[src*=\'shoppingcar/index.html\']"]'
+    exact_candidate = (
+        '["iframe[src=\\"https://kweweb-b4.example.com/pr/shoppingcar/index.html'
+        '?sourceSystemAppId=abc#cart\\"]"]'
+    )
+    nth_fallback = '["iframe:nth-of-type(2)"]'
+    assert "frame_scope = await _resolve_frame_scope(" in body
+    assert path_candidate in body
+    assert exact_candidate in body
+    assert nth_fallback in body
+    assert body.index(path_candidate) < body.index(exact_candidate) < body.index(nth_fallback)
+
+
+def test_iframe_frame_signal_reported_path_is_used_when_trace_frame_path_is_empty():
+    trace = RPAAcceptedTrace(
+        trace_id="iframe-signal-only",
+        trace_type=RPATraceType.MANUAL_ACTION,
+        action="fill",
+        value="contract-001",
+        locator_candidates=[
+            {"locator": {"method": "css", "value": "#c_layout input[name='contract']"}, "selected": True},
+        ],
+        signals={
+            "frame": {"reported_frame_path": ["iframe[title='cart']"]},
+        },
+    )
+
+    body = _execute_body(TraceSkillCompiler().generate_script([trace], is_local=True))
+
+    assert "frame_scope = await _resolve_frame_scope(" in body
+    assert '["iframe[title=\'cart\']"]' in body
+    assert 'await frame_scope.locator("#c_layout input[name=\'contract\']").first.fill(' in body
+
+
+def test_iframe_resolver_falls_back_when_reported_candidate_lacks_target_locator():
+    trace = RPAAcceptedTrace(
+        trace_id="fill-iframe-field",
+        trace_type=RPATraceType.MANUAL_ACTION,
+        action="fill",
+        value="contract-001",
+        frame_path=["iframe:nth-of-type(2)"],
+        locator_candidates=[
+            {"locator": {"method": "css", "value": "#target"}, "selected": True},
+        ],
+        signals={
+            "reported_frame_path": ["iframe[title='wrong-frame']"],
+        },
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    execute_skill = _load_execute_skill(script)
+    page = _FakeFrameResolverPage(
+        {
+            "iframe[title='wrong-frame']": False,
+            "iframe:nth-of-type(2)": True,
+        }
+    )
+
+    asyncio.run(execute_skill(page))
+
+    assert page.frame_selectors == ["iframe[title='wrong-frame']", "iframe:nth-of-type(2)"]
+    assert page.frame_scopes["iframe[title='wrong-frame']"].probes == [("#target", "attached", 2000)]
+    assert page.frame_scopes["iframe:nth-of-type(2)"].fills == [("#target", "contract-001")]
+
+
+def test_legacy_iframe_trace_uses_resolver_with_recorded_frame_path_only():
+    trace = RPAAcceptedTrace(
+        trace_id="legacy-iframe-fill",
+        trace_type=RPATraceType.MANUAL_ACTION,
+        action="fill",
+        value="contract-001",
+        frame_path=["iframe:nth-of-type(2)"],
+        locator_candidates=[
+            {"locator": {"method": "css", "value": "#target"}, "selected": True},
+        ],
+    )
+
+    body = _execute_body(TraceSkillCompiler().generate_script([trace], is_local=True))
+
+    assert "frame_scope = await _resolve_frame_scope(" in body
+    assert '["iframe:nth-of-type(2)"]' in body
+
+
+def test_trace_without_iframe_evidence_does_not_call_frame_resolver():
+    trace = RPAAcceptedTrace(
+        trace_id="plain-fill",
+        trace_type=RPATraceType.MANUAL_ACTION,
+        action="fill",
+        value="contract-001",
+        locator_candidates=[
+            {"locator": {"method": "css", "value": "#target"}, "selected": True},
+        ],
+    )
+
+    body = _execute_body(TraceSkillCompiler().generate_script([trace], is_local=True))
+
+    assert "_resolve_frame_scope(" not in body
+    assert "await current_page.locator('#target').first.fill('contract-001')" in body
 
 
 def test_iframe_frame_signal_with_new_tab_id_does_not_materialize_page():
@@ -297,6 +461,8 @@ def test_iframe_frame_signal_with_new_tab_id_does_not_materialize_page():
 
     assert '_ensure_recorded_tab(tabs, current_page, kwargs, "tab-frame-drift")' not in body
     assert "Ignore frame-scoped tab drift tab-frame-drift" in body
+    assert "frame_scope = await _resolve_frame_scope(" in body
+    assert '["iframe:nth-of-type(2)"]' in body
 
 
 def test_popup_click_in_frame_still_compiles_to_expect_popup():
@@ -316,7 +482,7 @@ def test_popup_click_in_frame_still_compiles_to_expect_popup():
 
     body = _execute_body(TraceSkillCompiler().generate_script([trace], is_local=True))
 
-    assert 'frame_scope = current_page.frame_locator("iframe:nth-of-type(2)")' in body
+    assert "frame_scope = await _resolve_frame_scope(" in body
     assert "async with current_page.expect_popup() as popup_info:" in body
     assert "await frame_scope.get_by_text('Export all', exact=True).click()" in body
     assert 'tabs["tab-export"] = new_page' in body

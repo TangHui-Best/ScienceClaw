@@ -178,7 +178,7 @@ async def test_recording_runtime_agent_browser_e2e_extract_restores_to_last_user
 
 @pytest.mark.asyncio
 async def test_generated_highest_star_skill_uses_runtime_ai(monkeypatch):
-    async def fake_runtime_ai_run(self, *, page, instruction, runtime_results=None):
+    async def fake_runtime_ai_run(self, *, page, instruction, runtime_results=None, region_context=None):
         await page.goto("https://example.test/projects/big", wait_until="domcontentloaded")
         return SimpleNamespace(
             success=True,
@@ -218,7 +218,7 @@ async def test_generated_highest_star_skill_uses_runtime_ai(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_generated_skill_rewrites_recorded_subpage_url_to_dynamic_selected_object(monkeypatch):
-    async def fake_runtime_ai_run(self, *, page, instruction, runtime_results=None):
+    async def fake_runtime_ai_run(self, *, page, instruction, runtime_results=None, region_context=None):
         await page.goto("https://example.test/projects/live", wait_until="domcontentloaded")
         return SimpleNamespace(
             success=True,
@@ -385,7 +385,7 @@ async def test_generated_dataflow_skill_fills_from_previous_runtime_result():
 
 @pytest.mark.asyncio
 async def test_generated_skill_replays_trending_semantic_project_to_pr_extraction_flow(monkeypatch):
-    async def fake_runtime_ai_run(self, *, page, instruction, runtime_results=None):
+    async def fake_runtime_ai_run(self, *, page, instruction, runtime_results=None, region_context=None):
         await page.goto("https://github.com/openai/openai-agents-python", wait_until="domcontentloaded")
         return SimpleNamespace(
             success=True,
@@ -502,7 +502,7 @@ async def test_generated_skill_replays_trending_semantic_project_to_pr_extractio
 
 @pytest.mark.asyncio
 async def test_generated_skill_replays_semantic_project_manual_pr_click_and_two_page_pr_extraction(monkeypatch):
-    async def fake_runtime_ai_run(self, *, page, instruction, runtime_results=None):
+    async def fake_runtime_ai_run(self, *, page, instruction, runtime_results=None, region_context=None):
         await page.goto("https://github.com/openai/openai-agents-python", wait_until="domcontentloaded")
         return SimpleNamespace(
             success=True,
