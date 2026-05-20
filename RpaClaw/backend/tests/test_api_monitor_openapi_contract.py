@@ -328,6 +328,24 @@ class TestOpenApiExecutionParts:
         assert parts["body"] == {}
         assert parts["url"] == "https://api.example.com/api/test"
 
+    def test_execute_deep_endpoint_path_without_base_path(self):
+        from backend.deepagent.mcp_runtime import _execute_openapi_request
+
+        doc = {
+            "method": "POST",
+            "url": "/isales/ssdmdoc/services/api/solr/contractsearch/query/contract/information",
+            "openapi_parameters": [
+                {"name": "body", "in": "body", "schema": {"type": "object", "properties": {}}},
+            ],
+        }
+        parts = _execute_openapi_request(doc, {"keyword": "abc"}, "https://isales.huawei.com")
+
+        assert (
+            parts["url"]
+            == "https://isales.huawei.com/isales/ssdmdoc/services/api/solr/contractsearch/query/contract/information"
+        )
+        assert parts["body"] == {"keyword": "abc"}
+
 
 class TestOpenApiPromptContract:
     def test_tool_generation_prompt_omits_base_path(self):
