@@ -2237,11 +2237,15 @@ class ApiMonitorSessionManager:
         return [call for call in session.captured_calls if self._candidate_dedup_key(call) == candidate.dedup_key][:5]
 
     def _request_summary_for_prune(self, calls: list[CapturedApiCall]) -> str:
+        if not calls:
+            return "(无请求体)"
         first = calls[0]
         body = first.request.body or ""
         return (body[:500] + "...") if len(body) > 500 else (body or "(无请求体)")
 
     def _response_summary_for_prune(self, calls: list[CapturedApiCall]) -> str:
+        if not calls:
+            return "(无响应)"
         first = calls[0]
         if not first.response:
             return "(无响应)"
