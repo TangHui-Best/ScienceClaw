@@ -1165,6 +1165,38 @@ class TestBatchIntentPruning(unittest.IsolatedAsyncioTestCase):
         assert filtered[0].intent_group == "bootstrap"
         assert filtered[0].intent_filter_reason == "菜单初始化接口。"
 
+    async def test_generate_tools_from_calls_uses_review_fallback_when_batch_prune_fails(self):
+        manager = ApiMonitorSessionManager()
+        session = ApiMonitorSession(
+            id="session_1",
+            user_id="user_1",
+            sandbox_session_id="sandbox_1",
+            intent="查询订单列表",
+            target_url="https://example.com/orders",
+        )
+        manager.sessions[session.id] = session
+        order_call = _call("order_1", method="POST", path="/api/orders/search")
+        order_call.source_evidence = {
+            "action_window_matched": True,
+            "initiator_urls": ["https://example.com/app.js"],
+        }
+        order_call.response.body = '{"items":[{"orderNo":"A001"}]}'
+
+        async def broken_prune(candidates, intent, page_context="", model_config=None):
+            raise RuntimeError("llm unavailable")
+
+        with patch("backend.rpa.api_monitor.manager.prune_candidates_by_intent", side_effect=broken_prune):
+            with patch("backend.rpa.api_monitor.manager.INTENT_PRUNE_RETRY_BASE_DELAY_S", 0):
+                tools = await manager._generate_tools_from_calls(session.id, [order_call], model_config=None)
+
+        assert tools == []
+        assert len(session.generation_candidates) == 1
+        candidate = session.generation_candidates[0]
+        assert candidate.status == "intent_review"
+        assert candidate.intent_prune_attempts == 3
+        assert candidate.intent_prune_error == "llm unavailable"
+        assert candidate.intent_filter_reason == "意图裁剪多次失败，需人工确认：llm unavailable"
+
 
 # ── Realtime buffer tests ───────────────────────────────────────────────
 
@@ -1199,6 +1231,39 @@ class TestRealtimeBuffer(unittest.IsolatedAsyncioTestCase):
         assert len(changed) == 1
         assert enqueued == []
         assert manager._intent_prune_buffers[session.id] == {changed[0].id}
+
+    async def test_flush_intent_prune_buffer_uses_review_fallback_when_prune_fails(self):
+        manager = ApiMonitorSessionManager()
+        session = ApiMonitorSession(
+            id="session_1",
+            user_id="user_1",
+            sandbox_session_id="sandbox_1",
+            intent="查询订单列表",
+        )
+        manager.sessions[session.id] = session
+        call = _call("order_1", method="POST", path="/api/orders/search")
+        call.source_evidence = {
+            "action_window_matched": True,
+            "initiator_urls": ["https://example.com/app.js"],
+        }
+        call.response.body = '{"items":[{"orderNo":"A001"}]}'
+        session.captured_calls.append(call)
+        candidate, _ = manager._upsert_generation_candidate(session.id, call)
+        manager._intent_prune_buffers[session.id].add(candidate.id)
+        enqueued: list[str] = []
+        manager._enqueue_generation_candidate = lambda _sid, candidate_id, **_kw: enqueued.append(candidate_id)
+
+        async def broken_prune(candidates, intent, page_context="", model_config=None):
+            raise RuntimeError("llm unavailable")
+
+        with patch("backend.rpa.api_monitor.manager.prune_candidates_by_intent", side_effect=broken_prune):
+            with patch("backend.rpa.api_monitor.manager.INTENT_PRUNE_RETRY_BASE_DELAY_S", 0):
+                await manager._flush_intent_prune_buffer(session.id, model_config=None)
+
+        assert enqueued == []
+        assert candidate.status == "intent_review"
+        assert candidate.intent_prune_error == "llm unavailable"
+        assert candidate.intent_filter_reason == "意图裁剪多次失败，需人工确认：llm unavailable"
 
 
 # ── Reserve generation and force flow tests ────────────────────────────────

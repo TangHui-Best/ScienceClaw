@@ -1777,30 +1777,28 @@ class ApiMonitorSessionManager:
                 self._intent_prune_candidate(session, candidate, confidence_result)
                 for _key, _samples, confidence_result, candidate in high_confidence
             ]
-            try:
-                prune_result = await prune_candidates_by_intent(
-                    prune_candidates,
-                    intent,
-                    page_context=session.target_url or "",
-                    model_config=model_config,
-                )
-                prune_by_key = {item.candidate_key: item for item in prune_result.items}
-                for _key, _samples, _confidence_result, candidate in high_confidence:
-                    item = prune_by_key.get(self._candidate_key_for_prune(candidate))
-                    if item:
-                        self._apply_prune_item_to_candidate(
-                            session,
-                            candidate,
-                            item,
-                            batch_id=prune_result.batch_id,
-                        )
-                        self._emit_analysis_event(
-                            session_id,
-                            "api_candidate_intent_pruned",
-                            self._candidate_event_payload(candidate),
-                        )
-            except Exception as exc:
-                logger.warning("[ApiMonitor] Batch intent prune failed for session %s: %s", session_id, exc)
+            prune_result = await self._prune_candidates_with_retry(
+                session,
+                [candidate for _key, _samples, _confidence_result, candidate in high_confidence],
+                prune_candidates,
+                intent,
+                model_config=model_config,
+            )
+            prune_by_key = {item.candidate_key: item for item in prune_result.items}
+            for _key, _samples, _confidence_result, candidate in high_confidence:
+                item = prune_by_key.get(self._candidate_key_for_prune(candidate))
+                if item:
+                    self._apply_prune_item_to_candidate(
+                        session,
+                        candidate,
+                        item,
+                        batch_id=prune_result.batch_id,
+                    )
+                    self._emit_analysis_event(
+                        session_id,
+                        "api_candidate_intent_pruned",
+                        self._candidate_event_payload(candidate),
+                    )
 
         # Phase 3: Generate tools only for candidates that passed pruning
         for _key, samples, confidence_result, candidate in high_confidence:
@@ -2463,6 +2461,7 @@ class ApiMonitorSessionManager:
         candidate.intent_rank = item.intent_rank
         candidate.intent_reason = item.intent_reason
         candidate.intent_batch_id = batch_id
+        candidate.intent_prune_retry_after = None
         if item.intent_group in ("adjacent", "bootstrap", "noise"):
             candidate.status = "intent_filtered"
             candidate.intent_filter_reason = item.intent_reason
@@ -2529,7 +2528,7 @@ class ApiMonitorSessionManager:
         candidates = [
             candidate
             for candidate in session.generation_candidates
-            if candidate.id in candidate_ids and candidate.status in ("pending", "stale", "failed")
+            if candidate.id in candidate_ids and candidate.status in ("pending", "stale", "failed", "intent_prune_retrying")
         ]
         if not candidates:
             return
@@ -2557,10 +2556,11 @@ class ApiMonitorSessionManager:
 
         if not prune_candidates:
             return
-        prune_result = await prune_candidates_by_intent(
+        prune_result = await self._prune_candidates_with_retry(
+            session,
+            candidates,
             prune_candidates,
             intent,
-            page_context=session.target_url or "",
             model_config=model_config,
         )
         by_key = {item.candidate_key: item for item in prune_result.items}
