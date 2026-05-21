@@ -1,0 +1,63 @@
+{
+  "step_index": 2,
+  "step_id": "trace-4dc4ac88-c666-4378-9f09-c2b0bd7e51ab",
+  "step_intent": "点击 link(\"tinyhumansai / openhuman\") 并跳转页面",
+  "recording_mode": "manual",
+  "page_patterns": [
+    "card-list",
+    "semantic-selection",
+    "multi-page"
+  ],
+  "captured_at": "2026-05-18T19:09:53.463823",
+  "before": {
+    "url": "https://github.com/trending",
+    "title": "Trending repositories on GitHub today · GitHub",
+    "html_path": "steps/002/before.html",
+    "html_sha256": "2077bb541990e148db16569dee95518f29f14e9da63bdd29dc767e547b07e0a7",
+    "same_as_before": false,
+    "capture_quality": {},
+    "screenshot_path": "",
+    "raw_snapshot_path": "",
+    "compact_snapshot_path": "",
+    "active_page_id": "",
+    "iframe_metadata": []
+  },
+  "action": {
+    "trace_events_path": "steps/002/trace_events.json",
+    "expected_action_type": "",
+    "target_evidence": {}
+  },
+  "after": {
+    "url": "https://github.com/tinyhumansai/openhuman",
+    "title": "GitHub - tinyhumansai/openhuman: Your Personal AI super intelligence. Private, Simple and extremely powerful. · GitHub",
+    "html_path": "steps/002/after.html",
+    "html_sha256": "bfeef54c9d323ff51d7d59eacd2f9a7f0a4ca83f980605dde73082d67f207403",
+    "same_as_before": false,
+    "capture_quality": {
+      "status": "stable",
+      "reason": "",
+      "attempts": 2,
+      "settle_ms": 200,
+      "url": "https://github.com/tinyhumansai/openhuman",
+      "html_bytes": 409584,
+      "body_text_chars": 59434,
+      "title_present": true,
+      "ready_state": "interactive",
+      "url_stable": true,
+      "title_stable": true,
+      "html_stable": true,
+      "shell_like": false
+    },
+    "screenshot_path": "",
+    "raw_snapshot_path": "",
+    "compact_snapshot_path": "",
+    "active_page_id": "",
+    "iframe_metadata": []
+  },
+  "runtime_result": {
+    "status": "success",
+    "error": null
+  },
+  "expected_path": "steps/002/expected.json",
+  "failure_path": ""
+}

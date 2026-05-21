@@ -4,6 +4,7 @@ import sys
 import unittest
 import json
 import asyncio
+import tempfile
 from types import SimpleNamespace
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -56,9 +57,10 @@ class _FakeBrowser:
 
 
 class _FakePage:
-    def __init__(self, url: str, title: str, context=None):
+    def __init__(self, url: str, title: str, context=None, html: str = "<html></html>"):
         self.url = url
         self._title = title
+        self._html = html
         self.context = context or _FakeContext()
         self.main_frame = SimpleNamespace(url=url)
         self.handlers = {}
@@ -72,6 +74,12 @@ class _FakePage:
 
     async def title(self):
         return self._title
+
+    async def content(self):
+        return self._html
+
+    async def wait_for_timeout(self, _timeout_ms):
+        return None
 
     async def expose_function(self, _name, _fn):
         self.expose_function_calls.append((_name, _fn))
@@ -778,6 +786,196 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.session.steps[-1].locator_candidates[0]["kind"], "role")
         self.assertTrue(self.session.steps[-1].locator_candidates[0]["selected"])
         self.assertEqual(self.session.steps[-1].validation["status"], "ok")
+
+    async def test_full_sop_harness_captures_manual_trace_checkpoint_from_event_before_html(self):
+        original_enabled = MANAGER_MODULE.settings.rpa_harness_capture_enabled
+        original_assets_dir = MANAGER_MODULE.settings.rpa_harness_assets_dir
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            MANAGER_MODULE.settings.rpa_harness_capture_enabled = True
+            MANAGER_MODULE.settings.rpa_harness_assets_dir = tmp_dir
+            try:
+                page = _FakePage(
+                    "https://example.com/before",
+                    "Before",
+                    html="<html><body><button>Open</button><main>After</main></body></html>",
+                )
+                tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+                state = self.manager.start_harness_capture(
+                    self.session.id,
+                    capture_scope="full_sop",
+                    enabled=True,
+                )
+
+                await self.manager._handle_event(
+                    self.session.id,
+                    {
+                        "action": "click",
+                        "tab_id": tab_id,
+                        "tag": "BUTTON",
+                        "timestamp": 1234567890,
+                        "locator": {"method": "role", "role": "button", "name": "Open"},
+                        "harness_before_page_state": {
+                            "url": "https://example.com/before",
+                            "title": "Before",
+                            "html": "<html><body><button>Open</button></body></html>",
+                        },
+                    },
+                )
+
+                step_dir = Path(tmp_dir) / state.capture_id / "steps" / "001"
+                checkpoint = json.loads((step_dir / "checkpoint.json").read_text(encoding="utf-8"))
+                trace_events = json.loads((step_dir / "trace_events.json").read_text(encoding="utf-8"))
+
+                self.assertEqual((step_dir / "before.html").read_text(encoding="utf-8"), "<html><body><button>Open</button></body></html>")
+                self.assertEqual((step_dir / "after.html").read_text(encoding="utf-8"), "<html><body><button>Open</button><main>After</main></body></html>")
+                self.assertEqual(checkpoint["recording_mode"], "manual")
+                self.assertEqual(checkpoint["runtime_result"]["status"], "success")
+                self.assertEqual(checkpoint["step_index"], 1)
+                self.assertEqual(trace_events[0]["source"], "manual")
+                self.assertEqual(trace_events[0]["action"], "click")
+            finally:
+                MANAGER_MODULE.settings.rpa_harness_capture_enabled = original_enabled
+                MANAGER_MODULE.settings.rpa_harness_assets_dir = original_assets_dir
+
+    async def test_full_sop_harness_captures_pure_navigation_checkpoint_from_page_baseline(self):
+        original_enabled = MANAGER_MODULE.settings.rpa_harness_capture_enabled
+        original_assets_dir = MANAGER_MODULE.settings.rpa_harness_assets_dir
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            MANAGER_MODULE.settings.rpa_harness_capture_enabled = True
+            MANAGER_MODULE.settings.rpa_harness_assets_dir = tmp_dir
+            try:
+                page = _FakePage(
+                    "https://example.com/start",
+                    "Start",
+                    html="<html><body><main>Start page</main></body></html>",
+                )
+                tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+                state = self.manager.start_harness_capture(
+                    self.session.id,
+                    capture_scope="full_sop",
+                    enabled=True,
+                )
+                await self.manager.set_harness_capture_runtime_active(self.session.id, True)
+
+                page.url = "https://example.com/destination"
+                page._title = "Destination"
+                page._html = "<html><body><main>Destination page</main></body></html>"
+                await self.manager._handle_event(
+                    self.session.id,
+                    {
+                        "action": "navigate",
+                        "tab_id": tab_id,
+                        "timestamp": 1234567890,
+                        "url": "https://example.com/destination",
+                    },
+                )
+
+                step_dir = Path(tmp_dir) / state.capture_id / "steps" / "001"
+                checkpoint = json.loads((step_dir / "checkpoint.json").read_text(encoding="utf-8"))
+                trace_events = json.loads((step_dir / "trace_events.json").read_text(encoding="utf-8"))
+
+                self.assertEqual((step_dir / "before.html").read_text(encoding="utf-8"), "<html><body><main>Start page</main></body></html>")
+                self.assertEqual((step_dir / "after.html").read_text(encoding="utf-8"), "<html><body><main>Destination page</main></body></html>")
+                self.assertEqual(checkpoint["recording_mode"], "manual")
+                self.assertEqual(checkpoint["step_intent"], "导航到 https://example.com/destination")
+                self.assertEqual(checkpoint["before"]["url"], "https://example.com/start")
+                self.assertEqual(checkpoint["after"]["url"], "https://example.com/destination")
+                self.assertEqual(trace_events[0]["trace_type"], "navigation")
+                self.assertEqual(trace_events[0]["action"], "navigate")
+            finally:
+                MANAGER_MODULE.settings.rpa_harness_capture_enabled = original_enabled
+                MANAGER_MODULE.settings.rpa_harness_assets_dir = original_assets_dir
+
+    async def test_full_sop_harness_skips_manual_click_without_before_html(self):
+        original_enabled = MANAGER_MODULE.settings.rpa_harness_capture_enabled
+        original_assets_dir = MANAGER_MODULE.settings.rpa_harness_assets_dir
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            MANAGER_MODULE.settings.rpa_harness_capture_enabled = True
+            MANAGER_MODULE.settings.rpa_harness_assets_dir = tmp_dir
+            try:
+                page = _FakePage(
+                    "https://example.com/current",
+                    "Current",
+                    html="<html><body><button>Open</button></body></html>",
+                )
+                tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+                state = self.manager.start_harness_capture(
+                    self.session.id,
+                    capture_scope="full_sop",
+                    enabled=True,
+                )
+
+                await self.manager._handle_event(
+                    self.session.id,
+                    {
+                        "action": "click",
+                        "tab_id": tab_id,
+                        "tag": "BUTTON",
+                        "timestamp": 1234567890,
+                        "locator": {"method": "role", "role": "button", "name": "Open"},
+                    },
+                )
+
+                self.assertEqual(len(self.session.traces), 1)
+                self.assertFalse((Path(tmp_dir) / state.capture_id / "steps").exists())
+                self.assertFalse((Path(tmp_dir) / state.capture_id / "scenario.json").exists())
+            finally:
+                MANAGER_MODULE.settings.rpa_harness_capture_enabled = original_enabled
+                MANAGER_MODULE.settings.rpa_harness_assets_dir = original_assets_dir
+
+    async def test_full_sop_harness_skips_unsupported_manual_fill_even_with_before_html(self):
+        original_enabled = MANAGER_MODULE.settings.rpa_harness_capture_enabled
+        original_assets_dir = MANAGER_MODULE.settings.rpa_harness_assets_dir
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            MANAGER_MODULE.settings.rpa_harness_capture_enabled = True
+            MANAGER_MODULE.settings.rpa_harness_assets_dir = tmp_dir
+            try:
+                page = _FakePage(
+                    "https://example.com/form",
+                    "Form",
+                    html="<html><body><input aria-label='Name' value='Ada'></body></html>",
+                )
+                tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+                state = self.manager.start_harness_capture(
+                    self.session.id,
+                    capture_scope="full_sop",
+                    enabled=True,
+                )
+
+                await self.manager._handle_event(
+                    self.session.id,
+                    {
+                        "action": "fill",
+                        "tab_id": tab_id,
+                        "tag": "INPUT",
+                        "timestamp": 1234567890,
+                        "value": "Ada",
+                        "locator": {"method": "label", "value": "Name"},
+                        "harness_before_page_state": {
+                            "url": "https://example.com/form",
+                            "title": "Form",
+                            "html": "<html><body><input aria-label='Name'></body></html>",
+                        },
+                    },
+                )
+
+                self.assertEqual(len(self.session.traces), 1)
+                self.assertEqual(self.session.traces[0].action, "fill")
+                self.assertFalse((Path(tmp_dir) / state.capture_id / "steps").exists())
+                self.assertFalse((Path(tmp_dir) / state.capture_id / "scenario.json").exists())
+            finally:
+                MANAGER_MODULE.settings.rpa_harness_capture_enabled = original_enabled
+                MANAGER_MODULE.settings.rpa_harness_assets_dir = original_assets_dir
+
+    async def test_harness_runtime_flag_updates_registered_pages(self):
+        page = _FakePage("https://example.com", "Example")
+        await self.manager.register_page(self.session.id, page, make_active=True)
+
+        await self.manager.set_harness_capture_runtime_active(self.session.id, True)
+        await self.manager.set_harness_capture_runtime_active(self.session.id, False)
+
+        self.assertIn("window.__rpa_harness_capture_active = true;", page.evaluate_calls)
+        self.assertIn("window.__rpa_harness_capture_active = false;", page.evaluate_calls)
 
     async def test_handle_event_accepts_testid_locator_candidate(self):
         page = _FakePage("https://example.com", "Example")

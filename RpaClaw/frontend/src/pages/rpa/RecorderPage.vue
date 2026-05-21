@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
+import { useI18n } from 'vue-i18n';
 import { Camera, Terminal, CheckCircle, Radio, Send, Wand2, Bot, Code, Globe, AlertCircle, ChevronDown, ChevronUp, ClipboardCheck, Loader2, Crop, X } from 'lucide-vue-next';
 import { apiClient } from '@/api/client';
 import { listModels, type ModelConfig } from '@/api/models';
 import ProviderIcon from '@/components/icons/ProviderIcon.vue';
 import RpaFlowGuide from '@/components/rpa/RpaFlowGuide.vue';
 import RpaStepTimeline from '@/components/rpa/RpaStepTimeline.vue';
-import { i18n } from '@/composables/useI18n';
 import { getBackendWsUrl } from '@/utils/sandbox';
 import {
   getFrameSizeFromMetadata,
@@ -59,6 +59,7 @@ import {
 
 const router = useRouter();
 const route = useRoute();
+const { t } = useI18n();
 const launchSource = ref(typeof route.query.source === 'string' ? route.query.source : '');
 
 const sessionId = ref<string | null>(null);
@@ -275,8 +276,6 @@ let regionSelectionToken = 0;
 let finalizedRegionSelectionToken: number | null = null;
 let regionDocumentListenersAttached = false;
 
-const t = (key: string) => String(i18n.global.t(key));
-
 const regionSelectionOverlayRect = computed(() => {
   if (!regionDragStart.value || !regionDragCurrent.value) return null;
   const start = regionDragStart.value.local;
@@ -348,6 +347,12 @@ const handlePendingRegionAttachmentEvent = (event: Event) => {
   if (!isPendingRegionAttachment(attachment)) return;
   applyPendingRegionAttachment(attachment);
 };
+const harnessCaptureAvailable = ref(false);
+const harnessCaptureBusy = ref(false);
+const harnessCaptureMode = ref<'none' | 'full_sop' | 'selected_steps'>('none');
+const harnessSelectedStepIndexes = ref<number[]>([]);
+const harnessPendingNaturalLanguageSteps = ref(0);
+const harnessNextNaturalLanguageStepMarked = ref(false);
 
 const selectedModel = computed(() => (
   models.value.find((model) => model.id === selectedModelId.value) ?? null
@@ -361,6 +366,23 @@ const selectedModelName = computed(() => (
   selectedModel.value ? modelDisplayName(selectedModel.value) : 'Select Model'
 ));
 
+const harnessCaptureStatusLabel = computed(() => {
+  if (harnessCaptureMode.value === 'full_sop') return t('Harness Full SOP active');
+  if (harnessCaptureMode.value === 'selected_steps') {
+    if (harnessPendingNaturalLanguageSteps.value > 0) return t('Harness Next NL Step pending');
+    const selected = harnessSelectedStepIndexes.value.length;
+    return selected > 0
+      ? t('Harness selected step count', { count: selected })
+      : t('Harness Selected Step active');
+  }
+  return t('Harness Idle');
+});
+const harnessHasPendingNaturalLanguageStep = computed(() => (
+  harnessPendingNaturalLanguageSteps.value > 0 || harnessNextNaturalLanguageStepMarked.value
+));
+const harnessCaptureActiveButtonClass = 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200';
+const harnessCaptureIdleButtonClass = 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-[#272728] dark:text-gray-200 dark:hover:bg-white/10';
+
 const loadAssistantModels = async () => {
   try {
     const modelList = await listModels();
@@ -373,9 +395,71 @@ const loadAssistantModels = async () => {
   }
 };
 
+const loadHarnessCaptureConfig = async () => {
+  try {
+    const resp = await apiClient.get('/rpa/harness/config');
+    harnessCaptureAvailable.value = resp.data?.capture_enabled === true;
+  } catch {
+    harnessCaptureAvailable.value = false;
+  }
+};
+
 const selectAssistantModel = (modelId: string) => {
   selectedModelId.value = modelId;
   modelDropdownOpen.value = false;
+};
+
+const applyHarnessCaptureState = (capture: any, fallbackScope: 'full_sop' | 'selected_steps') => {
+  harnessCaptureMode.value = capture?.capture_scope || fallbackScope;
+  harnessSelectedStepIndexes.value = Array.isArray(capture?.selected_step_indexes)
+    ? capture.selected_step_indexes
+    : [];
+  harnessPendingNaturalLanguageSteps.value = Number(capture?.pending_natural_language_step_captures || 0);
+  harnessNextNaturalLanguageStepMarked.value = harnessPendingNaturalLanguageSteps.value > 0;
+};
+
+const applyHarnessCaptureEventState = (data: any) => {
+  if (!data?.capture) return;
+  const fallbackScope = harnessCaptureMode.value === 'full_sop' ? 'full_sop' : 'selected_steps';
+  applyHarnessCaptureState(data.capture, fallbackScope);
+};
+
+const startHarnessCapture = async (captureScope: 'full_sop' | 'selected_steps') => {
+  if (!sessionId.value || !harnessCaptureAvailable.value || harnessCaptureBusy.value) return null;
+  harnessCaptureBusy.value = true;
+  try {
+    const resp = await apiClient.post(`/rpa/session/${sessionId.value}/harness-capture/start`, {
+      capture_scope: captureScope,
+    });
+    applyHarnessCaptureState(resp.data?.capture, captureScope);
+    return resp.data?.capture || null;
+  } catch (err: any) {
+    error.value = err?.response?.data?.detail || err?.message || t('Failed to start Harness capture');
+    return null;
+  } finally {
+    harnessCaptureBusy.value = false;
+  }
+};
+
+const markNextHarnessStep = async () => {
+  if (!sessionId.value || !harnessCaptureAvailable.value || harnessCaptureBusy.value) return;
+  harnessCaptureBusy.value = true;
+  try {
+    if (harnessCaptureMode.value !== 'selected_steps') {
+      const resp = await apiClient.post(`/rpa/session/${sessionId.value}/harness-capture/start`, {
+        capture_scope: 'selected_steps',
+      });
+      applyHarnessCaptureState(resp.data?.capture, 'selected_steps');
+    }
+    const selectResp = await apiClient.post(`/rpa/session/${sessionId.value}/harness-capture/next-natural-language-step/select`);
+    applyHarnessCaptureState(selectResp.data?.capture, 'selected_steps');
+    harnessPendingNaturalLanguageSteps.value = Math.max(harnessPendingNaturalLanguageSteps.value, 1);
+    harnessNextNaturalLanguageStepMarked.value = true;
+  } catch (err: any) {
+    error.value = err?.response?.data?.detail || err?.message || t('Failed to mark Harness step');
+  } finally {
+    harnessCaptureBusy.value = false;
+  }
 };
 
 const scrollAssistantToBottom = () => {
@@ -522,6 +606,7 @@ const startTimer = () => {
 
 onMounted(() => {
   loadAssistantModels();
+  loadHarnessCaptureConfig();
   initSession();
 });
 
@@ -1139,6 +1224,7 @@ const sendMessage = async () => {
                 data,
               );
             }
+            applyHarnessCaptureEventState(data);
             if (eventType === 'message_chunk') {
               chatMessages.value[msgIdx].text += data.text || '';
             } else if (eventType === 'script') {
@@ -1393,6 +1479,48 @@ const sendMessage = async () => {
                 class="text-[10px] font-bold text-red-500 border border-red-200 dark:border-red-800 px-2 py-1 rounded-lg hover:bg-red-50 transition-colors"
               >中止</button>
             </div>
+          </div>
+        </div>
+
+        <div
+          v-if="harnessCaptureAvailable"
+          data-testid="harness-capture-panel"
+          class="border-b border-gray-100 bg-[#f7f8fa] px-4 py-3 dark:border-gray-800 dark:bg-[#242425]"
+        >
+          <div class="mb-2 flex items-center justify-between gap-2">
+            <div class="min-w-0">
+              <div class="text-[11px] font-bold text-gray-900 dark:text-gray-100">{{ t('Harness Capture') }}</div>
+              <div class="mt-0.5 truncate text-[9px] font-semibold text-gray-500 dark:text-gray-400">
+                {{ harnessCaptureStatusLabel }}
+              </div>
+            </div>
+            <ClipboardCheck
+              :size="16"
+              class="shrink-0"
+              :class="harnessCaptureMode === 'none' ? 'text-gray-400' : 'text-emerald-500'"
+            />
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              data-testid="harness-start-full-sop"
+              class="h-8 rounded-lg border px-2 text-[10px] font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+              :class="harnessCaptureMode === 'full_sop' ? harnessCaptureActiveButtonClass : harnessCaptureIdleButtonClass"
+              :disabled="!sessionId || harnessCaptureBusy || agentRunning || harnessCaptureMode === 'full_sop' || harnessHasPendingNaturalLanguageStep"
+              @click="startHarnessCapture('full_sop')"
+            >
+              {{ t('Harness Full SOP') }}
+            </button>
+            <button
+              type="button"
+              data-testid="harness-mark-next-step"
+              class="h-8 rounded-lg border px-2 text-[10px] font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+              :class="harnessHasPendingNaturalLanguageStep ? harnessCaptureActiveButtonClass : harnessCaptureIdleButtonClass"
+              :disabled="!sessionId || harnessCaptureBusy || agentRunning || harnessCaptureMode === 'full_sop' || harnessHasPendingNaturalLanguageStep"
+              @click="markNextHarnessStep"
+            >
+              {{ t('Harness Next NL Step') }}
+            </button>
           </div>
         </div>
 

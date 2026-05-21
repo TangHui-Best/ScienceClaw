@@ -1,0 +1,55 @@
+{
+  "schema_version": "rpa-harness-scenario-v0",
+  "asset_id": "hcap-4be6265f43eb42dfa259182207aa64cc",
+  "capture_scope": "full_sop",
+  "sop_intent": "Navigate GitHub Trending, open a repository, and extract fork count.",
+  "source": {
+    "recording_id": "57f962bc-07f5-43ee-834d-a0021fad40b0",
+    "captured_at": "2026-05-18T19:09:29.662524",
+    "capture_mode": "harness",
+    "capture_trigger": "full_sop"
+  },
+  "environment": {},
+  "asset_status": "active",
+  "sensitivity": "repo-safe",
+  "page_patterns": [
+    "card-list",
+    "detail-page",
+    "multi-page",
+    "semantic-selection",
+    "data-extraction"
+  ],
+  "governance": {
+    "promotion_status": "candidate",
+    "runner_modes": [
+      "offline_core_chain",
+      "skill_replay_e2e",
+      "stateful_sop_capture_to_skill"
+    ],
+    "core_chain_coverage": [
+      "html_to_raw_snapshot",
+      "raw_to_compact_snapshot",
+      "planner_action_selection",
+      "trace_to_skill",
+      "skill_replay",
+      "stateful_capture_to_skill"
+    ],
+    "expected_signals_reviewed": true,
+    "sensitivity_reviewed": true,
+    "review_notes": "Promoted to candidate after F004 governed regression report excluded it only for missing governance metadata. Public GitHub capture reviewed as repo-safe baseline evidence. F008.1 enables skill_replay_e2e only through captured HTML controlled replay, not live GitHub. F009 enables stateful_sop_capture_to_skill after the Full SOP asset drove session-style accepted trace generation, full SOP Skill compilation, and controlled replay without live GitHub."
+  },
+  "step_checkpoints": [
+    {
+      "step_index": 1,
+      "checkpoint_path": "steps/001/checkpoint.json"
+    },
+    {
+      "step_index": 2,
+      "checkpoint_path": "steps/002/checkpoint.json"
+    },
+    {
+      "step_index": 3,
+      "checkpoint_path": "steps/003/checkpoint.json"
+    }
+  ]
+}

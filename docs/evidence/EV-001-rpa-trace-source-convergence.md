@@ -3,6 +3,7 @@ doc_kind: evidence
 id: EV-001
 title: RPA Trace Source Convergence Evidence
 status: active
+scope: project
 feature_ids: [F001]
 created: 2026-05-13
 updated: 2026-05-17
@@ -14,6 +15,34 @@ evidence_level: exhaustive
 ## Scope
 
 Evidence for F001: remove `step` / `recorded_actions` / `recording_diagnostics` / `legacy_steps` as RPA business facts and make trace the sole accepted timeline across backend, frontend, generate/test/save, and MCP/export.
+
+## Commands
+
+Detailed task-level commands are preserved in the historical sections below. Representative commands include:
+
+```powershell
+$env:PYTHONPATH="RpaClaw"; python -m pytest RpaClaw/backend/tests/test_rpa_trace_timeline.py -q
+$env:PYTHONPATH="RpaClaw"; python -m pytest RpaClaw/backend/tests/test_rpa_trace_mutation_routes.py RpaClaw/backend/tests/test_rpa_trace_timeline.py -q
+npm.cmd --prefix RpaClaw/frontend test -- rpaConfigureTimeline
+npm.cmd --prefix RpaClaw/frontend run type-check
+```
+
+## Results
+
+Partial. Multiple focused backend/frontend checks passed and are recorded below, but F001 remains active because final release readiness still requires the remaining migration closeout, negative grep review, manual smoke, and updated Harness validation.
+
+## Artifacts
+
+- Feature: [F001 RPA Trace Source Convergence](../features/F001-rpa-trace-source-convergence.md)
+- ADR: [ADR-001 RPA Trace Is The Single Accepted Timeline](../decisions/ADR-001-rpa-trace-is-single-accepted-timeline.md)
+- ADR: [ADR-002 Trace Evidence Drives Compiler Strategy](../decisions/ADR-002-trace-evidence-driven-compiler-strategy.md)
+- Spec: [2026-04-28 RPA Trace-first Full Migration Design](../superpowers/specs/2026-04-28-rpa-trace-first-full-migration-design.md)
+- Plan: [2026-04-28 RPA Trace-first Full Migration](../superpowers/plans/2026-04-28-rpa-trace-first-full-migration.md)
+- Plan: [2026-05-16 RPA Trace Source Final Convergence](../superpowers/plans/2026-05-16-rpa-trace-source-final-convergence.md)
+
+## Notes
+
+This evidence record predates the latest bundled Harness validator. The current closeout recovery updates its required frontmatter and section structure while preserving the detailed task records below.
 
 ## Entry Gate
 

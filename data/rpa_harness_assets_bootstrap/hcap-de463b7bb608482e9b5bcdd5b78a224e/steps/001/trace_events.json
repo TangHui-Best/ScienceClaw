@@ -1,0 +1,42 @@
+[
+  {
+    "trace_id": "trace-cd0d9995-99ce-46a9-af23-42ba8fa15052",
+    "trace_type": "navigation",
+    "source": "manual",
+    "user_instruction": null,
+    "action": "navigate",
+    "description": "导航到 https://github.com/trending",
+    "before_page": {
+      "url": "",
+      "title": "",
+      "snapshot_summary": {}
+    },
+    "after_page": {
+      "url": "https://github.com/trending",
+      "title": "",
+      "snapshot_summary": {}
+    },
+    "frame_path": [],
+    "locator_candidates": [],
+    "validation": {},
+    "signals": {
+      "tab": {
+        "tab_id": "e19579c6-0230-42ce-bda2-c48d4f5a795f"
+      },
+      "recording": {
+        "event_timestamp_ms": 1779171273431
+      }
+    },
+    "value": "",
+    "sensitive": false,
+    "output_key": null,
+    "output": null,
+    "ai_execution": null,
+    "locator_stability": null,
+    "dataflow": null,
+    "diagnostics_ref": null,
+    "accepted": true,
+    "started_at": "2026-05-19T14:14:33.432163",
+    "ended_at": "2026-05-19T14:14:33.432163"
+  }
+]

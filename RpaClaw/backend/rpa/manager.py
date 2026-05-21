@@ -17,8 +17,13 @@ from .manual_recording_models import ManualRecordedAction, ManualRecordingDiagno
 from .manual_recording_normalizer import build_manual_recording_outcome
 from .playwright_security import get_context_kwargs
 from .region_context import RPARegionContext
-from .trace_models import RPAAcceptedTrace, RPATraceDiagnostic, RPARuntimeResults
+from .trace_models import RPAAcceptedTrace, RPAPageState, RPATraceDiagnostic, RPATraceType, RPARuntimeResults
 from .trace_recorder import infer_dataflow_for_ai_fill, infer_dataflow_for_fill, manual_step_to_trace
+from .harness.capture import HarnessCapturedPageState, HarnessCaptureSessionState
+from .harness.capture import capture_current_page_state, capture_step_checkpoint
+from .harness.config import harness_assets_dir
+from .harness.store import HarnessAssetStore
+from backend.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +139,10 @@ class RPASessionManager:
         self._pending_event_counts: Dict[str, int] = {}
         self._pending_event_idle: Dict[str, asyncio.Event] = {}
         self._pending_region_contexts: Dict[str, Dict[str, RPARegionContext]] = {}
+        self._harness_capture_sessions: Dict[str, HarnessCaptureSessionState] = {}
+        self._manual_harness_before_states: Dict[str, Dict[str, HarnessCapturedPageState]] = {}
+        self._harness_page_baselines: Dict[str, Dict[str, HarnessCapturedPageState]] = {}
+        self._suppressed_navigation_events: Dict[str, Dict[str, str]] = {}
 
     def touch_session(self, session_id: str) -> None:
         session = self.sessions.get(session_id)
@@ -225,11 +234,161 @@ class RPASessionManager:
         self._pending_event_counts.pop(session_id, None)
         self._pending_event_idle.pop(session_id, None)
         self._pending_region_contexts.pop(session_id, None)
+        self._harness_capture_sessions.pop(session_id, None)
+        self._manual_harness_before_states.pop(session_id, None)
+        self._harness_page_baselines.pop(session_id, None)
+        self._suppressed_navigation_events.pop(session_id, None)
 
         session = self.sessions.get(session_id)
         if session:
             session.active_tab_id = None
         self._pending_hover_candidates.pop(session_id, None)
+
+    def get_harness_capture_session(self, session_id: str) -> Optional[HarnessCaptureSessionState]:
+        return self._harness_capture_sessions.get(session_id)
+
+    def start_harness_capture(
+        self,
+        session_id: str,
+        *,
+        capture_scope: str,
+        enabled: bool,
+    ) -> Optional[HarnessCaptureSessionState]:
+        if not enabled:
+            return None
+        if session_id not in self.sessions:
+            raise ValueError(f"Session {session_id} not found")
+        state = HarnessCaptureSessionState(
+            session_id=session_id,
+            capture_scope=capture_scope,
+        )
+        self._manual_harness_before_states.pop(session_id, None)
+        self._harness_page_baselines.pop(session_id, None)
+        self._harness_capture_sessions[session_id] = state
+        return state
+
+    def _is_full_sop_harness_active(self, session_id: str) -> bool:
+        if not settings.rpa_harness_capture_enabled:
+            return False
+        state = self._harness_capture_sessions.get(session_id)
+        return state is not None and state.capture_scope == "full_sop"
+
+    async def _remember_harness_page_baseline(self, session_id: str, tab_id: Optional[str], page) -> None:
+        if not tab_id or not self._is_full_sop_harness_active(session_id):
+            return
+        try:
+            baseline = await capture_current_page_state(page)
+        except Exception as exc:
+            logger.debug("[RPA] Failed to capture harness page baseline: %s", exc)
+            return
+        self._harness_page_baselines.setdefault(session_id, {})[tab_id] = baseline
+
+    def _attach_harness_navigation_baseline(self, session_id: str, evt: dict) -> None:
+        if evt.get("action") != "navigate":
+            return
+        if not self._is_full_sop_harness_active(session_id):
+            return
+        tab_id = evt.get("tab_id")
+        if not tab_id:
+            return
+        baseline = self._harness_page_baselines.get(session_id, {}).get(tab_id)
+        if baseline is None:
+            return
+        evt["harness_before_page_state"] = baseline.model_dump(mode="json")
+
+    def mark_harness_step_selected(
+        self,
+        session_id: str,
+        *,
+        step_index: int,
+    ) -> Optional[HarnessCaptureSessionState]:
+        state = self._harness_capture_sessions.get(session_id)
+        if state is None:
+            return None
+        state.mark_step_selected(step_index)
+        return state
+
+    def mark_harness_next_natural_language_step_selected(
+        self,
+        session_id: str,
+    ) -> Optional[HarnessCaptureSessionState]:
+        state = self._harness_capture_sessions.get(session_id)
+        if state is None:
+            return None
+        state.mark_next_natural_language_step_selected()
+        return state
+
+    async def set_harness_capture_runtime_active(self, session_id: str, active: bool) -> None:
+        script = f"window.__rpa_harness_capture_active = {json.dumps(bool(active))};"
+        context = self._contexts.get(session_id)
+        if context is not None:
+            try:
+                await context.add_init_script(script=script)
+            except Exception as exc:
+                logger.debug("[RPA] Failed to set harness capture init flag: %s", exc)
+        for page in list(self._tabs.get(session_id, {}).values()):
+            try:
+                await page.evaluate(script)
+            except Exception as exc:
+                logger.debug("[RPA] Failed to set harness capture page flag: %s", exc)
+        if active:
+            for tab_id, page in list(self._tabs.get(session_id, {}).items()):
+                await self._remember_harness_page_baseline(session_id, tab_id, page)
+
+    async def prepare_harness_step_capture(
+        self,
+        session_id: str,
+        *,
+        step_index: int,
+        page,
+    ) -> Optional[HarnessCapturedPageState]:
+        if not settings.rpa_harness_capture_enabled:
+            return None
+        state = self._harness_capture_sessions.get(session_id)
+        if state is None or not state.should_capture_step(step_index):
+            return None
+        return await capture_current_page_state(page)
+
+    async def capture_harness_step_checkpoint(
+        self,
+        session_id: str,
+        *,
+        step_index: int,
+        step_id: str,
+        step_intent: str,
+        recording_mode: str,
+        before_page=None,
+        after_page=None,
+        before_state: Optional[HarnessCapturedPageState] = None,
+        after_state: Optional[HarnessCapturedPageState] = None,
+        trace_events: list[dict],
+        runtime_status: str,
+        error: Optional[str] = None,
+    ):
+        if not settings.rpa_harness_capture_enabled:
+            return None
+        state = self._harness_capture_sessions.get(session_id)
+        if state is None:
+            return None
+        store = HarnessAssetStore(harness_assets_dir(settings))
+        checkpoint = await capture_step_checkpoint(
+            state,
+            store,
+            step_index=step_index,
+            step_id=step_id,
+            step_intent=step_intent,
+            recording_mode=recording_mode,
+            before_page=before_page,
+            after_page=after_page,
+            before_state=before_state,
+            after_state=after_state,
+            trace_events=trace_events,
+            runtime_status=runtime_status,
+            error=error,
+        )
+        if checkpoint is not None and recording_mode == "natural_language":
+            state.consume_natural_language_step_selection(step_index)
+        return checkpoint
 
     async def create_session(self, user_id: str, sandbox_session_id: str) -> RPASession:
         session_id = str(uuid.uuid4())
@@ -299,6 +458,12 @@ class RPASessionManager:
 
         if make_active or not self.sessions[session_id].active_tab_id:
             await self.activate_tab(session_id, tab_id, source="auto")
+        state = self._harness_capture_sessions.get(session_id)
+        if settings.rpa_harness_capture_enabled and state is not None and state.capture_scope == "full_sop":
+            try:
+                await page.evaluate("window.__rpa_harness_capture_active = true;")
+            except Exception as exc:
+                logger.debug("[RPA] Failed to set harness capture page flag: %s", exc)
 
         return tab_id
 
@@ -443,6 +608,17 @@ class RPASessionManager:
             raise ValueError(f"No active page for session {session_id}")
 
         normalized_url = self._normalize_url(url)
+        harness_state = self._harness_capture_sessions.get(session_id)
+        harness_before_state = None
+        harness_step_index = len(session.traces) + 1
+        if (
+            settings.rpa_harness_capture_enabled
+            and harness_state is not None
+            and harness_state.capture_scope == "full_sop"
+        ):
+            harness_before_state = await capture_current_page_state(page)
+            self._suppressed_navigation_events.setdefault(session_id, {})[session.active_tab_id] = normalized_url
+
         await page.goto(normalized_url)
         await page.wait_for_load_state("domcontentloaded")
 
@@ -454,10 +630,41 @@ class RPASessionManager:
             if title:
                 tab.title = title
 
+        if harness_before_state is not None:
+            after_state = await capture_current_page_state(page)
+            trace = RPAAcceptedTrace(
+                trace_id=f"trace-{uuid.uuid4()}",
+                trace_type=RPATraceType.NAVIGATION,
+                source="manual",
+                action="navigate",
+                description=f"Navigate to {normalized_url}",
+                before_page=RPAPageState(url=harness_before_state.url, title=harness_before_state.title),
+                after_page=RPAPageState(url=after_state.url, title=after_state.title),
+                value=normalized_url,
+                signals={"tab": {"tab_id": session.active_tab_id}},
+            )
+            await self.append_trace(session_id, trace)
+            await self.capture_harness_step_checkpoint(
+                session_id,
+                step_index=harness_step_index,
+                step_id=trace.trace_id,
+                step_intent=trace.description,
+                recording_mode="manual",
+                before_state=harness_before_state,
+                after_state=after_state,
+                trace_events=[trace.model_dump(mode="json")],
+                runtime_status="success",
+            )
+            self._harness_page_baselines.setdefault(session_id, {})[session.active_tab_id] = after_state
+
         return {
             "tab_id": session.active_tab_id,
             "url": getattr(page, "url", normalized_url) or normalized_url,
         }
+
+    @staticmethod
+    def _navigation_urls_match(left: str, right: str) -> bool:
+        return str(left or "").rstrip("/") == str(right or "").rstrip("/")
 
     async def activate_tab(self, session_id: str, tab_id: str, source: str = "auto"):
         page = self._tabs.get(session_id, {}).get(tab_id)
@@ -654,6 +861,13 @@ class RPASessionManager:
             new_url = frame.url
             if new_url and new_url != last_url["value"] and new_url != "about:blank":
                 last_url["value"] = new_url
+                suppressed = self._suppressed_navigation_events.get(session_id, {})
+                expected_url = suppressed.get(tab_id)
+                if expected_url and self._navigation_urls_match(new_url, expected_url):
+                    suppressed.pop(tab_id, None)
+                    if not suppressed:
+                        self._suppressed_navigation_events.pop(session_id, None)
+                    return
                 tab = self._tab_meta.get(session_id, {}).get(tab_id)
                 if tab:
                     tab.url = new_url
@@ -1484,7 +1698,7 @@ class RPASessionManager:
     def _step_data_from_event(evt: Dict[str, Any]) -> Dict[str, Any]:
         locator_info = evt.get("locator", {})
         is_sensitive = evt.get("sensitive", False)
-        return {
+        step_data = {
             "action": evt.get("action", "unknown"),
             "target": json.dumps(locator_info) if locator_info else "",
             "frame_path": evt.get("frame_path", []) or [],
@@ -1504,6 +1718,10 @@ class RPASessionManager:
             "sequence": evt.get("sequence"),
             "event_timestamp_ms": evt.get("timestamp"),
         }
+        harness_before_state = evt.get("harness_before_page_state")
+        if isinstance(harness_before_state, dict):
+            step_data["_harness_before_state"] = dict(harness_before_state)
+        return step_data
 
     def owns_sandbox_session(self, user_id: str, sandbox_session_id: str) -> bool:
         return any(
@@ -1599,6 +1817,8 @@ class RPASessionManager:
                             return
                         logger.debug(f"[RPA] Preserving nav after {last_step.action}: {evt.get('url', '')[:60]}")
 
+            self._attach_harness_navigation_baseline(session_id, evt)
+
         self._normalize_event_locator_payload(evt)
 
         if evt.get("action") == "hover":
@@ -1676,6 +1896,7 @@ class RPASessionManager:
             raise ValueError(f"Session {session_id} not found")
 
         session = self.sessions[session_id]
+        harness_before_state = step_data.pop("_harness_before_state", None)
         step = RPAStep(id=str(uuid.uuid4()), **step_data)
         insert_at = len(session.steps)
         for index, existing_step in enumerate(session.steps):
@@ -1699,6 +1920,12 @@ class RPASessionManager:
                 return next_step
 
         session.steps.insert(insert_at, step)
+        if isinstance(harness_before_state, dict):
+            self._manual_harness_before_states.setdefault(session_id, {})[step.id] = HarnessCapturedPageState(
+                url=str(harness_before_state.get("url", "") or ""),
+                title=str(harness_before_state.get("title", "") or ""),
+                html=str(harness_before_state.get("html", "") or ""),
+            )
         self._rebuild_manual_recording_state(session)
         await self._record_manual_trace_for_step(session_id, step)
 
@@ -1958,8 +2185,56 @@ class RPASessionManager:
             session.traces = [existing for existing in session.traces if existing.trace_id != trace.trace_id]
             session.traces.append(trace)
             await self._broadcast_trace(session_id, trace)
+            await self._capture_manual_harness_checkpoint_for_step(session_id, step, trace)
         except Exception as exc:
             logger.debug("[RPA] Failed to record manual trace for step %s: %s", step.id, exc)
+
+    async def _capture_manual_harness_checkpoint_for_step(
+        self,
+        session_id: str,
+        step: RPAStep,
+        trace: RPAAcceptedTrace,
+    ) -> None:
+        if not settings.rpa_harness_capture_enabled:
+            return
+        state = self._harness_capture_sessions.get(session_id)
+        if state is None or state.capture_scope != "full_sop":
+            return
+        if step.action not in {"click", "press", "navigate", "navigate_click", "navigate_press"}:
+            return
+        before_state = self._manual_harness_before_states.get(session_id, {}).get(step.id)
+        if before_state is None:
+            return
+        page = self.get_page(session_id)
+        if page is None:
+            return
+        wait_for_timeout = getattr(page, "wait_for_timeout", None)
+        if callable(wait_for_timeout):
+            await wait_for_timeout(100)
+        session = self.sessions.get(session_id)
+        if not session:
+            return
+        step_index = next(
+            (
+                index + 1
+                for index, existing_trace in enumerate(session.traces)
+                if existing_trace.trace_id == trace.trace_id
+            ),
+            len(session.traces),
+        )
+        await self.capture_harness_step_checkpoint(
+            session_id,
+            step_index=step_index,
+            step_id=trace.trace_id,
+            step_intent=trace.description or step.description or step.action,
+            recording_mode="manual",
+            before_state=before_state,
+            after_page=page,
+            trace_events=[trace.model_dump(mode="json")],
+            runtime_status="success",
+        )
+        if step.tab_id:
+            self._harness_page_baselines.setdefault(session_id, {})[step.tab_id] = await capture_current_page_state(page)
 
     async def _broadcast_trace(self, session_id: str, trace: RPAAcceptedTrace) -> None:
         if session_id in self.ws_connections:

@@ -3,7 +3,7 @@ import logging
 import asyncio
 from pathlib import Path
 from urllib.parse import urlparse
-from typing import Dict, Any
+from typing import Dict, Any, Literal
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends, Request
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
@@ -34,6 +34,7 @@ from backend.models import get_model_config, resolve_default_model_config
 from backend.storage import get_repository
 from backend.credential.vault import inject_credentials
 from backend.rpa.runtime_context import inject_runtime_context_kwargs, runtime_requirements_from_traces
+from backend.rpa.harness.config import harness_capture_enabled
 from backend.rpa.region_context import (
     RPARegionAnalyzeRequest,
     RPARegionAnalyzeResponse,
@@ -56,6 +57,10 @@ trace_compiler = TraceSkillCompiler()
 
 class StartSessionRequest(BaseModel):
     sandbox_session_id: str
+
+
+class StartHarnessCaptureRequest(BaseModel):
+    capture_scope: Literal["full_sop", "selected_steps"]
 
 
 class GenerateRequest(BaseModel):
@@ -236,6 +241,16 @@ def _ensure_no_unresolved_manual_diagnostics(session) -> None:
 def _ensure_session_owner(session, current_user: User) -> None:
     if session.user_id != str(current_user.id):
         raise HTTPException(status_code=403, detail="Not authorized")
+
+
+def _ensure_harness_capture_enabled() -> None:
+    if not harness_capture_enabled(settings):
+        raise HTTPException(status_code=404, detail="RPA Harness capture is disabled")
+
+
+def _build_harness_capture_payload(session_id: str) -> dict[str, Any] | None:
+    state = rpa_manager.get_harness_capture_session(session_id)
+    return state.model_dump(mode="json") if state is not None else None
 
 
 async def _apply_recording_agent_result(session_id: str, result: RecordingAgentResult) -> None:
@@ -615,6 +630,73 @@ async def stop_rpa_session(
     return {"status": "success", "session": _build_session_response(session)}
 
 
+@router.get("/harness/config")
+async def get_rpa_harness_config(
+    current_user: User = Depends(get_current_user),
+):
+    return {
+        "status": "success",
+        "capture_enabled": harness_capture_enabled(settings),
+    }
+
+
+@router.post("/session/{session_id}/harness-capture/start")
+async def start_harness_capture(
+    session_id: str,
+    request: StartHarnessCaptureRequest,
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_harness_capture_enabled()
+    session = await rpa_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    _ensure_session_owner(session, current_user)
+    state = rpa_manager.start_harness_capture(
+        session_id,
+        capture_scope=request.capture_scope,
+        enabled=True,
+    )
+    if state is not None:
+        await rpa_manager.set_harness_capture_runtime_active(
+            session_id,
+            active=state.capture_scope == "full_sop",
+        )
+    return {"status": "success", "capture": state.model_dump(mode="json") if state else None}
+
+
+@router.post("/session/{session_id}/harness-capture/steps/{step_index}/select")
+async def select_harness_capture_step(
+    session_id: str,
+    step_index: int,
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_harness_capture_enabled()
+    session = await rpa_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    _ensure_session_owner(session, current_user)
+    state = rpa_manager.mark_harness_step_selected(session_id, step_index=step_index)
+    if state is None:
+        raise HTTPException(status_code=400, detail="Harness capture has not started")
+    return {"status": "success", "capture": state.model_dump(mode="json")}
+
+
+@router.post("/session/{session_id}/harness-capture/next-natural-language-step/select")
+async def select_next_natural_language_harness_capture_step(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_harness_capture_enabled()
+    session = await rpa_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    _ensure_session_owner(session, current_user)
+    state = rpa_manager.mark_harness_next_natural_language_step_selected(session_id)
+    if state is None:
+        raise HTTPException(status_code=400, detail="Harness capture has not started")
+    return {"status": "success", "capture": state.model_dump(mode="json")}
+
+
 @router.delete("/session/{session_id}/timeline-item")
 async def delete_timeline_item(
     session_id: str,
@@ -956,6 +1038,12 @@ async def chat_with_assistant(
                         "event": "region_context",
                         "data": json.dumps(region_preview, ensure_ascii=False),
                     }
+                harness_step_index = len(session.traces) + 1
+                harness_before_state = await rpa_manager.prepare_harness_step_capture(
+                    session_id,
+                    step_index=harness_step_index,
+                    page=page,
+                )
                 yield {
                     "event": "agent_thought",
                     "data": json.dumps({"text": "Planning one trace-first recording command."}, ensure_ascii=False),
@@ -971,6 +1059,22 @@ async def chat_with_assistant(
                 await _apply_recording_agent_result(session_id, result)
                 if request.region_id and result.success:
                     rpa_manager.clear_region_context(session_id, request.region_id)
+                if harness_before_state is not None:
+                    trace_events = [
+                        result.trace.model_dump(mode="json")
+                    ] if result.trace is not None else []
+                    await rpa_manager.capture_harness_step_checkpoint(
+                        session_id,
+                        step_index=harness_step_index,
+                        step_id=result.trace.trace_id if result.trace else f"ai-step-{harness_step_index}",
+                        step_intent=request.message,
+                        recording_mode="natural_language",
+                        before_state=harness_before_state,
+                        after_page=page if result.success else None,
+                        trace_events=trace_events,
+                        runtime_status="success" if result.success else "failed",
+                        error=None if result.success else result.message,
+                    )
                 run_trace_count = len([
                     trace for trace in session.traces
                     if trace.trace_id not in before_trace_ids
@@ -979,6 +1083,7 @@ async def chat_with_assistant(
 
                 if result.trace:
                     code = result.trace.ai_execution.code if result.trace.ai_execution else ""
+                    harness_capture_payload = _build_harness_capture_payload(session_id)
                     yield {
                         "event": "agent_action",
                         "data": json.dumps(
@@ -998,6 +1103,7 @@ async def chat_with_assistant(
                                 "description": result.trace.description,
                                 "output": result.output,
                                 "trace": result.trace.model_dump(mode="json"),
+                                "capture": harness_capture_payload,
                             },
                             ensure_ascii=False,
                         ),
@@ -1011,6 +1117,7 @@ async def chat_with_assistant(
                                 "message": result.message,
                                 "trace_count": run_trace_count,
                                 "session_trace_count": session_trace_count,
+                                "capture": _build_harness_capture_payload(session_id),
                             },
                             ensure_ascii=False,
                         ),
@@ -1023,6 +1130,7 @@ async def chat_with_assistant(
                                 "reason": result.message,
                                 "diagnostics": [d.model_dump(mode="json") for d in result.diagnostics],
                                 "region": region_preview,
+                                "capture": _build_harness_capture_payload(session_id),
                             },
                             ensure_ascii=False,
                         ),
