@@ -95,6 +95,8 @@ class ApiToolDefinition(BaseModel):
 
 GenerationStatus = Literal[
     "pending",
+    "intent_pruning",
+    "intent_prune_retrying",
     "running",
     "generated",
     "failed",
@@ -121,7 +123,10 @@ class ApiToolGenerationCandidate(BaseModel):
     intent_score: Optional[int] = None
     intent_rank: Optional[int] = None
     intent_batch_id: Optional[str] = None
-    status: GenerationStatus = "pending"  # pending, running, generated, failed, rate_limited, stale, confidence_rejected, intent_filtered, intent_review
+    intent_prune_attempts: int = 0
+    intent_prune_error: str = ""
+    intent_prune_retry_after: Optional[datetime] = None
+    status: GenerationStatus = "pending"  # pending, intent_pruning, intent_prune_retrying, running, generated, failed, rate_limited, stale, confidence_rejected, intent_filtered, intent_review
     tool_id: Optional[str] = None
     error: str = ""
     retry_after: Optional[datetime] = None

@@ -511,6 +511,9 @@ class ApiMonitorSessionManager:
             "intent_score": candidate.intent_score,
             "intent_rank": candidate.intent_rank,
             "intent_batch_id": candidate.intent_batch_id,
+            "intent_prune_attempts": candidate.intent_prune_attempts,
+            "intent_prune_error": candidate.intent_prune_error,
+            "intent_prune_retry_after": candidate.intent_prune_retry_after.isoformat() if candidate.intent_prune_retry_after else None,
         }
 
     def register_screencast(self, session_id: str, controller: SessionScreencastController) -> None:

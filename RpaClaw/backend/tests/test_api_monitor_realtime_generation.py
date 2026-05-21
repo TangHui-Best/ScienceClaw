@@ -32,6 +32,29 @@ def test_generation_candidate_defaults_are_serializable():
     assert dumped["capture_dom_context"] == {}
     assert isinstance(dumped["created_at"], str)
     assert isinstance(dumped["updated_at"], str)
+    assert dumped["intent_prune_attempts"] == 0
+    assert dumped["intent_prune_error"] == ""
+    assert dumped["intent_prune_retry_after"] is None
+
+
+def test_generation_candidate_accepts_intent_prune_statuses():
+    pruning = ApiToolGenerationCandidate(
+        session_id="session-1",
+        dedup_key="GET /api/orders",
+        method="GET",
+        url_pattern="/api/orders",
+        status="intent_pruning",
+    )
+    retrying = ApiToolGenerationCandidate(
+        session_id="session-1",
+        dedup_key="GET /api/orders",
+        method="GET",
+        url_pattern="/api/orders",
+        status="intent_prune_retrying",
+    )
+
+    assert pruning.status == "intent_pruning"
+    assert retrying.status == "intent_prune_retrying"
 
 
 def test_session_contains_generation_candidates_by_default():
