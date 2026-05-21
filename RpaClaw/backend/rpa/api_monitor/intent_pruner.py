@@ -99,6 +99,35 @@ def _strip_json_fence(raw: str) -> str:
     return text.strip()
 
 
+def _extract_json_object(text: str) -> str:
+    """Extract the first top-level JSON object from potentially mixed LLM output."""
+    text = text.strip()
+    # Fast path: the whole text is already valid JSON
+    try:
+        json.loads(text)
+        return text
+    except (json.JSONDecodeError, ValueError):
+        pass
+    # Find the outermost { … } and try to parse it
+    depth = 0
+    start = None
+    for i, ch in enumerate(text):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start is not None:
+                candidate = text[start : i + 1]
+                try:
+                    json.loads(candidate)
+                    return candidate
+                except (json.JSONDecodeError, ValueError):
+                    start = None
+    return text
+
+
 def _clamp_score(value: object) -> int:
     try:
         score = int(value)
@@ -147,7 +176,7 @@ def _parse_prune_response(
 ) -> IntentPruneResult:
     keys = [candidate.candidate_key for candidate in candidates]
     try:
-        parsed = json.loads(_strip_json_fence(raw))
+        parsed = json.loads(_extract_json_object(_strip_json_fence(raw)))
     except json.JSONDecodeError:
         logger.warning("[IntentPruner] Failed to parse LLM response: %s", raw[:500])
         return _fallback_result(candidates, batch_id=batch_id, reason="意图裁剪失败，需人工确认")
