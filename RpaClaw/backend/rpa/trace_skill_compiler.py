@@ -439,7 +439,7 @@ class TraceSkillCompiler:
             "    await _activate_recorded_page(page, kwargs, tab_id)",
             "    return page",
             "",
-            "async def _resolve_frame_scope(current_page, frame_candidate_paths, probe):",
+            "async def _resolve_frame_target(current_page, frame_candidate_paths, locator_candidates):",
             "    attempts = []",
             "    last_error = None",
             "    for frame_path in frame_candidate_paths:",
@@ -449,15 +449,24 @@ class TraceSkillCompiler:
             "            for frame_selector in frame_path:",
             "                labels.append(str(frame_selector))",
             "                scope = scope.frame_locator(frame_selector)",
-            "            target = probe(scope)",
-            "            await target.wait_for(state='attached', timeout=2000)",
-            "            return scope",
+            "            for locator_index, locator_factory in enumerate(locator_candidates):",
+            "                try:",
+            "                    target = locator_factory(scope)",
+            "                    await target.wait_for(state='attached', timeout=2000)",
+            "                    return scope, target",
+            "                except Exception as exc:",
+            "                    last_error = exc",
+            "                    attempts.append(f\"{' -> '.join(labels) or '<main>'} :: locator[{locator_index}] :: {exc}\")",
             "        except Exception as exc:",
             "            last_error = exc",
-            "            attempts.append(' -> '.join(labels) or '<main>')",
+            "            attempts.append(f\"{' -> '.join(labels) or '<main>'} :: frame :: {exc}\")",
             "    detail = ', '.join(attempts) or '<none>'",
             "    suffix = f'; last error: {last_error}' if last_error else ''",
-            "    raise RuntimeError(f'Unable to resolve iframe scope containing target locator; candidates tried: {detail}{suffix}')",
+            "    raise RuntimeError(f'Unable to resolve iframe target locator; candidates tried: {detail}{suffix}')",
+            "",
+            "async def _resolve_frame_scope(current_page, frame_candidate_paths, probe):",
+            "    frame_scope, _target = await _resolve_frame_target(current_page, frame_candidate_paths, [probe])",
+            "    return frame_scope",
             "",
             "async def execute_skill(page, **kwargs):",
             '    """Auto-generated skill from RPA trace recording."""',
@@ -668,9 +677,8 @@ class TraceSkillCompiler:
             if not locator:
                 lines.extend(self._invalid_manual_action_lines(action))
                 return lines
-            scope_lines, scope_var = self._frame_scope_lines(self._frame_candidate_paths(trace), locator)
+            scope_lines, expr = self._manual_action_target_lines(trace, locator)
             lines.extend(scope_lines)
-            expr = _locator_expression(scope_var, locator)
             lines.append("    async with current_page.expect_navigation(wait_until='domcontentloaded'):")
             if action == "navigate_click":
                 lines.append(f"        await {expr}.click()")
@@ -694,9 +702,8 @@ class TraceSkillCompiler:
         if not locator:
             lines.append("    # No stable locator was recorded for this manual action.")
             return lines
-        scope_lines, scope_var = self._frame_scope_lines(self._frame_candidate_paths(trace), locator)
+        scope_lines, expr = self._manual_action_target_lines(trace, locator)
         lines.extend(scope_lines)
-        expr = _locator_expression(scope_var, locator)
         popup_signal = _trace_signal(trace, "popup")
         download_signal = _trace_signal(trace, "download")
         if action in {"click", "press"} and (popup_signal or download_signal):
@@ -732,6 +739,20 @@ class TraceSkillCompiler:
         else:
             lines.append(f"    # Unsupported manual action preserved as no-op: {action}")
         return lines
+
+    def _manual_action_target_lines(
+        self,
+        trace: RPAAcceptedTrace,
+        fallback_locator: Dict[str, Any],
+    ) -> tuple[List[str], str]:
+        frame_candidate_paths = self._frame_candidate_paths(trace)
+        if not frame_candidate_paths:
+            return [], _locator_expression("current_page", fallback_locator)
+        return self._frame_target_lines(
+            frame_candidate_paths,
+            trace.locator_candidates,
+            fallback_locator=fallback_locator,
+        )
 
     @staticmethod
     def _render_switch_tab_trace(trace: RPAAcceptedTrace) -> List[str]:
@@ -1284,23 +1305,70 @@ class TraceSkillCompiler:
         if path:
             paths.append(path)
 
-    @staticmethod
-    def _frame_scope_lines(
+    def _frame_target_lines(
+        self,
         frame_candidate_paths: List[List[str]] | List[str],
-        locator: Optional[Dict[str, Any]] = None,
+        locator_candidates: List[Dict[str, Any]],
+        *,
+        fallback_locator: Dict[str, Any],
     ) -> tuple[List[str], str]:
-        normalized_paths: List[List[str]]
+        normalized_paths = self._normalize_frame_candidate_paths(frame_candidate_paths)
+        if not normalized_paths:
+            return [], _locator_expression("current_page", fallback_locator)
+        target_locators = self._target_locator_candidates(locator_candidates, fallback_locator=fallback_locator)
+        return [
+            "    frame_scope, target_locator = await _resolve_frame_target(",
+            "        current_page,",
+            f"        {json.dumps(normalized_paths, ensure_ascii=False)},",
+            "        [",
+            *[f"            lambda scope: {_locator_expression('scope', locator)}," for locator in target_locators],
+            "        ],",
+            "    )",
+        ], "target_locator"
+
+    @staticmethod
+    def _normalize_frame_candidate_paths(frame_candidate_paths: List[List[str]] | List[str]) -> List[List[str]]:
         if not frame_candidate_paths:
-            return [], "current_page"
+            return []
         if all(isinstance(item, str) for item in frame_candidate_paths):
-            normalized_paths = [[str(item) for item in frame_candidate_paths if str(item or "").strip()]]
+            normalized_paths = [[str(item).strip() for item in frame_candidate_paths if str(item or "").strip()]]
         else:
             normalized_paths = [
                 [str(item).strip() for item in path if str(item or "").strip()]
                 for path in frame_candidate_paths
                 if isinstance(path, list)
             ]
-        normalized_paths = [path for path in normalized_paths if path]
+        return [path for path in normalized_paths if path]
+
+    def _target_locator_candidates(
+        self,
+        candidates: List[Dict[str, Any]],
+        *,
+        fallback_locator: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        ordered = [item for item in candidates if isinstance(item, dict) and item.get("selected")]
+        ordered.extend(item for item in candidates if isinstance(item, dict) and not item.get("selected"))
+        locators: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for candidate in ordered:
+            locator = _locator_from_candidate(candidate)
+            if not locator:
+                continue
+            key = repr(locator)
+            if key in seen:
+                continue
+            seen.add(key)
+            locators.append(locator)
+        if not locators and fallback_locator:
+            locators.append(fallback_locator)
+        return locators
+
+    @staticmethod
+    def _frame_scope_lines(
+        frame_candidate_paths: List[List[str]] | List[str],
+        locator: Optional[Dict[str, Any]] = None,
+    ) -> tuple[List[str], str]:
+        normalized_paths = TraceSkillCompiler._normalize_frame_candidate_paths(frame_candidate_paths)
         if not normalized_paths:
             return [], "current_page"
         if locator:
@@ -1441,6 +1509,26 @@ def _locator_expression(scope: str, locator: Dict[str, Any]) -> str:
     return f"{scope}.locator({locator.get('value', 'body')!r}).first"
 
 
+def _locator_from_candidate(candidate: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(candidate, dict):
+        return {}
+    locator_payload = candidate.get("locator") if "locator" in candidate else candidate
+    locator = normalize_locator(locator_payload)
+    if locator:
+        return locator
+
+    playwright_locator = candidate.get("playwright_locator")
+    if isinstance(playwright_locator, str):
+        locator = _parse_playwright_locator_expression(playwright_locator)
+        if locator:
+            return locator
+
+    selector = candidate.get("selector")
+    if isinstance(selector, str) and selector.strip() and "internal:" not in selector:
+        return normalize_locator({"method": "css", "value": selector.strip()})
+    return {}
+
+
 def _trace_signal(trace: RPAAcceptedTrace, name: str) -> Dict[str, Any]:
     signals = trace.signals if isinstance(trace.signals, dict) else {}
     signal = signals.get(name)
@@ -1484,6 +1572,62 @@ def _trace_region_frame_path(trace: RPAAcceptedTrace, region_context: Dict[str, 
     return list(trace.frame_path or [])
 
 
+_LOCATOR_LITERAL_RE = r'(?:"((?:\\.|[^"\\])*)"|\'((?:\\.|[^\'\\])*)\')'
+
+
+def _parse_playwright_locator_expression(expression: str) -> Dict[str, Any]:
+    remaining = str(expression or "").strip()
+    if remaining.startswith("page."):
+        remaining = remaining[5:]
+    if remaining.endswith(".first"):
+        remaining = remaining[:-6]
+    elif remaining.endswith(".first()"):
+        remaining = remaining[:-8]
+
+    role_match = re.fullmatch(
+        rf"get_by_role\({_LOCATOR_LITERAL_RE}(?:,\s*name={_LOCATOR_LITERAL_RE})?(?P<exact>,\s*exact=True)?\)",
+        remaining,
+    )
+    if role_match:
+        locator = {
+            "method": "role",
+            "role": _locator_literal_value(role_match, 1),
+        }
+        name = _locator_literal_value(role_match, 3)
+        if name:
+            locator["name"] = name
+        if role_match.group("exact"):
+            locator["exact"] = True
+        return normalize_locator(locator)
+
+    value_patterns = (
+        ("testid", "get_by_test_id"),
+        ("label", "get_by_label"),
+        ("placeholder", "get_by_placeholder"),
+        ("alt", "get_by_alt_text"),
+        ("title", "get_by_title"),
+        ("text", "get_by_text"),
+        ("css", "locator"),
+    )
+    for method, function_name in value_patterns:
+        exact_suffix = r"(?P<exact>,\s*exact=True)?" if method != "css" else ""
+        match = re.fullmatch(rf"{function_name}\({_LOCATOR_LITERAL_RE}{exact_suffix}\)", remaining)
+        if not match:
+            continue
+        locator = {"method": method, "value": _locator_literal_value(match, 1)}
+        if method != "css" and match.groupdict().get("exact"):
+            locator["exact"] = True
+        return normalize_locator(locator)
+    return {}
+
+
+def _locator_literal_value(match: re.Match[str], first_group: int) -> str:
+    value = match.group(first_group)
+    if value is None:
+        value = match.group(first_group + 1)
+    return str(value or "").replace('\\"', '"').replace("\\\\", "\\")
+
+
 _SRC_ATTR_RE = re.compile(
     r"\bsrc\s*(?P<op>[\*\^\$\|~]?=)\s*(?P<value>\"(?:\\.|[^\"])*\"|'(?:\\.|[^'])*'|[^\]\s]+)"
 )
@@ -1517,9 +1661,7 @@ def _frame_selector_variants(selector: str) -> List[str]:
     variants: List[str] = []
     if src_match:
         variants.extend(_stable_frame_attr_candidates(selector))
-        path_candidate = _src_path_candidate(src_match.group("value"))
-        if path_candidate:
-            variants.append(path_candidate)
+        variants.extend(_src_path_candidates(src_match.group("value")))
     variants.append(selector)
     return _dedupe_frame_selectors(variants)
 
@@ -1533,16 +1675,30 @@ def _stable_frame_attr_candidates(selector: str) -> List[str]:
     return candidates
 
 
-def _src_path_candidate(raw_value: str) -> str:
+def _src_path_candidates(raw_value: str) -> List[str]:
     src = _decode_css_attr_value(raw_value)
     parsed = urlsplit(src)
-    path = unquote(parsed.path or "").strip("/")
-    if not path:
-        return ""
-    parts = [part for part in path.split("/") if part]
-    if len(parts) >= 2:
-        path = "/".join(parts[-2:])
-    return f"iframe[src*={_quote_css_attr_value(path)}]"
+    candidates: List[str] = []
+
+    def append_path(path_value: str, *, include_parent: bool = False) -> None:
+        path = unquote(path_value or "").strip("/")
+        if not path:
+            return
+        path = path.split("?", 1)[0].split("#", 1)[0].strip("/")
+        parts = [part for part in path.split("/") if part]
+        if len(parts) < 2:
+            return
+        tail = "/".join(parts[-2:])
+        candidates.append(f"iframe[src*={_quote_css_attr_value(tail)}]")
+        if include_parent and len(parts) >= 3:
+            parent_tail = "/".join(parts[-3:])
+            candidates.append(f"iframe[src*={_quote_css_attr_value(parent_tail)}]")
+
+    fragment = unquote(parsed.fragment or "")
+    if fragment:
+        append_path(fragment.lstrip("!/"), include_parent=True)
+    append_path(parsed.path or "")
+    return _dedupe_frame_selectors(candidates)
 
 
 def _decode_css_attr_value(raw_value: str) -> str:
@@ -1554,6 +1710,7 @@ def _decode_css_attr_value(raw_value: str) -> str:
         r"\:": ":",
         r"\?": "?",
         r"\#": "#",
+        r"\!": "!",
         r"\&": "&",
         r"\=": "=",
         r"\"": '"',

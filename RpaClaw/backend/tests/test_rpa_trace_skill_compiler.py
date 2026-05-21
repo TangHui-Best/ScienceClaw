@@ -75,20 +75,24 @@ class _FakeFrameTarget:
 
     async def wait_for(self, state: str = "", timeout: int = 0) -> None:
         self.scope.probes.append((self.selector, state, timeout))
-        if not self.scope.has_target:
+        if not self.scope.has_target(self.selector):
             raise TimeoutError(f"{self.scope.selector} missing {self.selector}")
 
     async def fill(self, value: str) -> None:
         self.scope.fills.append((self.selector, value))
 
+    async def click(self) -> None:
+        self.scope.clicks.append(self.selector)
+
 
 class _FakeFrameScope:
-    def __init__(self, page: "_FakeFrameResolverPage", selector: str, has_target: bool) -> None:
+    def __init__(self, page: "_FakeFrameResolverPage", selector: str, target_config) -> None:
         self.page = page
         self.selector = selector
-        self.has_target = has_target
+        self.target_config = target_config
         self.probes = []
         self.fills = []
+        self.clicks = []
 
     def frame_locator(self, selector: str) -> "_FakeFrameScope":
         return self.page.frame_locator(selector)
@@ -96,9 +100,23 @@ class _FakeFrameScope:
     def locator(self, selector: str) -> _FakeFrameTarget:
         return _FakeFrameTarget(self, selector)
 
+    def get_by_role(self, role: str, name: str = "", exact=None) -> _FakeFrameTarget:
+        return _FakeFrameTarget(self, f"role:{role}|name={name}|exact={exact}")
+
+    def get_by_placeholder(self, value: str) -> _FakeFrameTarget:
+        return _FakeFrameTarget(self, f"placeholder:{value}")
+
+    def get_by_text(self, value: str, exact=None) -> _FakeFrameTarget:
+        return _FakeFrameTarget(self, f"text:{value}|exact={exact}")
+
+    def has_target(self, selector: str) -> bool:
+        if isinstance(self.target_config, bool):
+            return self.target_config
+        return selector in set(self.target_config or [])
+
 
 class _FakeFrameResolverPage(_FakeTracePage):
-    def __init__(self, target_by_selector: dict[str, bool]) -> None:
+    def __init__(self, target_by_selector: dict[str, object]) -> None:
         super().__init__("resolver-page")
         self.target_by_selector = target_by_selector
         self.frame_selectors = []
@@ -307,12 +325,12 @@ def test_iframe_trace_with_new_tab_id_does_not_materialize_page():
 
     assert '_ensure_recorded_tab(tabs, current_page, kwargs, "tab-frame-drift")' not in body
     assert "Materialize recorded tab tab-frame-drift" not in body
-    assert "frame_scope = await _resolve_frame_scope(" in body
+    assert "frame_scope, target_locator = await _resolve_frame_target(" in body
     assert '["iframe:nth-of-type(2)"]' in body
-    assert 'await frame_scope.locator("#c_layout input[name=\'contract\']").first.fill(' in body
+    assert "await target_locator.fill(" in body
 
 
-def test_iframe_trace_prefers_reported_frame_path_candidates_before_nth_fallback():
+def test_iframe_hash_route_src_candidate_uses_business_path_not_parent_path():
     trace = RPAAcceptedTrace(
         trace_id="fill-iframe-field",
         trace_type=RPATraceType.MANUAL_ACTION,
@@ -324,7 +342,7 @@ def test_iframe_trace_prefers_reported_frame_path_candidates_before_nth_fallback
         ],
         signals={
             "reported_frame_path": [
-                'iframe[src="https://kweweb-b4.example.com/pr/shoppingcar/index.html?sourceSystemAppId=abc#cart"]'
+                'iframe[src="https\\:\\/\\/kweweb-b4.huawei.com\\/pr\\/\\#\\!purpr\\/shoppingcar\\/index.html\\?sourceSystemAppId=abc"]'
             ],
         },
     )
@@ -332,16 +350,88 @@ def test_iframe_trace_prefers_reported_frame_path_candidates_before_nth_fallback
     body = _execute_body(TraceSkillCompiler().generate_script([trace], is_local=True))
 
     path_candidate = '["iframe[src*=\'shoppingcar/index.html\']"]'
-    exact_candidate = (
-        '["iframe[src=\\"https://kweweb-b4.example.com/pr/shoppingcar/index.html'
-        '?sourceSystemAppId=abc#cart\\"]"]'
-    )
+    route_candidate = '["iframe[src*=\'purpr/shoppingcar/index.html\']"]'
+    exact_candidate = '["iframe[src=\\"https\\\\:\\\\/\\\\/kweweb-b4.huawei.com\\\\/pr\\\\/\\\\#\\\\!purpr\\\\/shoppingcar\\\\/index.html\\\\?sourceSystemAppId=abc\\"]"]'
     nth_fallback = '["iframe:nth-of-type(2)"]'
-    assert "frame_scope = await _resolve_frame_scope(" in body
+    assert "frame_scope, target_locator = await _resolve_frame_target(" in body
     assert path_candidate in body
+    assert route_candidate in body
+    assert "iframe[src*='pr']" not in body
     assert exact_candidate in body
     assert nth_fallback in body
-    assert body.index(path_candidate) < body.index(exact_candidate) < body.index(nth_fallback)
+    assert body.index(path_candidate) < body.index(route_candidate) < body.index(exact_candidate) < body.index(nth_fallback)
+
+
+def test_iframe_role_probe_preserves_recorded_non_exact_locator_semantics():
+    trace = RPAAcceptedTrace(
+        trace_id="fill-iframe-role",
+        trace_type=RPATraceType.MANUAL_ACTION,
+        action="fill",
+        value="short reason",
+        frame_path=["iframe:nth-of-type(2)"],
+        locator_candidates=[
+            {
+                "kind": "role",
+                "locator": {
+                    "method": "role",
+                    "role": "textbox",
+                    "name": "请对本次申购做出简要说明",
+                },
+                "playwright_locator": 'page.get_by_role("textbox", name="请对本次申购做出简要说明")',
+                "selected": True,
+            },
+        ],
+    )
+
+    body = _execute_body(TraceSkillCompiler().generate_script([trace], is_local=True))
+
+    assert 'lambda scope: scope.get_by_role(\'textbox\', name=\'请对本次申购做出简要说明\')' in body
+    assert "请对本次申购做出简要说明', exact=True" not in body
+
+
+def test_iframe_resolver_uses_placeholder_candidate_when_selected_role_probe_fails():
+    trace = RPAAcceptedTrace(
+        trace_id="fill-iframe-placeholder",
+        trace_type=RPATraceType.MANUAL_ACTION,
+        action="fill",
+        value="short reason",
+        frame_path=["iframe[title='cart']"],
+        locator_candidates=[
+            {
+                "kind": "role",
+                "locator": {
+                    "method": "role",
+                    "role": "textbox",
+                    "name": "请对本次申购做出简要说明",
+                },
+                "selected": True,
+            },
+            {
+                "kind": "placeholder",
+                "locator": {
+                    "method": "placeholder",
+                    "value": "请对本次申购做出简要说明",
+                },
+            },
+        ],
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    execute_skill = _load_execute_skill(script)
+    page = _FakeFrameResolverPage(
+        {
+            "iframe[title='cart']": {"placeholder:请对本次申购做出简要说明"},
+        }
+    )
+
+    asyncio.run(execute_skill(page))
+
+    scope = page.frame_scopes["iframe[title='cart']"]
+    assert scope.probes == [
+        ("role:textbox|name=请对本次申购做出简要说明|exact=None", "attached", 2000),
+        ("placeholder:请对本次申购做出简要说明", "attached", 2000),
+    ]
+    assert scope.fills == [("placeholder:请对本次申购做出简要说明", "short reason")]
 
 
 def test_iframe_frame_signal_reported_path_is_used_when_trace_frame_path_is_empty():
@@ -360,9 +450,9 @@ def test_iframe_frame_signal_reported_path_is_used_when_trace_frame_path_is_empt
 
     body = _execute_body(TraceSkillCompiler().generate_script([trace], is_local=True))
 
-    assert "frame_scope = await _resolve_frame_scope(" in body
+    assert "frame_scope, target_locator = await _resolve_frame_target(" in body
     assert '["iframe[title=\'cart\']"]' in body
-    assert 'await frame_scope.locator("#c_layout input[name=\'contract\']").first.fill(' in body
+    assert "await target_locator.fill(" in body
 
 
 def test_iframe_resolver_falls_back_when_reported_candidate_lacks_target_locator():
@@ -410,8 +500,9 @@ def test_legacy_iframe_trace_uses_resolver_with_recorded_frame_path_only():
 
     body = _execute_body(TraceSkillCompiler().generate_script([trace], is_local=True))
 
-    assert "frame_scope = await _resolve_frame_scope(" in body
+    assert "frame_scope, target_locator = await _resolve_frame_target(" in body
     assert '["iframe:nth-of-type(2)"]' in body
+    assert "await target_locator.fill(" in body
 
 
 def test_trace_without_iframe_evidence_does_not_call_frame_resolver():
@@ -428,6 +519,7 @@ def test_trace_without_iframe_evidence_does_not_call_frame_resolver():
     body = _execute_body(TraceSkillCompiler().generate_script([trace], is_local=True))
 
     assert "_resolve_frame_scope(" not in body
+    assert "_resolve_frame_target(" not in body
     assert "await current_page.locator('#target').first.fill('contract-001')" in body
 
 
@@ -461,7 +553,7 @@ def test_iframe_frame_signal_with_new_tab_id_does_not_materialize_page():
 
     assert '_ensure_recorded_tab(tabs, current_page, kwargs, "tab-frame-drift")' not in body
     assert "Ignore frame-scoped tab drift tab-frame-drift" in body
-    assert "frame_scope = await _resolve_frame_scope(" in body
+    assert "frame_scope, target_locator = await _resolve_frame_target(" in body
     assert '["iframe:nth-of-type(2)"]' in body
 
 
@@ -482,9 +574,9 @@ def test_popup_click_in_frame_still_compiles_to_expect_popup():
 
     body = _execute_body(TraceSkillCompiler().generate_script([trace], is_local=True))
 
-    assert "frame_scope = await _resolve_frame_scope(" in body
+    assert "frame_scope, target_locator = await _resolve_frame_target(" in body
     assert "async with current_page.expect_popup() as popup_info:" in body
-    assert "await frame_scope.get_by_text('Export all', exact=True).click()" in body
+    assert "await target_locator.click()" in body
     assert 'tabs["tab-export"] = new_page' in body
 
 
