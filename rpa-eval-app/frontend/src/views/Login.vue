@@ -16,9 +16,6 @@
             show-password
           />
         </el-form-item>
-        <el-alert class="account-hint" type="info" :closable="false">
-          可用账号：admin/admin123、buyer/buyer123、approver/approver123
-        </el-alert>
         <el-button
           class="login-button"
           type="primary"
@@ -44,7 +41,7 @@ const route = useRoute()
 const router = useRouter()
 const formRef = ref<FormInstance>()
 const loading = ref(false)
-const form = reactive({ username: 'admin', password: 'admin123' })
+const form = reactive({ username: '', password: '' })
 const rules: FormRules = {
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
   password: [{ required: true, message: '请输入密码', trigger: 'blur' }]
@@ -80,10 +77,6 @@ async function handleLogin() {
 h1 {
   margin: 0 0 8px;
   font-size: 24px;
-}
-
-.account-hint {
-  margin-bottom: 14px;
 }
 
 .login-button {

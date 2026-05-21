@@ -3,7 +3,6 @@ name: 新建采购申请后生成采购订单
 tags: [e2e, purchase_requests, purchase_orders, data_flow]
 user:
   username: buyer
-  password: buyer123
 start_path: /purchase-requests/new
 timeout_s: 240
 instruction: >

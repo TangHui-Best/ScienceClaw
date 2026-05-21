@@ -8,6 +8,10 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
 
 
+class EvalTokenRequest(BaseModel):
+    username: str
+
+
 class LoginRequest(BaseModel):
     username: str
     password: str
@@ -20,6 +24,10 @@ class UserOut(BaseModel):
     department: str
 
     model_config = {"from_attributes": True}
+
+
+class EvalTokenResponse(TokenResponse):
+    user: UserOut
 
 
 class SupplierOut(BaseModel):

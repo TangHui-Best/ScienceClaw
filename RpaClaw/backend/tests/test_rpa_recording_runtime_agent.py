@@ -9,13 +9,17 @@ import pytest
 
 import backend.rpa.recording_runtime_agent as recording_runtime_agent
 from backend.rpa.recording_runtime_agent import (
+    RecordingPlannerContractError,
     RecordingRuntimeAgent,
     RECORDING_RUNTIME_SYSTEM_PROMPT,
     _classify_recording_failure,
+    _compact_region_context,
     _ensure_expected_effect,
+    _execute_extract_snapshot_plan,
     _parse_json_object,
     _resolve_recording_snapshot_debug_dir,
     _resolve_recording_snapshot_debug_path,
+    _selected_region_extract_plan_validation_error,
 )
 from backend.rpa.trace_models import RPAPageState
 
@@ -66,6 +70,77 @@ class _FakeLocator:
 
     async def click(self):
         return None
+
+
+def test_compact_region_context_forwards_scope_and_nested_locators():
+    compact = _compact_region_context(
+        {
+            "region_id": "region-1",
+            "tab_id": "tab-1",
+            "evidence": {
+                "inferred_kind": "single_value",
+                "scope_candidates": [
+                    {
+                        "kind": "text",
+                        "locator": {"method": "text", "value": "Order A"},
+                        "source": "dominant_scope",
+                    }
+                ],
+                "intersecting_elements": [
+                    {
+                        "tag": "span",
+                        "text": "Paid",
+                        "nested_locator_candidates": [
+                            {
+                                "kind": "nested",
+                                "locator": {
+                                    "method": "nested",
+                                    "parent": {"method": "text", "value": "Order A"},
+                                    "child": {"method": "text", "value": "Paid"},
+                                },
+                                "source": "region_ancestor_scope",
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
+    )
+
+    assert compact["scope_candidates"] == [
+        {
+            "kind": "text",
+            "locator": {"method": "text", "value": "Order A"},
+            "source": "dominant_scope",
+        }
+    ]
+    assert compact["intersecting_elements"][0]["nested_locator_candidates"] == [
+        {
+            "kind": "nested",
+            "locator": {
+                "method": "nested",
+                "parent": {"method": "text", "value": "Order A"},
+                "child": {"method": "text", "value": "Paid"},
+            },
+            "source": "region_ancestor_scope",
+        }
+    ]
+
+
+def test_compact_region_context_preserves_flat_trace_region_evidence():
+    compact = _compact_region_context(
+        {
+            "region_id": "region-1",
+            "inferred_kind": "text_region",
+            "local_text": ["Order No. AB-123"],
+            "locator_candidates": [{"kind": "css", "locator": {"method": "css", "value": "[data-order]"}}],
+        }
+    )
+
+    assert compact["region_id"] == "region-1"
+    assert compact["inferred_kind"] == "text_region"
+    assert compact["local_text"] == ["Order No. AB-123"]
+    assert compact["locator_candidates"][0]["locator"]["value"] == "[data-order]"
 
 
 class _FakeListPage(_FakePage):
@@ -249,6 +324,29 @@ def _ordinal_frame_collection_snapshot():
             }
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_run_python_fill_accepts_action_evidence_from_output():
+    page = _FakePage()
+    result = await _ensure_expected_effect(
+        page=page,
+        instruction="fill the previous title into the PR summary field",
+        plan={"action_type": "run_python", "expected_effect": "fill"},
+        result={
+            "success": True,
+            "output": {
+                "action_performed": True,
+                "action_type": "fill",
+                "filled_value": "Example",
+            },
+        },
+        before=RPAPageState(url=page.url, title="Example"),
+    )
+
+    assert result["success"] is True
+    assert result["effect"]["action_performed"] is True
+    assert result["effect"]["type"] == "fill"
 
 
 def test_ordinal_overlay_builds_relative_first_item_name_plan():
@@ -515,6 +613,9 @@ async def test_recording_runtime_agent_uses_ordinal_overlay_without_planner(monk
 
 def test_backend_rpa_package_import_is_lazy():
     module = importlib.import_module("backend.rpa")
+    for exported_name in module.__all__:
+        module.__dict__.pop(exported_name, None)
+    module = importlib.reload(module)
 
     assert "rpa_manager" not in module.__dict__
     assert "RPASession" not in module.__dict__
@@ -553,14 +654,18 @@ def test_recording_runtime_prompt_defines_result_return_contract():
     assert "internal_ref" in RECORDING_RUNTIME_SYSTEM_PROMPT
     assert "不是 DOM id、CSS selector 或 Playwright locator" in RECORDING_RUNTIME_SYSTEM_PROMPT
     assert "locator_hints" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "action_performed" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "filled_value" in RECORDING_RUNTIME_SYSTEM_PROMPT
 
 
 def test_recording_runtime_prompt_prefers_structured_snapshot_views():
     assert "extract_snapshot" in RECORDING_RUNTIME_SYSTEM_PROMPT
     assert "table_views" in RECORDING_RUNTIME_SYSTEM_PROMPT
     assert "detail_views" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "form_views" in RECORDING_RUNTIME_SYSTEM_PROMPT
     assert "row-relative" in RECORDING_RUNTIME_SYSTEM_PROMPT
     assert "column-relative" in RECORDING_RUNTIME_SYSTEM_PROMPT
+    assert "Do not turn summary text into placeholder" in RECORDING_RUNTIME_SYSTEM_PROMPT
     assert "Do not use observed row text as the primary selector when the instruction is ordinal" in RECORDING_RUNTIME_SYSTEM_PROMPT
 
 
@@ -607,6 +712,365 @@ async def test_recording_runtime_agent_accepts_successful_python_plan():
     assert result.trace.output_key == "page_title"
     assert result.trace.output == {"title": "Example"}
     assert result.trace.ai_execution.repair_attempted is False
+
+
+def test_recording_runtime_agent_passes_region_context_to_planner():
+    async def run_test():
+        planner_calls = []
+        region_context = {
+            "region_id": "region-1",
+            "tab_id": "tab-1",
+            "page_url": "https://example.test/start",
+            "page_title": "Example",
+            "evidence": {
+                "url": "https://example.test/start",
+                "title": "Example",
+                "frame_path": ["iframe.detail"],
+                "rect": {"x": 10, "y": 20, "width": 300, "height": 160},
+                "inferred_kind": "table_region",
+                "local_text": [f"cell-{index}" for index in range(25)],
+                "dominant_container": {"tag": "table", "text": "Orders"},
+                "locator_candidates": [
+                    {"kind": "css", "selector": f"table tr:nth-child({index})"} for index in range(12)
+                ],
+                "table_summary": {"headers": ["Name", "Price"], "row_count": 2},
+                "list_summary": {"item_count": 0},
+                "action_summary": {"controls": [{"text": "Open"}]},
+                "warnings": ["partial-overlap"],
+                "intersecting_elements": [
+                    {
+                        "tag": "span",
+                        "text": "Paid",
+                        "nested_locator_candidates": [
+                            {
+                                "kind": "nested",
+                                "locator": {
+                                    "method": "nested",
+                                    "parent": {"method": "text", "value": "Order A"},
+                                    "child": {"method": "text", "value": "Paid"},
+                                },
+                                "source": "region_ancestor_scope",
+                            }
+                        ],
+                    },
+                    *[{"tag": "td", "text": f"cell-{index}"} for index in range(24)],
+                ],
+            },
+        }
+
+        async def planner(payload):
+            planner_calls.append(payload)
+            return {
+                "description": "Extract selected region",
+                "action_type": "run_python",
+                "output_key": "selected_region",
+                "code": "async def run(page, results):\n    return {'ok': True}",
+            }
+
+        result = await RecordingRuntimeAgent(planner=planner).run(
+            page=_FakePage(),
+            instruction="extract selected region",
+            runtime_results={},
+            region_context=region_context,
+        )
+
+        assert result.success is True
+        assert "region_context" not in planner_calls[0]
+        snapshot = planner_calls[0]["snapshot"]
+        assert snapshot["mode"] == "region_scoped_snapshot"
+        assert snapshot["region_scope"]["region_id"] == "region-1"
+        assert snapshot["region_scope"]["tab_id"] == "tab-1"
+        assert snapshot["region_scope"]["frame_path"] == ["iframe.detail"]
+        assert snapshot["region_scope"]["frame_rect"] == {"x": 10, "y": 20, "width": 300, "height": 160}
+        assert "intersecting_elements" not in snapshot["region_scope"]
+        assert result.trace.region_scope["region_id"] == "region-1"
+        assert result.trace.region_scope["frame_path"] == ["iframe.detail"]
+        compact = result.trace.region_context
+        assert compact["region_id"] == "region-1"
+        assert compact["inferred_kind"] == "table_region"
+        assert compact["frame_path"] == ["iframe.detail"]
+        assert compact["rect"] == {"x": 10, "y": 20, "width": 300, "height": 160}
+        assert compact["local_text"] == [f"cell-{index}" for index in range(20)]
+        assert len(compact["locator_candidates"]) == 10
+        assert len(compact["intersecting_elements"]) == 20
+        assert compact["intersecting_elements"][0]["nested_locator_candidates"] == [
+            {
+                "kind": "nested",
+                "locator": {
+                    "method": "nested",
+                    "parent": {"method": "text", "value": "Order A"},
+                    "child": {"method": "text", "value": "Paid"},
+                },
+                "source": "region_ancestor_scope",
+            }
+        ]
+        assert result.trace.region_context == compact
+        assert result.trace.signals["region_selection"] == {
+            "region_id": "region-1",
+            "inferred_kind": "table_region",
+            "rect": {"x": 10, "y": 20, "width": 300, "height": 160},
+            "frame_path": ["iframe.detail"],
+            "local_text_preview": [f"cell-{index}" for index in range(20)],
+            "table": {"headers": ["Name", "Price"], "row_count": 2},
+            "list": {"item_count": 0},
+            "action": {"controls": [{"text": "Open"}]},
+            "warnings": ["partial-overlap"],
+        }
+        assert result.trace.signals["region_context_decision"] == {
+            "region_id": "region-1",
+            "used_as": "extraction",
+            "action_type": "run_python",
+            "output_key": "selected_region",
+        }
+
+    asyncio.run(run_test())
+
+
+def test_recording_runtime_agent_does_not_use_full_page_ordinal_overlay_with_region_context(monkeypatch):
+    async def run_test():
+        planner_calls = []
+        region_context = {
+            "region_id": "region-1",
+            "page_url": "https://example.test/start",
+            "page_title": "Example",
+            "evidence": {
+                "inferred_kind": "table_region",
+                "rect": {"x": 10, "y": 20, "width": 300, "height": 160},
+                "local_text": ["Name", "Price", "alpha", "$1"],
+                "table_summary": {"headers": ["Name", "Price"], "row_count": 1},
+            },
+        }
+
+        def fail_if_overlay_builder_called(_instruction, _snapshot):
+            raise AssertionError("full-page overlay builders should not run with region context")
+
+        async def planner(payload):
+            planner_calls.append(payload)
+            return {
+                "description": "Extract selected region first row",
+                "action_type": "run_python",
+                "expected_effect": "extract",
+                "output_key": "region_value",
+                "code": "async def run(page, results):\n    return {'region': True}",
+            }
+
+        monkeypatch.setattr(
+            "backend.rpa.recording_runtime_agent._build_table_ordinal_overlay_plan",
+            fail_if_overlay_builder_called,
+        )
+        monkeypatch.setattr(
+            "backend.rpa.recording_runtime_agent._build_ordinal_overlay_plan",
+            fail_if_overlay_builder_called,
+        )
+
+        result = await RecordingRuntimeAgent(planner=planner).run(
+            page=_FakePage(),
+            instruction="extract the first row from this selected area",
+            runtime_results={},
+            region_context=region_context,
+        )
+
+        assert result.success is True
+        assert result.output_key == "region_value"
+        assert result.output == {"region": True}
+        assert len(planner_calls) == 1
+
+    asyncio.run(run_test())
+
+
+def test_recording_runtime_agent_uses_region_scoped_snapshot_for_region_planner(monkeypatch):
+    async def run_test():
+        async def fake_snapshot(_page, region_scope=None):
+            return {"url": "https://example.test/start", "title": "Example"}
+
+        def fake_compact_snapshot(_snapshot, _instruction, region_scope=None):
+            assert region_scope["region_id"] == "region-1"
+            return {
+                "mode": "region_scoped_snapshot",
+                "url": "https://example.test/start",
+                "title": "Example",
+                "region_scope": region_scope,
+                "page_context": {"url": "https://example.test/start", "title": "Example"},
+                "expanded_regions": [
+                    {
+                        "kind": "text_region",
+                        "title": "region-1",
+                        "summary": "Order A | $10",
+                        "evidence": {
+                            "texts": [
+                                {"text": "Order A"},
+                                {"text": "$10"},
+                            ]
+                        },
+                    }
+                ],
+            }
+
+        planner_calls = []
+        runtime_results = {"previous_order": {"id": "A"}}
+        region_context = {
+            "region_id": "region-1",
+            "evidence": {
+                "local_text": ["Order A", "$10"],
+            },
+        }
+
+        async def planner(payload):
+            planner_calls.append(payload)
+            return {
+                "description": "Extract selected region",
+                "action_type": "run_python",
+                "output_key": "selected_region",
+                "code": "async def run(page, results):\n    return {'ok': True}",
+            }
+
+        monkeypatch.setattr(recording_runtime_agent, "_safe_page_snapshot", fake_snapshot)
+        monkeypatch.setattr(recording_runtime_agent, "_compact_snapshot", fake_compact_snapshot)
+
+        result = await RecordingRuntimeAgent(planner=planner).run(
+            page=_FakePage(),
+            instruction="extract selected region",
+            runtime_results=runtime_results,
+            region_context=region_context,
+        )
+
+        assert result.success is True
+        payload = planner_calls[0]
+        snapshot = payload["snapshot"]
+        assert "context_scope" not in payload
+        assert "region_context" not in payload
+        assert snapshot["mode"] == "region_scoped_snapshot"
+        assert snapshot["region_scope"]["region_id"] == "region-1"
+        assert snapshot["expanded_regions"][0]["summary"] == "Order A | $10"
+        assert snapshot["url"] == "https://example.test/start"
+        assert payload["runtime_results"] == runtime_results
+
+    asyncio.run(run_test())
+
+
+def test_recording_runtime_agent_region_repair_payload_excludes_full_page_snapshot(monkeypatch):
+    async def run_test():
+        async def fake_snapshot(_page, region_scope=None):
+            return {"url": "https://example.test/start", "title": "Example"}
+
+        def fake_compact_snapshot(_snapshot, _instruction, region_scope=None):
+            assert region_scope["region_id"] == "region-1"
+            return {
+                "mode": "region_scoped_snapshot",
+                "url": "https://example.test/start",
+                "title": "Example",
+                "region_scope": region_scope,
+                "expanded_regions": [
+                    {"title": "region-1", "summary": "Order A | $10", "evidence": {"texts": [{"text": "Order A"}]}}
+                ],
+            }
+
+        planner_calls = []
+        plans = [
+            {
+                "description": "Broken selected region extraction",
+                "action_type": "run_python",
+                "code": "async def run(page, results):\n    raise Exception('locator failed')",
+            },
+            {
+                "description": "Fixed selected region extraction",
+                "action_type": "run_python",
+                "output_key": "selected_region",
+                "code": "async def run(page, results):\n    return {'ok': True}",
+            },
+        ]
+        region_context = {
+            "region_id": "region-1",
+            "page_url": "https://example.test/start",
+            "page_title": "Example",
+            "evidence": {
+                "local_text": ["Order A", "$10"],
+                "rect": {"x": 10, "y": 20, "width": 300, "height": 160},
+            },
+        }
+
+        async def planner(payload):
+            planner_calls.append(payload)
+            return plans.pop(0)
+
+        monkeypatch.setattr(recording_runtime_agent, "_safe_page_snapshot", fake_snapshot)
+        monkeypatch.setattr(recording_runtime_agent, "_compact_snapshot", fake_compact_snapshot)
+
+        result = await RecordingRuntimeAgent(planner=planner).run(
+            page=_FakePage(),
+            instruction="extract selected region",
+            runtime_results={},
+            region_context=region_context,
+        )
+
+        assert result.success is True
+        assert len(planner_calls) == 2
+        repair_payload = planner_calls[1]
+        assert "context_scope" not in repair_payload
+        assert "region_context" not in repair_payload
+        assert repair_payload["snapshot"]["mode"] == "region_scoped_snapshot"
+        assert repair_payload["repair"]["snapshot_after_failure"]["mode"] == "region_scoped_snapshot"
+        assert repair_payload["repair"]["page_after_failure"]["url"] == "https://example.test/start"
+        assert repair_payload["repair"]["snapshot_after_failure"]["region_scope"]["region_id"] == "region-1"
+
+    asyncio.run(run_test())
+
+
+def test_recording_runtime_agent_omits_region_context_when_absent():
+    async def run_test():
+        planner_calls = []
+
+        async def planner(payload):
+            planner_calls.append(payload)
+            return {
+                "description": "Extract title",
+                "action_type": "run_python",
+                "output_key": "page_title",
+                "code": "async def run(page, results):\n    return {'title': await page.title()}",
+            }
+
+        result = await RecordingRuntimeAgent(planner=planner).run(
+            page=_FakePage(),
+            instruction="extract title",
+            runtime_results={},
+        )
+
+        assert result.success is True
+        assert "region_context" not in planner_calls[0]
+        assert result.trace.region_context == {}
+        assert result.trace.region_scope == {}
+        assert "region_selection" not in result.trace.signals
+        assert "region_context_decision" not in result.trace.signals
+
+    asyncio.run(run_test())
+
+
+@pytest.mark.asyncio
+async def test_recording_runtime_agent_persists_runtime_ai_preserve_signal():
+    async def planner(_payload):
+        return {
+            "description": "Select the closest matching project",
+            "action_type": "run_python",
+            "expected_effect": "click",
+            "output_key": "selected_project",
+            "preserve_runtime_ai": True,
+            "semantic_intent": "select_best_matching_candidate",
+            "code": (
+                "async def run(page, results):\n"
+                "    await page.locator('a.project').nth(0).click()\n"
+                "    return {'action_performed': True, 'action_type': 'click', 'target': 'alpha'}"
+            ),
+        }
+
+    result = await RecordingRuntimeAgent(planner=planner).run(
+        page=_FakePage(),
+        instruction="open the closest matching project",
+        runtime_results={},
+    )
+
+    assert result.success is True
+    assert result.trace.signals["runtime_ai"]["preserve"] is True
+    assert result.trace.signals["runtime_ai"]["reason"] == "select_best_matching_candidate"
 
 
 @pytest.mark.asyncio
@@ -708,6 +1172,343 @@ async def test_recording_runtime_agent_preserves_extract_snapshot_frame_path(mon
 
     assert result.success is True
     assert result.trace.signals["extract_snapshot"]["frame_path"] == ["iframe[title='detail']"]
+
+
+def test_extract_snapshot_plan_validation_allows_empty_fields_by_default():
+    plan = {
+        "action_type": "extract_snapshot",
+        "fields": [{"label": "Optional note", "value": "", "visible": True}],
+    }
+
+    assert _selected_region_extract_plan_validation_error(plan) == ""
+
+
+def test_execute_extract_snapshot_plan_allows_empty_output_by_default():
+    result = _execute_extract_snapshot_plan(
+        {
+            "action_type": "extract_snapshot",
+            "output_key": "optional_note",
+            "source": "detail_views",
+            "fields": [{"label": "Optional note", "value": "", "visible": True}],
+        }
+    )
+
+    assert result["success"] is True
+    assert result["output"] == {"Optional note": ""}
+    assert result["signals"]["extract_snapshot"]["fields"][0]["value"] == ""
+
+
+def test_extract_snapshot_plan_validation_rejects_empty_required_field():
+    plan = {
+        "action_type": "extract_snapshot",
+        "fields": [{"label": "Total", "value": "", "visible": True, "required": True}],
+    }
+
+    assert _selected_region_extract_plan_validation_error(plan) == "extract_snapshot required field has empty value"
+
+
+def test_recording_runtime_agent_does_not_synthesize_region_extract_fields_from_local_text(monkeypatch):
+    async def run_test():
+        async def fake_build_page_snapshot(_page, _build_frame_path):
+            return {
+                "url": "https://example.test/pricing",
+                "title": "Pricing",
+                "frames": [],
+                "actionable_nodes": [],
+                "content_nodes": [],
+                "containers": [],
+                "detail_views": [],
+            }
+
+        async def planner(_payload):
+            return {
+                "description": "Extract model count from selected region",
+                "action_type": "extract_snapshot",
+                "expected_effect": "extract",
+                "output_key": "model_count",
+                "source": "detail_views",
+                "fields": [
+                    {
+                        "label": "模型数量",
+                        "value": "",
+                        "visible": True,
+                        "value_kind": "number",
+                    }
+                ],
+            }
+
+        monkeypatch.setattr("backend.rpa.recording_runtime_agent.build_page_snapshot", fake_build_page_snapshot)
+
+        result = await RecordingRuntimeAgent(planner=planner).run(
+            page=_FakePage(),
+            instruction="获取框选区域的模型数量",
+            runtime_results={},
+            region_context={
+                "region_id": "region-1",
+                "page_url": "https://example.test/pricing",
+                "evidence": {
+                    "inferred_kind": "text_region",
+                    "local_text": ["Total 99 models"],
+                    "rect": {"x": 10, "y": 20, "width": 110, "height": 34},
+                },
+            },
+        )
+
+        assert result.success is True
+        assert result.output == {"模型数量": ""}
+        assert result.trace.signals["extract_snapshot"]["fields"][0]["value"] == ""
+
+    asyncio.run(run_test())
+
+
+def test_recording_runtime_agent_accepts_planner_selected_region_extract_field(monkeypatch):
+    async def run_test():
+        captured_payloads = []
+
+        async def fake_snapshot(_page, region_scope=None):
+            return {
+                "url": "https://example.test/orders",
+                "title": "Orders",
+                "region_scope": region_scope,
+            }
+
+        def fake_compact_snapshot(_snapshot, _instruction, region_scope=None):
+            return {
+                "mode": "region_scoped_snapshot",
+                "url": "https://example.test/orders",
+                "title": "Orders",
+                "region_scope": region_scope,
+                "detail_views": [
+                    {
+                        "source": "region_scoped_snapshot",
+                        "section_title": "Selected region",
+                        "fields": [
+                            {
+                                "label": "order_number",
+                                "value": "Order No. AB-123",
+                                "visible": True,
+                                "value_kind": "text",
+                            }
+                        ],
+                    }
+                ],
+            }
+
+        async def planner(payload):
+            captured_payloads.append(payload)
+            return {
+                "description": "Extract order number from selected region",
+                "action_type": "extract_snapshot",
+                "expected_effect": "extract",
+                "output_key": "order_number",
+                "source": "region_scoped_snapshot",
+                "fields": [
+                    {
+                        "label": "order_number",
+                        "value": "AB-123",
+                        "visible": True,
+                        "value_kind": "text",
+                    }
+                ],
+            }
+
+        monkeypatch.setattr("backend.rpa.recording_runtime_agent._safe_page_snapshot", fake_snapshot)
+        monkeypatch.setattr("backend.rpa.recording_runtime_agent._compact_snapshot", fake_compact_snapshot)
+
+        result = await RecordingRuntimeAgent(planner=planner).run(
+            page=_FakePage(),
+            instruction="Get the selected region order number",
+            runtime_results={},
+            region_context={
+                "region_id": "region-1",
+                "page_url": "https://example.test/orders",
+                "evidence": {
+                    "inferred_kind": "text_region",
+                    "local_text": ["Order No. AB-123"],
+                    "rect": {"x": 10, "y": 20, "width": 160, "height": 34},
+                },
+            },
+        )
+
+        assert result.success is True
+        assert result.output == {"order_number": "AB-123"}
+        assert result.trace.signals["extract_snapshot"]["source"] == "region_scoped_snapshot"
+        assert "context_scope" not in captured_payloads[0]
+        assert "region_context" not in captured_payloads[0]
+        selected_snapshot = captured_payloads[0]["snapshot"]
+        assert selected_snapshot["mode"] == "region_scoped_snapshot"
+        assert selected_snapshot["region_scope"]["region_id"] == "region-1"
+        assert selected_snapshot["detail_views"][0]["source"] == "region_scoped_snapshot"
+        assert selected_snapshot["detail_views"][0]["fields"][0]["value"] == "Order No. AB-123"
+
+    asyncio.run(run_test())
+
+
+def test_recording_runtime_agent_reasks_planner_when_region_extract_snapshot_missing_fields(monkeypatch):
+    async def run_test():
+        captured_payloads = []
+
+        async def fake_snapshot(_page, region_scope=None):
+            return {
+                "url": "https://example.test/pricing",
+                "title": "Pricing",
+                "region_scope": region_scope,
+            }
+
+        def fake_compact_snapshot(_snapshot, _instruction, region_scope=None):
+            return {
+                "mode": "region_scoped_snapshot",
+                "url": "https://example.test/pricing",
+                "title": "Pricing",
+                "region_scope": region_scope,
+                "detail_views": [
+                    {
+                        "source": "region_scoped_snapshot",
+                        "section_title": "Selected region",
+                        "fields": [
+                            {
+                                "label": "selected_value",
+                                "value": "Total 99 models",
+                                "visible": True,
+                                "value_kind": "text",
+                            }
+                        ],
+                    }
+                ],
+            }
+
+        async def planner(payload):
+            captured_payloads.append(payload)
+            if len(captured_payloads) == 1:
+                return {
+                    "description": "Extract selected region",
+                    "action_type": "extract_snapshot",
+                    "expected_effect": "extract",
+                    "output_key": "selected_value",
+                    "source": "region_scoped_snapshot",
+                }
+            return {
+                "description": "Extract selected region value",
+                "action_type": "extract_snapshot",
+                "expected_effect": "extract",
+                "output_key": "selected_value",
+                "source": "region_scoped_snapshot",
+                "fields": [
+                    {
+                        "label": "selected_value",
+                        "value": "Total 99 models",
+                        "visible": True,
+                        "value_kind": "text",
+                    }
+                ],
+            }
+
+        monkeypatch.setattr("backend.rpa.recording_runtime_agent._safe_page_snapshot", fake_snapshot)
+        monkeypatch.setattr("backend.rpa.recording_runtime_agent._compact_snapshot", fake_compact_snapshot)
+
+        result = await RecordingRuntimeAgent(planner=planner).run(
+            page=_FakePage(),
+            instruction="Get data from selected region",
+            runtime_results={},
+            region_context={
+                "region_id": "region-1",
+                "page_url": "https://example.test/pricing",
+                "evidence": {
+                    "inferred_kind": "text_region",
+                    "local_text": ["Total 99 models"],
+                    "rect": {"x": 10, "y": 20, "width": 110, "height": 34},
+                },
+            },
+        )
+
+        assert result.success is True
+        assert result.output == {"selected_value": "Total 99 models"}
+        assert len(captured_payloads) == 2
+        validation = captured_payloads[1]["plan_validation"]
+        assert validation["error"] == "extract_snapshot plan missing fields"
+        assert validation["failed_plan"]["action_type"] == "extract_snapshot"
+        assert validation["snapshot"]["mode"] == "region_scoped_snapshot"
+        assert validation["snapshot"]["region_scope"]["region_id"] == "region-1"
+        assert validation["snapshot"]["detail_views"][0]["source"] == "region_scoped_snapshot"
+
+    asyncio.run(run_test())
+
+
+def test_recording_runtime_agent_reasks_repair_planner_when_region_extract_snapshot_missing_fields(monkeypatch):
+    async def run_test():
+        captured_payloads = []
+
+        async def fake_build_page_snapshot(_page, _build_frame_path):
+            return {
+                "url": "https://example.test/pricing",
+                "title": "Pricing",
+                "frames": [],
+                "actionable_nodes": [],
+                "content_nodes": [],
+                "containers": [],
+                "detail_views": [],
+            }
+
+        async def planner(payload):
+            captured_payloads.append(payload)
+            if len(captured_payloads) == 1:
+                return {
+                    "description": "First attempt fails",
+                    "action_type": "run_python",
+                    "expected_effect": "extract",
+                    "output_key": "selected_value",
+                    "code": "async def run(page, results):\n    raise RuntimeError('temporary extraction failure')",
+                }
+            if len(captured_payloads) == 2:
+                return {
+                    "description": "Repair extracts selected region",
+                    "action_type": "extract_snapshot",
+                    "expected_effect": "extract",
+                    "output_key": "selected_value",
+                    "source": "selected_region.local_text",
+                }
+            return {
+                "description": "Corrected repair extracts selected region",
+                "action_type": "extract_snapshot",
+                "expected_effect": "extract",
+                "output_key": "selected_value",
+                "source": "selected_region.local_text",
+                "fields": [
+                    {
+                        "label": "selected_value",
+                        "value": "Total 99 models",
+                        "visible": True,
+                        "value_kind": "text",
+                    }
+                ],
+            }
+
+        monkeypatch.setattr("backend.rpa.recording_runtime_agent.build_page_snapshot", fake_build_page_snapshot)
+
+        result = await RecordingRuntimeAgent(planner=planner).run(
+            page=_FakePage(),
+            instruction="Get data from selected region",
+            runtime_results={},
+            region_context={
+                "region_id": "region-1",
+                "page_url": "https://example.test/pricing",
+                "evidence": {
+                    "inferred_kind": "text_region",
+                    "local_text": ["Total 99 models"],
+                    "rect": {"x": 10, "y": 20, "width": 110, "height": 34},
+                },
+            },
+        )
+
+        assert result.success is True
+        assert result.output == {"selected_value": "Total 99 models"}
+        assert len(captured_payloads) == 3
+        assert "repair" in captured_payloads[1]
+        validation = captured_payloads[2]["plan_validation"]
+        assert validation["error"] == "extract_snapshot plan missing fields"
+        assert "repair" in captured_payloads[2]
+
+    asyncio.run(run_test())
 
 
 @pytest.mark.asyncio
@@ -1318,6 +2119,177 @@ async def test_recording_runtime_agent_dumps_repair_snapshot_after_first_failure
         file.unlink()
 
 
+@pytest.mark.asyncio
+async def test_recording_runtime_agent_dumps_planner_failure_when_debug_dir_is_enabled(monkeypatch):
+    raw_snapshot = {
+        "url": "https://github.com/trending",
+        "title": "Trending",
+        "content_nodes": [{"text": "stars 13,680"}],
+        "actionable_nodes": [],
+        "containers": [],
+        "frames": [],
+    }
+    compact_snapshot = {
+        "mode": "region_scoped_snapshot",
+        "url": "https://github.com/trending",
+        "title": "Trending",
+        "region_scope": {"region_id": "region-1"},
+        "expanded_regions": [{"title": "academic-research-skills", "summary": "stars 13,680"}],
+        "sampled_regions": [],
+        "region_catalogue": [],
+    }
+
+    async def fake_build_page_snapshot(*_args, **_kwargs):
+        return raw_snapshot
+
+    def fake_compact_recording_snapshot(_snapshot, _instruction, *, char_budget=20000):
+        return compact_snapshot
+
+    async def bad_planner(_payload):
+        exc = RecordingPlannerContractError(
+            "Recording planner must return Python code defining async def run(page, results)",
+            raw_output='{"description":"Extract stars","action_type":"run_python","code":"return 13680"}',
+        )
+        exc.llm_call = {
+            "request": {"total_message_chars": 1234, "effective_model": {"model_name": "glm-4.7"}},
+            "response": {"chars": 76, "preview": '{"description":"Extract stars"}', "truncated": False},
+        }
+        raise exc
+
+    debug_dir = Path(__file__).resolve().parents[1] / "recording_debug_test_output"
+    debug_dir.mkdir(exist_ok=True)
+    for pattern in ("*-snapshot-*.json", "*-attempt-*.json", "*-code-*.py", "*-planner_failure-*.json"):
+        for existing in debug_dir.glob(pattern):
+            existing.unlink()
+
+    monkeypatch.setenv("RPA_RECORDING_DEBUG_SNAPSHOT_DIR", str(debug_dir))
+    monkeypatch.setattr("backend.rpa.recording_runtime_agent.build_page_snapshot", fake_build_page_snapshot)
+    monkeypatch.setattr("backend.rpa.recording_runtime_agent.compact_recording_snapshot", fake_compact_recording_snapshot)
+
+    result = await RecordingRuntimeAgent(planner=bad_planner, model_config={"model_name": "glm-4.7"}).run(
+        page=_FakePage(),
+        instruction="stars",
+        runtime_results={},
+    )
+
+    failure_files = sorted(debug_dir.glob("*-planner_failure-*.json"))
+    snapshot_files = sorted(debug_dir.glob("*-snapshot-*.json"))
+
+    assert result.success is False
+    assert len(snapshot_files) == 1
+    assert len(failure_files) == 1
+    assert failure_files[0].name == "002-initial-planner_failure-stars.json"
+
+    payload = json.loads(failure_files[0].read_text(encoding="utf-8"))
+    assert payload["stage"] == "initial"
+    assert payload["instruction"] == "stars"
+    assert payload["exception"]["type"] == "RecordingPlannerContractError"
+    assert "async def run" in payload["exception"]["message"]
+    assert payload["planner_raw_output"]["preview"].startswith('{"description":"Extract stars"')
+    assert payload["llm_call"]["request"]["effective_model"]["model_name"] == "glm-4.7"
+    assert payload["compact_snapshot_summary"]["mode"] == "region_scoped_snapshot"
+    assert payload["compact_snapshot_summary"]["expanded_region_titles"] == ["academic-research-skills"]
+    assert payload["snapshot_comparison"]["classification"] == "present_in_both"
+
+    for file in failure_files + snapshot_files:
+        file.unlink()
+
+
+@pytest.mark.asyncio
+async def test_recording_runtime_agent_dumps_repair_planner_failure_when_debug_dir_is_enabled(monkeypatch):
+    raw_snapshots = [
+        {
+            "url": "https://github.com/trending",
+            "title": "Trending",
+            "content_nodes": [{"text": "stars 13,680"}],
+            "actionable_nodes": [],
+            "containers": [],
+            "frames": [],
+        },
+        {
+            "url": "https://github.com/trending",
+            "title": "Trending",
+            "content_nodes": [{"text": "stars 13,680 after failed click"}],
+            "actionable_nodes": [],
+            "containers": [],
+            "frames": [],
+        },
+    ]
+
+    async def fake_build_page_snapshot(*_args, **_kwargs):
+        return raw_snapshots.pop(0)
+
+    def fake_compact_recording_snapshot(snapshot, _instruction, *, char_budget=20000):
+        return {
+            "mode": "region_scoped_snapshot",
+            "url": snapshot.get("url", ""),
+            "title": snapshot.get("title", ""),
+            "region_scope": {"region_id": "region-1"},
+            "expanded_regions": [{"title": "academic-research-skills", "summary": "stars 13,680"}],
+            "sampled_regions": [],
+            "region_catalogue": [],
+        }
+
+    async def planner(payload):
+        if "repair" not in payload:
+            return {
+                "description": "Broken stars strategy",
+                "action_type": "run_python",
+                "expected_effect": "none",
+                "code": "async def run(page, results):\n    raise TimeoutError('Locator.click: Timeout 60000ms exceeded')",
+            }
+        exc = RecordingPlannerContractError(
+            "Recording planner must return Python code defining async def run(page, results)",
+            raw_output='{"description":"Repair stars","action_type":"run_python","code":"return 13680"}',
+        )
+        exc.llm_call = {
+            "request": {"total_message_chars": 2222, "effective_model": {"model_name": "glm-4.7"}},
+            "response": {"chars": 75, "preview": '{"description":"Repair stars"}', "truncated": False},
+        }
+        raise exc
+
+    debug_dir = Path(__file__).resolve().parents[1] / "recording_debug_test_output"
+    debug_dir.mkdir(exist_ok=True)
+    for pattern in ("*-snapshot-*.json", "*-attempt-*.json", "*-code-*.py", "*-planner_failure-*.json"):
+        for existing in debug_dir.glob(pattern):
+            existing.unlink()
+
+    monkeypatch.setenv("RPA_RECORDING_DEBUG_SNAPSHOT_DIR", str(debug_dir))
+    monkeypatch.setattr("backend.rpa.recording_runtime_agent.build_page_snapshot", fake_build_page_snapshot)
+    monkeypatch.setattr("backend.rpa.recording_runtime_agent.compact_recording_snapshot", fake_compact_recording_snapshot)
+
+    result = await RecordingRuntimeAgent(planner=planner, model_config={"model_name": "glm-4.7"}).run(
+        page=_FakePage(),
+        instruction="stars",
+        runtime_results={},
+    )
+
+    failure_files = sorted(debug_dir.glob("*-planner_failure-*.json"))
+    snapshot_files = sorted(debug_dir.glob("*-snapshot-*.json"))
+    attempt_files = sorted(debug_dir.glob("*-attempt-*.json"))
+    code_files = sorted(debug_dir.glob("*-code-*.py"))
+
+    assert result.success is False
+    assert result.message == "Recording planner failed to return a valid repair plan."
+    assert len(snapshot_files) == 2
+    assert len(attempt_files) == 1
+    assert len(code_files) == 1
+    assert len(failure_files) == 1
+    assert failure_files[0].name == "004-repair-planner_failure-stars.json"
+
+    payload = json.loads(failure_files[0].read_text(encoding="utf-8"))
+    assert payload["stage"] == "repair"
+    assert payload["instruction"] == "stars"
+    assert payload["exception"]["type"] == "RecordingPlannerContractError"
+    assert payload["planner_raw_output"]["preview"].startswith('{"description":"Repair stars"')
+    assert payload["llm_call"]["request"]["total_message_chars"] == 2222
+    assert payload["compact_snapshot_summary"]["mode"] == "region_scoped_snapshot"
+    assert payload["snapshot_comparison"]["classification"] == "present_in_both"
+
+    for file in failure_files + snapshot_files + attempt_files + code_files:
+        file.unlink()
+
+
 def test_classify_recording_failure_returns_unknown_without_hint_for_unseen_errors():
     analysis = _classify_recording_failure("some new browser error shape")
 
@@ -1553,6 +2525,29 @@ async def test_recording_runtime_agent_accepts_empty_extract_when_plan_explicitl
 
     assert result.success is True
     assert result.output == {"notifications": []}
+    assert result.trace.signals["output_contract"] == {"allow_empty": True}
+
+
+@pytest.mark.asyncio
+async def test_recording_runtime_agent_does_not_mark_empty_output_allowed_by_default():
+    async def planner(_payload):
+        return {
+            "description": "Collect optional notifications",
+            "action_type": "run_python",
+            "expected_effect": "extract",
+            "output_key": "notifications",
+            "code": "async def run(page, results):\n    return {'notifications': []}",
+        }
+
+    result = await RecordingRuntimeAgent(planner=planner).run(
+        page=_FakePage(),
+        instruction="collect notifications",
+        runtime_results={},
+    )
+
+    assert result.success is True
+    assert result.output == {"notifications": []}
+    assert "output_contract" not in result.trace.signals
 
 
 @pytest.mark.asyncio
@@ -1653,3 +2648,343 @@ def test_parse_json_object_rejects_run_python_without_runner():
     with pytest.raises(ValueError):
         _parse_json_object(json.dumps(payload))
 
+
+def test_parse_json_object_wraps_top_level_run_python_code():
+    payload = {
+        "description": "Extract stars",
+        "action_type": "run_python",
+        "expected_effect": "extract",
+        "output_key": "stars_count",
+        "code": (
+            "import re\n\n"
+            "locator = page.locator('text=/stars today/')\n"
+            "if await locator.count() > 0:\n"
+            "    text_content = await locator.first.text_content()\n"
+            "    match = re.search(r'([\\d,]+)\\s*stars', text_content)\n"
+            "    if match:\n"
+            "        return match.group(1)\n"
+            "return ''"
+        ),
+    }
+
+    parsed = _parse_json_object(json.dumps(payload))
+
+    assert parsed["code"].startswith("async def run(page, results):\n")
+    assert "    import re" in parsed["code"]
+    assert "    locator = page.locator" in parsed["code"]
+    assert "    if await locator.count() > 0:" in parsed["code"]
+    assert "return match.group(1)" in parsed["code"]
+
+
+def test_parse_json_object_rejects_top_level_python_without_runtime_context():
+    payload = {
+        "description": "Hard-coded extract",
+        "action_type": "run_python",
+        "code": "import re\nreturn '3,184'",
+    }
+
+    with pytest.raises(ValueError):
+        _parse_json_object(json.dumps(payload))
+
+
+def test_parse_json_object_accepts_plan_with_extra_planner_output():
+    payload = {
+        "description": "Run",
+        "action_type": "run_python",
+        "code": "async def run(page, results):\n    return {'ok': True}",
+    }
+
+    parsed = _parse_json_object(json.dumps(payload) + "\n" + json.dumps({"reason": "extra"}))
+
+    assert parsed["description"] == "Run"
+    assert "async def run(page, results)" in parsed["code"]
+
+
+def test_parse_json_object_ignores_analysis_and_evidence_json_before_plan():
+    payload = {
+        "description": "Extract fork count",
+        "action_type": "run_python",
+        "expected_effect": "extract",
+        "allow_empty_output": False,
+        "output_key": "fork_count",
+        "code": "async def run(page, results):\n    return {'fork_count': 315}",
+    }
+    text = (
+        "1. Analyze the request.\n"
+        'Evidence: {"label": "Fork 315", "locator": {"method": "role"}}.\n'
+        "The output should be JSON.\n"
+        "```json\n"
+        + json.dumps(payload)
+        + "\n```"
+    )
+
+    parsed = _parse_json_object(text)
+
+    assert parsed["description"] == "Extract fork count"
+    assert parsed["output_key"] == "fork_count"
+    assert "async def run(page, results)" in parsed["code"]
+
+
+def test_parse_json_object_finds_unfenced_plan_after_evidence_json():
+    payload = {
+        "description": "Extract fork count",
+        "action_type": "run_python",
+        "expected_effect": "extract",
+        "allow_empty_output": False,
+        "output_key": "fork_count",
+        "code": "async def run(page, results):\n    return {'fork_count': 315}",
+    }
+    text = (
+        "Analysis before the answer.\n"
+        'Evidence: {"label": "Fork 315", "locator": {"method": "role"}}.\n'
+        + json.dumps(payload)
+    )
+
+    parsed = _parse_json_object(text)
+
+    assert parsed["description"] == "Extract fork count"
+    assert parsed["output_key"] == "fork_count"
+
+
+@pytest.mark.asyncio
+async def test_planner_json_parse_failure_returns_agent_diagnostic(monkeypatch):
+    async def fake_snapshot(_page):
+        return {
+            "url": "https://github.com/trending",
+            "title": "Trending",
+            "frames": [],
+            "content_nodes": [],
+            "actionable_nodes": [],
+            "containers": [],
+        }
+
+    async def bad_planner(_payload):
+        _parse_json_object("I could not build a JSON plan")
+
+    monkeypatch.setattr(recording_runtime_agent, "_safe_page_snapshot", fake_snapshot)
+
+    result = await RecordingRuntimeAgent(planner=bad_planner).run(
+        page=_FakePage(),
+        instruction="打开和Skill最相关的项目",
+        runtime_results={},
+    )
+
+    assert result.success is False
+    assert result.trace is None
+    assert result.diagnostics
+    assert result.diagnostics[0].source == "ai"
+    assert "planner" in result.diagnostics[0].message.lower()
+    assert result.diagnostics[0].raw["error_type"] == "planner_contract"
+
+
+@pytest.mark.asyncio
+async def test_default_planner_contract_diagnostic_includes_llm_call_summary(monkeypatch):
+    async def fake_snapshot(_page):
+        return {
+            "url": "https://github.com/trending",
+            "title": "Trending",
+            "frames": [],
+            "content_nodes": [],
+            "actionable_nodes": [],
+            "containers": [],
+        }
+
+    class FakeModel:
+        model_name = "glm-4.7"
+        openai_api_base = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        max_tokens = 100000
+        model_kwargs = {}
+        profile = {"max_input_tokens": 200000}
+
+        async def ainvoke(self, messages):
+            assert len(messages) == 2
+            return SimpleNamespace(content="I cannot return JSON")
+
+    import backend.deepagent.engine as engine
+
+    monkeypatch.setattr(recording_runtime_agent, "_safe_page_snapshot", fake_snapshot)
+    monkeypatch.setattr(
+        engine,
+        "get_llm_model",
+        lambda config=None, max_tokens_override=None, streaming=False: FakeModel(),
+    )
+
+    result = await RecordingRuntimeAgent(
+        model_config={
+            "id": "model-glm",
+            "provider": "other",
+            "model_name": "glm-4.7",
+            "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "context_window": 200000,
+            "user_id": "admin-uuid",
+        }
+    ).run(
+        page=_FakePage(),
+        instruction="find repo star count",
+        runtime_results={},
+    )
+
+    raw = result.diagnostics[0].raw
+    assert raw["error_type"] == "planner_contract"
+    assert raw["llm_call"]["request"]["effective_model"]["model_name"] == "glm-4.7"
+    assert raw["llm_call"]["request"]["effective_model"]["max_tokens"] == 100000
+    assert raw["llm_call"]["request"]["effective_model"]["profile"]["max_input_tokens"] == 200000
+    assert "preview" not in raw["llm_call"]["request"]["messages"][0]
+    assert raw["llm_call"]["response"]["preview"] == "I cannot return JSON"
+
+
+@pytest.mark.asyncio
+async def test_default_planner_prompt_preview_requires_debug_flag(monkeypatch):
+    async def fake_snapshot(_page):
+        return {
+            "url": "https://github.com/trending",
+            "title": "Trending",
+            "frames": [],
+            "content_nodes": [],
+            "actionable_nodes": [],
+            "containers": [],
+        }
+
+    class FakeModel:
+        model_name = "glm-4.7"
+        max_tokens = 8192
+        model_kwargs = {}
+
+        async def ainvoke(self, _messages):
+            return SimpleNamespace(content="not json")
+
+    import backend.deepagent.engine as engine
+
+    monkeypatch.setattr(recording_runtime_agent, "_safe_page_snapshot", fake_snapshot)
+    monkeypatch.setattr(
+        engine,
+        "get_llm_model",
+        lambda config=None, max_tokens_override=None, streaming=False: FakeModel(),
+    )
+    monkeypatch.setenv("RPA_LLM_DIAGNOSTIC_PROMPT_PREVIEW", "true")
+
+    result = await RecordingRuntimeAgent(model_config={"model_name": "glm-4.7"}).run(
+        page=_FakePage(),
+        instruction="find repo star count",
+        runtime_results={},
+    )
+
+    messages = result.diagnostics[0].raw["llm_call"]["request"]["messages"]
+    assert messages[0]["preview"].startswith("You operate exactly one RPA recording command.")
+    assert "find repo star count" in messages[1]["preview"]
+
+
+@pytest.mark.asyncio
+async def test_default_planner_uses_recording_token_floor(monkeypatch):
+    async def fake_snapshot(_page):
+        return {
+            "url": "https://github.com/example/repo",
+            "title": "Repo",
+            "frames": [],
+            "content_nodes": [],
+            "actionable_nodes": [],
+            "containers": [],
+        }
+
+    calls = []
+
+    class FakeModel:
+        model_name = "glm-4.7"
+        openai_api_base = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        max_tokens = 8192
+        model_kwargs = {}
+        profile = {"max_input_tokens": 200000}
+
+        async def ainvoke(self, _messages):
+            return SimpleNamespace(content="not json")
+
+    import backend.deepagent.engine as engine
+
+    def fake_get_llm_model(config=None, max_tokens_override=None, streaming=False):
+        calls.append(
+            {
+                "config": config,
+                "max_tokens_override": max_tokens_override,
+                "streaming": streaming,
+            }
+        )
+        return FakeModel()
+
+    monkeypatch.setattr(recording_runtime_agent, "_safe_page_snapshot", fake_snapshot)
+    monkeypatch.setattr(engine, "get_llm_model", fake_get_llm_model)
+
+    result = await RecordingRuntimeAgent(model_config={"model_name": "glm-4.7"}).run(
+        page=_FakePage(),
+        instruction="get fork count",
+        runtime_results={},
+    )
+
+    assert result.success is False
+    assert calls == [
+        {
+            "config": {"model_name": "glm-4.7"},
+            "max_tokens_override": 8192,
+            "streaming": False,
+        }
+    ]
+    assert result.diagnostics[0].raw["llm_call"]["request"]["effective_model"]["max_tokens"] == 8192
+
+
+@pytest.mark.asyncio
+async def test_execution_failure_diagnostic_includes_planner_llm_call_summary(monkeypatch):
+    async def fake_snapshot(_page):
+        return {
+            "url": "https://github.com/mattpocock/skills",
+            "title": "Skills",
+            "frames": [],
+            "content_nodes": [],
+            "actionable_nodes": [],
+            "containers": [],
+        }
+
+    bad_plan = {
+        "description": "Extract stars",
+        "action_type": "run_python",
+        "expected_effect": "extract",
+        "allow_empty_output": False,
+        "code": (
+            "async def run(page, results):\n"
+            "    link = page.get_by_role('link', name=lambda text: 'stars' in text)\n"
+            "    return await link.text_content()"
+        ),
+    }
+
+    class FakeModel:
+        model_name = "glm-4.7"
+        openai_api_base = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        max_tokens = 100000
+        model_kwargs = {}
+        profile = {"max_input_tokens": 200000}
+
+        async def ainvoke(self, _messages):
+            return SimpleNamespace(content=json.dumps(bad_plan))
+
+    class FailingPage(_FakePage):
+        def get_by_role(self, *_args, **_kwargs):
+            raise AttributeError("'function' object has no attribute 'replace'")
+
+    import backend.deepagent.engine as engine
+
+    monkeypatch.setattr(recording_runtime_agent, "_safe_page_snapshot", fake_snapshot)
+    monkeypatch.setattr(
+        engine,
+        "get_llm_model",
+        lambda config=None, max_tokens_override=None, streaming=False: FakeModel(),
+    )
+
+    result = await RecordingRuntimeAgent(model_config={"model_name": "glm-4.7"}).run(
+        page=FailingPage(),
+        instruction="get the repository star count",
+        runtime_results={},
+    )
+
+    assert result.success is False
+    raw = result.diagnostics[0].raw
+    assert "'function' object has no attribute 'replace'" in raw["result"]["error"]
+    assert raw["llm_call"]["response"]["preview"].startswith("{")
+    assert raw["llm_call"]["request"]["message_count"] == 2

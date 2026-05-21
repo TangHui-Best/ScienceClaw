@@ -13,7 +13,19 @@ from .manual_recording_models import (
 from .trace_locator_utils import normalize_locator
 
 
-_ROLE_FIRST_RE = re.compile(r'^page\.get_by_role\("(?P<role>[^"]+)"\)\.first$')
+_LITERAL_RE = r'(?:"((?:\\.|[^"\\])*)"|\'((?:\\.|[^\'\\])*)\')'
+_ROLE_RE = re.compile(
+    rf'^page\.get_by_role\({_LITERAL_RE}(?:,\s*name={_LITERAL_RE}(?:,\s*exact=True)?)?\)\.first(?:\(\))?$'
+)
+_VALUE_FIRST_PATTERNS = (
+    ("testid", re.compile(rf'^page\.get_by_test_id\({_LITERAL_RE}\)\.first(?:\(\))?$')),
+    ("label", re.compile(rf'^page\.get_by_label\({_LITERAL_RE}(?:,\s*exact=True)?\)\.first(?:\(\))?$')),
+    ("placeholder", re.compile(rf'^page\.get_by_placeholder\({_LITERAL_RE}(?:,\s*exact=True)?\)\.first(?:\(\))?$')),
+    ("alt", re.compile(rf'^page\.get_by_alt_text\({_LITERAL_RE}(?:,\s*exact=True)?\)\.first(?:\(\))?$')),
+    ("title", re.compile(rf'^page\.get_by_title\({_LITERAL_RE}(?:,\s*exact=True)?\)\.first(?:\(\))?$')),
+    ("text", re.compile(rf'^page\.get_by_text\({_LITERAL_RE}(?:,\s*exact=True)?\)\.first(?:\(\))?$')),
+    ("css", re.compile(rf'^page\.locator\({_LITERAL_RE}\)\.first(?:\(\))?$')),
+)
 
 _INTERACTIVE_ACTIONS = {
     ManualActionKind.HOVER.value,
@@ -36,14 +48,34 @@ class ManualRecordingOutcome:
 
 def parse_playwright_locator_string(value: str) -> Dict[str, Any]:
     text = str(value or "").strip()
-    match = _ROLE_FIRST_RE.match(text)
+    match = _ROLE_RE.match(text)
     if match:
+        role = _match_literal(match, 1)
+        name = _match_literal(match, 3)
+        base = {"method": "role", "role": role}
+        if name:
+            base["name"] = name
         return {
             "method": "nth",
-            "locator": {"method": "role", "role": match.group("role")},
+            "locator": base,
             "index": 0,
         }
+    for method, pattern in _VALUE_FIRST_PATTERNS:
+        match = pattern.match(text)
+        if match:
+            return {
+                "method": "nth",
+                "locator": {"method": method, "value": _match_literal(match, 1)},
+                "index": 0,
+            }
     return {}
+
+
+def _match_literal(match: re.Match, first_group: int) -> str:
+    value = match.group(first_group)
+    if value is None:
+        value = match.group(first_group + 1)
+    return str(value or "").replace('\\"', '"').replace("\\\\", "\\")
 
 
 def normalize_manual_candidate(candidate: Dict[str, Any]) -> Dict[str, Any]:

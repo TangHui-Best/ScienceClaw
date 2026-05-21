@@ -39,12 +39,21 @@ async def _get_cdp_url() -> str:
 {execute_skill_func}
 
 
+def _parse_cli_value(key, value):
+    if key in {{"_runtime_context", "_model_config"}}:
+        try:
+            return _json.loads(value)
+        except Exception:
+            return value
+    return value
+
+
 async def main():
     kwargs = {{}}
     for arg in sys.argv[1:]:
         if arg.startswith("--") and "=" in arg:
             k, v = arg[2:].split("=", 1)
-            kwargs[k] = v
+            kwargs[k] = _parse_cli_value(k, v)
 
     cdp_url = await _get_cdp_url()
     pw = await async_playwright().start()
@@ -81,12 +90,21 @@ from playwright.async_api import async_playwright
 {execute_skill_func}
 
 
+def _parse_cli_value(key, value):
+    if key in {{"_runtime_context", "_model_config"}}:
+        try:
+            return _json.loads(value)
+        except Exception:
+            return value
+    return value
+
+
 async def main():
     kwargs = {{}}
     for arg in sys.argv[1:]:
         if arg.startswith("--") and "=" in arg:
             k, v = arg[2:].split("=", 1)
-            kwargs[k] = v
+            kwargs[k] = _parse_cli_value(k, v)
 
     pw = await async_playwright().start()
     browser = await pw.chromium.launch(**{launch_kwargs})
@@ -731,7 +749,11 @@ class StepExecutionError(Exception):
                 if param_info.get("sensitive"):
                     # No default value for sensitive params
                     return f"kwargs['{param_name}']"
-                return f"kwargs.get('{param_name}', '{value}')"
+                default_value = param_info.get("default_value")
+                if default_value in (None, ""):
+                    default_value = value
+                safe_default = str(default_value).replace("'", "\\'")
+                return f"kwargs.get('{param_name}', '{safe_default}')"
         safe = value.replace("'", "\\'")
         return f"'{safe}'"
 

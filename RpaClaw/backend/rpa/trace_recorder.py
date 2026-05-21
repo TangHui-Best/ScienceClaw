@@ -4,7 +4,7 @@ import json
 from typing import Any, Dict, List
 
 from .manual_recording_models import ManualRecordedAction
-from .trace_locator_utils import normalize_locator, normalize_locator_candidates
+from .trace_locator_utils import has_valid_locator, normalize_locator, normalize_locator_candidates
 from .trace_models import (
     RPAAcceptedTrace,
     RPADataflowMapping,
@@ -54,6 +54,15 @@ def _tab_signal(step: Dict[str, Any]) -> Dict[str, Any]:
     return signal
 
 
+def _recording_signal(step: Dict[str, Any]) -> Dict[str, Any]:
+    signal: Dict[str, Any] = {}
+    for key in ("sequence", "event_timestamp_ms"):
+        value = _step_get(step, key)
+        if value is not None:
+            signal[key] = value
+    return signal
+
+
 def _page_state_from_step(step: Dict[str, Any], *, prefer_after: bool = True) -> RPAPageState:
     url = _step_get(step, "url", "") or _step_get(step, "page_url", "") or ""
     title = _step_get(step, "title", "") or _step_get(step, "page_title", "") or ""
@@ -67,6 +76,8 @@ def manual_step_to_trace(step: Dict[str, Any]) -> RPAAcceptedTrace:
     trace_type = RPATraceType.NAVIGATION if action in {"navigate", "goto"} else RPATraceType.MANUAL_ACTION
     if action == "extract_text":
         trace_type = RPATraceType.DATA_CAPTURE
+    sensitive = bool(_step_get(step, "sensitive", False))
+    value = "{{credential}}" if sensitive else _step_get(step, "value")
 
     trace_id = f"trace-{_step_get(step, 'id', '') or action or 'manual'}"
     after_page = _page_state_from_step(step, prefer_after=True)
@@ -78,6 +89,10 @@ def manual_step_to_trace(step: Dict[str, Any]) -> RPAAcceptedTrace:
     if tab_signal:
         existing_tab_signal = signals.get("tab") if isinstance(signals.get("tab"), dict) else {}
         signals["tab"] = {**existing_tab_signal, **tab_signal}
+    recording_signal = _recording_signal(step)
+    if recording_signal:
+        existing_recording_signal = signals.get("recording") if isinstance(signals.get("recording"), dict) else {}
+        signals["recording"] = {**existing_recording_signal, **recording_signal}
 
     return RPAAcceptedTrace(
         trace_id=trace_id,
@@ -91,7 +106,8 @@ def manual_step_to_trace(step: Dict[str, Any]) -> RPAAcceptedTrace:
         locator_candidates=_locator_candidates(step),
         validation=dict(_step_get(step, "validation", {}) or {}),
         signals=signals,
-        value=_step_get(step, "value"),
+        value=value,
+        sensitive=sensitive,
         output_key=_step_get(step, "result_key"),
         output=_step_get(step, "output"),
     )
@@ -139,6 +155,46 @@ def infer_dataflow_for_fill(trace: RPAAcceptedTrace, runtime_results: RPARuntime
     trace.dataflow = RPADataflowMapping(
         target_field=RPATargetField(locator_candidates=list(trace.locator_candidates or [])),
         value=trace.value,
+        source_ref_candidates=refs,
+        selected_source_ref=refs[0],
+        confidence="exact_value_match",
+    )
+    if selected_locator:
+        trace.dataflow.target_field.locator_candidates = [{"locator": selected_locator, "selected": True}]
+    trace.trace_type = RPATraceType.DATAFLOW_FILL
+    return trace
+
+
+def infer_dataflow_for_ai_fill(trace: RPAAcceptedTrace, runtime_results: RPARuntimeResults) -> RPAAcceptedTrace:
+    if trace.trace_type != RPATraceType.AI_OPERATION:
+        return trace
+    output = trace.output if isinstance(trace.output, dict) else {}
+    if not output.get("action_performed"):
+        return trace
+    action_type = str(output.get("action_type") or output.get("type") or "").strip().lower()
+    if action_type != "fill":
+        return trace
+
+    filled_value = output.get("filled_value", output.get("value"))
+    refs = runtime_results.find_value_refs(filled_value)
+    if not refs:
+        return trace
+
+    selected_locator = {}
+    if trace.locator_candidates:
+        selected = next((item for item in trace.locator_candidates if item.get("selected")), trace.locator_candidates[0])
+        selected_locator = normalize_locator(selected.get("locator") or selected)
+    if not has_valid_locator(selected_locator):
+        return trace
+
+    trace.action = "fill"
+    trace.value = filled_value
+    trace.dataflow = RPADataflowMapping(
+        target_field=RPATargetField(
+            label=str(output.get("target") or ""),
+            locator_candidates=list(trace.locator_candidates or []),
+        ),
+        value=filled_value,
         source_ref_candidates=refs,
         selected_source_ref=refs[0],
         confidence="exact_value_match",

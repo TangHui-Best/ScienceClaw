@@ -29,6 +29,16 @@ class SkillExporter:
         )
 
     @staticmethod
+    def _normalize_recording_meta(recording_meta: Dict[str, Any]) -> Dict[str, Any]:
+        if recording_meta.get("recording_source") != "trace":
+            return dict(recording_meta)
+        return {
+            key: value
+            for key, value in recording_meta.items()
+            if key not in {"legacy_steps", "recorded_actions", "recording_diagnostics"}
+        }
+
+    @staticmethod
     def _build_skill_meta(
         skill_name: str,
         description: str,
@@ -36,9 +46,15 @@ class SkillExporter:
         recording_meta: Dict[str, Any],
         projected_steps: list[Dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
+        recording_meta = SkillExporter._normalize_recording_meta(recording_meta)
+        recording_source = recording_meta.get("recording_source", "trace")
+        is_trace_recording = recording_source == "trace"
         legacy_steps = recording_meta.get("legacy_steps", [])
-        mcp_steps = projected_steps if projected_steps is not None else recording_meta.get("mcp_steps", legacy_steps)
-        return {
+        mcp_steps = projected_steps if projected_steps is not None else recording_meta.get(
+            "mcp_steps",
+            [] if is_trace_recording else legacy_steps,
+        )
+        meta = {
             "version": 2,
             "kind": "rpa-recording",
             "name": skill_name,
@@ -46,12 +62,18 @@ class SkillExporter:
             "entry_script": "skill.py",
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "params": params,
-            "recording_source": recording_meta.get("recording_source", "trace"),
+            "runtime_requirements": recording_meta.get(
+                "runtime_requirements",
+                {"runtime_ai": False},
+            ),
+            "recording_source": recording_source,
             "recording": recording_meta,
-            "steps": legacy_steps,
             "mcp_steps": mcp_steps,
             "artifacts": ["SKILL.md", "params.json", "skill.py"],
         }
+        if not is_trace_recording:
+            meta["steps"] = legacy_steps
+        return meta
 
     async def export_skill(
         self,
@@ -84,12 +106,13 @@ class SkillExporter:
                 "description": param_info.get("description", ""),
             }
             original = param_info.get("original_value", "")
-            if original and original != "{{credential}}":
-                prop["default"] = original
+            default = param_info.get("default_value", original)
+            if default and default != "{{credential}}":
+                prop["default"] = default
                 has_auto_injected = True
             input_schema["properties"][param_name] = prop
             # Only required if no default value available
-            if param_info.get("required", False) and not original:
+            if param_info.get("required", False) and not default:
                 input_schema["required"].append(param_name)
 
         auto_inject_note = ""
@@ -98,8 +121,9 @@ class SkillExporter:
             examples = []
             for param_name, param_info in params.items():
                 original = param_info.get("original_value", "")
-                if original and original != "{{credential}}":
-                    examples.append(f"`--{param_name}={original}`")
+                default = param_info.get("default_value", original)
+                if default and default != "{{credential}}":
+                    examples.append(f"`--{param_name}={default}`")
             example_text = ""
             if examples:
                 example_text = f" For example: {', '.join(examples[:3])}"
@@ -150,6 +174,7 @@ The skill is implemented in `skill.py` using Playwright for browser automation.
                 "recorded_actions": [],
                 "legacy_steps": steps or [],
                 "runtime_results": {},
+                "runtime_requirements": {"runtime_ai": False},
                 "trace_diagnostics": [],
                 "recording_diagnostics": [],
             },

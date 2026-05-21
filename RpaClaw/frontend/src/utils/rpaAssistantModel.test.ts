@@ -42,10 +42,32 @@ describe('rpaAssistantModel', () => {
     });
   });
 
+  it('includes a selected region id in assistant chat payloads', () => {
+    expect(buildRpaAssistantChatPayload('click search', 'model-2', 'region-1')).toEqual({
+      message: 'click search',
+      mode: 'trace_first',
+      model_config_id: 'model-2',
+      region_id: 'region-1',
+    });
+  });
+
   it('omits model_config_id when no model is selected', () => {
     expect(buildRpaAssistantChatPayload('click search', null)).toEqual({
       message: 'click search',
       mode: 'trace_first',
+    });
+  });
+
+  it('omits region_id when no region is selected', () => {
+    expect(buildRpaAssistantChatPayload('click search', 'model-2')).toEqual({
+      message: 'click search',
+      mode: 'trace_first',
+      model_config_id: 'model-2',
+    });
+    expect(buildRpaAssistantChatPayload('click search', 'model-2', '')).toEqual({
+      message: 'click search',
+      mode: 'trace_first',
+      model_config_id: 'model-2',
     });
   });
 

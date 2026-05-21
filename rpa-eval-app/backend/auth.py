@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from os import getenv
+from secrets import token_urlsafe
 from typing import Callable
 
 import jwt
@@ -12,7 +13,7 @@ from database import get_db
 from models import User
 
 
-JWT_SECRET = "rpa-eval-local-secret"
+JWT_SECRET = getenv("RPA_EVAL_JWT_SECRET") or token_urlsafe(32)
 JWT_ALGORITHM = "HS256"
 TOKEN_TTL_MINUTES = 480
 PASSWORD_SALT = "rpa-eval-fixture"
@@ -69,6 +70,8 @@ def require_roles(*roles: str) -> Callable[[User], User]:
 def verify_reset_token(
     token: str | None = Header(default=None, alias="X-RPA-Eval-Reset-Token"),
 ) -> None:
-    expected_token = getenv("RPA_EVAL_RESET_TOKEN", "rpa-eval-reset")
+    expected_token = getenv("RPA_EVAL_RESET_TOKEN", "")
+    if not expected_token:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Reset token is not configured")
     if token != expected_token:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid reset token")

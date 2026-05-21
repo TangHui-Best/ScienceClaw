@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-SNAPSHOT_V2_JS = r"""() => {
+SNAPSHOT_V2_JS = r"""(regionScopeArg = null) => {
     const ACTIONABLE = 'a,button,input,textarea,select,[role=button],[role=link],[role=menuitem],[role=menuitemradio],[role=tab],[role=checkbox],[role=radio],[contenteditable=true]';
     const CONTENT = 'h1,h2,h3,h4,h5,h6,th,td,dt,dd,li,p,span,label,[data-field],[data-label],[data-value],[role=heading],[role=cell],[role=rowheader],[role=columnheader]';
     const recorder = globalThis.__rpaPlaywrightRecorder || null;
@@ -70,6 +70,94 @@ SNAPSHOT_V2_JS = r"""() => {
             width: Math.round(rect.width),
             height: Math.round(rect.height),
         };
+    }
+
+    const regionScope = regionScopeArg && regionScopeArg.rect ? regionScopeArg : null;
+
+    function rectIntersectionArea(left, right) {
+        if (!left || !right)
+            return 0;
+        const lx = Number(left.x || 0);
+        const ly = Number(left.y || 0);
+        const rx = Number(right.x || 0);
+        const ry = Number(right.y || 0);
+        const lright = lx + Number(left.width || 0);
+        const lbottom = ly + Number(left.height || 0);
+        const rright = rx + Number(right.width || 0);
+        const rbottom = ry + Number(right.height || 0);
+        const width = Math.max(0, Math.min(lright, rright) - Math.max(lx, rx));
+        const height = Math.max(0, Math.min(lbottom, rbottom) - Math.max(ly, ry));
+        return width * height;
+    }
+
+    function rectArea(rect) {
+        if (!rect)
+            return 0;
+        return Math.max(0, Number(rect.width || 0)) * Math.max(0, Number(rect.height || 0));
+    }
+
+    function rectContains(outer, inner) {
+        if (!outer || !inner)
+            return false;
+        const ox = Number(outer.x || 0);
+        const oy = Number(outer.y || 0);
+        const ix = Number(inner.x || 0);
+        const iy = Number(inner.y || 0);
+        return (
+            ox <= ix &&
+            oy <= iy &&
+            ox + Number(outer.width || 0) >= ix + Number(inner.width || 0) &&
+            oy + Number(outer.height || 0) >= iy + Number(inner.height || 0)
+        );
+    }
+
+    function nearRegionContext(left, right) {
+        if (!left || !right)
+            return false;
+        const lx = Number(left.x || 0);
+        const ly = Number(left.y || 0);
+        const rx = Number(right.x || 0);
+        const ry = Number(right.y || 0);
+        const lright = lx + Number(left.width || 0);
+        const lbottom = ly + Number(left.height || 0);
+        const rright = rx + Number(right.width || 0);
+        const rbottom = ry + Number(right.height || 0);
+        const horizontalOverlap = Math.min(lright, rright) > Math.max(lx, rx);
+        const verticalGap = Math.max(0, Math.max(ry - lbottom, ly - rbottom));
+        return horizontalOverlap && verticalGap <= 64;
+    }
+
+    function scopeRelationForRect(rect) {
+        if (!regionScope)
+            return '';
+        const nodeBox = bbox(rect);
+        const intersectionArea = rectIntersectionArea(nodeBox, regionScope.rect);
+        if (intersectionArea > 0) {
+            if (rectContains(nodeBox, regionScope.rect) && rectArea(nodeBox) > rectArea(regionScope.rect) * 1.5)
+                return 'ancestor_context';
+            return 'inside_region';
+        }
+        if (nearRegionContext(nodeBox, regionScope.rect))
+            return 'ancestor_context';
+        return 'outside_context';
+    }
+
+    function scopeRelationForElement(el) {
+        if (!el)
+            return '';
+        return scopeRelationForRect(el.getBoundingClientRect());
+    }
+
+    function sortScopedFirst(elements) {
+        if (!regionScope)
+            return elements;
+        return elements.slice().sort((left, right) => {
+            const leftArea = rectIntersectionArea(bbox(left.getBoundingClientRect()), regionScope.rect);
+            const rightArea = rectIntersectionArea(bbox(right.getBoundingClientRect()), regionScope.rect);
+            if (leftArea !== rightArea)
+                return rightArea - leftArea;
+            return 0;
+        });
     }
 
     function escapeCssAttributeValue(value) {
@@ -476,7 +564,7 @@ SNAPSHOT_V2_JS = r"""() => {
         const rowSelector = bodyTableId ? `#${escapeCssIdentifier(bodyTableId)} tbody.igrid-data tr.grid-row` : '.jalor-igrid-body tbody.igrid-data tr.grid-row';
         const rows = [];
         const columnSamples = new Map();
-        for (const row of bodyRows.slice(0, 10)) {
+        for (const row of sortScopedFirst(bodyRows).slice(0, 10)) {
             const rowIndex = rows.length;
             const cells = [];
             const cellEls = Array.from(row.querySelectorAll('td')).filter(cell => !cell.closest('tr.grid-row-group'));
@@ -507,6 +595,7 @@ SNAPSHOT_V2_JS = r"""() => {
                     column_header: headerRecord ? headerRecord.header : '',
                     text,
                     value_kind: valueKind(text),
+                    scope_relation: scopeRelationForElement(cell),
                     row_local_actions: actions,
                     actions,
                 });
@@ -521,6 +610,7 @@ SNAPSHOT_V2_JS = r"""() => {
             rows.push({
                 index: rowIndex,
                 source_row_index: attr(row, '_row', 40),
+                scope_relation: scopeRelationForElement(row),
                 cells,
                 locator_hints: [
                     {
@@ -556,6 +646,8 @@ SNAPSHOT_V2_JS = r"""() => {
             row_count_observed: bodyRows.length,
             columns,
             rows,
+            selected_row_indexes: rows.filter(row => row.scope_relation === 'inside_region').map(row => row.index),
+            scope_relation: scopeRelationForElement(root),
             auxiliary_text: [],
         };
     }
@@ -591,7 +683,7 @@ SNAPSHOT_V2_JS = r"""() => {
 
             const rows = [];
             const columnSamples = new Map();
-            for (const row of bodyRows.slice(0, 10)) {
+            for (const row of sortScopedFirst(bodyRows).slice(0, 10)) {
                 const rowIndex = rows.length;
                 const cells = [];
                 const cellEls = Array.from(row.querySelectorAll('td,[role=cell]'));
@@ -618,6 +710,7 @@ SNAPSHOT_V2_JS = r"""() => {
                         column_header: headerRecord ? headerRecord.header : '',
                         text,
                         value_kind: valueKind(text),
+                        scope_relation: scopeRelationForElement(cell),
                         row_local_actions: actions,
                         actions,
                     };
@@ -633,6 +726,7 @@ SNAPSHOT_V2_JS = r"""() => {
                 });
                 rows.push({
                     index: rowIndex,
+                    scope_relation: scopeRelationForElement(row),
                     cells,
                     locator_hints: [
                         {
@@ -684,6 +778,8 @@ SNAPSHOT_V2_JS = r"""() => {
                 row_count_observed: bodyRows.length,
                 columns,
                 rows,
+                selected_row_indexes: rows.filter(row => row.scope_relation === 'inside_region').map(row => row.index),
+                scope_relation: scopeRelationForElement(root),
                 auxiliary_text: auxiliaryText,
             });
         }
@@ -723,6 +819,7 @@ SNAPSHOT_V2_JS = r"""() => {
                     visible,
                     hidden_reason: visible ? '' : 'hidden',
                     value_kind: valueKind(value),
+                    scope_relation: scopeRelationForElement(field),
                     locator_hints: dataProp ? [
                         {
                             kind: 'field_container',
@@ -736,6 +833,7 @@ SNAPSHOT_V2_JS = r"""() => {
                     kind: 'detail_view',
                     section_title: sectionTitle,
                     section_locator: sectionTitle ? { method: 'text', value: sectionTitle } : {},
+                    scope_relation: scopeRelationForElement(section),
                     fields,
                 });
             }
@@ -744,7 +842,7 @@ SNAPSHOT_V2_JS = r"""() => {
     }
 
     const actionableSeen = new Set();
-    for (const el of Array.from(document.querySelectorAll(ACTIONABLE))) {
+    for (const el of sortScopedFirst(Array.from(document.querySelectorAll(ACTIONABLE)))) {
         const rect = el.getBoundingClientRect();
         if (!isVisible(el, rect))
             continue;
@@ -773,6 +871,7 @@ SNAPSHOT_V2_JS = r"""() => {
             placeholder,
             title,
             bbox: bbox(rect),
+            scope_relation: scopeRelationForRect(rect),
             center_point: centerPoint(rect),
             is_visible: true,
             is_enabled: !el.disabled,
@@ -799,7 +898,7 @@ SNAPSHOT_V2_JS = r"""() => {
     }
 
     const contentSeen = new Set();
-    for (const el of Array.from(document.querySelectorAll(CONTENT))) {
+    for (const el of sortScopedFirst(Array.from(document.querySelectorAll(CONTENT)))) {
         const rect = el.getBoundingClientRect();
         if (!isVisible(el, rect))
             continue;
@@ -820,6 +919,7 @@ SNAPSHOT_V2_JS = r"""() => {
             role,
             text,
             bbox: bbox(rect),
+            scope_relation: scopeRelationForRect(rect),
             locator: buildContentLocator(el, role, '', text, '', '').primary,
             element_snapshot: {
                 tag: el.tagName.toLowerCase(),

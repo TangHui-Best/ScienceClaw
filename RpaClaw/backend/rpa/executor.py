@@ -119,6 +119,21 @@ class ScriptExecutor:
 
                     context.on("page", on_context_page)
 
+                    async def _activate_recorded_page(page_to_activate, tab_id: str = ""):
+                        activator = getattr(session_manager, "activate_page", None)
+                        if callable(activator):
+                            return await activator(session_id, page_to_activate, tab_id=tab_id or None)
+
+                        tab_registry = getattr(session_manager, "_page_tab_ids", {})
+                        existing_tab_id = None
+                        if isinstance(tab_registry, dict):
+                            existing_tab_id = tab_registry.get(session_id, {}).get(id(page_to_activate))
+                        if existing_tab_id:
+                            return await session_manager.activate_tab(session_id, existing_tab_id, source="execution")
+                        return await session_manager.register_context_page(session_id, page_to_activate, make_active=True)
+
+                    skill_kwargs.setdefault("_activate_recorded_page", _activate_recorded_page)
+
                 _emit_log("Executing script...")
 
                 _result = await asyncio.wait_for(
@@ -142,7 +157,7 @@ class ScriptExecutor:
                     "success": False,
                     "output": output,
                     "error": f"Timeout after {timeout}s",
-                    "failed_step_index": failed_step_index,
+                    "failed_trace_index": failed_step_index,
                 }
 
             except Exception as e:
@@ -169,7 +184,7 @@ class ScriptExecutor:
                     "success": False,
                     "output": output,
                     "error": original_error,
-                    "failed_step_index": failed_step_index,
+                    "failed_trace_index": failed_step_index,
                 }
 
             finally:

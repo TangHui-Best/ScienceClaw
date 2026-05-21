@@ -8,6 +8,8 @@ from backend.rpa.trace_models import (
 
 
 def test_ai_operation_trace_serializes_execution_and_page_state():
+    assert "region_context" in RPAAcceptedTrace.model_fields
+
     trace = RPAAcceptedTrace(
         trace_id="trace-1",
         trace_type=RPATraceType.AI_OPERATION,
@@ -22,6 +24,7 @@ def test_ai_operation_trace_serializes_execution_and_page_state():
         ),
         validation={"status": "ok"},
         signals={"navigation": {"url": "https://github.com/owner/repo"}},
+        region_context={"region_id": "region-1", "inferred_kind": "table_region"},
         accepted=True,
     )
 
@@ -32,7 +35,19 @@ def test_ai_operation_trace_serializes_execution_and_page_state():
     assert payload["ai_execution"]["language"] == "python"
     assert payload["validation"]["status"] == "ok"
     assert payload["signals"]["navigation"]["url"] == "https://github.com/owner/repo"
+    assert payload["region_context"] == {"region_id": "region-1", "inferred_kind": "table_region"}
     assert payload["accepted"] is True
+
+
+def test_accepted_trace_carries_region_scope_evidence():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        region_scope={"region_id": "region-1", "mode": "region_scoped_snapshot"},
+    )
+
+    payload = trace.model_dump(mode="json")
+
+    assert payload["region_scope"] == {"region_id": "region-1", "mode": "region_scoped_snapshot"}
 
 
 def test_runtime_results_resolves_dotted_refs_and_list_indexes():

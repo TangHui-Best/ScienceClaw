@@ -1,5 +1,7 @@
 from datetime import datetime
+from os import getenv
 from pathlib import Path
+from secrets import token_urlsafe
 from shutil import rmtree
 
 from sqlalchemy.orm import Session
@@ -24,24 +26,28 @@ def reset_downloads_dir() -> None:
 
 
 def load_fixtures(db: Session) -> None:
+    def fixture_password(username: str) -> str:
+        env_key = f"RPA_EVAL_{username.upper()}_PASSWORD"
+        return getenv(env_key) or token_urlsafe(24)
+
     users = [
         User(
             username="admin",
-            password_hash=hash_password("admin123"),
+            password_hash=hash_password(fixture_password("admin")),
             display_name="系统管理员",
             role="admin",
             department="数字化管理部",
         ),
         User(
             username="buyer",
-            password_hash=hash_password("buyer123"),
+            password_hash=hash_password(fixture_password("buyer")),
             display_name="采购专员",
             role="buyer",
             department="采购管理部",
         ),
         User(
             username="approver",
-            password_hash=hash_password("approver123"),
+            password_hash=hash_password(fixture_password("approver")),
             display_name="合规审批经理",
             role="approver",
             department="风控合规部",

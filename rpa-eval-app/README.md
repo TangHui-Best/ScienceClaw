@@ -19,6 +19,7 @@ rpa-eval-app/
 - Node.js 18+。
 - RpaClaw 后端可访问，默认地址为 `http://localhost:12001`。
 - RpaClaw 需要能访问本机评测前端 `http://localhost:5175`。
+- 后端和 runner 必须使用同一个 `RPA_EVAL_RESET_TOKEN`，用于重置 fixtures 和签发评测登录态。
 
 ## 1. 安装后端与评测依赖
 
@@ -43,6 +44,7 @@ python -m pip install -r requirements.txt
 继续在后端终端中执行：
 
 ```powershell
+$env:RPA_EVAL_RESET_TOKEN = "your-reset-token"
 python -m uvicorn main:app --host 127.0.0.1 --port 8085
 ```
 
@@ -93,9 +95,9 @@ runner 会对每个用例执行总时限控制。默认 `--case-timeout-s` 为 1
 
 | 用户名 | 密码 | 角色 |
 | --- | --- | --- |
-| `admin` | `admin123` | 管理员 |
-| `buyer` | `buyer123` | 采购员 |
-| `approver` | `approver123` | 审批人 |
+| `admin` | 运行时生成 | 管理员 |
+| `buyer` | 运行时生成 | 采购员 |
+| `approver` | 运行时生成 | 审批人 |
 
 评测 runner 会在每个用例开始前重置数据，并使用评测后端签发的 token 访问 `eval-auth.html` 写入浏览器登录态，再导航到用例起始页。发送给 RpaClaw 的指令只包含业务任务本身，避免“登录/导航前置步骤”被误判为业务完成。
 
@@ -107,10 +109,10 @@ runner 会对每个用例执行总时限控制。默认 `--case-timeout-s` 为 1
 Invoke-WebRequest `
   -Method POST `
   -Uri http://localhost:8085/api/eval/reset `
-  -Headers @{ "X-RPA-Eval-Reset-Token" = "rpa-eval-reset" }
+  -Headers @{ "X-RPA-Eval-Reset-Token" = $env:RPA_EVAL_RESET_TOKEN }
 ```
 
-重置 token 可通过环境变量覆盖：
+重置 token 必须通过环境变量提供，并在后端和 runner 中保持一致。通常在启动后端前已经设置过；如果这是新的终端，请重新设置：
 
 ```powershell
 $env:RPA_EVAL_RESET_TOKEN = "your-reset-token"
@@ -122,12 +124,14 @@ $env:RPA_EVAL_RESET_TOKEN = "your-reset-token"
 
 ```powershell
 cd D:\code\MyScienceClaw
+$env:RPA_EVAL_RESET_TOKEN = "your-reset-token"
 python rpa-eval-app\evals\runner.py --tag smoke
 ```
 
 运行全部用例：
 
 ```powershell
+$env:RPA_EVAL_RESET_TOKEN = "your-reset-token"
 python rpa-eval-app\evals\runner.py --all
 ```
 

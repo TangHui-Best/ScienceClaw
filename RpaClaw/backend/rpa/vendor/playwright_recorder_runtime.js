@@ -8189,27 +8189,36 @@ function deepEquals(a, b) {
             index: parseInt(matched[1], 10)
           };
         } else {
-          matched = remaining.match(/^\.locator\("((?:\\.|[^"\\])*)"\)/);
+          matched = remaining.match(/^\.first(?:\(\))?/);
           if (matched) {
-            step = { method: 'css', value: unescapeLiteral(matched[1]) };
+            current = {
+              method: 'nth',
+              locator: current,
+              index: 0
+            };
           } else {
-            matched = remaining.match(/^\.get_by_role\("((?:\\.|[^"\\])*)"(?:,\s*name="((?:\\.|[^"\\])*)"(?:,\s*exact=True)?)?\)/);
+            matched = remaining.match(/^\.locator\("((?:\\.|[^"\\])*)"\)/);
             if (matched) {
-              step = makeRoleLocator(matched);
+              step = { method: 'css', value: unescapeLiteral(matched[1]) };
             } else {
-              const valuePatterns = [
-                ['testid', /^\.get_by_test_id\("((?:\\.|[^"\\])*)"\)/],
-                ['label', /^\.get_by_label\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)/],
-                ['placeholder', /^\.get_by_placeholder\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)/],
-                ['alt', /^\.get_by_alt_text\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)/],
-                ['title', /^\.get_by_title\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)/],
-                ['text', /^\.get_by_text\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)/]
-              ];
-              for (const [method, pattern] of valuePatterns) {
-                matched = remaining.match(pattern);
-                if (matched) {
-                  step = makeValueLocator(method, matched);
-                  break;
+              matched = remaining.match(/^\.get_by_role\("((?:\\.|[^"\\])*)"(?:,\s*name="((?:\\.|[^"\\])*)"(?:,\s*exact=True)?)?\)/);
+              if (matched) {
+                step = makeRoleLocator(matched);
+              } else {
+                const valuePatterns = [
+                  ['testid', /^\.get_by_test_id\("((?:\\.|[^"\\])*)"\)/],
+                  ['label', /^\.get_by_label\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)/],
+                  ['placeholder', /^\.get_by_placeholder\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)/],
+                  ['alt', /^\.get_by_alt_text\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)/],
+                  ['title', /^\.get_by_title\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)/],
+                  ['text', /^\.get_by_text\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)/]
+                ];
+                for (const [method, pattern] of valuePatterns) {
+                  matched = remaining.match(pattern);
+                  if (matched) {
+                    step = makeValueLocator(method, matched);
+                    break;
+                  }
                 }
               }
             }
