@@ -25,10 +25,14 @@ def _execute_body(script: str) -> str:
 
 
 def _load_execute_skill(script: str):
+    return _load_script_namespace(script)["execute_skill"]
+
+
+def _load_script_namespace(script: str):
     end = script.index("\ndef _parse_cli_value")
     namespace = {"__name__": "compiled_skill_test"}
     exec(script[:end], namespace)
-    return namespace["execute_skill"]
+    return namespace
 
 
 def _assert_script_loads(script: str):
@@ -44,6 +48,7 @@ class _FakeTracePage:
         self.brought_to_front = 0
         self.closed = False
         self.goto_calls = []
+        self.waits = []
 
     async def bring_to_front(self) -> None:
         self.brought_to_front += 1
@@ -51,9 +56,15 @@ class _FakeTracePage:
     async def close(self) -> None:
         self.closed = True
 
+    async def title(self) -> str:
+        return self.name
+
     async def goto(self, url: str, wait_until: str = "") -> None:
         self.goto_calls.append((url, wait_until))
         self.url = url
+
+    async def wait_for_timeout(self, ms: int) -> None:
+        self.waits.append(ms)
 
 
 class _FakeTraceContext:
@@ -578,6 +589,229 @@ def test_popup_click_in_frame_still_compiles_to_expect_popup():
     assert "async with current_page.expect_popup() as popup_info:" in body
     assert "await target_locator.click()" in body
     assert 'tabs["tab-export"] = new_page' in body
+
+
+def test_click_before_iframe_trace_waits_for_next_frame_target():
+    traces = [
+        RPAAcceptedTrace(
+            trace_id="click-open-cart",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            action="click",
+            description='click text("Open cart")',
+            locator_candidates=[
+                {"locator": {"method": "text", "value": "Open cart", "exact": True}, "selected": True},
+            ],
+        ),
+        RPAAcceptedTrace(
+            trace_id="fill-iframe-field",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            action="fill",
+            description="fill iframe field",
+            value="contract-001",
+            frame_path=["iframe:nth-of-type(2)"],
+            locator_candidates=[
+                {"locator": {"method": "css", "value": "#target"}, "selected": True},
+            ],
+            signals={"reported_frame_path": ["iframe[title='cart']"]},
+        ),
+    ]
+
+    body = _execute_body(TraceSkillCompiler().generate_script(traces, is_local=True))
+
+    click = "await current_page.get_by_text('Open cart', exact=True).click()"
+    wait = "await _wait_for_frame_target("
+    fill = "await target_locator.fill('contract-001')"
+    assert wait in body
+    assert '["iframe[title=\'cart\']"]' in body
+    assert '["iframe:nth-of-type(2)"]' in body
+    assert "lambda scope: scope.locator('#target').first," in body
+    assert body.index(click) < body.index(wait) < body.index(fill)
+
+
+def test_plain_click_without_following_iframe_trace_does_not_wait():
+    traces = [
+        RPAAcceptedTrace(
+            trace_id="click-open-panel",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            action="click",
+            locator_candidates=[
+                {"locator": {"method": "text", "value": "Open panel", "exact": True}, "selected": True},
+            ],
+        ),
+        RPAAcceptedTrace(
+            trace_id="fill-main-field",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            action="fill",
+            value="contract-001",
+            locator_candidates=[
+                {"locator": {"method": "css", "value": "#target"}, "selected": True},
+            ],
+        ),
+    ]
+
+    body = _execute_body(TraceSkillCompiler().generate_script(traces, is_local=True))
+
+    assert "_wait_for_frame_target(" not in body
+
+
+def test_popup_click_does_not_use_iframe_postcondition_wait():
+    traces = [
+        RPAAcceptedTrace(
+            trace_id="popup-export",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            action="click",
+            locator_candidates=[
+                {"locator": {"method": "text", "value": "Export all", "exact": True}, "selected": True},
+            ],
+            signals={"popup": {"target_tab_id": "tab-export"}},
+        ),
+        RPAAcceptedTrace(
+            trace_id="fill-iframe-field",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            action="fill",
+            value="contract-001",
+            frame_path=["iframe:nth-of-type(2)"],
+            locator_candidates=[
+                {"locator": {"method": "css", "value": "#target"}, "selected": True},
+            ],
+        ),
+    ]
+
+    body = _execute_body(TraceSkillCompiler().generate_script(traces, is_local=True))
+
+    assert "async with current_page.expect_popup() as popup_info:" in body
+    assert "_wait_for_frame_target(" not in body
+
+
+def test_download_click_does_not_use_iframe_postcondition_wait():
+    traces = [
+        RPAAcceptedTrace(
+            trace_id="download-report",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            action="click",
+            locator_candidates=[
+                {"locator": {"method": "role", "role": "link", "name": "report.xlsx", "exact": True}, "selected": True},
+            ],
+            signals={"download": {"filename": "report.xlsx"}},
+        ),
+        RPAAcceptedTrace(
+            trace_id="fill-iframe-field",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            action="fill",
+            value="contract-001",
+            frame_path=["iframe:nth-of-type(2)"],
+            locator_candidates=[
+                {"locator": {"method": "css", "value": "#target"}, "selected": True},
+            ],
+        ),
+    ]
+
+    body = _execute_body(TraceSkillCompiler().generate_script(traces, is_local=True))
+
+    assert "async with current_page.expect_download() as _dl_info:" in body
+    assert "_wait_for_frame_target(" not in body
+
+
+def test_switch_and_close_tab_are_not_affected_by_iframe_postcondition():
+    switch_traces = [
+        RPAAcceptedTrace(
+            trace_id="switch-to-sales",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            action="switch_tab",
+            signals={"tab": {"source_tab_id": "tab-root", "target_tab_id": "tab-sales"}},
+        ),
+        RPAAcceptedTrace(
+            trace_id="fill-iframe-field",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            action="fill",
+            value="contract-001",
+            frame_path=["iframe:nth-of-type(2)"],
+            locator_candidates=[
+                {"locator": {"method": "css", "value": "#target"}, "selected": True},
+            ],
+        ),
+    ]
+    close_traces = [
+        RPAAcceptedTrace(
+            trace_id="close-sales",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            action="close_tab",
+            signals={"tab": {"tab_id": "tab-sales", "target_tab_id": "tab-root"}},
+        ),
+        switch_traces[1],
+    ]
+
+    switch_body = _execute_body(TraceSkillCompiler().generate_script(switch_traces, is_local=True))
+    close_body = _execute_body(TraceSkillCompiler().generate_script(close_traces, is_local=True))
+
+    assert "_ensure_recorded_tab(tabs, current_page, kwargs, \"tab-sales\", \"\", True)" in switch_body
+    assert "await closing_page.close()" in close_body
+    assert "_wait_for_frame_target(" not in switch_body
+    assert "_wait_for_frame_target(" not in close_body
+
+
+def test_iframe_postcondition_wait_failure_emits_frame_diag_once():
+    script = TraceSkillCompiler().generate_script(
+        [
+            RPAAcceptedTrace(
+                trace_type=RPATraceType.NAVIGATION,
+                after_page=RPAPageState(url="https://example.test"),
+            )
+        ],
+        is_local=True,
+    )
+    namespace = _load_script_namespace(script)
+    wait_for_frame_target = namespace["_wait_for_frame_target"]
+    logs = []
+    page = _FakeFrameResolverPage({"iframe[title='cart']": False})
+
+    try:
+        asyncio.run(
+            wait_for_frame_target(
+                page,
+                [["iframe[title='cart']"]],
+                [lambda scope: scope.locator("#target").first],
+                logger=logs.append,
+                timeout_ms=1,
+            )
+        )
+    except RuntimeError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("missing iframe target should time out")
+
+    assert "iframe postcondition target did not appear within 1ms" in message
+    assert sum(1 for line in logs if line.startswith("FRAME_DIAG ")) == 1
+
+
+def test_iframe_trace_itself_still_uses_resolve_frame_target():
+    traces = [
+        RPAAcceptedTrace(
+            trace_id="click-open-cart",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            action="click",
+            locator_candidates=[
+                {"locator": {"method": "text", "value": "Open cart", "exact": True}, "selected": True},
+            ],
+        ),
+        RPAAcceptedTrace(
+            trace_id="fill-iframe-field",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            action="fill",
+            value="contract-001",
+            frame_path=["iframe:nth-of-type(2)"],
+            locator_candidates=[
+                {"locator": {"method": "css", "value": "#target"}, "selected": True},
+            ],
+        ),
+    ]
+
+    body = _execute_body(TraceSkillCompiler().generate_script(traces, is_local=True))
+
+    wait_index = body.index("await _wait_for_frame_target(")
+    resolve_index = body.rindex("frame_scope, target_locator = await _resolve_frame_target(")
+    fill_index = body.index("await target_locator.fill('contract-001')")
+    assert wait_index < resolve_index < fill_index
 
 
 def test_navigation_url_difference_without_tab_fact_does_not_create_new_page():

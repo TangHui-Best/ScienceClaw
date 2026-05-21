@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import unquote, urlsplit
 
@@ -12,6 +13,12 @@ from .trace_models import RPAAcceptedTrace, RPATraceType
 
 
 _EXACT_DEFAULT_METHODS = {"role", "label", "placeholder", "alt", "title", "text"}
+
+
+@dataclass(frozen=True)
+class FrameTargetPostcondition:
+    frame_candidate_paths: List[List[str]]
+    target_locator_candidates: List[Dict[str, Any]]
 
 
 class TraceSkillCompiler:
@@ -520,7 +527,7 @@ class TraceSkillCompiler:
             "        diagnostics['frames'].append(frame_info)",
             "    return diagnostics",
             "",
-            "async def _resolve_frame_target(current_page, frame_candidate_paths, locator_candidates, logger=None):",
+            "async def _resolve_frame_target(current_page, frame_candidate_paths, locator_candidates, logger=None, emit_diagnostics=True):",
             "    attempts = []",
             "    last_error = None",
             "    for frame_path in frame_candidate_paths:",
@@ -541,14 +548,38 @@ class TraceSkillCompiler:
             "        except Exception as exc:",
             "            last_error = exc",
             "            attempts.append(f\"{' -> '.join(labels) or '<main>'} :: frame :: {exc}\")",
+            "    if emit_diagnostics:",
+            "        try:",
+            "            diagnostics = await _frame_target_diagnostics(current_page, frame_candidate_paths)",
+            "            _frame_diag_emit(logger, _json.dumps(diagnostics, ensure_ascii=False, default=str)[:12000])",
+            "        except Exception as diag_exc:",
+            "            _frame_diag_emit(logger, f'failed to collect frame diagnostics: {type(diag_exc).__name__}: {diag_exc}')",
+            "    detail = ', '.join(attempts) or '<none>'",
+            "    suffix = f'; last error: {last_error}' if last_error else ''",
+            "    raise RuntimeError(f'Unable to resolve iframe target locator; candidates tried: {detail}{suffix}')",
+            "",
+            "async def _wait_for_frame_target(current_page, frame_candidate_paths, locator_candidates, logger=None, timeout_ms=60000):",
+            "    deadline = time.perf_counter() + (timeout_ms / 1000)",
+            "    last_error = None",
+            "    while time.perf_counter() < deadline:",
+            "        try:",
+            "            await _resolve_frame_target(",
+            "                current_page,",
+            "                frame_candidate_paths,",
+            "                locator_candidates,",
+            "                logger=None,",
+            "                emit_diagnostics=False,",
+            "            )",
+            "            return",
+            "        except Exception as exc:",
+            "            last_error = exc",
+            "            await current_page.wait_for_timeout(1000)",
             "    try:",
             "        diagnostics = await _frame_target_diagnostics(current_page, frame_candidate_paths)",
             "        _frame_diag_emit(logger, _json.dumps(diagnostics, ensure_ascii=False, default=str)[:12000])",
             "    except Exception as diag_exc:",
             "        _frame_diag_emit(logger, f'failed to collect frame diagnostics: {type(diag_exc).__name__}: {diag_exc}')",
-            "    detail = ', '.join(attempts) or '<none>'",
-            "    suffix = f'; last error: {last_error}' if last_error else ''",
-            "    raise RuntimeError(f'Unable to resolve iframe target locator; candidates tried: {detail}{suffix}')",
+            "    raise RuntimeError(f'iframe postcondition target did not appear within {timeout_ms}ms: {last_error}')",
             "",
             "async def _resolve_frame_scope(current_page, frame_candidate_paths, probe, logger=None):",
             "    frame_scope, _target = await _resolve_frame_target(current_page, frame_candidate_paths, [probe], logger=logger)",
@@ -563,12 +594,13 @@ class TraceSkillCompiler:
         ]
         used_output_keys: Dict[str, int] = {}
         for index, trace in enumerate(traces):
+            next_trace = traces[index + 1] if index + 1 < len(traces) else None
             alignment_lines, current_tab_id = self._render_trace_tab_alignment(
                 trace,
                 known_tab_ids,
                 current_tab_id,
             )
-            trace_lines = self._render_trace(index, trace, traces[:index], used_output_keys)
+            trace_lines = self._render_trace(index, trace, traces[:index], used_output_keys, next_trace)
             if alignment_lines:
                 trace_lines = alignment_lines + trace_lines
             lines.extend(self._wrap_trace_logging(index, trace, trace_lines))
@@ -716,13 +748,14 @@ class TraceSkillCompiler:
         trace: RPAAcceptedTrace,
         previous_traces: List[RPAAcceptedTrace],
         used_output_keys: Dict[str, int],
+        next_trace: Optional[RPAAcceptedTrace] = None,
     ) -> List[str]:
         if trace.trace_type == RPATraceType.NAVIGATION:
             return self._render_navigation_trace(index, trace, previous_traces)
         if trace.trace_type == RPATraceType.DATAFLOW_FILL and trace.dataflow:
             return self._render_dataflow_fill_trace(index, trace)
         if trace.trace_type == RPATraceType.MANUAL_ACTION:
-            return self._render_manual_action_trace(index, trace, previous_traces)
+            return self._render_manual_action_trace(index, trace, previous_traces, next_trace)
         if trace.trace_type == RPATraceType.DATA_CAPTURE:
             return self._render_data_capture_trace(index, trace, used_output_keys)
         if trace.trace_type == RPATraceType.AI_OPERATION:
@@ -755,9 +788,11 @@ class TraceSkillCompiler:
         index: int,
         trace: RPAAcceptedTrace,
         previous_traces: List[RPAAcceptedTrace],
+        next_trace: Optional[RPAAcceptedTrace] = None,
     ) -> List[str]:
         action = self._effective_manual_action(trace)
         locator = self._preferred_locator_for_trace(trace, trace.locator_candidates)
+        postcondition = self._next_frame_target_postcondition(trace, next_trace)
         lines = ["", f"    # trace {index}: {trace.description or action}"]
         if action in {"navigate_click", "navigate_press"}:
             if not locator:
@@ -807,12 +842,17 @@ class TraceSkillCompiler:
             lines.append(f"    await {expr}.hover()")
         elif action == "click":
             lines.append(f"    await {expr}.click()")
-            lines.append("    await current_page.wait_for_timeout(500)")
+            if postcondition:
+                lines.extend(self._frame_target_postcondition_wait_lines(postcondition))
+            else:
+                lines.append("    await current_page.wait_for_timeout(500)")
         elif action == "fill":
             fill_value = self._maybe_parameterize_value(str(trace.value or ""))
             lines.append(f"    await {expr}.fill({fill_value})")
         elif action == "press":
             lines.append(f"    await {expr}.press({str(trace.value or '')!r})")
+            if postcondition:
+                lines.extend(self._frame_target_postcondition_wait_lines(postcondition))
         elif action == "check":
             lines.append(f"    await {expr}.check()")
         elif action == "uncheck":
@@ -825,6 +865,55 @@ class TraceSkillCompiler:
         else:
             lines.append(f"    # Unsupported manual action preserved as no-op: {action}")
         return lines
+
+    def _next_frame_target_postcondition(
+        self,
+        trace: RPAAcceptedTrace,
+        next_trace: Optional[RPAAcceptedTrace],
+    ) -> Optional[FrameTargetPostcondition]:
+        if trace.trace_type != RPATraceType.MANUAL_ACTION:
+            return None
+        if next_trace is None or next_trace.trace_type != RPATraceType.MANUAL_ACTION:
+            return None
+        action = self._effective_manual_action(trace)
+        if action not in {"click", "press"}:
+            return None
+        if _trace_signal(trace, "popup") or _trace_signal(trace, "download"):
+            return None
+
+        frame_candidate_paths = self._frame_candidate_paths(next_trace)
+        if not frame_candidate_paths:
+            return None
+        fallback_locator = self._preferred_locator_for_trace(next_trace, next_trace.locator_candidates)
+        if not fallback_locator:
+            return None
+        target_locator_candidates = self._target_locator_candidates(
+            next_trace.locator_candidates,
+            fallback_locator=fallback_locator,
+        )
+        if not target_locator_candidates:
+            return None
+        return FrameTargetPostcondition(
+            frame_candidate_paths=frame_candidate_paths,
+            target_locator_candidates=target_locator_candidates,
+        )
+
+    @staticmethod
+    def _frame_target_postcondition_wait_lines(postcondition: FrameTargetPostcondition) -> List[str]:
+        return [
+            "    await _wait_for_frame_target(",
+            "        current_page,",
+            f"        {json.dumps(postcondition.frame_candidate_paths, ensure_ascii=False)},",
+            "        [",
+            *[
+                f"            lambda scope: {_locator_expression('scope', locator)},"
+                for locator in postcondition.target_locator_candidates
+            ],
+            "        ],",
+            "        logger=_trace_logger,",
+            "        timeout_ms=60000,",
+            "    )",
+        ]
 
     def _manual_action_target_lines(
         self,

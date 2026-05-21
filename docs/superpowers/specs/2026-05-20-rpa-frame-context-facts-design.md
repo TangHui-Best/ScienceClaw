@@ -652,4 +652,49 @@ git diff --check -- RpaClaw/backend/rpa/trace_skill_compiler.py RpaClaw/backend/
   - `7649d1c fix: resolve iframe frame scope candidates`
   - `3c788b7 fix: resolve iframe target locators`
   - `7cf60dc chore: log iframe resolver diagnostics`
-- 当前文档新增第四阶段方案，下一步应先写上述 TDD 测试，再实现 postcondition wait。
+- 第四阶段已完成本地实现，尚未提交/推送，等待内网回放验证。
+
+### 第四阶段实现进展（2026-05-21）
+
+本轮按 TDD 实现相邻 trace iframe postcondition wait：
+
+1. `TraceSkillCompiler` 新增 `_next_frame_target_postcondition(...)`，只在当前 trace 是手动 `click` / `press`、下一条 trace 是 iframe-scoped manual action、且当前 trace 没有 popup/download/switch/close/navigation 强副作用语义时启用。
+2. 生成脚本新增 `_wait_for_frame_target(...)`，复用 `_resolve_frame_target(...)` 的 `frame_candidate_paths × locator_candidates` 解析矩阵；轮询期间关闭 resolver 诊断，最终失败时只输出一次 `FRAME_DIAG` 并抛出 `iframe postcondition target did not appear...`。
+3. 触发 wait 的 click 不再依赖固定 `wait_for_timeout(500)` 作为业务状态保证；普通 click 仍保持既有 500ms 兼容等待。
+4. 下一条 iframe trace 自身仍通过 `_resolve_frame_target(...)` 执行实际 fill/click/press，不被 postcondition wait 替代。
+5. popup、download、switch_tab、close_tab、navigate_click / navigate_press 语义未被 postcondition wait 覆盖。
+
+新增测试：
+
+- `test_click_before_iframe_trace_waits_for_next_frame_target`
+- `test_plain_click_without_following_iframe_trace_does_not_wait`
+- `test_popup_click_does_not_use_iframe_postcondition_wait`
+- `test_download_click_does_not_use_iframe_postcondition_wait`
+- `test_switch_and_close_tab_are_not_affected_by_iframe_postcondition`
+- `test_iframe_postcondition_wait_failure_emits_frame_diag_once`
+- `test_iframe_trace_itself_still_uses_resolve_frame_target`
+
+已跑验证：
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_click_before_iframe_trace_waits_for_next_frame_target -q
+# RED: failed because generated script did not contain await _wait_for_frame_target(...)
+
+python -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q -k "postcondition or click_before_iframe or plain_click_without_following_iframe or popup_click_does_not_use_iframe_postcondition or download_click_does_not_use_iframe_postcondition or switch_and_close_tab_are_not_affected or iframe_trace_itself"
+# 7 passed
+
+python -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q -k "iframe or popup or switch_tab or navigation or download"
+# 43 passed, 58 deselected
+
+python -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q
+# 101 passed
+
+python -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_trace_e2e.py -q
+# 112 passed
+
+git diff --check -- RpaClaw/backend/rpa/trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py docs/superpowers/specs/2026-05-20-rpa-frame-context-facts-design.md
+# exit 0
+```
+
+下一步：提交并推送后，用用户内网 trace 重新生成脚本并回放，确认 trace 7 点击 `操作` 后会等待 trace 8 的 iframe/textbox 出现；若仍失败，应优先阅读 postcondition timeout 的 `FRAME_DIAG`，判断 iframe 是否仍未加载、frame candidate 是否不匹配，或 target locator 是否不匹配。
