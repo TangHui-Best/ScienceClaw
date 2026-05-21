@@ -432,3 +432,224 @@ python -m pytest RpaClaw/backend/tests/test_rpa_manager.py RpaClaw/backend/tests
 ```
 
 后续仍需要内网回放验证确认真实页面 accessible name / placeholder 与 frame candidate 命中情况。
+
+## 第四阶段：跨 Trace iframe 后置条件等待方案（2026-05-21）
+
+### 背景
+
+2026-05-21 内网重新生成脚本并执行 `7cf60dc chore: log iframe resolver diagnostics` 后，`FRAME_DIAG` 给出了新的关键事实：
+
+```json
+{
+  "top_url": "https://kweweb-uata.huawei.com/iplatform/saasone/#/miniapps/.../requirementManagement?reqId=3548124130716926322",
+  "top_title": "TEST -- iPlatform",
+  "iframe_elements": [
+    {
+      "index": 0,
+      "src": "",
+      "visible": false,
+      "box": {"x": 0, "y": 0, "width": 0, "height": 0}
+    }
+  ],
+  "frames": [
+    {"index": 0, "url": "https://kweweb-uata.huawei.com/iplatform/saasone/#/.../requirementManagement?reqId=3548124130716926322"},
+    {"index": 1, "url": "about:blank"}
+  ]
+}
+```
+
+这说明第三阶段的 `frame_candidate_paths × locator_candidates` resolver 并没有选错 iframe。失败时页面里根本没有出现录制时的 `kweweb-b4.../pr/#!purpr/shoppingcar/index.html?...` iframe，只有一个不可见空 iframe 与 `about:blank` frame。
+
+因此当前根因不再是 iframe selector、frame tab drift 或 locator exact 语义，而是跨 trace 业务状态依赖缺失：
+
+```python
+await current_page.get_by_text('操作', exact=True).click()
+await current_page.wait_for_timeout(500)
+```
+
+这段只证明 Playwright click 已完成，不证明业务状态已经进入“后续申购 iframe 已加载且目标 textbox 可定位”。下一条 iframe trace 依赖这个状态，但编译器没有把相邻 trace 之间的后置条件表达出来。
+
+### Vision Anchor
+
+Trace-first Recording 的回放脚本应忠实表达用户操作序列中可验证的能力增量：当前一步如果为下一步打开了新的 frame scope 或目标控件，编译阶段应把这个相邻依赖编译成保守的后置条件等待，而不是依赖固定 sleep。
+
+目标不是让编译器理解某个站点的“操作”按钮语义，而是用下一条 trace 已经记录的事实作为当前步骤的 postcondition：
+
+- 当前步骤：执行用户点击或按键。
+- 下一步骤：已记录在某个 iframe 中操作某个目标控件。
+- 编译结果：当前步骤完成后等待“下一步骤的 frame candidates 与 target locator candidates 可解析”，再进入下一步骤。
+
+### 非目标
+
+- 不继续补 `kweweb-b4`、`shoppingcar`、`purpr` 等站点模板。
+- 不全局加长 click 后 sleep。
+- 不自动点击别的“操作”按钮或猜测业务列表中的正确行。
+- 不把 iframe `src` 当成顶层 `Page` 导航或新 tab 证据。
+- 不改变真实 `popup`、`download`、`switch_tab`、`close_tab` 的强语义。
+- 不把空提取、弱 selector 或页面慢加载变成新的录制前置拦截。
+
+### 推荐方案
+
+在 `TraceSkillCompiler` 中新增保守的相邻 trace postcondition 推断。
+
+当当前 trace 是手动 `click` 或 `press`，下一条 trace 是 iframe-scoped manual action，且当前 trace 没有强副作用证据时，当前 trace 的 action 后追加等待：
+
+```python
+await current_page.get_by_text('操作', exact=True).click()
+await _wait_for_frame_target(
+    current_page,
+    next_trace_frame_candidate_paths,
+    next_trace_locator_candidates,
+    logger=_trace_logger,
+    timeout_ms=60000,
+)
+```
+
+`_wait_for_frame_target(...)` 只等待，不执行下一步动作。下一条 iframe trace 仍然通过 `_resolve_frame_target(...)` 解析并执行自己的 click/fill/press/select 等操作。
+
+### 触发条件
+
+只在以下条件全部满足时启用：
+
+1. 当前 trace 是 `RPATraceType.MANUAL_ACTION`。
+2. 当前 action 是 `click` 或 `press`。
+3. 当前 trace 没有 `signals.popup`。
+4. 当前 trace 没有 `signals.download`。
+5. 当前 action 不是 `switch_tab` 或 `close_tab`。
+6. 下一条 trace 是 `RPATraceType.MANUAL_ACTION`。
+7. 下一条 trace 有 iframe evidence：
+   - `next_trace.frame_path`；或
+   - `next_trace.signals.reported_frame_path`；或
+   - `next_trace.signals.frame.reported_frame_path`。
+8. 下一条 trace 有可用 locator candidates，或至少有 fallback locator 可用于 probe。
+
+建议暂时不要对已有 `navigate_click` / `navigate_press` 自动叠加 iframe postcondition，除非实现时确认其 navigation 语义与 iframe wait 不冲突。若当前 action 已经有 `post_navigation`、`expect_navigation` 或强导航证据，应优先保持原语义。
+
+### 实现建议
+
+目标文件：
+
+- `RpaClaw/backend/rpa/trace_skill_compiler.py`
+- `RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py`
+
+建议分解：
+
+1. 新增判断函数：
+
+```python
+def _next_frame_target_postcondition(
+    self,
+    trace: RPAAcceptedTrace,
+    next_trace: Optional[RPAAcceptedTrace],
+) -> Optional[FrameTargetPostcondition]:
+    ...
+```
+
+也可以先不引入新 dataclass，直接返回 `(frame_candidate_paths, target_locator_candidates)`，但不要让判断逻辑散落在 `_render_manual_action_trace()` 里。
+
+2. 让 `_render_trace()` / `_render_manual_action_trace()` 可以看到 `next_trace`。
+
+当前渲染链路只显式传入 `previous_traces`，第四阶段需要把 `traces[index + 1]` 传给 manual action 渲染。保持其他 trace 类型行为不变。
+
+3. 新增生成脚本 helper：
+
+```python
+async def _wait_for_frame_target(current_page, frame_candidate_paths, locator_candidates, logger=None, timeout_ms=60000):
+    deadline = time.perf_counter() + (timeout_ms / 1000)
+    last_error = None
+    while time.perf_counter() < deadline:
+        try:
+            await _resolve_frame_target(current_page, frame_candidate_paths, locator_candidates, logger=None)
+            return
+        except Exception as exc:
+            last_error = exc
+            await current_page.wait_for_timeout(1000)
+    diagnostics = await _frame_target_diagnostics(current_page, frame_candidate_paths)
+    _frame_diag_emit(logger, _json.dumps(diagnostics, ensure_ascii=False, default=str)[:12000])
+    raise RuntimeError(f'iframe postcondition target did not appear within {timeout_ms}ms: {last_error}')
+```
+
+注意：循环内部不建议把 logger 传给 `_resolve_frame_target()`，避免每秒输出一大段 `FRAME_DIAG`。只在最终失败时输出一次诊断。
+
+4. 复用第三阶段已有能力：
+
+- `_frame_candidate_paths(next_trace)`
+- `_target_locator_candidates(next_trace.locator_candidates, fallback_locator=...)`
+- `_locator_expression(...)`
+- `_resolve_frame_target(...)`
+- `_frame_target_diagnostics(...)`
+
+不应新增第二套 frame/locator 解析逻辑。
+
+### 必加 TDD 测试矩阵
+
+1. `test_click_before_iframe_trace_waits_for_next_frame_target`
+   - 构造 click trace 后紧跟 iframe fill/click trace。
+   - 断言 click 后生成 `_wait_for_frame_target(...)`。
+   - 断言 wait 使用下一条 trace 的 frame candidates 与 locator candidates。
+
+2. `test_plain_click_without_following_iframe_trace_does_not_wait`
+   - 普通 click 后普通 action，不生成 `_wait_for_frame_target(...)`。
+
+3. `test_popup_click_does_not_use_iframe_postcondition_wait`
+   - 当前 trace 有 `signals.popup` 时仍走 `expect_popup()`，不生成 iframe postcondition wait。
+
+4. `test_download_click_does_not_use_iframe_postcondition_wait`
+   - 当前 trace 有 `signals.download` 时仍走 download 逻辑，不生成 iframe postcondition wait。
+
+5. `test_switch_and_close_tab_are_not_affected_by_iframe_postcondition`
+   - 显式 tab 行为不触发 iframe postcondition。
+
+6. `test_iframe_postcondition_wait_failure_emits_frame_diag_once`
+   - wait 超时只输出一次 `FRAME_DIAG`，不要在轮询中刷屏。
+
+7. `test_iframe_trace_itself_still_uses_resolve_frame_target`
+   - 下一条 iframe trace 自身仍执行 `_resolve_frame_target(...)` 与实际动作，不被 postcondition 替代。
+
+### 验证命令
+
+Focused：
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q -k "iframe or popup or switch_tab or navigation or download"
+```
+
+Compiler full：
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q
+```
+
+If main compile flow changes:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_trace_e2e.py -q
+```
+
+Diff hygiene：
+
+```powershell
+git diff --check -- RpaClaw/backend/rpa/trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py docs/superpowers/specs/2026-05-20-rpa-frame-context-facts-design.md
+```
+
+### 验收标准
+
+- 用户场景中 trace 7 点击 `操作` 后不再只等待固定 500ms，而是等待 trace 8 的 iframe/textbox postcondition。
+- 如果 iframe 成功出现，trace 8 继续用 `_resolve_frame_target(...)` 点击 textbox，trace 9 继续填值。
+- 如果 iframe 仍未出现，失败日志应明确显示 postcondition 超时，并输出 `FRAME_DIAG`，不再误导为单纯 iframe selector 问题。
+- 普通 click、popup、download、switch tab、close tab、same-tab navigation 的现有测试不回退。
+- 不引入任何站点名或业务路径特例；`shoppingcar/index.html` 只能来自 trace evidence 的泛化候选，不应作为硬编码规则写入触发条件。
+
+### 交接状态
+
+- Worktree: `E:\Work-Project\OtherWork\ScienceClaw\.worktrees\rpa-frame-context-facts`
+- Branch: `codex/rpa-frame-context-facts`
+- 已推送提交：
+  - `011cba2 fix: keep iframe traces on current page`
+  - `7649d1c fix: resolve iframe frame scope candidates`
+  - `3c788b7 fix: resolve iframe target locators`
+  - `7cf60dc chore: log iframe resolver diagnostics`
+- 当前文档新增第四阶段方案，下一步应先写上述 TDD 测试，再实现 postcondition wait。
