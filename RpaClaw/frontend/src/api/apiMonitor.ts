@@ -11,6 +11,8 @@ export type ApiToolConfidence = 'high' | 'medium' | 'low'
 
 export type ApiToolGenerationStatus =
   | 'pending'
+  | 'intent_pruning'
+  | 'intent_prune_retrying'
   | 'running'
   | 'generated'
   | 'failed'
@@ -52,6 +54,9 @@ export interface ApiToolGenerationCandidate {
   intent_score?: number | null
   intent_rank?: number | null
   intent_batch_id?: string | null
+  intent_prune_attempts?: number
+  intent_prune_error?: string | null
+  intent_prune_retry_after?: string | null
   created_at: string
   updated_at: string
 }
