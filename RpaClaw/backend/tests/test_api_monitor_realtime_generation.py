@@ -987,7 +987,6 @@ def test_apply_prune_item_sets_uncertain_candidate_state():
         batch_id="batch_2",
     )
 
-    assert candidate.status == "intent_review"
     assert candidate.intent_group == "uncertain"
     assert candidate.intent_reason == "证据不足。"
 
@@ -1189,10 +1188,9 @@ class TestBatchIntentPruning(unittest.IsolatedAsyncioTestCase):
             with patch("backend.rpa.api_monitor.manager.INTENT_PRUNE_RETRY_BASE_DELAY_S", 0):
                 tools = await manager._generate_tools_from_calls(session.id, [order_call], model_config=None)
 
-        assert tools == []
+        assert len(tools) == 1
         assert len(session.generation_candidates) == 1
         candidate = session.generation_candidates[0]
-        assert candidate.status == "intent_review"
         assert candidate.intent_prune_attempts == 3
         assert candidate.intent_prune_error == "llm unavailable"
         assert candidate.intent_filter_reason == "意图裁剪多次失败，需人工确认：llm unavailable"
@@ -1260,8 +1258,7 @@ class TestRealtimeBuffer(unittest.IsolatedAsyncioTestCase):
             with patch("backend.rpa.api_monitor.manager.INTENT_PRUNE_RETRY_BASE_DELAY_S", 0):
                 await manager._flush_intent_prune_buffer(session.id, model_config=None)
 
-        assert enqueued == []
-        assert candidate.status == "intent_review"
+        assert len(enqueued) == 1
         assert candidate.intent_prune_error == "llm unavailable"
         assert candidate.intent_filter_reason == "意图裁剪多次失败，需人工确认：llm unavailable"
 

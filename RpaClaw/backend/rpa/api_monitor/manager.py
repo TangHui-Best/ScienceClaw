@@ -2466,7 +2466,7 @@ class ApiMonitorSessionManager:
             candidate.status = "intent_filtered"
             candidate.intent_filter_reason = item.intent_reason
         elif item.intent_group == "uncertain":
-            candidate.status = "intent_review"
+            candidate.status = "pending"
             candidate.intent_filter_reason = item.intent_reason
         candidate.updated_at = datetime.now()
         session.updated_at = datetime.now()
@@ -2513,6 +2513,8 @@ class ApiMonitorSessionManager:
             current = asyncio.current_task()
             if self._intent_prune_tasks.get(session_id) is current:
                 self._intent_prune_tasks.pop(session_id, None)
+            if self._intent_prune_buffers.get(session_id):
+                self._schedule_intent_prune_flush(session_id, model_config=model_config)
 
     async def _flush_intent_prune_buffer(
         self,
@@ -2570,8 +2572,8 @@ class ApiMonitorSessionManager:
                 continue
             self._apply_prune_item_to_candidate(session, candidate, item, batch_id=prune_result.batch_id)
             self._emit_analysis_event(session_id, "api_candidate_intent_pruned", self._candidate_event_payload(candidate))
-            if candidate.status not in ("intent_filtered", "intent_review"):
-                self._enqueue_generation_candidate(session_id, candidate.id, model_config=model_config)
+            if candidate.status not in ("intent_filtered",):
+                self._enqueue_generation_candidate(session_id, candidate.id, model_config=model_config, skip_filter=True)
 
     def _is_rate_limit_error(self, exc: Exception) -> bool:
         text = str(exc).lower()
