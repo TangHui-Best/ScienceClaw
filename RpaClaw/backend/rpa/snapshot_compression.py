@@ -112,7 +112,17 @@ def tier_regions(regions: Sequence[Dict[str, Any]], instruction: str) -> Dict[st
     }
 
 
-def compact_recording_snapshot(snapshot: Dict[str, Any], instruction: str, *, char_budget: int = 60000) -> Dict[str, Any]:
+def compact_recording_snapshot(
+    snapshot: Dict[str, Any],
+    instruction: str,
+    *,
+    char_budget: int = 60000,
+    region_scope: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    effective_scope = region_scope if region_scope is not None else snapshot.get("region_scope")
+    if isinstance(effective_scope, dict) and effective_scope:
+        return _compact_region_scoped_snapshot(snapshot, instruction, effective_scope, char_budget=char_budget)
+
     regions = build_structured_regions(snapshot)
     tiers = tier_regions(regions, instruction)
     clean_payload = _build_clean_payload(snapshot, regions, tiers["region_catalogue"])
@@ -129,10 +139,332 @@ def compact_recording_snapshot(snapshot: Dict[str, Any], instruction: str, *, ch
         "title": snapshot.get("title", ""),
         "table_views": _compact_table_views(snapshot),
         "detail_views": _compact_detail_views(snapshot),
+        "form_views": _compact_form_views(snapshot),
         "expanded_regions": expanded_regions,
         "sampled_regions": sampled_regions,
         "region_catalogue": tiers["region_catalogue"],
     }
+
+
+def _compact_region_scoped_snapshot(
+    snapshot: Dict[str, Any],
+    instruction: str,
+    region_scope: Dict[str, Any],
+    *,
+    char_budget: int,
+) -> Dict[str, Any]:
+    regions = build_structured_regions(snapshot)
+    scope_rect = region_scope.get("frame_rect") or region_scope.get("viewport_rect") or {}
+    selected_regions = [
+        scoped_region
+        for region in regions
+        if _region_is_inside_scope(region, snapshot)
+        for scoped_region in [_scoped_candidate_region(region, scope_rect if isinstance(scope_rect, dict) else None)]
+        if scoped_region
+    ]
+    if not selected_regions:
+        selected_regions = _regions_intersecting_scope(regions, snapshot, region_scope)
+    selected_regions.sort(
+        key=lambda region: (-_region_relevance(region, instruction), _region_rank(region), region.get("title", ""))
+    )
+    selected_region_ids = {str(region.get("region_id") or "") for region in selected_regions}
+    context_regions = [
+        region
+        for region in regions
+        if str(region.get("region_id") or "") not in selected_region_ids and _region_is_context_scope(region, snapshot)
+    ]
+
+    payload = {
+        "mode": "region_scoped_snapshot",
+        "url": snapshot.get("url", ""),
+        "title": snapshot.get("title", ""),
+        "region_scope": _compact_region_scope(region_scope),
+        "page_context": _region_page_context(snapshot, context_regions),
+        "table_views": _compact_table_views(snapshot, scope_only=True),
+        "detail_views": _compact_detail_views(snapshot, scope_only=True),
+        "form_views": _compact_form_views(snapshot, scope_only=True),
+        "expanded_regions": [_expanded_region(region) for region in selected_regions],
+        "sampled_regions": [],
+        "region_catalogue": [_summary_region(region) for region in context_regions[:4]],
+    }
+    return _trim_region_scoped_snapshot_to_budget(payload, char_budget)
+
+
+def _node_scope_relation(node: Dict[str, Any]) -> str:
+    return str(node.get("scope_relation") or "").strip()
+
+
+def _view_scope_relation(view: Dict[str, Any]) -> str:
+    return _node_scope_relation(view)
+
+
+def _region_node_relations(region: Dict[str, Any], snapshot: Dict[str, Any]) -> set[str]:
+    container_id = str(region.get("container_id") or "")
+    relations: set[str] = set()
+    for node in list(snapshot.get("content_nodes") or []) + list(snapshot.get("actionable_nodes") or []):
+        if str(node.get("container_id") or "") == container_id:
+            relation = _node_scope_relation(node)
+            if relation:
+                relations.add(relation)
+    return relations
+
+
+def _region_is_inside_scope(region: Dict[str, Any], snapshot: Dict[str, Any]) -> bool:
+    return "inside_region" in _region_node_relations(region, snapshot)
+
+
+def _region_is_context_scope(region: Dict[str, Any], snapshot: Dict[str, Any]) -> bool:
+    return "ancestor_context" in _region_node_relations(region, snapshot)
+
+
+def _scoped_candidate_region(
+    region: Dict[str, Any],
+    scope_rect: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    kind = _normalize_kind(region.get("kind"))
+    if kind == "action_group":
+        return _scoped_action_group_region(region, scope_rect)
+    if kind != "label_value_group":
+        return region
+    pairs = list(region.get("pairs") or [])
+    scoped_pairs = [pair for pair in pairs if pair.get("scope_relation") == "inside_region"]
+    if not scoped_pairs and scope_rect:
+        scoped_pairs = [pair for pair in pairs if _pair_intersects_scope(pair, scope_rect)]
+    if not scoped_pairs:
+        if any(pair.get("scope_relation") for pair in pairs):
+            return None
+        return region
+    scoped_region = dict(region)
+    scoped_region["pairs"] = scoped_pairs
+    scoped_region["summary"] = " | ".join(f"{pair['label']}={pair['value']}" for pair in scoped_pairs[:4])
+    return scoped_region
+
+
+def _scoped_action_group_region(
+    region: Dict[str, Any],
+    scope_rect: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    texts = list(region.get("texts") or [])
+    actions = list(region.get("actions") or [])
+    scoped_texts = [entry for entry in texts if entry.get("scope_relation") == "inside_region"]
+    scoped_actions = [entry for entry in actions if entry.get("scope_relation") == "inside_region"]
+    if scope_rect:
+        if not scoped_texts:
+            scoped_texts = [entry for entry in texts if _rects_intersect(entry.get("bbox") or {}, scope_rect)]
+        if not scoped_actions:
+            scoped_actions = [entry for entry in actions if _rects_intersect(entry.get("bbox") or {}, scope_rect)]
+    if not scoped_texts and not scoped_actions:
+        if any(entry.get("scope_relation") for entry in texts + actions):
+            return None
+        return region
+
+    scoped_region = dict(region)
+    scoped_region["actions"] = scoped_actions
+    scoped_region["selected_texts"] = scoped_texts
+    summary_parts = [_clean_text(scoped_region.get("title") or "")]
+    summary_parts.extend(_clean_text(entry.get("text") or "") for entry in scoped_texts[:4])
+    summary_parts.extend(_clean_text(entry.get("label") or "") for entry in scoped_actions[:4])
+    scoped_region["summary"] = " | ".join(part for part in summary_parts if part)
+    return scoped_region
+
+
+def _compact_region_scope(region_scope: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "region_id": region_scope.get("region_id", ""),
+        "tab_id": region_scope.get("tab_id", ""),
+        "frame_path": list(region_scope.get("frame_path") or []),
+        "frame_rect": dict(region_scope.get("frame_rect") or {}),
+        "warnings": list(region_scope.get("warnings") or []),
+    }
+
+
+def _region_page_context(snapshot: Dict[str, Any], context_regions: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    return {
+        "url": snapshot.get("url", ""),
+        "title": snapshot.get("title", ""),
+        "context_regions": [_summary_region(region) for region in list(context_regions)[:4]],
+    }
+
+
+def _regions_intersecting_scope(
+    regions: Sequence[Dict[str, Any]],
+    snapshot: Dict[str, Any],
+    region_scope: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    scope_rect = region_scope.get("frame_rect") or region_scope.get("viewport_rect") or {}
+    if not isinstance(scope_rect, dict) or not scope_rect:
+        return []
+    scope_frame_path = _normalized_frame_path(region_scope.get("frame_path"))
+    scoped_regions: List[Dict[str, Any]] = []
+    for region in regions:
+        if scope_frame_path and _region_frame_path(region, snapshot) != scope_frame_path:
+            continue
+        if not _rects_intersect(_region_rect(region, snapshot), scope_rect):
+            continue
+        scoped_region = _scoped_candidate_region(region, scope_rect)
+        if scoped_region:
+            scoped_regions.append(scoped_region)
+    return scoped_regions
+
+
+def _region_rect(region: Dict[str, Any], snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    container_id = str(region.get("container_id") or "")
+    for container in snapshot.get("containers") or []:
+        if str(container.get("container_id") or "") == container_id and isinstance(container.get("bbox"), dict):
+            return dict(container.get("bbox") or {})
+    nodes = [
+        node
+        for node in list(snapshot.get("content_nodes") or []) + list(snapshot.get("actionable_nodes") or [])
+        if str(node.get("container_id") or "") == container_id and isinstance(node.get("bbox"), dict)
+    ]
+    return _union_rect([node.get("bbox") or {} for node in nodes])
+
+
+def _region_frame_path(region: Dict[str, Any], snapshot: Dict[str, Any]) -> List[str]:
+    region_frame_path = _normalized_frame_path(region.get("frame_path"))
+    if region_frame_path:
+        return region_frame_path
+    container_id = str(region.get("container_id") or "")
+    for container in snapshot.get("containers") or []:
+        if str(container.get("container_id") or "") == container_id:
+            container_frame_path = _normalized_frame_path(container.get("frame_path"))
+            if container_frame_path:
+                return container_frame_path
+    nodes = [
+        node
+        for node in list(snapshot.get("content_nodes") or []) + list(snapshot.get("actionable_nodes") or [])
+        if str(node.get("container_id") or "") == container_id
+    ]
+    return _first_frame_path(nodes)
+
+
+def _normalized_frame_path(value: Any) -> List[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item or "").strip()]
+
+
+def _json_size(payload: Dict[str, Any]) -> int:
+    return len(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+
+
+def _trim_region_scoped_snapshot_to_budget(payload: Dict[str, Any], char_budget: int) -> Dict[str, Any]:
+    if char_budget <= 0 or _json_size(payload) <= char_budget:
+        return payload
+    if char_budget < _minimum_region_scoped_snapshot_size(payload):
+        return payload
+
+    trimmed = dict(payload)
+    page_context = dict(trimmed.get("page_context") or {})
+    page_context["context_regions"] = []
+    trimmed["page_context"] = page_context
+    trimmed["region_catalogue"] = []
+    trimmed = _truncate_snapshot_strings(trimmed, limit=160)
+    if _json_size(trimmed) <= char_budget:
+        return trimmed
+
+    trimmed["expanded_regions"] = [
+        _sample_expanded_region_for_budget(region)
+        for region in list(trimmed.get("expanded_regions") or [])[:2]
+        if isinstance(region, dict)
+    ]
+    if _json_size(trimmed) <= char_budget:
+        return trimmed
+
+    trimmed["expanded_regions"] = [
+        _sample_expanded_region_for_budget(region)
+        for region in list(trimmed.get("expanded_regions") or [])[:1]
+        if isinstance(region, dict)
+    ]
+    if _json_size(trimmed) <= char_budget:
+        return trimmed
+
+    trimmed["table_views"] = list(trimmed.get("table_views") or [])[:1]
+    trimmed["detail_views"] = list(trimmed.get("detail_views") or [])[:1]
+    trimmed["form_views"] = list(trimmed.get("form_views") or [])[:1]
+    return _truncate_snapshot_strings(trimmed, limit=80)
+
+
+def _minimum_region_scoped_snapshot_size(payload: Dict[str, Any]) -> int:
+    minimum_payload = {
+        "mode": payload.get("mode", "region_scoped_snapshot"),
+        "url": payload.get("url", ""),
+        "title": payload.get("title", ""),
+        "region_scope": payload.get("region_scope") or {},
+        "page_context": {
+            "url": (payload.get("page_context") or {}).get("url", ""),
+            "title": (payload.get("page_context") or {}).get("title", ""),
+            "context_regions": [],
+        },
+        "table_views": [],
+        "detail_views": [],
+        "form_views": [],
+        "expanded_regions": [],
+        "sampled_regions": [],
+        "region_catalogue": [],
+    }
+    return _json_size(minimum_payload)
+
+
+def _truncate_snapshot_strings(value: Any, *, limit: int) -> Any:
+    if isinstance(value, str):
+        return value if len(value) <= limit else value[:limit]
+    if isinstance(value, list):
+        return [_truncate_snapshot_strings(item, limit=limit) for item in value]
+    if isinstance(value, dict):
+        return {key: _truncate_snapshot_strings(item, limit=limit) for key, item in value.items()}
+    return value
+
+
+def _sample_expanded_region_for_budget(region: Dict[str, Any]) -> Dict[str, Any]:
+    sampled = dict(region)
+    evidence = sampled.get("evidence")
+    if isinstance(evidence, dict):
+        sampled_evidence: Dict[str, Any] = {}
+        for key, value in evidence.items():
+            sampled_evidence[key] = value[:2] if isinstance(value, list) else value
+        sampled["evidence"] = sampled_evidence
+    sampled["mode"] = "expanded"
+    return sampled
+
+
+def _union_rect(rects: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    normalized = [_normalized_rect(rect) for rect in rects]
+    normalized = [rect for rect in normalized if rect]
+    if not normalized:
+        return {}
+    left = min(rect["x"] for rect in normalized)
+    top = min(rect["y"] for rect in normalized)
+    right = max(rect["x"] + rect["width"] for rect in normalized)
+    bottom = max(rect["y"] + rect["height"] for rect in normalized)
+    return {"x": left, "y": top, "width": right - left, "height": bottom - top}
+
+
+def _normalized_rect(rect: Dict[str, Any]) -> Dict[str, float]:
+    try:
+        return {
+            "x": float(rect.get("x", 0) or 0),
+            "y": float(rect.get("y", 0) or 0),
+            "width": float(rect.get("width", 0) or 0),
+            "height": float(rect.get("height", 0) or 0),
+        }
+    except (TypeError, ValueError):
+        return {}
+
+
+def _rects_intersect(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
+    left_rect = _normalized_rect(left)
+    right_rect = _normalized_rect(right)
+    if not left_rect or not right_rect:
+        return False
+    left_right = left_rect["x"] + left_rect["width"]
+    right_right = right_rect["x"] + right_rect["width"]
+    left_bottom = left_rect["y"] + left_rect["height"]
+    right_bottom = right_rect["y"] + right_rect["height"]
+    return (
+        min(left_right, right_right) > max(left_rect["x"], right_rect["x"])
+        and min(left_bottom, right_bottom) > max(left_rect["y"], right_rect["y"])
+    )
 
 
 def _build_clean_payload(
@@ -145,17 +477,35 @@ def _build_clean_payload(
         "title": snapshot.get("title", ""),
         "table_views": _compact_table_views(snapshot),
         "detail_views": _compact_detail_views(snapshot),
+        "form_views": _compact_form_views(snapshot),
         "expanded_regions": [_expanded_region(region) for region in regions],
         "sampled_regions": [],
         "region_catalogue": list(region_catalogue),
     }
 
 
-def _compact_table_views(snapshot: Dict[str, Any], *, row_limit: int = 10, cell_limit: int = 12) -> List[Dict[str, Any]]:
+def _compact_table_views(
+    snapshot: Dict[str, Any],
+    *,
+    row_limit: int = 10,
+    cell_limit: int = 12,
+    scope_only: bool = False,
+) -> List[Dict[str, Any]]:
     views: List[Dict[str, Any]] = []
     for view in list(snapshot.get("table_views") or [])[:8]:
+        if scope_only and _view_scope_relation(view) not in {"inside_region", "ancestor_context"}:
+            continue
+        selected_row_indexes = set(view.get("selected_row_indexes") or [])
+        source_rows = list(view.get("rows") or [])
+        if scope_only and selected_row_indexes:
+            source_rows = [row for row in source_rows if row.get("index") in selected_row_indexes]
+        elif scope_only:
+            selected_rows = [row for row in source_rows if _view_scope_relation(row) == "inside_region"]
+            if selected_rows:
+                source_rows = selected_rows
+
         rows = []
-        for row in list(view.get("rows") or [])[:row_limit]:
+        for row in source_rows[:row_limit]:
             cells = []
             for cell in list(row.get("cells") or [])[:cell_limit]:
                 cells.append(
@@ -175,6 +525,8 @@ def _compact_table_views(snapshot: Dict[str, Any], *, row_limit: int = 10, cell_
                     "locator_hints": list(row.get("locator_hints") or [])[:2],
                 }
             )
+            if scope_only and (row.get("scope_relation") or row.get("index") in selected_row_indexes):
+                rows[-1]["scope_relation"] = row.get("scope_relation") or "inside_region"
         views.append(
             {
                 "kind": "table_view",
@@ -192,11 +544,23 @@ def _compact_table_views(snapshot: Dict[str, Any], *, row_limit: int = 10, cell_
     return views
 
 
-def _compact_detail_views(snapshot: Dict[str, Any], *, field_limit: int = 40) -> List[Dict[str, Any]]:
+def _compact_detail_views(
+    snapshot: Dict[str, Any],
+    *,
+    field_limit: int = 40,
+    scope_only: bool = False,
+) -> List[Dict[str, Any]]:
     views: List[Dict[str, Any]] = []
     for view in list(snapshot.get("detail_views") or [])[:12]:
+        if scope_only and _view_scope_relation(view) not in {"inside_region", "ancestor_context"}:
+            continue
+        source_fields = list(view.get("fields") or [])
+        if scope_only:
+            selected_fields = [field for field in source_fields if _view_scope_relation(field) == "inside_region"]
+            if selected_fields:
+                source_fields = selected_fields
         fields = []
-        for field in list(view.get("fields") or [])[:field_limit]:
+        for field in source_fields[:field_limit]:
             fields.append(
                 {
                     "label": field.get("label", ""),
@@ -219,6 +583,148 @@ def _compact_detail_views(snapshot: Dict[str, Any], *, field_limit: int = 40) ->
             }
         )
     return views
+
+
+def _compact_form_views(snapshot: Dict[str, Any], *, field_limit: int = 30, scope_only: bool = False) -> List[Dict[str, Any]]:
+    containers = _index_containers(snapshot.get("containers") or [])
+    content_by_container: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    action_by_container: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for node in snapshot.get("content_nodes") or []:
+        content_by_container[str(node.get("container_id") or "")].append(node)
+    for node in snapshot.get("actionable_nodes") or []:
+        action_by_container[str(node.get("container_id") or "")].append(node)
+
+    views: List[Dict[str, Any]] = []
+    for container_id, container in containers.items():
+        if _normalize_kind(container.get("container_kind")) != "form_section":
+            continue
+        controls = [node for node in action_by_container.get(container_id, []) if _is_fillable_control(node)]
+        if scope_only:
+            controls = [node for node in controls if _node_scope_relation(node) == "inside_region"]
+        if not controls:
+            continue
+        content_nodes = content_by_container.get(container_id, [])
+        fields = []
+        for control in _sort_nodes(controls)[:field_limit]:
+            field = _project_form_field(control, content_nodes)
+            if field:
+                fields.append(field)
+        if not fields:
+            continue
+        views.append(
+            {
+                "kind": "form_view",
+                "title": _clean_text(container.get("name") or "form"),
+                "frame_path": list(container.get("frame_path") or _first_frame_path([*content_nodes, *controls])),
+                "fields": fields,
+            }
+        )
+    return views[:12]
+
+
+def _project_form_field(control: Dict[str, Any], content_nodes: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    label_node = _nearest_form_label(control, content_nodes)
+    if not label_node:
+        return {}
+    hint_text = _form_hint_text(label_node, control, content_nodes)
+    locator = control.get("locator") or _best_locator(control)
+    control_payload = {
+        "role": control.get("role", ""),
+        "name": control.get("name", ""),
+        "tag": control.get("tag") or control.get("element_snapshot", {}).get("tag", ""),
+        "type": control.get("type", ""),
+        "placeholder": control.get("placeholder", ""),
+        "locator": locator,
+        "action_kinds": list(control.get("action_kinds") or [])[:4],
+        "visible": bool(control.get("is_visible", True)),
+        "enabled": bool(control.get("is_enabled", True)),
+    }
+    return {
+        "label": _clean_label_text(label_node.get("text") or "").rstrip(":："),
+        "required": str(label_node.get("text") or "").strip().startswith("*"),
+        "hint_text": hint_text,
+        "label_locator": label_node.get("locator") or _best_locator(label_node),
+        "control": control_payload,
+        "confidence": _form_field_confidence(label_node, control),
+    }
+
+
+def _nearest_form_label(control: Dict[str, Any], content_nodes: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    candidates = [node for node in content_nodes if _is_form_label_text(node)]
+    if not candidates:
+        return None
+    control_x = _node_x(control)
+    control_y = _node_y(control)
+    best: Optional[Dict[str, Any]] = None
+    best_score: Optional[Tuple[int, int, int]] = None
+    for node in candidates:
+        y_gap = abs(_node_y(node) - control_y)
+        if y_gap > 32:
+            continue
+        node_right = _node_x(node) + int((node.get("bbox") or {}).get("width", 0) or 0)
+        if node_right > control_x + 16:
+            continue
+        x_gap = max(control_x - node_right, 0)
+        score = (y_gap, x_gap, _node_x(node))
+        if best_score is None or score < best_score:
+            best_score = score
+            best = node
+    return best
+
+
+def _form_hint_text(label_node: Dict[str, Any], control: Dict[str, Any], content_nodes: Sequence[Dict[str, Any]]) -> str:
+    label_y = _node_y(label_node)
+    control_x = _node_x(control)
+    control_right = control_x + int((control.get("bbox") or {}).get("width", 0) or 0)
+    hints: List[str] = []
+    for node in _sort_nodes(content_nodes):
+        if node is label_node or _is_form_label_text(node):
+            continue
+        if abs(_node_y(node) - label_y) > 24:
+            continue
+        node_x = _node_x(node)
+        if node_x < _node_x(label_node):
+            continue
+        if node_x > control_right + 24:
+            continue
+        text = _clean_text(node.get("text") or "")
+        if text:
+            hints.append(text)
+    return " ".join(hints[:2])
+
+
+def _is_form_label_text(node: Dict[str, Any]) -> bool:
+    text = _clean_text(node.get("text") or "")
+    if not text:
+        return False
+    tag = _normalize_kind(node.get("element_snapshot", {}).get("tag"))
+    classes = str(node.get("element_snapshot", {}).get("class") or "").lower()
+    if _is_label_node(node) or tag == "label":
+        return True
+    if "label" in classes or "title" in classes:
+        return True
+    return text.endswith((":", "："))
+
+
+def _is_fillable_control(node: Dict[str, Any]) -> bool:
+    action_kinds = {str(item).lower() for item in (node.get("action_kinds") or [])}
+    if "fill" in action_kinds or "press" in action_kinds:
+        return True
+    role = _normalize_kind(node.get("role"))
+    tag = _normalize_kind(node.get("tag") or node.get("element_snapshot", {}).get("tag"))
+    return role in {"textbox", "combobox", "searchbox"} or tag in {"input", "textarea", "select"}
+
+
+def _form_field_confidence(label_node: Dict[str, Any], control: Dict[str, Any]) -> str:
+    if (
+        list(label_node.get("frame_path") or []) == list(control.get("frame_path") or [])
+        and abs(_node_y(label_node) - _node_y(control)) <= 8
+        and bool(control.get("is_visible", True))
+        and bool(control.get("is_enabled", True))
+        and bool(control.get("hit_test_ok", True))
+    ):
+        return "high"
+    return "medium"
 
 
 def _build_region(
@@ -271,6 +777,7 @@ def _build_region(
             "title": title or container.get("name") or "actions",
             "summary": summary,
             "actions": _extract_actions(nodes),
+            "texts": _extract_text_entries(nodes),
             "frame_path": frame_path,
             "container_kind": container.get("container_kind", ""),
         }
@@ -450,9 +957,30 @@ def _extract_label_value_pairs(nodes: Sequence[Dict[str, Any]]) -> List[Dict[str
                 "label_locator": label_node.get("locator") or _best_locator(label_node),
                 "value_locator": value_node.get("locator") or _best_locator(value_node),
                 "value_hint": value_node.get("data_field") or value_node.get("semantic_kind") or "",
+                "scope_relation": _pair_scope_relation(label_node, value_node),
+                "label_bbox": dict(label_node.get("bbox") or {}),
+                "value_bbox": dict(value_node.get("bbox") or {}),
             }
         )
     return pairs
+
+
+def _pair_intersects_scope(pair: Dict[str, Any], scope_rect: Dict[str, Any]) -> bool:
+    return _rects_intersect(pair.get("label_bbox") or {}, scope_rect) or _rects_intersect(
+        pair.get("value_bbox") or {},
+        scope_rect,
+    )
+
+
+def _pair_scope_relation(label_node: Dict[str, Any], value_node: Dict[str, Any]) -> str:
+    relations = {_node_scope_relation(label_node), _node_scope_relation(value_node)}
+    if "inside_region" in relations:
+        return "inside_region"
+    if "ancestor_context" in relations:
+        return "ancestor_context"
+    if "outside_context" in relations:
+        return "outside_context"
+    return ""
 
 
 def _extract_table_data(nodes: Sequence[Dict[str, Any]]) -> Tuple[List[str], List[List[str]]]:
@@ -491,9 +1019,31 @@ def _extract_actions(nodes: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 {
                     "label": _clean_text(node.get("name") or node.get("text") or ""),
                     "locator": node.get("locator") or _best_locator(node),
+                    "scope_relation": _node_scope_relation(node),
+                    "bbox": dict(node.get("bbox") or {}),
                 }
             )
     return actions
+
+
+def _extract_text_entries(nodes: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    texts: List[Dict[str, Any]] = []
+    for node in _sort_nodes(nodes):
+        if _is_action_node(node):
+            continue
+        text = _clean_text(node.get("text") or node.get("name") or "")
+        if not text:
+            continue
+        texts.append(
+            {
+                "text": text,
+                "locator": node.get("locator") or _best_locator(node),
+                "scope_relation": _node_scope_relation(node),
+                "bbox": dict(node.get("bbox") or {}),
+                "semantic_kind": node.get("semantic_kind") or "",
+            }
+        )
+    return texts
 
 
 def _extract_record_list_items(container: Dict[str, Any], nodes: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -702,6 +1252,17 @@ def _region_evidence(region: Dict[str, Any], *, limit: Optional[int]) -> Dict[st
         }
 
     if kind == "action_group":
+        texts = []
+        text_items = list(region.get("selected_texts") or [])
+        if limit is not None:
+            text_items = text_items[:limit]
+        for item in text_items:
+            texts.append(
+                {
+                    "text": item.get("text", ""),
+                    "locator": item.get("locator") or {},
+                }
+            )
         actions = []
         action_items = list(region.get("actions") or [])
         if limit is not None:
@@ -713,7 +1274,10 @@ def _region_evidence(region: Dict[str, Any], *, limit: Optional[int]) -> Dict[st
                     "locator": action.get("locator") or {},
                 }
             )
-        return {"actions": actions}
+        evidence = {"actions": actions}
+        if texts:
+            evidence["texts"] = texts
+        return evidence
 
     excerpt = _clean_text(region.get("summary") or region.get("title") or "")
     if excerpt:

@@ -146,6 +146,7 @@ class RpaMcpConverter:
             if "cookies" not in input_schema["required"]:
                 input_schema["required"].append("cookies")
         recommended_output_schema, inference_report = self._build_recommended_output_schema(sanitized_steps)
+        runtime_requirements = self._runtime_requirements_from_steps(sanitized_steps)
         semantic_source = semantic_recommendation.source if semantic_recommendation else "rule_inferred"
         semantic_warnings = list(semantic_recommendation.warnings) if semantic_recommendation else []
         if semantic_warnings:
@@ -162,6 +163,7 @@ class RpaMcpConverter:
             post_auth_start_url=post_auth_start_url,
             steps=sanitized_steps,
             params=sanitized_params,
+            runtime_requirements=runtime_requirements,
             input_schema=input_schema,
             output_schema=recommended_output_schema,
             recommended_output_schema=recommended_output_schema,
@@ -176,6 +178,22 @@ class RpaMcpConverter:
                 "generated_at": "preview",
             },
         )
+
+    @staticmethod
+    def _runtime_requirements_from_steps(steps: list[dict]) -> dict[str, bool]:
+        from backend.rpa.runtime_context import runtime_requirements_from_traces
+        from backend.rpa.trace_models import RPAAcceptedTrace
+
+        traces = []
+        for step in steps:
+            raw_trace = step.get("rpa_trace") if isinstance(step, dict) else None
+            if not isinstance(raw_trace, dict):
+                continue
+            try:
+                traces.append(RPAAcceptedTrace.model_validate(raw_trace))
+            except Exception:
+                continue
+        return runtime_requirements_from_traces(traces)
 
     def infer_output_from_execution(self, tool: RpaMcpToolDefinition, execution_result: dict) -> tuple[dict, dict]:
         data_schema = self._infer_schema_from_value((execution_result or {}).get("data"))
@@ -274,14 +292,15 @@ class RpaMcpConverter:
             name = self._unique_param_name(base_name, used_names)
             used_names.add(name)
             known_values.add(original_value)
+            rpa_trace = step.get("rpa_trace") if isinstance(step.get("rpa_trace"), dict) else {}
             inferred[name] = {
                 "original_value": original_value,
                 "type": self._infer_param_type(original_value),
                 "description": str(step.get("description") or name),
                 "required": False,
                 "sensitive": False,
-                "source_step_index": step_index,
-                "source_step_id": str(step.get("id") or ""),
+                "source_trace_id": str(rpa_trace.get("trace_id") or step.get("id") or ""),
+                "source_trace_output_key": str(rpa_trace.get("output_key") or ""),
             }
 
         return inferred

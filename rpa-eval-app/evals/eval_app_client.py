@@ -36,6 +36,15 @@ class EvalAppClient:
         user = self._request("GET", "/api/auth/me", token=token)
         return EvalAppUserSession(username=username, token=token, user=user)
 
+    def issue_eval_token(self, username: str, reset_token: str) -> EvalAppUserSession:
+        response = self._request(
+            "POST",
+            "/api/eval/auth-token",
+            json_body={"username": username},
+            headers={"X-RPA-Eval-Reset-Token": reset_token},
+        )
+        return EvalAppUserSession(username=username, token=response["access_token"], user=response.get("user"))
+
     def get_json(self, path: str, token: str) -> Any:
         return self._request("GET", path, token=token)
 

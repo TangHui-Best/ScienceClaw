@@ -14,11 +14,22 @@ class InvalidCookieError(ValueError):
 
 
 class RpaMcpExecutor:
-    def __init__(self, *, browser_factory=None, script_runner=None, pw_loop_runner=None, downloads_dir_factory=None) -> None:
+    def __init__(
+        self,
+        *,
+        browser_factory=None,
+        script_runner=None,
+        pw_loop_runner=None,
+        downloads_dir_factory=None,
+        user_id: str | None = None,
+        runtime_context_builder=None,
+    ) -> None:
         self._browser_factory = browser_factory
         self._script_runner = script_runner or self._default_runner
         self._pw_loop_runner = pw_loop_runner
         self._downloads_dir_factory = downloads_dir_factory
+        self._user_id = user_id
+        self._runtime_context_builder = runtime_context_builder
 
     def validate_cookies(self, *, cookies: list[dict[str, Any]], allowed_domains: list[str], post_auth_start_url: str) -> list[dict[str, Any]]:
         if not isinstance(cookies, list) or not cookies:
@@ -50,6 +61,12 @@ class RpaMcpExecutor:
         downloads_dir = self._prepare_downloads_dir(tool)
         if downloads_dir:
             kwargs.setdefault('_downloads_dir', downloads_dir)
+        if self._user_id and self._tool_requires_runtime_ai(tool):
+            builder = self._runtime_context_builder
+            if builder is None:
+                from backend.rpa.runtime_context import inject_runtime_context_kwargs
+                builder = inject_runtime_context_kwargs
+            kwargs = await builder(self._user_id, kwargs)
         script = generate_mcp_script(tool.steps, tool.params, is_local=(settings.storage_backend == 'local'))
 
         async def _run() -> dict[str, Any]:
@@ -85,6 +102,13 @@ class RpaMcpExecutor:
             return None
         Path(downloads_dir).mkdir(parents=True, exist_ok=True)
         return downloads_dir
+
+    @staticmethod
+    def _tool_requires_runtime_ai(tool) -> bool:
+        requirements = getattr(tool, "runtime_requirements", None)
+        if not isinstance(requirements, dict):
+            return False
+        return requirements.get("runtime_ai") is True
 
     async def _default_runner(self, page, script: str, kwargs: dict[str, Any]) -> dict[str, Any]:
         namespace: dict[str, Any] = {}

@@ -638,3 +638,46 @@ async def test_generated_skill_replays_semantic_project_manual_pr_click_and_two_
             "url": "https://github.com/openai/openai-agents-python/pull/19",
         },
     ]
+
+
+@pytest.mark.asyncio
+async def test_generated_skill_navigating_link_tolerates_dynamic_counter_text():
+    traces = [
+        RPAAcceptedTrace(
+            trace_type=RPATraceType.NAVIGATION,
+            after_page=RPAPageState(url="https://github.com/owner/repo"),
+        ),
+        RPAAcceptedTrace(
+            trace_type=RPATraceType.MANUAL_ACTION,
+            source="manual",
+            action="click",
+            description='点击 link("Issues") 并跳转页面',
+            locator_candidates=[
+                {"locator": {"method": "role", "role": "link", "name": "Issues"}},
+            ],
+            signals={"navigation": {"url": "https://github.com/owner/repo/issues"}},
+            after_page=RPAPageState(url="https://github.com/owner/repo/issues"),
+        ),
+    ]
+    execute_skill = _load_execute_skill(TraceSkillCompiler().generate_script(traces, is_local=True))
+
+    pw = await async_playwright().start()
+    browser = await pw.chromium.launch(headless=True)
+    page = await browser.new_page()
+    await page.route(
+        "https://github.com/owner/repo",
+        lambda route: route.fulfill(
+            body='<html><body><a href="/owner/repo/issues">Issues <span>112</span></a></body></html>'
+        ),
+    )
+    await page.route(
+        "https://github.com/owner/repo/issues",
+        lambda route: route.fulfill(body="<html><body>issues</body></html>"),
+    )
+
+    await execute_skill(page)
+    final_url = page.url
+    await browser.close()
+    await pw.stop()
+
+    assert final_url == "https://github.com/owner/repo/issues"

@@ -1,3 +1,4 @@
+import asyncio
 import os
 import tempfile
 import unittest
@@ -70,3 +71,55 @@ class CredentialVaultKeyTests(unittest.TestCase):
         env_content = env_path.read_text(encoding="utf-8")
         self.assertIn(f"CREDENTIAL_KEY={settings.credential_key}", env_content)
         self.assertFalse((self.cwd_dir / ".env").exists())
+
+
+class InjectCredentialsParamTests(unittest.TestCase):
+    def test_injects_configured_default_value_for_plain_params(self) -> None:
+        class DummyVault:
+            async def decrypt_credential(self, user_id: str, cred_id: str):
+                raise AssertionError("plain params should not resolve credentials")
+
+        original_get_vault = vault_module.get_vault
+        vault_module.get_vault = lambda: DummyVault()
+        self.addCleanup(lambda: setattr(vault_module, "get_vault", original_get_vault))
+
+        injected = asyncio.run(
+            vault_module.inject_credentials(
+                "user-1",
+                {
+                    "keyword": {
+                        "original_value": "JE",
+                        "default_value": "JET",
+                        "sensitive": False,
+                        "credential_id": "",
+                    }
+                },
+                {},
+            )
+        )
+
+        self.assertEqual(injected["keyword"], "JET")
+
+    def test_inject_credentials_preserves_explicit_runtime_kwargs(self) -> None:
+        class DummyVault:
+            async def decrypt_credential(self, user_id: str, cred_id: str):
+                raise AssertionError("explicit kwargs should not resolve credentials")
+
+        original_get_vault = vault_module.get_vault
+        vault_module.get_vault = lambda: DummyVault()
+        self.addCleanup(lambda: setattr(vault_module, "get_vault", original_get_vault))
+
+        injected = asyncio.run(
+            vault_module.inject_credentials(
+                "user-1",
+                {
+                    "keyword": {
+                        "original_value": "JE",
+                        "default_value": "JET",
+                    }
+                },
+                {"keyword": "MANUAL"},
+            )
+        )
+
+        self.assertEqual(injected["keyword"], "MANUAL")

@@ -49,7 +49,7 @@ type EditableParam = {
   enabled: boolean;
   defaultValue: string;
   originalValue?: unknown;
-  sourceStepIndex?: number;
+  sourceTraceId?: string;
 };
 
 const PARAM_TYPES = ['string', 'number', 'integer', 'boolean', 'array', 'object'];
@@ -84,6 +84,8 @@ interface StepValidation {
 interface RecordedStepItem {
   id: string;
   action: string;
+  traceId?: string;
+  rpa_trace?: { trace_id?: string };
   target?: ParsedLocator | string | null;
   frame_path?: string[];
   locator_candidates?: LocatorCandidate[];
@@ -415,7 +417,7 @@ const hydrateEditableParams = (toolPreview: RpaMcpPreview | null, options: { pre
       const info = getSourceParamInfo(toolPreview, key);
       const schemaProp = (prop || {}) as Record<string, any>;
       const originalValue = info.original_value ?? schemaProp.default;
-      const sourceStepIndex = typeof info.source_step_index === 'number' ? info.source_step_index : undefined;
+      const sourceTraceId = typeof info.source_trace_id === 'string' ? info.source_trace_id : undefined;
       return {
         id: `param-${index}-${key}`,
         sourceKey: String(info.source_param || key),
@@ -426,7 +428,7 @@ const hydrateEditableParams = (toolPreview: RpaMcpPreview | null, options: { pre
         enabled: true,
         defaultValue: stringifyEditorValue(originalValue),
         originalValue,
-        sourceStepIndex,
+        sourceTraceId,
       };
     });
 };
@@ -452,8 +454,8 @@ const buildConfirmedParams = () => {
       sensitive: false,
       source_param: param.sourceKey,
     };
-    if (param.sourceStepIndex !== undefined) {
-      confirmed[name].source_step_index = param.sourceStepIndex;
+    if (param.sourceTraceId) {
+      confirmed[name].source_trace_id = param.sourceTraceId;
     }
   }
   return confirmed;
@@ -615,6 +617,11 @@ const canPromoteStepLocator = (step: RecordedStepItem) => (
   canTuneRecordedSteps.value
   && step.configurable !== false
   && step.source !== 'ai'
+  && Boolean(getRecordedStepTraceId(step))
+);
+
+const getRecordedStepTraceId = (step: RecordedStepItem | undefined): string => (
+  step?.traceId || step?.rpa_trace?.trace_id || ''
 );
 
 const loadRecordedSession = async (sourceSessionId?: string, options: { silent?: boolean } = {}) => {
@@ -627,7 +634,10 @@ const loadRecordedSession = async (sourceSessionId?: string, options: { silent?:
   stepsLoading.value = true;
   try {
     const resp = await apiClient.get(`/rpa/session/${targetSessionId}`);
-    const session = resp.data.session;
+    const session = {
+      ...(resp.data.session || {}),
+      timeline: resp.data.session?.timeline ?? resp.data.timeline,
+    };
     recordedSteps.value = mapRpaConfigureDisplaySteps(session) as RecordedStepItem[];
     recordedStepsMode.value = 'source-session';
   } catch (error: any) {
@@ -864,7 +874,12 @@ const promoteLocator = async (stepIndex: number, candidateIndex: number) => {
   if (!canTuneRecordedSteps.value || promotingStepIndex.value !== null) return;
   promotingStepIndex.value = stepIndex;
   try {
-    await apiClient.post(`/rpa/session/${sessionId.value}/step/${stepIndex}/locator`, {
+    const traceId = getRecordedStepTraceId(recordedSteps.value[stepIndex]);
+    if (!traceId) {
+      showErrorToast(t('MCP Editor Failed to switch locator'));
+      return;
+    }
+    await apiClient.post(`/rpa/session/${sessionId.value}/trace/${traceId}/locator`, {
       candidate_index: candidateIndex,
     });
     await Promise.all([loadRecordedSession(), loadPreview()]);
@@ -1044,7 +1059,7 @@ watch(viewActiveTab, async (tab) => {
                       {{ t('MCP Editor Parameter enabled') }}
                     </label>
                     <span class="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-500 dark:bg-white/10 dark:text-slate-400">
-                      {{ t('MCP Editor Source parameter') }} {{ param.sourceKey }}<template v-if="param.sourceStepIndex !== undefined"> · {{ t('MCP Editor Step number', { number: param.sourceStepIndex + 1 }) }}</template>
+                      {{ t('MCP Editor Source parameter') }} {{ param.sourceKey }}<template v-if="param.sourceTraceId"> · {{ param.sourceTraceId }}</template>
                     </span>
                   </div>
 

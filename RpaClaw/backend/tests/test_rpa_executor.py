@@ -82,6 +82,7 @@ class _FakeSessionManager:
         self.attached = []
         self.registered = []
         self.context_pages = []
+        self.activated = []
         self.detached = []
 
     def attach_context(self, session_id, context):
@@ -94,6 +95,10 @@ class _FakeSessionManager:
     async def register_context_page(self, session_id, page, make_active=True):
         self.context_pages.append((session_id, page, make_active))
         return "popup-tab"
+
+    async def activate_page(self, session_id, page, tab_id=None):
+        self.activated.append((session_id, page, tab_id))
+        return "activated-tab"
 
     def detach_context(self, session_id, context=None):
         self.detached.append((session_id, context))
@@ -116,7 +121,7 @@ async def execute_skill(page, **kwargs):
         result = await executor.execute(browser, script, on_log=logs.append, timeout=0.01)
 
         self.assertFalse(result["success"])
-        self.assertEqual(result["failed_step_index"], 1)
+        self.assertEqual(result["failed_trace_index"], 1)
         self.assertTrue(any(log.startswith("TRACE_START 1: runtime semantic repository selection") for log in logs))
 
     async def test_execute_registers_popup_pages_with_session_manager(self):
@@ -161,11 +166,34 @@ async def execute_skill(page, **kwargs):
         self.assertEqual(page_registry, {})
         self.assertTrue(browser.contexts[0].closed)
 
+    async def test_execute_injects_activate_recorded_page_hook_for_preview_switching(self):
+        browser = _FakeBrowser()
+        session_manager = _FakeSessionManager()
+        script = """
+async def execute_skill(page, **kwargs):
+    new_page = await page.context.new_page()
+    await kwargs["_activate_recorded_page"](new_page, "tab-second")
+    return {"ok": True}
+"""
+
+        result = await EXECUTOR_MODULE.ScriptExecutor().execute(
+            browser,
+            script,
+            session_id="session-1",
+            session_manager=session_manager,
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(len(session_manager.activated), 1)
+        self.assertEqual(session_manager.activated[0][0], "session-1")
+        self.assertEqual(session_manager.activated[0][2], "tab-second")
+        self.assertIs(session_manager.activated[0][1], browser.contexts[0].pages[1])
+
 
 class StepExecutionErrorTests(unittest.IsolatedAsyncioTestCase):
     """Tests for STEP_FAILED: parsing in the except Exception block."""
 
-    async def test_execute_returns_failed_step_index_on_step_error(self):
+    async def test_execute_returns_failed_trace_index_on_step_error(self):
         executor = EXECUTOR_MODULE.ScriptExecutor()
         script = '''
 class StepExecutionError(Exception):
@@ -181,10 +209,10 @@ async def execute_skill(page, **kwargs):
         result = await executor.execute(browser, script)
 
         self.assertFalse(result["success"])
-        self.assertEqual(result["failed_step_index"], 2)
+        self.assertEqual(result["failed_trace_index"], 2)
         self.assertEqual(result["error"], "Timeout 30000ms exceeded")
 
-    async def test_execute_returns_none_failed_step_index_on_generic_error(self):
+    async def test_execute_returns_none_failed_trace_index_on_generic_error(self):
         executor = EXECUTOR_MODULE.ScriptExecutor()
         script = '''
 async def execute_skill(page, **kwargs):
@@ -194,9 +222,9 @@ async def execute_skill(page, **kwargs):
         result = await executor.execute(browser, script)
 
         self.assertFalse(result["success"])
-        self.assertIsNone(result["failed_step_index"])
+        self.assertIsNone(result["failed_trace_index"])
 
-    async def test_execute_returns_none_failed_step_index_on_success(self):
+    async def test_execute_returns_none_failed_trace_index_on_success(self):
         executor = EXECUTOR_MODULE.ScriptExecutor()
         script = '''
 async def execute_skill(page, **kwargs):
@@ -206,7 +234,7 @@ async def execute_skill(page, **kwargs):
         result = await executor.execute(browser, script)
 
         self.assertTrue(result["success"])
-        self.assertIsNone(result.get("failed_step_index"))
+        self.assertIsNone(result.get("failed_trace_index"))
 
 
 if __name__ == "__main__":

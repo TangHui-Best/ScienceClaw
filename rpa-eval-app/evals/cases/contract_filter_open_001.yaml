@@ -3,7 +3,6 @@ name: 筛选并打开固定合同
 tags: [smoke, contracts]
 user:
   username: buyer
-  password: buyer123
 start_path: /contracts
 timeout_s: 120
 instruction: >

@@ -1,7 +1,6 @@
 import json
 import logging
 import asyncio
-from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 from typing import Dict, Any
@@ -13,23 +12,35 @@ from websockets.exceptions import ConnectionClosed
 import httpx
 from fastapi.responses import Response as FastAPIResponse
 
-from backend.rpa.manager import rpa_manager
-from backend.rpa.generator import PlaywrightGenerator
+from backend.rpa.manager import rpa_manager, RPASkillConfigDraft
 from backend.rpa.executor import ScriptExecutor
 from backend.rpa.skill_exporter import SkillExporter
 from backend.rpa.assistant import RPAAssistant, RPAReActAgent, _active_agents
 from backend.rpa.recording_runtime_agent import RecordingRuntimeAgent, RecordingAgentResult
-from backend.rpa.trace_recorder import manual_step_to_trace, recorded_action_to_trace
 from backend.rpa.trace_models import RPAAcceptedTrace
+from backend.rpa.trace_ordering import order_traces_by_recording_time
+from backend.rpa.trace_timeline import build_trace_timeline_items
 from backend.rpa.trace_skill_compiler import TraceSkillCompiler
 from backend.rpa.mcp_step_projection import session_to_mcp_steps
 from backend.rpa.cdp_connector import get_cdp_connector
 from backend.rpa.screencast import SessionScreencastController
-from backend.user.dependencies import get_current_user, User
+from backend.user.dependencies import (
+    get_current_user,
+    get_user_from_session_id,
+    User,
+)
 from backend.config import settings
-from backend.models import get_model_config
+from backend.models import get_model_config, resolve_default_model_config
 from backend.storage import get_repository
 from backend.credential.vault import inject_credentials
+from backend.rpa.runtime_context import inject_runtime_context_kwargs, runtime_requirements_from_traces
+from backend.rpa.region_context import (
+    RPARegionAnalyzeRequest,
+    RPARegionAnalyzeResponse,
+    RPARegionContext,
+    RPARegionEvidence,
+    analyze_region_on_page,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +48,6 @@ RPA_TEST_TIMEOUT_S = 180.0
 RPA_PAGE_TIMEOUT_MS = 60000
 
 router = APIRouter(tags=["RPA"])
-generator = PlaywrightGenerator()
 executor = ScriptExecutor()
 exporter = SkillExporter()
 assistant = RPAAssistant()
@@ -68,6 +78,7 @@ class ChatRequest(BaseModel):
     message: str
     mode: str = "chat"
     model_config_id: str | None = None
+    region_id: str | None = None
 
 
 class ConfirmRequest(BaseModel):
@@ -82,22 +93,23 @@ class PromoteLocatorRequest(BaseModel):
     candidate_index: int
 
 
+class SkillConfigDraftRequest(RPASkillConfigDraft):
+    pass
+
+
 def _generate_session_script(session, params: Dict[str, Any], *, test_mode: bool = False) -> str:
     traces_for_compile = _session_traces_for_compile(session)
-    if traces_for_compile:
-        return trace_compiler.generate_script(
-            traces_for_compile,
-            params,
-            is_local=(settings.storage_backend == "local"),
-            test_mode=test_mode,
-        )
-    steps = [step.model_dump() for step in session.steps]
-    return generator.generate_script(
-        steps,
+    return trace_compiler.generate_script(
+        traces_for_compile,
         params,
         is_local=(settings.storage_backend == "local"),
         test_mode=test_mode,
     )
+
+
+def _session_model_config(session) -> dict | None:
+    model_config = getattr(session, "llm_model_config", None)
+    return model_config if isinstance(model_config, dict) and model_config else None
 
 
 def _model_dump_json(value: Any) -> Any:
@@ -106,217 +118,114 @@ def _model_dump_json(value: Any) -> Any:
     return value
 
 
-def _step_tab_signal(step) -> Dict[str, Any]:
-    tab_signal: Dict[str, Any] = {}
-    for key in ("tab_id", "source_tab_id", "target_tab_id"):
-        value = getattr(step, key, None)
-        if value:
-            tab_signal[key] = value
-    return tab_signal
-
-
-def _step_recording_signal(step) -> Dict[str, Any]:
-    recording_signal: Dict[str, Any] = {}
-    for key in ("sequence", "event_timestamp_ms"):
-        value = getattr(step, key, None)
-        if value is not None:
-            recording_signal[key] = value
-    return recording_signal
-
-
-def _step_evidence_signal(step) -> Dict[str, Any]:
-    evidence_signal: Dict[str, Any] = {}
-    for key in (
-        "frame_path",
-        "element_snapshot",
-        "screenshot_url",
-        "tag",
-        "label",
-        "sensitive",
-        "collection_hint",
-        "item_hint",
-        "ordinal",
-        "assistant_diagnostics",
-    ):
-        value = getattr(step, key, None)
-        if value not in (None, "", [], {}):
-            evidence_signal[key] = value
-    return evidence_signal
-
-
-def _merge_step_metadata_into_trace(trace: RPAAcceptedTrace, step) -> None:
-    step_trace = manual_step_to_trace(step.model_dump(mode="json"))
-
-    if step_trace.locator_candidates:
-        trace.locator_candidates = step_trace.locator_candidates
-    if step_trace.validation:
-        merged_validation = dict(trace.validation or {})
-        merged_validation.update(step_trace.validation)
-        trace.validation = merged_validation
-    if not trace.value and step_trace.value is not None:
-        trace.value = step_trace.value
-    if not trace.output_key and step_trace.output_key:
-        trace.output_key = step_trace.output_key
-    if trace.output is None and step_trace.output is not None:
-        trace.output = step_trace.output
-
-    if not trace.before_page.url and step_trace.before_page.url:
-        trace.before_page = step_trace.before_page
-    if not trace.after_page.url and step_trace.after_page.url:
-        trace.after_page = step_trace.after_page
-
-    merged_signals: Dict[str, Any] = {}
-    if isinstance(trace.signals, dict):
-        merged_signals.update(trace.signals)
-    if isinstance(step.signals, dict):
-        merged_signals.update(step.signals)
-
-    tab_signal = _step_tab_signal(step)
-    if tab_signal:
-        existing = merged_signals.get("tab") if isinstance(merged_signals.get("tab"), dict) else {}
-        merged_signals["tab"] = {**existing, **tab_signal}
-
-    recording_signal = _step_recording_signal(step)
-    if recording_signal:
-        existing = merged_signals.get("recording") if isinstance(merged_signals.get("recording"), dict) else {}
-        merged_signals["recording"] = {**existing, **recording_signal}
-
-    evidence_signal = _step_evidence_signal(step)
-    if evidence_signal:
-        existing = merged_signals.get("evidence") if isinstance(merged_signals.get("evidence"), dict) else {}
-        merged_signals["evidence"] = {**existing, **evidence_signal}
-
-    trace.signals = merged_signals
-
-
-def _trace_order_ms(trace: RPAAcceptedTrace) -> float | None:
-    started_at = getattr(trace, "started_at", None)
-    if started_at is not None:
-        try:
-            return started_at.timestamp() * 1000
-        except OSError:
-            return (
-                started_at.replace(tzinfo=None) - datetime(1970, 1, 1)
-            ).total_seconds() * 1000
-
-    recording = (trace.signals or {}).get("recording") if isinstance(trace.signals, dict) else None
-    if isinstance(recording, dict):
-        value = recording.get("event_timestamp_ms")
-        if isinstance(value, (int, float)):
-            return float(value)
-    return None
-
-
-def _order_traces_by_recording_time(traces: list[RPAAcceptedTrace]) -> list[RPAAcceptedTrace]:
-    keyed_traces: list[tuple[int, float, int, RPAAcceptedTrace]] = []
-    for index, trace in enumerate(traces):
-        order_ms = _trace_order_ms(trace)
-        keyed_traces.append((0 if order_ms is not None else 1, order_ms or 0, index, trace))
-
+def _build_session_timeline(session) -> list[dict[str, Any]]:
     return [
-        trace
-        for _, _, _, trace in sorted(
-            keyed_traces,
-            key=lambda item: (item[0], item[1], item[2]),
+        item.model_dump(mode="json")
+        for item in build_trace_timeline_items(
+            traces=list(getattr(session, "traces", None) or []),
+            trace_diagnostics=list(getattr(session, "trace_diagnostics", None) or []),
         )
     ]
 
 
-def _session_traces_for_compile(session) -> list[RPAAcceptedTrace]:
-    traces_by_id = {
-        trace.trace_id: trace
-        for trace in getattr(session, "traces", None) or []
-        if getattr(trace, "trace_id", None)
-    }
-    for step in getattr(session, "steps", None) or []:
-        trace = traces_by_id.get(f"trace-{getattr(step, 'id', '')}")
-        if trace:
-            _merge_step_metadata_into_trace(trace, step)
+def _build_session_response(session) -> dict[str, Any]:
+    payload = session.model_dump(mode="json")
+    for key in ("steps", "recorded_actions", "recording_diagnostics", "legacy_steps"):
+        payload.pop(key, None)
+    payload["trace_count"] = len(getattr(session, "traces", None) or [])
+    payload["diagnostic_count"] = len(getattr(session, "trace_diagnostics", None) or [])
+    return payload
 
-    if getattr(session, "recorded_actions", None):
-        derived_manual_traces = {
-            trace.trace_id: trace
-            for trace in (recorded_action_to_trace(action) for action in session.recorded_actions)
-        }
-        _merge_recorded_action_trace_metadata(session, derived_manual_traces)
-        traces_for_compile = []
-        for trace in getattr(session, "traces", None) or []:
-            if trace.source == "manual" and trace.trace_id in derived_manual_traces:
-                traces_for_compile.append(derived_manual_traces.pop(trace.trace_id))
-            else:
-                traces_for_compile.append(trace)
-        traces_for_compile.extend(derived_manual_traces.values())
-        return _order_traces_by_recording_time(traces_for_compile)
-    return list(getattr(session, "traces", None) or [])
+
+def _order_traces_by_recording_time(traces: list[RPAAcceptedTrace]) -> list[RPAAcceptedTrace]:
+    return order_traces_by_recording_time(traces)
+
+
+def _session_traces_for_compile(session) -> list[RPAAcceptedTrace]:
+    return _order_traces_by_recording_time(list(getattr(session, "traces", None) or []))
 
 
 def _build_session_recording_meta(session) -> Dict[str, Any]:
     traces = _session_traces_for_compile(session)
-    source = "trace" if traces else "legacy_step"
-    if not traces and getattr(session, "steps", None):
-        traces = []
-        for step in session.steps:
-            trace = manual_step_to_trace(step.model_dump(mode="json"))
-            _merge_step_metadata_into_trace(trace, step)
-            traces.append(trace)
-
-    legacy_steps = [_model_dump_json(step) for step in getattr(session, "steps", None) or []]
-    recorded_actions = [_model_dump_json(action) for action in getattr(session, "recorded_actions", None) or []]
     trace_diagnostics = [_model_dump_json(item) for item in getattr(session, "trace_diagnostics", None) or []]
-    recording_diagnostics = [_model_dump_json(item) for item in getattr(session, "recording_diagnostics", None) or []]
     runtime_results = _model_dump_json(getattr(session, "runtime_results", {})) or {}
 
     return {
-        "recording_source": source,
+        "recording_source": "trace" if traces else "none",
         "traces": [trace.model_dump(mode="json") for trace in traces],
-        "recorded_actions": recorded_actions,
-        "legacy_steps": legacy_steps,
         "runtime_results": runtime_results,
+        "runtime_requirements": runtime_requirements_from_traces(traces),
         "trace_diagnostics": trace_diagnostics,
-        "recording_diagnostics": recording_diagnostics,
     }
 
 
-def _merge_recorded_action_trace_metadata(session, derived_manual_traces: Dict[str, RPAAcceptedTrace]) -> None:
-    original_traces = {
-        trace.trace_id: trace
-        for trace in (getattr(session, "traces", None) or [])
-        if getattr(trace, "source", "") == "manual"
+def _session_requires_runtime_ai(session) -> bool:
+    return runtime_requirements_from_traces(_session_traces_for_compile(session)).get("runtime_ai") is True
+
+
+def _ensure_has_compile_traces(session) -> None:
+    if not _session_traces_for_compile(session):
+        raise HTTPException(
+            status_code=400,
+            detail="No trace facts available for script generation. Record or resolve at least one trace first.",
+        )
+
+
+def _failed_trace_retry_context(session, result: Dict[str, Any]) -> Dict[str, Any]:
+    failed_trace_index = result.get("failed_trace_index")
+
+    failed_trace_id = None
+    failed_step_candidates = []
+    traces = _session_traces_for_compile(session)
+    if failed_trace_index is None:
+        return {
+            "failed_trace_id": failed_trace_id,
+            "failed_trace_index": None,
+            "failed_step_candidates": failed_step_candidates,
+        }
+
+    try:
+        failed_trace_index = int(failed_trace_index)
+    except (TypeError, ValueError):
+        failed_trace_index = None
+
+    if failed_trace_index is not None and 0 <= failed_trace_index < len(traces):
+        failed_trace = traces[failed_trace_index]
+        failed_trace_id = failed_trace.trace_id
+        candidates = getattr(failed_trace, "locator_candidates", None) or []
+        filtered = []
+        for orig_idx, candidate in enumerate(candidates):
+            entry = _model_dump_json(candidate)
+            if not isinstance(entry, dict):
+                continue
+            if not entry.get("selected"):
+                entry = dict(entry)
+                entry["original_index"] = orig_idx
+                filtered.append(entry)
+        def _candidate_score(candidate: dict[str, Any]) -> float:
+            try:
+                value = float(candidate.get("score", 999))
+            except (TypeError, ValueError):
+                return 999.0
+            return value
+
+        failed_step_candidates = sorted(
+            filtered,
+            key=lambda candidate: (
+                0 if candidate.get("strict_match_count") == 1 else 1,
+                _candidate_score(candidate),
+            ),
+        )
+
+    return {
+        "failed_trace_id": failed_trace_id,
+        "failed_trace_index": failed_trace_index,
+        "failed_step_candidates": failed_step_candidates,
     }
-    steps_by_trace_id = {
-        f"trace-{step.id}": step
-        for step in (getattr(session, "steps", None) or [])
-        if getattr(step, "source", "record") == "record"
-    }
-    for trace_id, derived in derived_manual_traces.items():
-        original = original_traces.get(trace_id)
-        step = steps_by_trace_id.get(trace_id)
-        if original:
-            derived.before_page = original.before_page
-            derived.after_page = original.after_page
-            derived.started_at = original.started_at
-            derived.ended_at = original.ended_at
-            derived.signals = dict(original.signals or {})
-            if original.locator_candidates:
-                derived.locator_candidates = original.locator_candidates
-            if original.validation:
-                derived.validation = original.validation
-            if original.output_key:
-                derived.output_key = original.output_key
-            if original.output is not None:
-                derived.output = original.output
-        if step:
-            _merge_step_metadata_into_trace(derived, step)
-            if not original and getattr(step, "timestamp", None) is not None:
-                derived.started_at = step.timestamp
-            if derived.ended_at is None or (not original and getattr(step, "timestamp", None) is not None):
-                derived.ended_at = derived.started_at
-            if not derived.frame_path:
-                derived.frame_path = list(getattr(step, "frame_path", None) or [])
 
 
 def _ensure_no_unresolved_manual_diagnostics(session) -> None:
-    diagnostics = getattr(session, "recording_diagnostics", None) or []
+    diagnostics = getattr(session, "trace_diagnostics", None) or []
     if diagnostics:
         raise HTTPException(
             status_code=400,
@@ -338,41 +247,50 @@ async def _apply_recording_agent_result(session_id: str, result: RecordingAgentR
         rpa_manager.write_runtime_result(session_id, result.output_key, result.output)
 
 
+def _resolve_chat_region_context(
+    session_id: str,
+    region_id: str | None,
+    current_url: str | None,
+) -> dict[str, Any] | None:
+    if not region_id:
+        return None
+    context = rpa_manager.resolve_region_context(
+        session_id,
+        region_id,
+        current_url=current_url,
+    )
+    if context is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Selected region is unavailable or no longer matches the current page. "
+                "Please reselect the region before sending this command."
+            ),
+        )
+    return context.model_dump(mode="json")
+
+
+def _preview_chat_region_context(region_context: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not region_context:
+        return None
+    return RPARegionContext.model_validate(region_context).preview()
+
+
 async def _get_ws_user(websocket: WebSocket) -> User | None:
     """Resolve the current user for a WebSocket request.
 
     Browser WebSocket APIs cannot attach custom Authorization headers in the
     same way axios does, so we accept a bearer token via query param as a
-    fallback and keep the existing local-mode shortcut.
+    fallback and keep the explicit no-auth local shortcut.
     """
-    if settings.storage_backend == "local":
-        return User(id="local_admin", username="admin", role="admin")
-
     if getattr(settings, "auth_provider", "local") == "none":
-        return User(id="anonymous", username="Anonymous", role="user")
+        return await get_current_user(websocket)  # type: ignore[arg-type]
 
     session_id = (
         websocket.query_params.get("token")
         or websocket.cookies.get(settings.session_cookie)
     )
-    if not session_id:
-        return None
-
-    repo = get_repository("user_sessions")
-    session_doc = await repo.find_one({"_id": session_id})
-    if not session_doc:
-        return None
-
-    import time
-    if session_doc.get("expires_at", 0) < time.time():
-        await repo.delete_one({"_id": session_id})
-        return None
-
-    return User(
-        id=str(session_doc["user_id"]),
-        username=session_doc["username"],
-        role=session_doc.get("role", "user"),
-    )
+    return await get_user_from_session_id(session_id)
 
 
 async def _get_http_user(request: Request) -> User | None:
@@ -381,34 +299,14 @@ async def _get_http_user(request: Request) -> User | None:
     This mirrors websocket auth so iframe-based noVNC pages can use either
     the session cookie or a `token` query param.
     """
-    if settings.storage_backend == "local":
-        return User(id="local_admin", username="admin", role="admin")
-
     if getattr(settings, "auth_provider", "local") == "none":
-        return User(id="anonymous", username="Anonymous", role="user")
+        return await get_current_user(request)
 
     session_id = (
         request.query_params.get("token")
         or request.cookies.get(settings.session_cookie)
     )
-    if not session_id:
-        return None
-
-    repo = get_repository("user_sessions")
-    session_doc = await repo.find_one({"_id": session_id})
-    if not session_doc:
-        return None
-
-    import time
-    if session_doc.get("expires_at", 0) < time.time():
-        await repo.delete_one({"_id": session_id})
-        return None
-
-    return User(
-        id=str(session_doc["user_id"]),
-        username=session_doc["username"],
-        role=session_doc.get("role", "user"),
-    )
+    return await get_user_from_session_id(session_id)
 
 
 def _get_sandbox_vnc_ws_url() -> str:
@@ -494,21 +392,9 @@ async def _resolve_user_model_config(user_id: str, model_config_id: str | None =
             raise HTTPException(status_code=403, detail="Cannot use this model")
         return model_config.model_dump()
 
-    # Try user's own active model first, then system models
-    docs = await get_repository("models").find_many(
-        {"$or": [{"user_id": user_id}, {"is_system": True}], "is_active": True, "api_key": {"$nin": ["", None]}},
-        sort=[("is_system", 1), ("updated_at", -1)],  # user models first
-        limit=1,
-    )
-    doc = docs[0] if docs else None
-    if doc:
-        return {
-            "model_name": doc.get("model_name"),
-            "base_url": doc.get("base_url"),
-            "api_key": doc.get("api_key"),
-            "context_window": doc.get("context_window"),
-            "provider": doc.get("provider", ""),
-        }
+    model_config = await resolve_default_model_config(user_id)
+    if model_config:
+        return model_config
     # Fall back to env defaults
     if (getattr(settings, "model_ds_api_key", None) or "").strip():
         return None  # get_llm_model(config=None) uses env defaults
@@ -525,10 +411,25 @@ async def start_rpa_session(
             user_id=str(current_user.id),
             sandbox_session_id=request.sandbox_session_id,
         )
-        return {"status": "success", "session": session}
+        return {
+            "status": "success",
+            "session": _build_session_response(session),
+            "timeline": _build_session_timeline(session),
+        }
     except Exception as e:
         logger.error(f"Failed to start RPA session: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/sessions/cleanup")
+async def cleanup_rpa_sessions(
+    max_idle_seconds: int = 7200,
+    current_user: User = Depends(get_current_user),
+):
+    if getattr(current_user, "role", "") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    removed = await rpa_manager.cleanup_expired_sessions(max_idle_seconds=max_idle_seconds)
+    return {"status": "success", "removed": removed}
 
 
 @router.get("/session/{session_id}")
@@ -541,7 +442,61 @@ async def get_rpa_session(
         raise HTTPException(status_code=404, detail="Session not found")
     if session.user_id != str(current_user.id):
         raise HTTPException(status_code=403, detail="Not authorized")
-    return {"status": "success", "session": session}
+    rpa_manager.touch_session(session_id)
+    return {
+        "status": "success",
+        "session": _build_session_response(session),
+        "timeline": _build_session_timeline(session),
+    }
+
+
+@router.get("/session/{session_id}/timeline")
+async def get_session_timeline(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    session = await rpa_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.user_id != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    rpa_manager.touch_session(session_id)
+    return {"status": "success", "timeline": _build_session_timeline(session)}
+
+
+@router.get("/session/{session_id}/skill-config-draft")
+async def get_skill_config_draft(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    session = await rpa_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    _ensure_session_owner(session, current_user)
+    rpa_manager.touch_session(session_id)
+    return {
+        "status": "success",
+        "draft": session.skill_config_draft.model_dump(mode="json")
+        if session.skill_config_draft
+        else None,
+    }
+
+
+@router.put("/session/{session_id}/skill-config-draft")
+async def update_skill_config_draft(
+    session_id: str,
+    request: SkillConfigDraftRequest,
+    current_user: User = Depends(get_current_user),
+):
+    session = await rpa_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    _ensure_session_owner(session, current_user)
+    draft = rpa_manager.update_skill_config_draft(session_id, request)
+    return {
+        "status": "success",
+        "draft": draft.model_dump(mode="json"),
+    }
 
 
 @router.get("/session/{session_id}/tabs")
@@ -554,11 +509,47 @@ async def list_rpa_tabs(
         raise HTTPException(status_code=404, detail="Session not found")
     if session.user_id != str(current_user.id):
         raise HTTPException(status_code=403, detail="Not authorized")
+    rpa_manager.touch_session(session_id)
     return {
         "status": "success",
         "tabs": rpa_manager.list_tabs(session_id),
         "active_tab_id": session.active_tab_id,
     }
+
+
+@router.post("/session/{session_id}/region/analyze", response_model=RPARegionAnalyzeResponse)
+async def analyze_rpa_region(
+    session_id: str,
+    request: RPARegionAnalyzeRequest,
+    current_user: User = Depends(get_current_user),
+):
+    session = await rpa_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    _ensure_session_owner(session, current_user)
+
+    page = rpa_manager.get_page_for_tab(session_id, request.tab_id)
+    if page is None:
+        raise HTTPException(status_code=404, detail="Tab page not found")
+
+    raw_evidence = await analyze_region_on_page(page, request)
+    evidence = RPARegionEvidence(**raw_evidence)
+    context = RPARegionContext(
+        session_id=session_id,
+        tab_id=request.tab_id,
+        page_url=evidence.url,
+        page_title=evidence.title,
+        evidence=evidence,
+    )
+    stored_context = rpa_manager.store_region_context(session_id, context)
+    preview = stored_context.preview()
+    rpa_manager.touch_session(session_id)
+    return RPARegionAnalyzeResponse(
+        region_id=stored_context.region_id,
+        summary=str(preview.get("summary", "")),
+        inferred_kind=evidence.inferred_kind,
+        evidence=evidence,
+    )
 
 
 @router.post("/session/{session_id}/tabs/{tab_id}/activate")
@@ -572,6 +563,7 @@ async def activate_rpa_tab(
         raise HTTPException(status_code=404, detail="Session not found")
     if session.user_id != str(current_user.id):
         raise HTTPException(status_code=403, detail="Not authorized")
+    rpa_manager.touch_session(session_id)
     try:
         result = await rpa_manager.activate_tab(session_id, tab_id, source="user")
     except ValueError as exc:
@@ -595,6 +587,7 @@ async def navigate_rpa_session(
         raise HTTPException(status_code=404, detail="Session not found")
     if session.user_id != str(current_user.id):
         raise HTTPException(status_code=403, detail="Not authorized")
+    rpa_manager.touch_session(session_id)
     try:
         result = await rpa_manager.navigate_active_tab(session_id, request.url)
     except ValueError as exc:
@@ -617,25 +610,9 @@ async def stop_rpa_session(
         raise HTTPException(status_code=404, detail="Session not found")
     if session.user_id != str(current_user.id):
         raise HTTPException(status_code=403, detail="Not authorized")
+    rpa_manager.touch_session(session_id)
     await rpa_manager.stop_session(session_id)
-    return {"status": "success", "session": session}
-
-
-@router.delete("/session/{session_id}/step/{step_index}")
-async def delete_step(
-    session_id: str,
-    step_index: int,
-    current_user: User = Depends(get_current_user),
-):
-    session = await rpa_manager.get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-    if session.user_id != str(current_user.id):
-        raise HTTPException(status_code=403, detail="Not authorized")
-    success = await rpa_manager.delete_step(session_id, step_index)
-    if not success:
-        raise HTTPException(status_code=400, detail="Invalid step index")
-    return {"status": "success"}
+    return {"status": "success", "session": _build_session_response(session)}
 
 
 @router.delete("/session/{session_id}/timeline-item")
@@ -649,10 +626,9 @@ async def delete_timeline_item(
         raise HTTPException(status_code=404, detail="Session not found")
     if session.user_id != str(current_user.id):
         raise HTTPException(status_code=403, detail="Not authorized")
+    rpa_manager.touch_session(session_id)
 
-    if request.kind == "manual_step":
-        success = await rpa_manager.delete_step_by_id(session_id, request.step_id or "")
-    elif request.kind == "trace":
+    if request.kind == "trace":
         success = await rpa_manager.delete_trace(session_id, request.trace_id or "")
     else:
         raise HTTPException(status_code=400, detail="Invalid timeline item kind")
@@ -662,10 +638,48 @@ async def delete_timeline_item(
     return {"status": "success"}
 
 
-@router.post("/session/{session_id}/step/{step_index}/locator")
-async def promote_step_locator(
+@router.delete("/session/{session_id}/trace/{trace_id}")
+async def delete_trace_item(
     session_id: str,
-    step_index: int,
+    trace_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    session = await rpa_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.user_id != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    rpa_manager.touch_session(session_id)
+
+    success = await rpa_manager.delete_trace(session_id, trace_id)
+    if not success:
+        raise HTTPException(status_code=400, detail="Invalid trace")
+    return {"status": "success"}
+
+
+@router.delete("/session/{session_id}/diagnostic/{diagnostic_id}")
+async def delete_diagnostic_item(
+    session_id: str,
+    diagnostic_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    session = await rpa_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.user_id != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    rpa_manager.touch_session(session_id)
+
+    success = await rpa_manager.delete_trace_diagnostic(session_id, diagnostic_id)
+    if not success:
+        raise HTTPException(status_code=400, detail="Invalid diagnostic")
+    return {"status": "success"}
+
+
+@router.post("/session/{session_id}/trace/{trace_id}/locator")
+async def promote_trace_locator(
+    session_id: str,
+    trace_id: str,
     request: PromoteLocatorRequest,
     current_user: User = Depends(get_current_user),
 ):
@@ -674,17 +688,44 @@ async def promote_step_locator(
         raise HTTPException(status_code=404, detail="Session not found")
     if session.user_id != str(current_user.id):
         raise HTTPException(status_code=403, detail="Not authorized")
+    rpa_manager.touch_session(session_id)
 
     try:
-        step = await rpa_manager.select_step_locator_candidate(
+        trace = await rpa_manager.select_trace_locator_candidate(
             session_id,
-            step_index,
+            trace_id,
             request.candidate_index,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return {"status": "success", "step": step}
+    return {"status": "success", "trace": trace}
+
+
+@router.post("/session/{session_id}/diagnostic/{diagnostic_id}/resolve-locator")
+async def resolve_diagnostic_locator(
+    session_id: str,
+    diagnostic_id: str,
+    request: PromoteLocatorRequest,
+    current_user: User = Depends(get_current_user),
+):
+    session = await rpa_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.user_id != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    rpa_manager.touch_session(session_id)
+
+    try:
+        trace = await rpa_manager.resolve_trace_diagnostic_locator_candidate(
+            session_id,
+            diagnostic_id,
+            request.candidate_index,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"status": "success", "trace": trace, "timeline": _build_session_timeline(session)}
 
 
 @router.post("/session/{session_id}/generate")
@@ -698,8 +739,10 @@ async def generate_script(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     _ensure_session_owner(session, current_user)
+    rpa_manager.touch_session(session_id)
 
     _ensure_no_unresolved_manual_diagnostics(session)
+    _ensure_has_compile_traces(session)
     script = _generate_session_script(session, request.params)
     return {"status": "success", "script": script}
 
@@ -715,9 +758,10 @@ async def test_script(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     _ensure_session_owner(session, current_user)
+    rpa_manager.touch_session(session_id)
 
     _ensure_no_unresolved_manual_diagnostics(session)
-    steps = [step.model_dump() for step in session.steps]
+    _ensure_has_compile_traces(session)
     script = _generate_session_script(session, request.params, test_mode=True)
 
     logs = []
@@ -733,8 +777,15 @@ async def test_script(
     # 本地模式：通过 pw_loop_runner 确保 Playwright 操作在正确的事件循环里执行
     if settings.storage_backend == "local":
         test_kwargs: Dict[str, Any] = {"_downloads_dir": downloads_dir}
+        model_config = _session_model_config(session)
         if request.params:
             test_kwargs.update(await inject_credentials(str(current_user.id), request.params, {}))
+        if _session_requires_runtime_ai(session):
+            test_kwargs = await inject_runtime_context_kwargs(
+                str(current_user.id),
+                test_kwargs,
+                session_model_config=model_config,
+            )
         result = await executor.execute(
             browser,
             script,
@@ -750,9 +801,16 @@ async def test_script(
     else:
         # Docker 模式：使用原有逻辑
         docker_kwargs: Dict[str, Any] = {}
+        model_config = _session_model_config(session)
         if request.params:
             docker_kwargs = await inject_credentials(
                 str(current_user.id), request.params, {}
+            )
+        if _session_requires_runtime_ai(session):
+            docker_kwargs = await inject_runtime_context_kwargs(
+                str(current_user.id),
+                docker_kwargs,
+                session_model_config=model_config,
             )
         result = await executor.execute(
             browser,
@@ -766,47 +824,16 @@ async def test_script(
             downloads_dir=downloads_dir,
         )
 
-    # Extract failed step candidates for locator retry
-    deduped_failed_index = result.get("failed_step_index")
-    failed_step_index = None
-    failed_step_candidates = []
-    if deduped_failed_index is not None:
-        deduped = generator._deduplicate_steps(steps)
-        deduped = generator._infer_missing_tab_transitions(deduped)
-        deduped = generator._normalize_step_signals(deduped)
-        if 0 <= deduped_failed_index < len(deduped):
-            failed_step = deduped[deduped_failed_index]
-            # Map deduped index back to original steps index via step id
-            failed_step_id = failed_step.get("id")
-            if failed_step_id:
-                for orig_i, orig_step in enumerate(steps):
-                    if orig_step.get("id") == failed_step_id:
-                        failed_step_index = orig_i
-                        break
-            if failed_step_index is None:
-                failed_step_index = min(deduped_failed_index, len(steps) - 1)
-            candidates = failed_step.get("locator_candidates", [])
-            filtered = []
-            for orig_idx, c in enumerate(candidates):
-                if not c.get("selected"):
-                    entry = dict(c)
-                    entry["original_index"] = orig_idx
-                    filtered.append(entry)
-            failed_step_candidates = sorted(
-                filtered,
-                key=lambda c: (
-                    0 if c.get("strict_match_count") == 1 else 1,
-                    c.get("score", 999),
-                ),
-            )
+    result_payload = dict(result)
+    result_payload.pop("failed_step_index", None)
+    failed_retry_context = _failed_trace_retry_context(session, result_payload)
 
     return {
         "status": "success" if result.get("success") else "failed",
-        "result": result,
+        "result": result_payload,
         "logs": logs,
         "script": script,
-        "failed_step_index": failed_step_index,
-        "failed_step_candidates": failed_step_candidates,
+        **failed_retry_context,
     }
 
 
@@ -821,8 +848,10 @@ async def save_skill(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     _ensure_session_owner(session, current_user)
+    rpa_manager.touch_session(session_id)
 
     _ensure_no_unresolved_manual_diagnostics(session)
+    _ensure_has_compile_traces(session)
     script = _generate_session_script(session, request.params)
     recording_meta = _build_session_recording_meta(session)
     steps = session_to_mcp_steps(session)
@@ -855,12 +884,20 @@ async def chat_with_assistant(
 
     # Resolve user's model config
     model_config = await _resolve_user_model_config(str(current_user.id), request.model_config_id)
+    if model_config:
+        session.llm_model_config = model_config
 
     # Get the page object for this session
     page = rpa_manager.get_page(session_id)
     if not page:
         raise HTTPException(status_code=400, detail="No active page for this session")
 
+    region_context = _resolve_chat_region_context(
+        session_id,
+        request.region_id,
+        getattr(page, "url", None),
+    )
+    region_preview = _preview_chat_region_context(region_context)
     steps = [step.model_dump() for step in session.steps]
 
     async def event_generator():
@@ -913,6 +950,12 @@ async def chat_with_assistant(
                         "data": json.dumps(evt_data, ensure_ascii=False),
                     }
             else:
+                before_trace_ids = {trace.trace_id for trace in session.traces}
+                if region_preview is not None:
+                    yield {
+                        "event": "region_context",
+                        "data": json.dumps(region_preview, ensure_ascii=False),
+                    }
                 yield {
                     "event": "agent_thought",
                     "data": json.dumps({"text": "Planning one trace-first recording command."}, ensure_ascii=False),
@@ -923,8 +966,16 @@ async def chat_with_assistant(
                     instruction=request.message,
                     runtime_results=session.runtime_results.values,
                     debug_context={"session_id": session_id},
+                    region_context=region_context,
                 )
                 await _apply_recording_agent_result(session_id, result)
+                if request.region_id and result.success:
+                    rpa_manager.clear_region_context(session_id, request.region_id)
+                run_trace_count = len([
+                    trace for trace in session.traces
+                    if trace.trace_id not in before_trace_ids
+                ])
+                session_trace_count = len(session.traces)
 
                 if result.trace:
                     code = result.trace.ai_execution.code if result.trace.ai_execution else ""
@@ -958,8 +1009,8 @@ async def chat_with_assistant(
                         "data": json.dumps(
                             {
                                 "message": result.message,
-                                "total_steps": len(session.traces),
-                                "trace_count": len(session.traces),
+                                "trace_count": run_trace_count,
+                                "session_trace_count": session_trace_count,
                             },
                             ensure_ascii=False,
                         ),
@@ -971,6 +1022,7 @@ async def chat_with_assistant(
                             {
                                 "reason": result.message,
                                 "diagnostics": [d.model_dump(mode="json") for d in result.diagnostics],
+                                "region": region_preview,
                             },
                             ensure_ascii=False,
                         ),
@@ -1014,32 +1066,6 @@ async def agent_abort(
     if agent:
         agent.abort()
     return {"ok": True}
-
-
-@router.websocket("/session/{session_id}/steps")
-async def steps_stream(websocket: WebSocket, session_id: str):
-    """Stream real-time step updates to frontend."""
-    await websocket.accept()
-
-    session = await rpa_manager.get_session(session_id)
-    if not session:
-        await websocket.close(code=1008, reason="Session not found")
-        return
-
-    rpa_manager.register_ws(session_id, websocket)
-
-    try:
-        for step in session.steps:
-            await websocket.send_json({"type": "step", "data": step.model_dump(mode="json")})
-        for trace in getattr(session, "traces", []):
-            await websocket.send_json({"type": "trace_added", "data": trace.model_dump(mode="json")})
-
-        while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        pass
-    finally:
-        rpa_manager.unregister_ws(session_id, websocket)
 
 
 @router.websocket("/screencast/{session_id}")
