@@ -4,6 +4,7 @@ export interface RpaAssistantChatPayload {
   message: string;
   mode: 'trace_first';
   model_config_id?: string;
+  region_id?: string;
 }
 
 export function getDefaultRpaAssistantModelId(
@@ -19,6 +20,7 @@ export function getDefaultRpaAssistantModelId(
 export function buildRpaAssistantChatPayload(
   message: string,
   selectedModelId: string | null,
+  regionId?: string | null,
 ): RpaAssistantChatPayload {
   const payload: RpaAssistantChatPayload = {
     message,
@@ -26,6 +28,9 @@ export function buildRpaAssistantChatPayload(
   };
   if (selectedModelId) {
     payload.model_config_id = selectedModelId;
+  }
+  if (regionId) {
+    payload.region_id = regionId;
   }
   return payload;
 }

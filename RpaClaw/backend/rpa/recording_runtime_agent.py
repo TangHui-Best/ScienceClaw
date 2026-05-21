@@ -67,6 +67,8 @@ Rules:
 - If code is returned, it must define async def run(page, results).
 - Use action_type="extract_snapshot" only when the requested extract-only data is already present in snapshot.detail_views fields.
 - For extract_snapshot, return the relevant observed detail fields in the plan itself, including the detail view frame_path when present; do not generate Python code and do not reference `snapshot` inside `run()`.
+- For snapshot.mode="selected_region_snapshot", selected_region evidence is the authoritative scope. If you use extract_snapshot, fields must contain labels copied from selected_region evidence; empty values are valid unless the field is explicitly required or the user's task requires non-empty output.
+- If payload.plan_validation is present, correct the failed plan contract issue before execution; do not repeat a failed extract_snapshot plan without fields.
 - `snapshot` is planner-only evidence. Generated Python can access only `page` and `results`.
 - 结果返回规则：
   - `results` 是普通 Python dict，只包含之前已成功步骤的输出结果。
@@ -114,8 +116,8 @@ Rules:
 - Do not include a separate done-check.
 - For run_python click/fill commands, return action evidence such as `{"action_performed": True, "action_type": "fill", "filled_value": value}` after the Playwright action completes.
 - If extracting data, return structured JSON-serializable Python values.
-- For extract-only commands, do not return null/empty output unless the user explicitly allows empty results.
-- Set allow_empty_output=true only when the user explicitly says no result, empty list, or empty output is acceptable.
+- For extract-only commands, preserve empty strings, empty lists, and empty tables as factual outputs unless the user explicitly requires non-empty results.
+- Set allow_empty_output=false only when the user explicitly requires a non-empty result; otherwise empty strings, empty lists, and empty tables may be valid extract outputs.
 - During repair, treat raw error logs and current page facts as authoritative. Any failure_analysis.hint is advisory only.
 - 修复规则：
   - 修复时必须优先参考原始错误日志、异常类型、traceback 行号和当前页面事实。
@@ -165,18 +167,31 @@ class RecordingRuntimeAgent:
         instruction: str,
         runtime_results: Optional[Dict[str, Any]] = None,
         debug_context: Optional[Dict[str, Any]] = None,
+        region_context: Optional[Dict[str, Any]] = None,
     ) -> RecordingAgentResult:
         runtime_results = runtime_results if runtime_results is not None else {}
         debug_context = dict(debug_context or {})
         before = await _page_state(page)
-        snapshot = await _safe_page_snapshot(page)
-        compact_snapshot = _compact_snapshot(snapshot, instruction)
+        region_scope = _region_scope_from_context(region_context)
+        snapshot = await _capture_page_snapshot(page, region_scope=region_scope)
+        compact_snapshot = _compact_snapshot_for_runtime(snapshot, instruction, region_scope=region_scope or None)
+        compact_region_context = _compact_region_context(region_context)
+        raw_region_evidence = _raw_region_evidence(region_context)
         payload = {
             "instruction": instruction,
             "page": before.model_dump(mode="json"),
             "snapshot": compact_snapshot,
             "runtime_results": runtime_results,
         }
+        snapshot_extra: Dict[str, Any] = {}
+        if raw_region_evidence:
+            snapshot_extra["raw_region_evidence"] = raw_region_evidence
+        if region_scope:
+            snapshot_extra["region_scope"] = region_scope
+            snapshot_extra["region_scoped_snapshot"] = compact_snapshot
+        if compact_region_context:
+            snapshot_extra["planner_region_context"] = compact_region_context
+            snapshot_extra["region_context_decision"] = {}
         _write_recording_snapshot_debug(
             "initial",
             instruction=instruction,
@@ -185,16 +200,29 @@ class RecordingRuntimeAgent:
             compact_snapshot=compact_snapshot,
             runtime_results=runtime_results,
             debug_context=debug_context,
+            extra=snapshot_extra or None,
         )
 
-        first_plan = _build_table_ordinal_overlay_plan(instruction, snapshot)
-        if not first_plan:
-            first_plan = _build_ordinal_overlay_plan(instruction, snapshot)
+        first_plan = None
+        if not compact_region_context:
+            first_plan = _build_table_ordinal_overlay_plan(instruction, snapshot)
+            if not first_plan:
+                first_plan = _build_ordinal_overlay_plan(instruction, snapshot)
         first_planner_call_index = len(self._planner_llm_calls)
         if not first_plan:
             try:
                 first_plan = await self.planner(payload)
             except Exception as exc:
+                _write_recording_planner_failure_debug(
+                    "initial",
+                    instruction=instruction,
+                    page_state=before.model_dump(mode="json"),
+                    raw_snapshot=snapshot,
+                    compact_snapshot=compact_snapshot,
+                    exception=exc,
+                    model_config=self.model_config,
+                    debug_context=debug_context,
+                )
                 return RecordingAgentResult(
                     success=False,
                     diagnostics=[
@@ -206,6 +234,24 @@ class RecordingRuntimeAgent:
                     ],
                     message="Recording planner failed to return a valid plan.",
                 )
+        if compact_region_context:
+            plan_validation_error = _selected_region_extract_plan_validation_error(first_plan)
+            if plan_validation_error:
+                validation_payload = _build_region_plan_validation_payload(payload, first_plan, plan_validation_error)
+                try:
+                    first_plan = await self.planner(validation_payload)
+                except Exception as exc:
+                    return RecordingAgentResult(
+                        success=False,
+                        diagnostics=[
+                            _planner_contract_diagnostic(
+                                exc,
+                                stage="initial_plan_validation",
+                                model_config=self.model_config,
+                            )
+                        ],
+                        message="Recording planner failed to correct an invalid selected-region plan.",
+                    )
         first_llm_call = self._planner_llm_call_since(first_planner_call_index)
         first_result = await self.executor(page, first_plan, runtime_results)
         first_result = await _ensure_expected_effect(
@@ -233,6 +279,8 @@ class RecordingRuntimeAgent:
                 before,
                 repair_attempted=False,
                 snapshot=snapshot,
+                region_context=compact_region_context,
+                region_scope=region_scope,
             )
             return RecordingAgentResult(
                 success=True,
@@ -243,8 +291,13 @@ class RecordingRuntimeAgent:
             )
 
         failed_page = await _page_state(page)
-        failed_snapshot = await _safe_page_snapshot(page)
-        compact_failed_snapshot = _compact_snapshot(failed_snapshot, instruction)
+        failed_snapshot = await _capture_page_snapshot(page, region_scope=region_scope)
+        compact_failed_snapshot = _compact_snapshot_for_runtime(
+            failed_snapshot,
+            instruction,
+            region_scope=region_scope or None,
+        )
+        repair_snapshot = compact_failed_snapshot
         first_error = str(first_result.get("error") or "recording command failed")
         first_error_type = str(first_result.get("error_type") or "").strip()
         first_traceback = str(first_result.get("traceback") or "").strip()
@@ -259,6 +312,17 @@ class RecordingRuntimeAgent:
             "failed_plan": _safe_jsonable(first_plan),
             "error": first_error,
         }
+        if raw_region_evidence:
+            repair_snapshot_extra["raw_region_evidence"] = raw_region_evidence
+        if region_scope:
+            repair_snapshot_extra["region_scope"] = region_scope
+            repair_snapshot_extra["region_scoped_snapshot"] = compact_failed_snapshot
+        if compact_region_context:
+            repair_snapshot_extra["planner_region_context"] = compact_region_context
+            repair_snapshot_extra["region_context_decision"] = _region_context_decision_signal(
+                first_plan,
+                compact_region_context,
+            )
         if first_error_type:
             repair_snapshot_extra["error_type"] = first_error_type
         if first_traceback:
@@ -279,7 +343,7 @@ class RecordingRuntimeAgent:
             "plan": _safe_jsonable(first_plan),
             "result": _safe_jsonable(first_result),
             "page_after_failure": failed_page.model_dump(mode="json"),
-            "snapshot_after_failure": _safe_jsonable(compact_failed_snapshot),
+            "snapshot_after_failure": _safe_jsonable(repair_snapshot),
         }
         if first_llm_call:
             diagnostic_raw["llm_call"] = _safe_jsonable(first_llm_call)
@@ -301,7 +365,7 @@ class RecordingRuntimeAgent:
             "error": first_error,
             "failed_plan": first_plan,
             "page_after_failure": failed_page.model_dump(mode="json"),
-            "snapshot_after_failure": compact_failed_snapshot,
+            "snapshot_after_failure": repair_snapshot,
         }
         if first_error_type:
             repair_context["error_type"] = first_error_type
@@ -317,6 +381,16 @@ class RecordingRuntimeAgent:
         try:
             repair_plan = await self.planner(repair_payload)
         except Exception as exc:
+            _write_recording_planner_failure_debug(
+                "repair",
+                instruction=instruction,
+                page_state=failed_page.model_dump(mode="json"),
+                raw_snapshot=failed_snapshot,
+                compact_snapshot=compact_failed_snapshot,
+                exception=exc,
+                model_config=self.model_config,
+                debug_context=debug_context,
+            )
             diagnostics.append(
                 _planner_contract_diagnostic(
                     exc,
@@ -329,6 +403,29 @@ class RecordingRuntimeAgent:
                 diagnostics=diagnostics,
                 message="Recording planner failed to return a valid repair plan.",
             )
+        if compact_region_context:
+            repair_plan_validation_error = _selected_region_extract_plan_validation_error(repair_plan)
+            if repair_plan_validation_error:
+                validation_payload = _build_region_plan_validation_payload(
+                    repair_payload,
+                    repair_plan,
+                    repair_plan_validation_error,
+                )
+                try:
+                    repair_plan = await self.planner(validation_payload)
+                except Exception as exc:
+                    diagnostics.append(
+                        _planner_contract_diagnostic(
+                            exc,
+                            stage="repair_plan_validation",
+                            model_config=self.model_config,
+                        )
+                    )
+                    return RecordingAgentResult(
+                        success=False,
+                        diagnostics=diagnostics,
+                        message="Recording planner failed to correct an invalid selected-region repair plan.",
+                    )
         repair_llm_call = self._planner_llm_call_since(repair_planner_call_index)
         repair_result = await self.executor(page, repair_plan, runtime_results)
         repair_result = await _ensure_expected_effect(
@@ -356,6 +453,8 @@ class RecordingRuntimeAgent:
                 before,
                 repair_attempted=True,
                 snapshot=failed_snapshot,
+                region_context=compact_region_context,
+                region_scope=region_scope,
             )
             return RecordingAgentResult(
                 success=True,
@@ -411,12 +510,18 @@ class RecordingRuntimeAgent:
         *,
         repair_attempted: bool,
         snapshot: Optional[Dict[str, Any]] = None,
+        region_context: Optional[Dict[str, Any]] = None,
+        region_scope: Optional[Dict[str, Any]] = None,
     ) -> RPAAcceptedTrace:
         after = await _page_state(page)
         output = result.get("output")
         output_key = _normalize_result_key(plan.get("output_key"))
         locator_stability = _build_locator_stability_metadata(plan, snapshot or {})
         signals = _merge_runtime_ai_signal(dict(result.get("signals") or {}), plan)
+        compact_region_context = dict(region_context or {})
+        if compact_region_context:
+            signals["region_selection"] = _region_selection_signal(compact_region_context)
+            signals["region_context_decision"] = _region_context_decision_signal(plan, compact_region_context)
         if _normalize_bool(plan.get("allow_empty_output")):
             output_contract = signals.get("output_contract") if isinstance(signals.get("output_contract"), dict) else {}
             signals["output_contract"] = {**output_contract, "allow_empty": True}
@@ -428,6 +533,8 @@ class RecordingRuntimeAgent:
             before_page=before,
             after_page=after,
             signals=signals,
+            region_context=compact_region_context,
+            region_scope=dict(region_scope or {}),
             output_key=output_key,
             output=output,
             ai_execution=RPAAIExecution(
@@ -624,7 +731,6 @@ def _execute_extract_snapshot_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
     output: Dict[str, Any] = {}
     selected_fields: List[Dict[str, Any]] = []
     include_hidden = _normalize_bool(plan.get("include_hidden"))
-    include_empty = _normalize_bool(plan.get("include_empty"))
     for field in fields:
         label = str(field.get("label") or "").strip()
         if not label:
@@ -632,8 +738,6 @@ def _execute_extract_snapshot_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
         visible = bool(field.get("visible", True))
         value = field.get("value")
         if not visible and not include_hidden:
-            continue
-        if value == "" and not include_empty:
             continue
         output[label] = value
         selected_fields.append(
@@ -647,7 +751,16 @@ def _execute_extract_snapshot_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
             }
         )
 
-    if not output and not _normalize_bool(plan.get("allow_empty_output")):
+    empty_required_label = _empty_required_snapshot_field_label(plan)
+    if empty_required_label:
+        return {
+            "success": False,
+            "error": "extract_snapshot required field has empty value",
+            "output": "",
+            "diagnostics": {"field": empty_required_label},
+        }
+
+    if _requires_non_empty_extract_snapshot_output(plan) and not _extract_snapshot_plan_has_visible_value(plan):
         return {
             "success": False,
             "error": "extract_snapshot plan produced no visible non-empty fields",
@@ -687,6 +800,79 @@ def _snapshot_plan_fields(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
     if isinstance(extraction, dict) and isinstance(extraction.get("fields"), list):
         return [dict(field) for field in extraction["fields"] if isinstance(field, dict)]
     return []
+
+
+def _extract_snapshot_plan_has_visible_value(plan: Dict[str, Any]) -> bool:
+    include_hidden = _normalize_bool(plan.get("include_hidden"))
+    include_empty = _normalize_bool(plan.get("include_empty"))
+    for field in _snapshot_plan_fields(plan):
+        if not str(field.get("label") or "").strip():
+            continue
+        if not bool(field.get("visible", True)) and not include_hidden:
+            continue
+        if field.get("value") == "" and not include_empty:
+            continue
+        return True
+    return False
+
+
+def _empty_required_snapshot_field_label(plan: Dict[str, Any]) -> str:
+    include_hidden = _normalize_bool(plan.get("include_hidden"))
+    for field in _snapshot_plan_fields(plan):
+        label = str(field.get("label") or "").strip()
+        if not label or not _normalize_bool(field.get("required")):
+            continue
+        if not bool(field.get("visible", True)) and not include_hidden:
+            continue
+        value = field.get("value")
+        if value in (None, ""):
+            return label
+        if isinstance(value, (list, dict)) and not value:
+            return label
+    return ""
+
+
+def _requires_non_empty_extract_snapshot_output(plan: Dict[str, Any]) -> bool:
+    if plan.get("_allow_empty_output_explicit") is False:
+        return False
+    if "allow_empty_output" not in plan:
+        return False
+    return not _normalize_bool(plan.get("allow_empty_output"))
+
+
+def _selected_region_extract_plan_validation_error(plan: Dict[str, Any]) -> str:
+    if str(plan.get("action_type") or "").strip() != "extract_snapshot":
+        return ""
+    fields = _snapshot_plan_fields(plan)
+    if not fields:
+        return "extract_snapshot plan missing fields"
+    if _empty_required_snapshot_field_label(plan):
+        return "extract_snapshot required field has empty value"
+    if _requires_non_empty_extract_snapshot_output(plan) and not _extract_snapshot_plan_has_visible_value(plan):
+        return "extract_snapshot plan produced no visible non-empty fields"
+    return ""
+
+
+def _build_region_plan_validation_payload(
+    payload: Dict[str, Any],
+    failed_plan: Dict[str, Any],
+    error: str,
+) -> Dict[str, Any]:
+    return {
+        **payload,
+        "plan_validation": {
+            "error": error,
+            "failed_plan": _safe_jsonable(failed_plan),
+            "snapshot": _safe_jsonable(payload.get("snapshot")),
+            "requirement": (
+                "The failed selected-region plan was not executable. "
+                "If using extract_snapshot, return a fields array with labels copied from "
+                "snapshot.detail_views or selected-region evidence. Empty values are allowed "
+                "unless the field is required or the plan explicitly disallows empty output. Otherwise return run_python "
+                "using selected-region locator evidence."
+            ),
+        },
+    }
 
 
 def _extract_snapshot_preview_code(plan: Dict[str, Any]) -> str:
@@ -774,10 +960,41 @@ def _coerce_recording_plan(parsed: Any) -> Dict[str, Any]:
         raise ValueError("Recording planner must return a JSON object")
     parsed.setdefault("action_type", "run_python")
     parsed["expected_effect"] = _normalize_expected_effect(parsed.get("expected_effect"))
+    parsed["_allow_empty_output_explicit"] = "allow_empty_output" in parsed
     parsed["allow_empty_output"] = _normalize_bool(parsed.get("allow_empty_output"))
-    if parsed.get("action_type") == "run_python" and "async def run(page, results)" not in str(parsed.get("code") or ""):
-        raise ValueError("Recording planner must return Python code defining async def run(page, results)")
+    if parsed.get("action_type") == "run_python":
+        code = str(parsed.get("code") or "")
+        if "async def run(page, results)" not in code:
+            wrapped_code = _wrap_top_level_run_python_code(code)
+            if wrapped_code:
+                parsed["code"] = wrapped_code
+            else:
+                raise ValueError("Recording planner must return Python code defining async def run(page, results)")
     return parsed
+
+
+def _wrap_top_level_run_python_code(code: str) -> Optional[str]:
+    source = str(code or "").strip()
+    if not _looks_like_top_level_python(source):
+        return None
+    body = "\n".join(("    " + line) if line.strip() else "" for line in source.splitlines())
+    wrapped = "async def run(page, results):\n" + (body or "    return None")
+    try:
+        compile(wrapped, _GENERATED_CODE_FILENAME, "exec")
+    except SyntaxError:
+        return None
+    return wrapped
+
+
+def _looks_like_top_level_python(source: str) -> bool:
+    if not source or "async def run(page, results)" in source:
+        return False
+    python_signals = (
+        "page.",
+        "await ",
+        "results",
+    )
+    return any(signal in source for signal in python_signals)
 
 
 def _planner_contract_diagnostic(
@@ -2022,16 +2239,277 @@ def _build_locator_stability_metadata(
     return fallback_metadata
 
 
-async def _safe_page_snapshot(page: Any) -> Dict[str, Any]:
+async def _safe_page_snapshot(page: Any, region_scope: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     try:
+        if region_scope:
+            try:
+                return await build_page_snapshot(page, build_frame_path, region_scope=region_scope)
+            except TypeError as exc:
+                if "region_scope" not in str(exc):
+                    raise
+                payload = await build_page_snapshot(page, build_frame_path)
+                if isinstance(payload, dict):
+                    payload.setdefault("region_scope", dict(region_scope))
+                return payload
         return await build_page_snapshot(page, build_frame_path)
     except Exception:
-        return {"url": getattr(page, "url", ""), "title": "", "frames": []}
+        payload = {"url": getattr(page, "url", ""), "title": "", "frames": []}
+        if region_scope:
+            payload["region_scope"] = dict(region_scope)
+        return payload
 
 
-def _compact_snapshot(snapshot: Dict[str, Any], instruction: str, limit: int = 80) -> Dict[str, Any]:
+async def _capture_page_snapshot(page: Any, *, region_scope: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    if not region_scope:
+        return await _safe_page_snapshot(page)
     try:
-        compact_snapshot = compact_recording_snapshot(snapshot, instruction)
+        return await _safe_page_snapshot(page, region_scope=region_scope)
+    except TypeError as exc:
+        if "region_scope" not in str(exc):
+            raise
+        snapshot = await _safe_page_snapshot(page)
+        if isinstance(snapshot, dict):
+            snapshot.setdefault("region_scope", dict(region_scope))
+        return snapshot
+
+
+def _compact_snapshot_for_runtime(
+    snapshot: Dict[str, Any],
+    instruction: str,
+    *,
+    region_scope: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    if not region_scope:
+        return _compact_snapshot(snapshot, instruction)
+    try:
+        return _compact_snapshot(snapshot, instruction, region_scope=region_scope)
+    except TypeError as exc:
+        if "region_scope" not in str(exc):
+            raise
+        compact = _compact_snapshot(snapshot, instruction)
+        if isinstance(compact, dict):
+            compact.setdefault("region_scope", dict(region_scope))
+        return compact
+
+
+def _region_scope_from_context(region_context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    context = _object_dict(region_context)
+    evidence = _object_dict(context.get("evidence"))
+    if not context and not evidence:
+        return {}
+    rect = _safe_jsonable(evidence.get("rect") or {})
+    if not isinstance(rect, dict):
+        rect = {}
+    return {
+        "region_id": str(context.get("region_id") or ""),
+        "session_id": str(context.get("session_id") or ""),
+        "tab_id": str(context.get("tab_id") or ""),
+        "page_url": str(context.get("page_url") or evidence.get("url") or ""),
+        "page_title": str(context.get("page_title") or evidence.get("title") or ""),
+        "viewport_rect": dict(rect),
+        "frame_path": _compact_list(evidence.get("frame_path")),
+        "frame_rect": dict(rect),
+        "warnings": _compact_list(evidence.get("warnings")),
+    }
+
+
+def _compact_region_context(region_context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    context = _object_dict(region_context)
+    evidence = _object_dict(context.get("evidence"))
+    if not evidence:
+        evidence = {
+            key: context.get(key)
+            for key in (
+                "inferred_kind",
+                "frame_path",
+                "rect",
+                "local_text",
+                "dominant_container",
+                "locator_candidates",
+                "scope_candidates",
+                "intersecting_elements",
+                "table_summary",
+                "list_summary",
+                "action_summary",
+                "warnings",
+            )
+            if key in context
+        }
+    if not context and not evidence:
+        return {}
+
+    compact: Dict[str, Any] = {}
+    _set_if_present(compact, "region_id", context.get("region_id"))
+    _set_if_present(compact, "tab_id", context.get("tab_id"))
+    _set_if_present(compact, "page_url", context.get("page_url") or evidence.get("url"))
+    _set_if_present(compact, "page_title", context.get("page_title") or evidence.get("title"))
+    _set_if_present(compact, "inferred_kind", evidence.get("inferred_kind"))
+    _set_if_present(compact, "frame_path", _compact_list(evidence.get("frame_path")))
+    _set_if_present(compact, "rect", evidence.get("rect"))
+    _set_if_present(compact, "local_text", _compact_list(evidence.get("local_text"), limit=20))
+    _set_if_present(compact, "dominant_container", evidence.get("dominant_container"))
+    _set_if_present(compact, "locator_candidates", _compact_list(evidence.get("locator_candidates"), limit=10))
+    _set_if_present(compact, "scope_candidates", _compact_list(evidence.get("scope_candidates"), limit=10))
+    _set_if_present(compact, "intersecting_elements", _compact_list(evidence.get("intersecting_elements"), limit=20))
+    _set_if_present(compact, "table_summary", evidence.get("table_summary"))
+    _set_if_present(compact, "list_summary", evidence.get("list_summary"))
+    _set_if_present(compact, "action_summary", evidence.get("action_summary"))
+    _set_if_present(compact, "warnings", _compact_list(evidence.get("warnings")))
+    return _safe_jsonable(compact) if compact else {}
+
+
+def _selected_region_snapshot(
+    compact_snapshot: Dict[str, Any],
+    page_state: RPAPageState,
+    region_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    snapshot = {
+        "mode": "selected_region_snapshot",
+        "url": str(compact_snapshot.get("url") or page_state.url or ""),
+        "title": str(compact_snapshot.get("title") or page_state.title or ""),
+        "selected_region": region_context,
+        "scope_note": (
+            "The user selected this page region for the current command. "
+            "Plan extraction or action targeting from selected_region evidence first."
+        ),
+    }
+    detail_views = _selected_region_detail_views(region_context)
+    if detail_views:
+        snapshot["detail_views"] = detail_views
+    return snapshot
+
+
+def _selected_region_detail_views(region_context: Dict[str, Any]) -> List[Dict[str, Any]]:
+    local_text = [str(item or "").strip() for item in list(region_context.get("local_text") or [])]
+    local_text = [item for item in local_text if item]
+    if not local_text:
+        return []
+    fields: List[Dict[str, Any]] = []
+    if len(local_text) > 1:
+        fields.append(
+            {
+                "label": "selected_region_text",
+                "value": "\n".join(local_text),
+                "visible": True,
+                "value_kind": "text",
+            }
+        )
+    fields.extend(
+        {
+            "label": f"selected_region_text_{index}",
+            "value": text,
+            "visible": True,
+            "value_kind": "text",
+        }
+        for index, text in enumerate(local_text, start=1)
+    )
+    return [
+        {
+            "source": "selected_region.local_text",
+            "section_title": "Selected region text",
+            "fields": fields,
+        }
+    ]
+
+
+def _build_recording_planner_payload(
+    *,
+    instruction: str,
+    page_state: RPAPageState,
+    compact_snapshot: Dict[str, Any],
+    runtime_results: Dict[str, Any],
+    compact_region_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    if compact_region_context:
+        return {
+            "instruction": instruction,
+            "page": {
+                "url": page_state.url,
+                "title": page_state.title,
+            },
+            "context_scope": "selected_region",
+            "snapshot": _selected_region_snapshot(compact_snapshot, page_state, compact_region_context),
+            "region_context": compact_region_context,
+            "runtime_results": runtime_results,
+        }
+    return {
+        "instruction": instruction,
+        "page": page_state.model_dump(mode="json"),
+        "context_scope": "full_page",
+        "snapshot": compact_snapshot,
+        "runtime_results": runtime_results,
+    }
+
+
+def _raw_region_evidence(region_context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    context = _object_dict(region_context)
+    evidence = _object_dict(context.get("evidence"))
+    return _safe_jsonable(evidence) if evidence else {}
+
+
+def _region_selection_signal(region_context: Dict[str, Any]) -> Dict[str, Any]:
+    signal: Dict[str, Any] = {}
+    _set_if_present(signal, "region_id", region_context.get("region_id"))
+    _set_if_present(signal, "inferred_kind", region_context.get("inferred_kind"))
+    _set_if_present(signal, "rect", region_context.get("rect"))
+    _set_if_present(signal, "frame_path", region_context.get("frame_path"))
+    _set_if_present(signal, "local_text_preview", region_context.get("local_text"))
+    _set_if_present(signal, "table", region_context.get("table_summary"))
+    _set_if_present(signal, "list", region_context.get("list_summary"))
+    _set_if_present(signal, "action", region_context.get("action_summary"))
+    _set_if_present(signal, "warnings", region_context.get("warnings"))
+    return signal
+
+
+def _region_context_decision_signal(plan: Dict[str, Any], region_context: Dict[str, Any]) -> Dict[str, Any]:
+    action_type = str(plan.get("action_type") or "").strip()
+    output_key = _normalize_result_key(plan.get("output_key"))
+    if output_key or action_type == "data_capture":
+        used_as = "extraction"
+    elif action_type in {"click", "fill", "select", "press", "hover", "run_python"}:
+        used_as = "action_targeting"
+    else:
+        used_as = "supporting_evidence"
+
+    signal: Dict[str, Any] = {"used_as": used_as}
+    _set_if_present(signal, "region_id", region_context.get("region_id"))
+    _set_if_present(signal, "action_type", action_type)
+    _set_if_present(signal, "output_key", output_key)
+    return signal
+
+
+def _object_dict(value: Any) -> Dict[str, Any]:
+    if isinstance(value, BaseModel):
+        value = value.model_dump(mode="json")
+    if isinstance(value, dict):
+        return dict(value)
+    return {}
+
+
+def _compact_list(value: Any, *, limit: Optional[int] = None) -> List[Any]:
+    if not isinstance(value, list):
+        return []
+    items = value[:limit] if limit is not None else value
+    return [_safe_jsonable(item) for item in items]
+
+
+def _set_if_present(target: Dict[str, Any], key: str, value: Any) -> None:
+    if value in (None, "", [], {}):
+        return
+    target[key] = _safe_jsonable(value)
+
+
+def _compact_snapshot(
+    snapshot: Dict[str, Any],
+    instruction: str,
+    limit: int = 80,
+    region_scope: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    try:
+        if region_scope is not None:
+            compact_snapshot = compact_recording_snapshot(snapshot, instruction, region_scope=region_scope)
+        else:
+            compact_snapshot = compact_recording_snapshot(snapshot, instruction)
         if isinstance(compact_snapshot, dict):
             return compact_snapshot
     except Exception:
@@ -2175,6 +2653,71 @@ def _write_recording_attempt_debug(
         return
 
 
+def _write_recording_planner_failure_debug(
+    stage: str,
+    *,
+    instruction: str,
+    page_state: Dict[str, Any],
+    raw_snapshot: Optional[Dict[str, Any]],
+    compact_snapshot: Dict[str, Any],
+    exception: BaseException,
+    model_config: Optional[Dict[str, Any]] = None,
+    debug_context: Optional[Dict[str, Any]] = None,
+) -> None:
+    debug_dir = _resolve_recording_snapshot_debug_dir()
+    if not debug_dir:
+        return
+
+    try:
+        debug_context = dict(debug_context or {})
+        target_dir = _resolve_recording_snapshot_debug_path(debug_dir, debug_context=debug_context)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        sequence = _next_debug_sequence(target_dir)
+        json_path = target_dir / _debug_filename(
+            sequence=sequence,
+            stage=stage,
+            kind="planner_failure",
+            label=instruction or stage,
+            extension="json",
+        )
+        raw_output = str(getattr(exception, "raw_output", "") or "")
+        llm_call = getattr(exception, "llm_call", None)
+        raw_snapshot = raw_snapshot or {}
+        payload: Dict[str, Any] = {
+            "stage": stage,
+            "debug_context": debug_context,
+            "instruction": instruction,
+            "page": page_state,
+            "exception": {
+                "type": type(exception).__name__,
+                "message": str(exception),
+            },
+            "model_config": _model_config_summary(model_config),
+            "compact_snapshot_summary": _compact_snapshot_debug_summary(compact_snapshot),
+            "snapshot_comparison": _compare_instruction_snapshot_presence(
+                instruction,
+                raw_snapshot,
+                compact_snapshot,
+            ),
+        }
+        if raw_snapshot:
+            payload["raw_snapshot_summary"] = _build_snapshot_debug_metrics(raw_snapshot, compact_snapshot)[
+                "raw_snapshot"
+            ]
+        if raw_output:
+            payload["planner_raw_output"] = _text_diagnostic(raw_output, limit=12000)
+        if isinstance(llm_call, dict) and llm_call:
+            payload["llm_call"] = _safe_jsonable(llm_call)
+        json_path.write_text(
+            json.dumps(_safe_jsonable(payload), ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
+        logger.info("[RPA-DIAG] planner failure dump written stage=%s path=%s", stage, json_path)
+    except Exception:
+        logger.warning("[RPA-DIAG] planner failure dump failed stage=%s", stage, exc_info=True)
+        return
+
+
 def _build_snapshot_debug_metrics(raw_snapshot: Dict[str, Any], compact_snapshot: Dict[str, Any]) -> Dict[str, Any]:
     content_nodes = list(raw_snapshot.get("content_nodes") or [])
     actionable_nodes = list(raw_snapshot.get("actionable_nodes") or [])
@@ -2213,6 +2756,37 @@ def _build_snapshot_debug_metrics(raw_snapshot: Dict[str, Any], compact_snapshot
             ],
             "region_kind_counts": _count_by_key(expanded_regions + sampled_regions + catalogue, "kind"),
         },
+    }
+
+
+def _compact_snapshot_debug_summary(compact_snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    expanded_regions = list(compact_snapshot.get("expanded_regions") or [])
+    sampled_regions = list(compact_snapshot.get("sampled_regions") or [])
+    catalogue = list(compact_snapshot.get("region_catalogue") or [])
+    table_views = list(compact_snapshot.get("table_views") or [])
+    detail_views = list(compact_snapshot.get("detail_views") or [])
+    form_views = list(compact_snapshot.get("form_views") or [])
+    return {
+        "mode": compact_snapshot.get("mode", ""),
+        "url": compact_snapshot.get("url", ""),
+        "title": compact_snapshot.get("title", ""),
+        "region_scope": _safe_jsonable(compact_snapshot.get("region_scope") or {}),
+        "char_size": len(json.dumps(_safe_jsonable(compact_snapshot), ensure_ascii=False, sort_keys=True, default=str)),
+        "expanded_region_count": len(expanded_regions),
+        "sampled_region_count": len(sampled_regions),
+        "catalogue_region_count": len(catalogue),
+        "table_view_count": len(table_views),
+        "detail_view_count": len(detail_views),
+        "form_view_count": len(form_views),
+        "expanded_region_titles": _region_titles(expanded_regions),
+        "sampled_region_titles": _region_titles(sampled_regions),
+        "catalogue_region_titles": _region_titles(catalogue),
+        "table_view_titles": _region_titles(table_views),
+        "detail_view_titles": [
+            str(view.get("section_title") or view.get("title") or "").strip()[:120]
+            for view in detail_views[:20]
+            if str(view.get("section_title") or view.get("title") or "").strip()
+        ],
     }
 
 
@@ -2316,7 +2890,16 @@ def _resolve_recording_snapshot_debug_path(debug_dir: str, *, debug_context: Opt
 
 def _next_debug_sequence(target_dir: Path) -> int:
     max_seen = 0
-    for pattern in ("*-snapshot-*.json", "*-attempt-*.json", "*-code-*.py", "snapshot-*.json", "attempt-*.json", "code-*.py"):
+    for pattern in (
+        "*-snapshot-*.json",
+        "*-attempt-*.json",
+        "*-planner_failure-*.json",
+        "*-code-*.py",
+        "snapshot-*.json",
+        "attempt-*.json",
+        "planner_failure-*.json",
+        "code-*.py",
+    ):
         for path in target_dir.glob(pattern):
             match = re.match(r"^(?:snapshot|attempt|code)-(\d+)-|^(\d+)-", path.name)
             if match:

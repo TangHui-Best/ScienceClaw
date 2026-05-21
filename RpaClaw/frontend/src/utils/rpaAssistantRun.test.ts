@@ -113,6 +113,27 @@ describe('rpaAssistantRun', () => {
     expect(run.rounds[0].items[2].detail).toBe('提取项目名、star数和fork数');
   });
 
+  it('renders region context stream events as plan evidence', () => {
+    let run = createRpaAssistantRun('00:44');
+
+    run = applyRpaAssistantRunEvent(run, 'region_context', {
+      summary: 'Search results area',
+      inferred_kind: 'list_region',
+      warnings: ['Only visible nodes were sampled'],
+    });
+
+    expect(run.rounds).toHaveLength(1);
+    expect(run.rounds[0].items).toHaveLength(1);
+    expect(run.rounds[0].items[0]).toMatchObject({
+      kind: 'plan',
+      title: '页面区域证据',
+      detail: [
+        '区域: Search results area',
+        '类型: list_region',
+        '提示: Only visible nodes were sampled',
+      ].join('\n'),
+    });
+  });
 
   it('ignores legacy total_steps when finishing assistant runs', () => {
     let run = createRpaAssistantRun('00:42');

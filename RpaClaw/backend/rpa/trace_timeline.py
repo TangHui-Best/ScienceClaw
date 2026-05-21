@@ -52,6 +52,7 @@ def build_trace_timeline_items(
 def _trace_to_item(trace: RPAAcceptedTrace) -> RPATimelineItem:
     action = _trace_action(trace)
     title = _trace_title(trace, action)
+    summary = _trace_summary(trace, title)
     locator_candidates = deepcopy(list(trace.locator_candidates or []))
     locator_candidate = _first_locator_candidate(locator_candidates)
     locator = locator_candidate.get("locator", {}) if locator_candidate else {}
@@ -66,7 +67,7 @@ def _trace_to_item(trace: RPAAcceptedTrace) -> RPATimelineItem:
         trace_type=trace_type,
         action=action,
         title=title,
-        summary=trace.description or title,
+        summary=summary,
         url=trace.after_page.url or trace.before_page.url,
         frame_path=list(trace.frame_path or []),
         locator=deepcopy(locator) if isinstance(locator, dict) else {},
@@ -177,3 +178,17 @@ def _trace_action(trace: RPAAcceptedTrace) -> str:
 
 def _trace_title(trace: RPAAcceptedTrace, action: str) -> str:
     return trace.description or trace.user_instruction or action
+
+
+def _trace_summary(trace: RPAAcceptedTrace, title: str) -> str:
+    signals = trace.signals if isinstance(trace.signals, dict) else {}
+    region_selection = signals.get("region_selection") if isinstance(signals, dict) else None
+    if isinstance(region_selection, dict):
+        output_key = str(trace.output_key or "").strip()
+        if output_key:
+            return output_key
+        decision = signals.get("region_context_decision")
+        output_key = str(decision.get("output_key") or "").strip() if isinstance(decision, dict) else ""
+        if output_key:
+            return output_key
+    return trace.description or title

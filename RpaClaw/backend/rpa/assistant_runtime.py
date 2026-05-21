@@ -154,12 +154,12 @@ async def _extract_frame_elements(frame) -> List[Dict[str, Any]]:
     return data if isinstance(data, list) else []
 
 
-async def _extract_frame_snapshot_v2(frame) -> Dict[str, Any]:
+async def _extract_frame_snapshot_v2(frame, region_scope: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     try:
         ready = await frame.evaluate("() => !!globalThis.__rpaPlaywrightRecorder")
         if not ready:
             await frame.evaluate(PLAYWRIGHT_RECORDER_RUNTIME_JS)
-        raw = await frame.evaluate(SNAPSHOT_V2_JS)
+        raw = await frame.evaluate(SNAPSHOT_V2_JS, region_scope or None)
         data = json.loads(raw) if isinstance(raw, str) else raw
     except Exception:
         data = None
@@ -242,7 +242,11 @@ async def build_frame_path_from_frame(frame) -> List[str]:
     return await build_frame_path(frame)
 
 
-async def build_page_snapshot(page, frame_path_builder: Callable[[Any], Any]) -> Dict[str, Any]:
+async def build_page_snapshot(
+    page,
+    frame_path_builder: Callable[[Any], Any],
+    region_scope: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     frames: List[Dict[str, Any]] = []
     actionable_nodes: List[Dict[str, Any]] = []
     content_nodes: List[Dict[str, Any]] = []
@@ -253,7 +257,13 @@ async def build_page_snapshot(page, frame_path_builder: Callable[[Any], Any]) ->
     async def walk(frame) -> None:
         try:
             frame_path = await _resolve_frame_path(frame, frame_path_builder)
-            snapshot_v2 = await _extract_frame_snapshot_v2(frame)
+            scope_frame_path = list((region_scope or {}).get("frame_path") or [])
+            frame_scope = None
+            if region_scope and scope_frame_path == frame_path:
+                frame_scope = {
+                    "rect": dict(region_scope.get("frame_rect") or region_scope.get("viewport_rect") or {})
+                }
+            snapshot_v2 = await _extract_frame_snapshot_v2(frame, frame_scope)
             elements = list(snapshot_v2.get("elements") or [])
             if not elements:
                 elements = await _extract_frame_elements(frame)
@@ -315,7 +325,7 @@ async def build_page_snapshot(page, frame_path_builder: Callable[[Any], Any]) ->
             await walk(child)
 
     await walk(page.main_frame)
-    return {
+    payload = {
         "url": page.url,
         "title": await page.title(),
         "frames": frames,
@@ -325,6 +335,9 @@ async def build_page_snapshot(page, frame_path_builder: Callable[[Any], Any]) ->
         "table_views": table_views,
         "detail_views": detail_views,
     }
+    if region_scope:
+        payload["region_scope"] = dict(region_scope)
+    return payload
 
 
 def resolve_collection_target(snapshot: Dict[str, Any], intent: Dict[str, Any]) -> Dict[str, Any]:

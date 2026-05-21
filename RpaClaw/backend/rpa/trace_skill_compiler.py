@@ -807,6 +807,14 @@ class TraceSkillCompiler:
     ) -> List[str]:
         if self._has_usable_snapshot_extract_fields(trace):
             return self._render_snapshot_extract_trace(index, trace, used_output_keys)
+        if _is_selected_region_local_text_extract(trace):
+            return self._render_runtime_ai_instruction_trace(index, trace, used_output_keys)
+        region_lines = self._render_region_extract_trace(index, trace, used_output_keys)
+        if region_lines:
+            return region_lines
+        region_runtime_requirement = _trace_region_runtime_ai_requirement(trace)
+        if region_runtime_requirement is True:
+            return self._render_runtime_ai_instruction_trace(index, trace, used_output_keys)
         if _should_preserve_runtime_ai_instruction(trace):
             return self._render_runtime_ai_instruction_trace(index, trace, used_output_keys)
         if _embedded_ai_code_has_weak_empty_extract_evidence(trace):
@@ -816,6 +824,121 @@ class TraceSkillCompiler:
         if trace.user_instruction or trace.description:
             return self._render_runtime_ai_instruction_trace(index, trace, used_output_keys)
         return ["", f"    # trace {index}: AI operation has no executable body"]
+
+    def _render_region_extract_trace(
+        self,
+        index: int,
+        trace: RPAAcceptedTrace,
+        used_output_keys: Dict[str, int],
+    ) -> List[str]:
+        region_kind = _trace_region_kind(trace)
+        region_context = _trace_region_context(trace)
+        if region_kind == "single_value":
+            locator = self._preferred_locator_for_trace(
+                trace,
+                _trace_region_value_locator_candidates(trace, region_context),
+            )
+            if locator:
+                return self._render_region_single_value_trace(index, trace, used_output_keys, locator, region_context)
+        if region_kind == "table_region":
+            table_summary = (
+                region_context.get("table_summary") if isinstance(region_context.get("table_summary"), dict) else {}
+            )
+            locator = self._best_locator(list(table_summary.get("locator_candidates") or []))
+            if locator:
+                return self._render_region_table_trace(index, trace, used_output_keys, locator, region_context)
+        if region_kind in {"list_sample", "list_region"}:
+            list_summary = (
+                region_context.get("list_summary") if isinstance(region_context.get("list_summary"), dict) else {}
+            )
+            item_selector = str(list_summary.get("item_selector") or "").strip()
+            locator = self._best_locator(list(list_summary.get("container_locator_candidates") or []))
+            if locator and item_selector:
+                return self._render_region_list_trace(
+                    index,
+                    trace,
+                    used_output_keys,
+                    locator,
+                    item_selector,
+                    region_context,
+                )
+        return []
+
+    def _render_region_single_value_trace(
+        self,
+        index: int,
+        trace: RPAAcceptedTrace,
+        used_output_keys: Dict[str, int],
+        locator: Dict[str, Any],
+        region_context: Dict[str, Any],
+    ) -> List[str]:
+        key = self._allocate_output_key(trace, trace.output_key or f"region_value_{index}", used_output_keys)
+        lines = ["", f"    # trace {index}: {trace.description or 'region value extract'}"]
+        scope_lines, scope_var = self._frame_scope_lines(_trace_region_frame_path(trace, region_context))
+        lines.extend(scope_lines)
+        lines.append(f"    _result = (await {_locator_expression(scope_var, locator)}.inner_text()).strip()")
+        lines.append(f"    _results[{key!r}] = _result")
+        return lines
+
+    def _render_region_table_trace(
+        self,
+        index: int,
+        trace: RPAAcceptedTrace,
+        used_output_keys: Dict[str, int],
+        locator: Dict[str, Any],
+        region_context: Dict[str, Any],
+    ) -> List[str]:
+        key = self._allocate_output_key(trace, trace.output_key or f"region_table_{index}", used_output_keys)
+        lines = ["", f"    # trace {index}: {trace.description or 'region table extract'}"]
+        scope_lines, scope_var = self._frame_scope_lines(_trace_region_frame_path(trace, region_context))
+        lines.extend(scope_lines)
+        table_summary = region_context.get("table_summary") if isinstance(region_context.get("table_summary"), dict) else {}
+        selected_indexes = _selected_indexes(table_summary.get("selected_row_indexes"))
+        row_source = "Array.from(table.querySelectorAll('tr'))"
+        if selected_indexes:
+            row_source = (
+                f"(() => {{const selectedIndexes = new Set({json.dumps(selected_indexes)});"
+                "return Array.from(table.querySelectorAll('tr'))"
+                ".filter((row, index) => selectedIndexes.has(index));}})()"
+            )
+        lines.append(
+            f"    _result = await {_locator_expression(scope_var, locator)}.evaluate("
+            f"\"\"\"(table) => {row_source}"
+            ".map((row) => Array.from(row.querySelectorAll('th,td'))"
+            ".map((cell) => (cell.innerText || cell.textContent || '').trim())"
+            ".filter(Boolean))"
+            ".filter((row) => row.length)\"\"\")"
+        )
+        lines.append(f"    _results[{key!r}] = _result")
+        return lines
+
+    def _render_region_list_trace(
+        self,
+        index: int,
+        trace: RPAAcceptedTrace,
+        used_output_keys: Dict[str, int],
+        locator: Dict[str, Any],
+        item_selector: str,
+        region_context: Dict[str, Any],
+    ) -> List[str]:
+        key = self._allocate_output_key(trace, trace.output_key or f"region_list_{index}", used_output_keys)
+        lines = ["", f"    # trace {index}: {trace.description or 'region list extract'}"]
+        scope_lines, scope_var = self._frame_scope_lines(_trace_region_frame_path(trace, region_context))
+        lines.extend(scope_lines)
+        list_summary = region_context.get("list_summary") if isinstance(region_context.get("list_summary"), dict) else {}
+        selected_indexes = _selected_indexes(list_summary.get("selected_item_indexes"))
+        item_source = "items"
+        if selected_indexes:
+            item_source = (
+                f"(() => {{const selectedIndexes = new Set({json.dumps(selected_indexes)});"
+                "return items.filter((item, index) => selectedIndexes.has(index));}})()"
+            )
+        lines.append(
+            f"    _result = await {_locator_expression(scope_var, locator)}.locator({item_selector!r}).evaluate_all("
+            f"\"\"\"(items) => {item_source}.map((item) => (item.innerText || item.textContent || '').trim()).filter(Boolean)\"\"\")"
+        )
+        lines.append(f"    _results[{key!r}] = _result")
+        return lines
 
     def _render_runtime_ai_instruction_trace(
         self,
@@ -1015,10 +1138,14 @@ class TraceSkillCompiler:
     def _best_locator(self, candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
         if not candidates:
             return {}
-        selected = next((item for item in candidates if item.get("selected")), candidates[0])
-        locator = selected.get("locator") if isinstance(selected, dict) else None
-        normalized = normalize_locator(locator if isinstance(locator, dict) else selected)
-        return normalized if has_valid_locator(normalized) else {}
+        ordered = [item for item in candidates if item.get("selected")]
+        ordered.extend(item for item in candidates if not item.get("selected"))
+        for candidate in ordered:
+            locator = candidate.get("locator") if isinstance(candidate, dict) else None
+            normalized = normalize_locator(locator if isinstance(locator, dict) else candidate)
+            if has_valid_locator(normalized):
+                return normalized
+        return {}
 
     def _preferred_locator_for_trace(self, trace: RPAAcceptedTrace, candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
         locator = self._best_locator(candidates)
@@ -1222,6 +1349,125 @@ def _trace_signal(trace: RPAAcceptedTrace, name: str) -> Dict[str, Any]:
     return dict(signal) if isinstance(signal, dict) else {}
 
 
+def _trace_region_context(trace: RPAAcceptedTrace) -> Dict[str, Any]:
+    context = trace.region_context if isinstance(trace.region_context, dict) else {}
+    if not context:
+        return {}
+    evidence = context.get("evidence")
+    if isinstance(evidence, dict):
+        merged = dict(evidence)
+        for key, value in context.items():
+            if key != "evidence":
+                merged.setdefault(key, value)
+        return merged
+    return dict(context)
+
+
+def _trace_region_kind(trace: RPAAcceptedTrace) -> str:
+    context = _trace_region_context(trace)
+    kind = str(context.get("inferred_kind") or context.get("kind") or "").strip()
+    if kind:
+        return kind
+    table_summary = context.get("table_summary")
+    if isinstance(table_summary, dict) and table_summary.get("locator_candidates"):
+        return "table_region"
+    list_summary = context.get("list_summary")
+    if isinstance(list_summary, dict) and list_summary.get("item_selector"):
+        return "list_sample"
+    if context.get("locator_candidates"):
+        return "single_value"
+    return ""
+
+
+def _trace_region_frame_path(trace: RPAAcceptedTrace, region_context: Dict[str, Any]) -> List[str]:
+    frame_path = region_context.get("frame_path")
+    if isinstance(frame_path, list):
+        return [str(item) for item in frame_path if str(item or "").strip()]
+    return list(trace.frame_path or [])
+
+
+def _is_selected_region_local_text_extract(trace: RPAAcceptedTrace) -> bool:
+    signal = _trace_signal(trace, "extract_snapshot")
+    return str(signal.get("source") or "").strip() == "selected_region.local_text"
+
+
+def _locator_candidate_dicts(value: Any) -> List[Dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _selected_indexes(value: Any) -> List[int]:
+    if not isinstance(value, list):
+        return []
+    indexes: List[int] = []
+    seen: set[int] = set()
+    for item in value:
+        try:
+            index = int(item)
+        except Exception:
+            continue
+        if index < 0 or index in seen:
+            continue
+        seen.add(index)
+        indexes.append(index)
+    return indexes
+
+
+def _prioritized_region_locator_candidates(*groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    for index, group in enumerate(groups):
+        if not group:
+            continue
+        candidates = list(group)
+        for fallback_group in groups[index + 1 :]:
+            for candidate in fallback_group:
+                fallback = dict(candidate)
+                fallback.pop("selected", None)
+                candidates.append(fallback)
+        return candidates
+    return []
+
+
+def _trace_region_value_locator_candidates(
+    trace: RPAAcceptedTrace,
+    region_context: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    nested_candidates: List[Dict[str, Any]] = []
+    intersecting_elements = region_context.get("intersecting_elements")
+    if isinstance(intersecting_elements, list):
+        for element in intersecting_elements:
+            if not isinstance(element, dict):
+                continue
+            candidates = element.get("nested_locator_candidates")
+            nested_candidates.extend(_locator_candidate_dicts(candidates))
+    return _prioritized_region_locator_candidates(
+        nested_candidates,
+        _locator_candidate_dicts(region_context.get("locator_candidates")),
+        _locator_candidate_dicts(trace.locator_candidates),
+    )
+
+
+def _trace_region_runtime_ai_requirement(trace: RPAAcceptedTrace) -> Optional[bool]:
+    region_kind = _trace_region_kind(trace)
+    region_context = _trace_region_context(trace)
+    if region_kind == "single_value":
+        candidates = _trace_region_value_locator_candidates(trace, region_context)
+        return not bool(TraceSkillCompiler()._best_locator(candidates))
+    if region_kind == "table_region":
+        table_summary = (
+            region_context.get("table_summary") if isinstance(region_context.get("table_summary"), dict) else {}
+        )
+        return not bool(TraceSkillCompiler()._best_locator(list(table_summary.get("locator_candidates") or [])))
+    if region_kind in {"list_sample", "list_region"}:
+        list_summary = (
+            region_context.get("list_summary") if isinstance(region_context.get("list_summary"), dict) else {}
+        )
+        item_selector = str(list_summary.get("item_selector") or "").strip()
+        locator = TraceSkillCompiler()._best_locator(list(list_summary.get("container_locator_candidates") or []))
+        return not bool(locator and item_selector)
+    return None
+
+
 def _xpath_literal(value: str) -> str:
     text = str(value)
     if "'" not in text:
@@ -1323,6 +1569,11 @@ def trace_requires_runtime_ai_replay(trace: RPAAcceptedTrace) -> bool:
         return False
     if _trace_signal(trace, "extract_snapshot") and TraceSkillCompiler._has_usable_snapshot_extract_fields(trace):
         return False
+    if _is_selected_region_local_text_extract(trace):
+        return True
+    region_runtime_requirement = _trace_region_runtime_ai_requirement(trace)
+    if region_runtime_requirement is not None:
+        return region_runtime_requirement
     if _should_preserve_runtime_ai_instruction(trace):
         return True
     if _embedded_ai_code_has_weak_empty_extract_evidence(trace):

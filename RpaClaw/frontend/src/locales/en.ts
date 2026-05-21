@@ -952,4 +952,11 @@ export default {
   'Edit saved token flows JSON hint': 'Edit saved token flows. Use [] to clear all token flows.',
   'Token flows JSON must be an array': 'Token flows JSON must be an array',
   'Invalid JSON': 'Invalid JSON',
+  'Select page region': 'Select page region',
+  'Drag to select page region · Esc to cancel': 'Drag to select page region · Esc to cancel',
+  'Selected page region': 'Selected page region',
+  'Remove selected region': 'Remove selected region',
+  'Region analysis failed, please select again': 'Region analysis failed, please select again',
+  'Type what to do with the selected region': 'Type what to do with the selected region',
+  'Page region evidence': 'Page region evidence',
 }

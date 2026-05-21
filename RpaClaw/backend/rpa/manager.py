@@ -16,6 +16,7 @@ from .frame_selectors import build_frame_path
 from .manual_recording_models import ManualRecordedAction, ManualRecordingDiagnostic
 from .manual_recording_normalizer import build_manual_recording_outcome
 from .playwright_security import get_context_kwargs
+from .region_context import RPARegionContext
 from .trace_models import RPAAcceptedTrace, RPATraceDiagnostic, RPARuntimeResults
 from .trace_recorder import infer_dataflow_for_ai_fill, infer_dataflow_for_fill, manual_step_to_trace
 
@@ -132,6 +133,7 @@ class RPASessionManager:
         self._pending_hover_candidates: Dict[str, List[Dict[str, Any]]] = {}
         self._pending_event_counts: Dict[str, int] = {}
         self._pending_event_idle: Dict[str, asyncio.Event] = {}
+        self._pending_region_contexts: Dict[str, Dict[str, RPARegionContext]] = {}
 
     def touch_session(self, session_id: str) -> None:
         session = self.sessions.get(session_id)
@@ -222,6 +224,7 @@ class RPASessionManager:
         self._bridged_context_ids.pop(session_id, None)
         self._pending_event_counts.pop(session_id, None)
         self._pending_event_idle.pop(session_id, None)
+        self._pending_region_contexts.pop(session_id, None)
 
         session = self.sessions.get(session_id)
         if session:
@@ -580,6 +583,11 @@ class RPASessionManager:
         if not active_tab_id:
             return None
         return self._tabs.get(session_id, {}).get(active_tab_id)
+
+    def get_page_for_tab(self, session_id: str, tab_id: Optional[str] = None) -> Optional[Page]:
+        if not tab_id:
+            return self.get_page(session_id)
+        return self._tabs.get(session_id, {}).get(tab_id)
 
     async def _ensure_context_recorder(self, session_id: str, context: BrowserContext):
         bridged_context_ids = self._bridged_context_ids.setdefault(session_id, set())
@@ -1895,6 +1903,42 @@ class RPASessionManager:
         if not session:
             raise ValueError(f"Session {session_id} not found")
         session.runtime_results.write(key, value)
+
+    def store_region_context(
+        self,
+        session_id: str,
+        context: RPARegionContext,
+    ) -> RPARegionContext:
+        if session_id not in self.sessions:
+            raise ValueError(f"Session {session_id} not found")
+        self._pending_region_contexts[session_id] = {context.region_id: context}
+        return context
+
+    def resolve_region_context(
+        self,
+        session_id: str,
+        region_id: str | None,
+        *,
+        current_url: str | None = None,
+    ) -> Optional[RPARegionContext]:
+        if not region_id:
+            return None
+        context = self._pending_region_contexts.get(session_id, {}).get(region_id)
+        if context is None:
+            return None
+        if current_url and context.page_url and context.page_url != current_url:
+            return None
+        return context
+
+    def clear_region_context(self, session_id: str, region_id: str | None = None) -> None:
+        if region_id:
+            contexts = self._pending_region_contexts.get(session_id)
+            if contexts is not None:
+                contexts.pop(region_id, None)
+                if not contexts:
+                    self._pending_region_contexts.pop(session_id, None)
+            return
+        self._pending_region_contexts.pop(session_id, None)
 
     async def _record_manual_trace_for_step(self, session_id: str, step: RPAStep) -> None:
         if step.source != "record":

@@ -86,6 +86,20 @@ const normalizeDoneSummary = (message: string): string => {
   return message;
 };
 
+const formatRegionContextDetail = (data: any = {}): string => {
+  const lines: string[] = [];
+  const summary = String(data.summary || '').trim();
+  const inferredKind = String(data.inferred_kind || data.inferredKind || '').trim();
+  const warnings = Array.isArray(data.warnings)
+    ? data.warnings.map((item: unknown) => String(item || '').trim()).filter(Boolean)
+    : [String(data.warnings || '').trim()].filter(Boolean);
+
+  if (summary) lines.push(`区域: ${summary}`);
+  if (inferredKind) lines.push(`类型: ${inferredKind}`);
+  if (warnings.length) lines.push(`提示: ${warnings.join('；')}`);
+  return lines.join('\n');
+};
+
 export const formatRpaAssistantDiagnostics = (diagnostics: any[] = []): string[] => diagnostics
   .map((item: any) => {
     const code = String(item?.code || '').trim();
@@ -154,6 +168,10 @@ export const applyRpaAssistantRunEvent = (
   const run = cloneRun(currentRun);
 
   switch (eventType) {
+    case 'region_context': {
+      addItem(run, 'plan', '页面区域证据', formatRegionContextDetail(data));
+      break;
+    }
     case 'message_chunk': {
       addItem(run, 'plan', '正在理解你的目标', normalizePlanDetail(String(data.text || '')));
       break;

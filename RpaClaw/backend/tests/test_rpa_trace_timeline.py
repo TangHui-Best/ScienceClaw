@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import importlib
+import asyncio
+import inspect
 import json
 import sys
 import types
 from datetime import datetime
 
-import pytest
 from fastapi.encoders import jsonable_encoder
 
 from backend.rpa.manager import RPASession, RPAStep
@@ -17,6 +18,12 @@ from backend.rpa.manual_recording_models import (
 )
 from backend.rpa.trace_models import RPAAcceptedTrace, RPAPageState, RPATraceDiagnostic, RPATraceType
 from backend.rpa.trace_timeline import build_trace_timeline_items
+
+
+def _resolve_maybe_async(value):
+    if inspect.isawaitable(value):
+        return asyncio.run(value)
+    return value
 
 
 def _load_route_module():
@@ -180,6 +187,46 @@ def test_trace_timeline_exposes_sensitive_fill_contract_without_raw_trace_depend
     assert item.raw_trace["sensitive"] is True
 
 
+def test_trace_timeline_projects_region_backed_trace_evidence():
+    trace = RPAAcceptedTrace(
+        trace_id="trace-region",
+        trace_type=RPATraceType.AI_OPERATION,
+        source="ai",
+        description="Extract selected region",
+        signals={
+            "recording": {"event_timestamp_ms": 1000},
+            "region_selection": {
+                "region_id": "region-123",
+                "inferred_kind": "list_region",
+            },
+            "region_context_decision": {
+                "region_id": "region-123",
+                "used_as": "extraction",
+                "output_key": "pricing_table",
+            },
+        },
+        output_key="pricing_table",
+        region_context={
+            "region_id": "region-123",
+            "summary": "Search results area",
+            "inferred_kind": "list_region",
+        },
+    )
+
+    [item] = build_trace_timeline_items(traces=[trace], trace_diagnostics=[])
+
+    assert item.summary == "pricing_table"
+    assert item.raw_trace["signals"]["region_selection"]["region_id"] == "region-123"
+    assert "output_key" not in item.raw_trace["signals"]["region_selection"]
+    assert item.raw_trace["signals"]["region_context_decision"]["output_key"] == "pricing_table"
+    assert item.raw_trace["output_key"] == "pricing_table"
+    assert item.raw_trace["region_context"] == {
+        "region_id": "region-123",
+        "summary": "Search results area",
+        "inferred_kind": "list_region",
+    }
+
+
 def test_trace_timeline_projects_diagnostics_without_accepting_them():
     diagnostic = RPATraceDiagnostic(
         diagnostic_id="diag-1",
@@ -266,8 +313,7 @@ def test_trace_timeline_detaches_mutable_payloads_from_source_models():
     assert diagnostic.raw["validation"]["status"] == "broken"
 
 
-@pytest.mark.asyncio
-async def test_build_session_timeline_ignores_legacy_sources():
+def test_build_session_timeline_ignores_legacy_sources():
     route_module = _load_route_module()
 
     class FakeSession:
@@ -294,7 +340,7 @@ async def test_build_session_timeline_ignores_legacy_sources():
         recording_diagnostics = [{"message": "DO_NOT_USE_LEGACY"}]
         legacy_steps = [{"id": "DO_NOT_USE_LEGACY"}]
 
-    timeline = route_module._build_session_timeline(FakeSession())
+    timeline = _resolve_maybe_async(route_module._build_session_timeline(FakeSession()))
 
     assert len(timeline) == 1
     assert timeline[0]["trace_id"] == "trace-only"
@@ -302,8 +348,7 @@ async def test_build_session_timeline_ignores_legacy_sources():
     assert "DO_NOT_USE_LEGACY" not in repr(timeline)
 
 
-@pytest.mark.asyncio
-async def test_get_session_timeline_route_returns_trace_projection():
+def test_get_session_timeline_route_returns_trace_projection():
     route_module = _load_route_module()
 
     manager = route_module.rpa_manager
@@ -329,7 +374,7 @@ async def test_get_session_timeline_route_returns_trace_projection():
 
     try:
         user = type("User", (), {"id": "u1"})()
-        response = await route_module.get_session_timeline(session.id, user)
+        response = _resolve_maybe_async(route_module.get_session_timeline(session.id, user))
 
         assert response["status"] == "success"
         assert response["timeline"][0]["trace_id"] == "trace-route"
@@ -338,8 +383,7 @@ async def test_get_session_timeline_route_returns_trace_projection():
         manager.sessions.pop(session.id, None)
 
 
-@pytest.mark.asyncio
-async def test_get_rpa_session_response_hides_legacy_sources_and_returns_trace_timeline():
+def test_get_rpa_session_response_hides_legacy_sources_and_returns_trace_timeline():
     route_module = _load_route_module()
 
     manager = route_module.rpa_manager
@@ -385,7 +429,7 @@ async def test_get_rpa_session_response_hides_legacy_sources_and_returns_trace_t
 
     try:
         user = type("User", (), {"id": "u1"})()
-        payload = jsonable_encoder(await route_module.get_rpa_session(session.id, user))
+        payload = jsonable_encoder(_resolve_maybe_async(route_module.get_rpa_session(session.id, user)))
         session_payload = payload["session"]
 
         assert "steps" not in session_payload
@@ -398,8 +442,7 @@ async def test_get_rpa_session_response_hides_legacy_sources_and_returns_trace_t
         manager.sessions.pop(session.id, None)
 
 
-@pytest.mark.asyncio
-async def test_stop_rpa_session_response_hides_legacy_sources():
+def test_stop_rpa_session_response_hides_legacy_sources():
     route_module = _load_route_module()
 
     manager = route_module.rpa_manager
@@ -437,7 +480,7 @@ async def test_stop_rpa_session_response_hides_legacy_sources():
 
     try:
         user = type("User", (), {"id": "u1"})()
-        payload = jsonable_encoder(await route_module.stop_rpa_session(session.id, user))
+        payload = jsonable_encoder(_resolve_maybe_async(route_module.stop_rpa_session(session.id, user)))
         session_payload = payload["session"]
 
         assert payload["status"] == "success"
