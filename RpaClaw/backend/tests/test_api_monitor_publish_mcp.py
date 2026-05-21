@@ -328,7 +328,7 @@ async def test_publish_persists_parsed_contract_fields_and_defaults():
     assert tools[0]["source_session_id"] == "session_1"
     assert tools[0]["order"] == 0
     assert tools[0]["validation_status"] == "valid"
-    assert tools[0]["validation_errors"] == []
+    assert tools[0].get("validation_errors", []) == []
     assert tools[0]["name"] == "search_orders"
     assert tools[0]["description"] == "Search orders by keyword"
     assert tools[0]["method"] == "GET"

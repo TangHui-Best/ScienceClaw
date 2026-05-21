@@ -264,6 +264,12 @@ class TestGenerateToolForCandidate(unittest.IsolatedAsyncioTestCase):
         manager, session_id = _manager_with_session()
         session = manager.sessions[session_id]
         call = _call("call-1")
+        call.source_evidence = {
+            "action_window_matched": True,
+            "initiator_urls": ["https://example.com/app"],
+            "js_stack_urls": [],
+            "frame_url": "https://example.com/app",
+        }
         session.captured_calls.append(call)
         candidate, _ = manager._upsert_generation_candidate(session_id, call)
 
@@ -286,6 +292,12 @@ class TestGenerateToolForCandidate(unittest.IsolatedAsyncioTestCase):
         manager, session_id = _manager_with_session()
         session = manager.sessions[session_id]
         call = _call("call-1")
+        call.source_evidence = {
+            "action_window_matched": True,
+            "initiator_urls": ["https://example.com/app"],
+            "js_stack_urls": [],
+            "frame_url": "https://example.com/app",
+        }
         session.captured_calls.append(call)
         candidate, _ = manager._upsert_generation_candidate(session_id, call)
 
@@ -360,7 +372,19 @@ class TestGenerateToolForCandidate(unittest.IsolatedAsyncioTestCase):
         manager, session_id = _manager_with_session()
         session = manager.sessions[session_id]
         first = _call("call-1", "https://example.com/api/orders?page=1")
+        first.source_evidence = {
+            "action_window_matched": True,
+            "initiator_urls": ["https://example.com/app"],
+            "js_stack_urls": [],
+            "frame_url": "https://example.com/app",
+        }
         second = _call("call-2", "https://example.com/api/orders?page=2")
+        second.source_evidence = {
+            "action_window_matched": True,
+            "initiator_urls": ["https://example.com/app"],
+            "js_stack_urls": [],
+            "frame_url": "https://example.com/app",
+        }
         session.captured_calls.append(first)
         candidate, _ = manager._upsert_generation_candidate(session_id, first)
         sample_counts: list[int] = []
