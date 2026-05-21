@@ -45,7 +45,7 @@ from .directed_trace import (
 
 from .confidence import dedup_key_for_tool, score_api_candidate, summarize_rejection_reasons
 from .intent_filter import filter_by_intent
-from .intent_pruner import IntentPruneCandidate, IntentPruneItem, prune_candidates_by_intent
+from .intent_pruner import IntentPruneCandidate, IntentPruneItem, IntentPruneResult, prune_candidates_by_intent
 from .llm_analyzer import analyze_elements, generate_tool_definition
 from .models import ApiMonitorSession, ApiToolDefinition, ApiToolGenerationCandidate, CapturedApiCall, DirectedAnalysisTrace
 from .network_capture import NetworkCaptureEngine, dedup_key
@@ -56,6 +56,10 @@ PAGE_TIMEOUT_MS = 60_000
 DOM_CONTEXT_SCAN_TIMEOUT_S = 2.0
 INTENT_PRUNE_DEBOUNCE_SECONDS = 3.0
 INTENT_PRUNE_MAX_BATCH_SIZE = 8
+INTENT_PRUNE_TIMEOUT_S = 20.0
+INTENT_PRUNE_MAX_RETRIES = 2
+INTENT_PRUNE_RETRY_BASE_DELAY_S = 2.0
+INTENT_PRUNE_CONCURRENCY = 2
 
 # ── Interactive element scanner ──────────────────────────────────────
 
@@ -484,6 +488,7 @@ class ApiMonitorSessionManager:
         self._generation_tasks: Dict[str, Dict[str, asyncio.Task[None]]] = defaultdict(dict)
         self._generation_followups: Set[tuple[str, str]] = set()
         self._generation_semaphore = asyncio.Semaphore(2)
+        self._intent_prune_semaphore = asyncio.Semaphore(INTENT_PRUNE_CONCURRENCY)
         self._analysis_event_sinks: Dict[str, Callable[[str, dict], None]] = {}
         self._intent_prune_buffers: Dict[str, set[str]] = defaultdict(set)
         self._intent_prune_tasks: Dict[str, asyncio.Task] = {}
@@ -2319,6 +2324,130 @@ class ApiMonitorSessionManager:
             step_summary=self._step_summary_for_prune(candidate),
             page_url=candidate.capture_page_url or session.target_url or "",
             title=candidate.capture_title or "",
+        )
+
+    def _intent_prune_retry_delay(self, failed_attempts: int) -> float:
+        return INTENT_PRUNE_RETRY_BASE_DELAY_S * (2 ** max(failed_attempts - 1, 0))
+
+    def _intent_prune_failure_reason(self, error: str) -> str:
+        return f"意图裁剪多次失败，需人工确认：{error or '未知错误'}"
+
+    def _mark_intent_prune_retrying(
+        self,
+        session: ApiMonitorSession,
+        candidates: list[ApiToolGenerationCandidate],
+        *,
+        error: str,
+        retry_after: datetime,
+    ) -> None:
+        for candidate in candidates:
+            candidate.status = "intent_prune_retrying"
+            candidate.intent_prune_error = error
+            candidate.intent_prune_retry_after = retry_after
+            candidate.updated_at = datetime.now()
+            self._emit_analysis_event(
+                session.id,
+                "api_candidate_intent_prune_retrying",
+                self._candidate_event_payload(candidate),
+            )
+        session.updated_at = datetime.now()
+
+    def _failed_intent_prune_result(
+        self,
+        candidates: list[ApiToolGenerationCandidate],
+        *,
+        batch_id: str,
+        error: str,
+    ) -> IntentPruneResult:
+        reason = self._intent_prune_failure_reason(error)
+        return IntentPruneResult(
+            batch_id=batch_id,
+            items=[
+                IntentPruneItem(
+                    candidate_key=self._candidate_key_for_prune(candidate),
+                    intent_group="uncertain",
+                    intent_score=0,
+                    intent_rank=None,
+                    intent_reason=reason,
+                )
+                for candidate in candidates
+            ],
+        )
+
+    async def _prune_candidates_with_retry(
+        self,
+        session: ApiMonitorSession,
+        candidates: list[ApiToolGenerationCandidate],
+        prune_candidates: list[IntentPruneCandidate],
+        intent: str,
+        *,
+        model_config: Optional[Dict] = None,
+    ) -> IntentPruneResult:
+        batch_id = f"intent_prune_failed_{uuid.uuid4().hex[:12]}"
+        if not candidates or not prune_candidates:
+            return IntentPruneResult(batch_id=batch_id, items=[])
+
+        last_error = ""
+        max_attempts = 1 + INTENT_PRUNE_MAX_RETRIES
+        for attempt in range(1, max_attempts + 1):
+            for candidate in candidates:
+                candidate.status = "intent_pruning"
+                candidate.intent_prune_attempts = attempt
+                candidate.intent_prune_retry_after = None
+                candidate.updated_at = datetime.now()
+                self._emit_analysis_event(
+                    session.id,
+                    "api_candidate_intent_prune_started",
+                    self._candidate_event_payload(candidate),
+                )
+            session.updated_at = datetime.now()
+
+            try:
+                async with self._intent_prune_semaphore:
+                    result = await asyncio.wait_for(
+                        prune_candidates_by_intent(
+                            prune_candidates,
+                            intent,
+                            page_context=session.target_url or "",
+                            model_config=model_config,
+                        ),
+                        timeout=INTENT_PRUNE_TIMEOUT_S,
+                    )
+                for candidate in candidates:
+                    candidate.status = "intent_pruning"
+                    candidate.intent_prune_error = ""
+                    candidate.intent_prune_retry_after = None
+                    candidate.updated_at = datetime.now()
+                session.updated_at = datetime.now()
+                return result
+            except asyncio.TimeoutError:
+                last_error = f"意图裁剪超过 {INTENT_PRUNE_TIMEOUT_S:.0f}s"
+            except Exception as exc:
+                last_error = str(exc) or exc.__class__.__name__
+
+            if attempt <= INTENT_PRUNE_MAX_RETRIES:
+                delay = self._intent_prune_retry_delay(attempt)
+                retry_after = datetime.now() + timedelta(seconds=delay)
+                self._mark_intent_prune_retrying(
+                    session,
+                    candidates,
+                    error=last_error,
+                    retry_after=retry_after,
+                )
+                if delay > 0:
+                    await asyncio.sleep(delay)
+
+        # Exhausted all retries — leave candidates in retrying state with last error
+        for candidate in candidates:
+            candidate.status = "intent_prune_retrying"
+            candidate.intent_prune_error = last_error
+            candidate.updated_at = datetime.now()
+        session.updated_at = datetime.now()
+
+        return self._failed_intent_prune_result(
+            candidates,
+            batch_id=batch_id,
+            error=last_error,
         )
 
     def _apply_prune_item_to_candidate(

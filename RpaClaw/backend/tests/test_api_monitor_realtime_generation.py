@@ -11,6 +11,8 @@ from backend.rpa.api_monitor.models import (
     ApiToolDefinition,
     ApiToolGenerationCandidate,
 )
+from backend.rpa.api_monitor.confidence import score_api_candidate
+from backend.rpa.api_monitor.intent_pruner import IntentPruneResult
 
 
 def test_generation_candidate_defaults_are_serializable():
@@ -988,6 +990,116 @@ def test_apply_prune_item_sets_uncertain_candidate_state():
     assert candidate.status == "intent_review"
     assert candidate.intent_group == "uncertain"
     assert candidate.intent_reason == "证据不足。"
+
+
+# ── Intent prune retry helper tests ───────────────────────────────────
+
+
+class TestIntentPruneRetryHelper(unittest.IsolatedAsyncioTestCase):
+
+    async def test_prune_candidates_with_retry_succeeds_after_timeout(self):
+        manager = ApiMonitorSessionManager()
+        session = ApiMonitorSession(
+            id="session_1",
+            user_id="user_1",
+            sandbox_session_id="sandbox_1",
+            intent="查询订单列表",
+        )
+        manager.sessions[session.id] = session
+        call = _call("order_1", method="POST", path="/api/orders/search")
+        call.source_evidence = {
+            "action_window_matched": True,
+            "initiator_urls": ["https://example.com/app.js"],
+        }
+        call.response.body = '{"items":[{"orderNo":"A001"}]}'
+        session.captured_calls.append(call)
+        candidate, _ = manager._upsert_generation_candidate(session.id, call)
+        prune_candidate = manager._intent_prune_candidate(
+            session,
+            candidate,
+            score_api_candidate([call], action_context=None),
+        )
+        events: list[tuple[str, dict]] = []
+        manager._analysis_event_sinks[session.id] = lambda event, data: events.append((event, data))
+
+        calls = {"count": 0}
+
+        async def fake_prune(candidates, intent, page_context="", model_config=None):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise asyncio.TimeoutError()
+            return IntentPruneResult(
+                batch_id="batch_1",
+                items=[
+                    IntentPruneItem(
+                        candidates[0].candidate_key,
+                        "primary",
+                        95,
+                        1,
+                        "订单查询主接口。",
+                    )
+                ],
+            )
+
+        with patch("backend.rpa.api_monitor.manager.prune_candidates_by_intent", side_effect=fake_prune):
+            with patch("backend.rpa.api_monitor.manager.INTENT_PRUNE_RETRY_BASE_DELAY_S", 0):
+                result = await manager._prune_candidates_with_retry(
+                    session,
+                    [candidate],
+                    [prune_candidate],
+                    "查询订单列表",
+                    model_config=None,
+                )
+
+        assert calls["count"] == 2
+        assert result.items[0].intent_group == "primary"
+        assert candidate.status == "intent_pruning"
+        assert candidate.intent_prune_attempts == 2
+        assert candidate.intent_prune_error == ""
+        assert candidate.intent_prune_retry_after is None
+        assert any(event == "api_candidate_intent_prune_retrying" for event, _data in events)
+
+    async def test_prune_candidates_with_retry_exhaustion_returns_uncertain_review(self):
+        manager = ApiMonitorSessionManager()
+        session = ApiMonitorSession(
+            id="session_1",
+            user_id="user_1",
+            sandbox_session_id="sandbox_1",
+            intent="查询订单列表",
+        )
+        manager.sessions[session.id] = session
+        call = _call("order_1", method="POST", path="/api/orders/search")
+        call.source_evidence = {
+            "action_window_matched": True,
+            "initiator_urls": ["https://example.com/app.js"],
+        }
+        call.response.body = '{"items":[{"orderNo":"A001"}]}'
+        session.captured_calls.append(call)
+        candidate, _ = manager._upsert_generation_candidate(session.id, call)
+        prune_candidate = manager._intent_prune_candidate(
+            session,
+            candidate,
+            score_api_candidate([call], action_context=None),
+        )
+
+        async def broken_prune(candidates, intent, page_context="", model_config=None):
+            raise RuntimeError("llm unavailable")
+
+        with patch("backend.rpa.api_monitor.manager.prune_candidates_by_intent", side_effect=broken_prune):
+            with patch("backend.rpa.api_monitor.manager.INTENT_PRUNE_RETRY_BASE_DELAY_S", 0):
+                result = await manager._prune_candidates_with_retry(
+                    session,
+                    [candidate],
+                    [prune_candidate],
+                    "查询订单列表",
+                    model_config=None,
+                )
+
+        assert candidate.status == "intent_prune_retrying"
+        assert candidate.intent_prune_attempts == 3
+        assert candidate.intent_prune_error == "llm unavailable"
+        assert result.items[0].intent_group == "uncertain"
+        assert result.items[0].intent_reason == "意图裁剪多次失败，需人工确认：llm unavailable"
 
 
 # ── Batch intent pruning integration test ─────────────────────────────────
