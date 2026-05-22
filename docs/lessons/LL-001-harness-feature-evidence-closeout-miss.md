@@ -6,7 +6,7 @@ scope: project
 source_feature_ids: [F002]
 applies_to: [harness-closeout, multi-slice-feature, evidence-gate]
 created: 2026-05-18
-updated: 2026-05-18
+updated: 2026-05-22
 ---
 
 # LL-001: Harness Feature Evidence Closeout Miss
@@ -42,6 +42,27 @@ F0-F14 开发过程中，执行者把 `docs/superpowers/plans/2026-05-17-rpa-har
 3. 每个 slice 完成后，在 Evidence 记录 commit、验证命令、结果、review 状态和 residual risk，再进入下一 slice。
 4. 如果 closeout 缺失，只能报告 `implementation done, harness closeout pending`，不能继续声明 ready/completed。
 5. 使用系统级 bundled scripts/templates；不要求项目先复制 Harness scripts/templates，除非未来接 CI、GitHub Actions 或离线策略。
+
+## Recurrence
+
+2026-05-22: F012 `live_agent_eval` initially shipped implementation, tests,
+usage guide, and Backlog recovery context, but missed formal Feature/Evidence
+capture until the user asked why the Feature document was absent. This was the
+same failure class as LL-001: implementation evidence existed, but the
+completion path treated a lightweight Backlog anchor as enough for a
+non-trivial Harness capability.
+
+Additional protection:
+
+1. For any new Harness runner, validation mode, asset lifecycle change, or
+   Agent/RPA behavior boundary, create or update the owning Feature/Evidence
+   before the final commit/push or explicitly report `implementation done,
+   harness closeout pending`.
+2. In the final self-check, verify the changed-files list includes either an
+   existing Feature/Evidence update or a documented reason why the task is too
+   small to need one.
+3. A Backlog item may record recovery state, but it does not replace
+   Feature/Evidence for a new durable Harness capability.
 
 ## Source
 
