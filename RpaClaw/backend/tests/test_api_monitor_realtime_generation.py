@@ -12,7 +12,7 @@ from backend.rpa.api_monitor.models import (
     ApiToolGenerationCandidate,
 )
 from backend.rpa.api_monitor.confidence import score_api_candidate
-from backend.rpa.api_monitor.intent_pruner import IntentPruneResult
+from backend.rpa.api_monitor.intent_pruner import IntentPruneResult, IntentPruneItem
 
 
 def test_generation_candidate_defaults_are_serializable():
@@ -1261,6 +1261,176 @@ class TestRealtimeBuffer(unittest.IsolatedAsyncioTestCase):
         assert len(enqueued) == 1
         assert candidate.intent_prune_error == "llm unavailable"
         assert candidate.intent_filter_reason == "意图裁剪多次失败，需人工确认：llm unavailable"
+
+    async def test_flush_intent_prune_buffer_single_chunk_no_split(self):
+        """When prune_candidates <= CHUNK_SIZE, a single prune call is made."""
+        manager = ApiMonitorSessionManager()
+        session = ApiMonitorSession(
+            id="session_1",
+            user_id="user_1",
+            sandbox_session_id="sandbox_1",
+            intent="查询订单列表",
+        )
+        manager.sessions[session.id] = session
+        enqueued: list[str] = []
+        manager._enqueue_generation_candidate = lambda _sid, candidate_id, **_kw: enqueued.append(candidate_id)
+        for i in range(4):
+            call = _call(f"call_{i}", method="POST", path=f"/api/orders/search/{i}")
+            call.source_evidence = {"action_window_matched": True, "initiator_urls": ["https://example.com/app.js"]}
+            call.response.body = f'{{"items":[{{"orderNo":"A{i:03d}"}}]}}'
+            session.captured_calls.append(call)
+        for call in session.captured_calls:
+            manager._upsert_generation_candidate(session.id, call)
+        candidates = session.generation_candidates
+        for c in candidates:
+            manager._intent_prune_buffers[session.id].add(c.id)
+        prune_call_count = 0
+
+        async def mock_prune(candidates_arg, intent, page_context="", model_config=None):
+            nonlocal prune_call_count
+            prune_call_count += 1
+            return IntentPruneResult(
+                batch_id="test_batch",
+                items=[
+                    IntentPruneItem(candidate_key=c.candidate_key, intent_group="primary", intent_score=90, intent_rank=i + 1, intent_reason="test")
+                    for i, c in enumerate(candidates_arg)
+                ],
+            )
+
+        with patch("backend.rpa.api_monitor.manager.prune_candidates_by_intent", side_effect=mock_prune):
+            await manager._flush_intent_prune_buffer(session.id, model_config=None)
+        assert prune_call_count == 1
+        assert len(enqueued) == 4
+
+    async def test_flush_intent_prune_buffer_splits_into_chunks(self):
+        """When prune_candidates > CHUNK_SIZE, multiple prune calls are made per chunk."""
+        manager = ApiMonitorSessionManager()
+        session = ApiMonitorSession(
+            id="session_1",
+            user_id="user_1",
+            sandbox_session_id="sandbox_1",
+            intent="查询订单列表",
+        )
+        manager.sessions[session.id] = session
+        enqueued: list[str] = []
+        manager._enqueue_generation_candidate = lambda _sid, candidate_id, **_kw: enqueued.append(candidate_id)
+        chunk_sizes_seen: list[int] = []
+        for i in range(14):
+            call = _call(f"call_{i}", method="POST", path=f"/api/orders/search/{i}")
+            call.source_evidence = {"action_window_matched": True, "initiator_urls": ["https://example.com/app.js"]}
+            call.response.body = f'{{"items":[{{"orderNo":"A{i:03d}"}}]}}'
+            session.captured_calls.append(call)
+        for call in session.captured_calls:
+            manager._upsert_generation_candidate(session.id, call)
+        candidates = session.generation_candidates
+        for c in candidates:
+            manager._intent_prune_buffers[session.id].add(c.id)
+
+        async def mock_prune(candidates_arg, intent, page_context="", model_config=None):
+            chunk_sizes_seen.append(len(candidates_arg))
+            return IntentPruneResult(
+                batch_id="test_batch",
+                items=[
+                    IntentPruneItem(candidate_key=c.candidate_key, intent_group="primary", intent_score=90, intent_rank=i + 1, intent_reason="test")
+                    for i, c in enumerate(candidates_arg)
+                ],
+            )
+
+        with patch("backend.rpa.api_monitor.manager.INTENT_PRUNE_CHUNK_SIZE", 6):
+            with patch("backend.rpa.api_monitor.manager.prune_candidates_by_intent", side_effect=mock_prune):
+                await manager._flush_intent_prune_buffer(session.id, model_config=None)
+        assert chunk_sizes_seen == [6, 6, 2]
+        assert len(enqueued) == 14
+
+    async def test_flush_intent_prune_buffer_partial_chunk_failure(self):
+        """When one chunk fails all retries, its candidates go to pending (uncertain); other chunks succeed."""
+        manager = ApiMonitorSessionManager()
+        session = ApiMonitorSession(
+            id="session_1",
+            user_id="user_1",
+            sandbox_session_id="sandbox_1",
+            intent="查询订单列表",
+        )
+        manager.sessions[session.id] = session
+        enqueued: list[str] = []
+        manager._enqueue_generation_candidate = lambda _sid, candidate_id, **_kw: enqueued.append(candidate_id)
+        for i in range(9):
+            call = _call(f"call_{i}", method="POST", path=f"/api/orders/search/{i}")
+            call.source_evidence = {"action_window_matched": True, "initiator_urls": ["https://example.com/app.js"]}
+            call.response.body = f'{{"items":[{{"orderNo":"A{i:03d}"}}]}}'
+            session.captured_calls.append(call)
+        for call in session.captured_calls:
+            manager._upsert_generation_candidate(session.id, call)
+        candidates = session.generation_candidates
+        for c in candidates:
+            manager._intent_prune_buffers[session.id].add(c.id)
+        call_count = 0
+
+        async def mock_prune(candidates_arg, intent, page_context="", model_config=None):
+            nonlocal call_count
+            call_count += 1
+            if len(candidates_arg) <= 3:
+                raise RuntimeError("llm unavailable for small chunk")
+            return IntentPruneResult(
+                batch_id="test_batch",
+                items=[
+                    IntentPruneItem(candidate_key=c.candidate_key, intent_group="primary", intent_score=90, intent_rank=i + 1, intent_reason="test")
+                    for i, c in enumerate(candidates_arg)
+                ],
+            )
+
+        with patch("backend.rpa.api_monitor.manager.INTENT_PRUNE_CHUNK_SIZE", 6):
+            with patch("backend.rpa.api_monitor.manager.INTENT_PRUNE_RETRY_BASE_DELAY_S", 0):
+                with patch("backend.rpa.api_monitor.manager.prune_candidates_by_intent", side_effect=mock_prune):
+                    await manager._flush_intent_prune_buffer(session.id, model_config=None)
+        first_6 = candidates[:6]
+        last_3 = candidates[6:]
+        for c in first_6:
+            assert c.status not in ("intent_filtered",), f"first chunk candidate {c.dedup_key} should not be intent_filtered"
+        for c in last_3:
+            assert c.status == "pending", f"last chunk candidate {c.dedup_key} should be pending (uncertain fallback)"
+            assert "llm unavailable for small chunk" in (c.intent_filter_reason or ""), f"last chunk candidate {c.dedup_key} should have failure reason"
+        assert len(enqueued) == 9  # all 9 get enqueued (first 6 as primary, last 3 as pending/uncertain)
+
+    async def test_flush_intent_prune_buffer_large_batch_splits_into_five_chunks(self):
+        """30 candidates split into 5 chunks of 6 each."""
+        manager = ApiMonitorSessionManager()
+        session = ApiMonitorSession(
+            id="session_1",
+            user_id="user_1",
+            sandbox_session_id="sandbox_1",
+            intent="查询订单列表",
+        )
+        manager.sessions[session.id] = session
+        enqueued: list[str] = []
+        manager._enqueue_generation_candidate = lambda _sid, candidate_id, **_kw: enqueued.append(candidate_id)
+        chunk_sizes_seen: list[int] = []
+        for i in range(30):
+            call = _call(f"call_{i}", method="POST", path=f"/api/orders/search/{i}")
+            call.source_evidence = {"action_window_matched": True, "initiator_urls": ["https://example.com/app.js"]}
+            call.response.body = f'{{"items":[{{"orderNo":"A{i:03d}"}}]}}'
+            session.captured_calls.append(call)
+        for call in session.captured_calls:
+            manager._upsert_generation_candidate(session.id, call)
+        candidates = session.generation_candidates
+        for c in candidates:
+            manager._intent_prune_buffers[session.id].add(c.id)
+
+        async def mock_prune(candidates_arg, intent, page_context="", model_config=None):
+            chunk_sizes_seen.append(len(candidates_arg))
+            return IntentPruneResult(
+                batch_id="test_batch",
+                items=[
+                    IntentPruneItem(candidate_key=c.candidate_key, intent_group="primary", intent_score=90, intent_rank=i + 1, intent_reason="test")
+                    for i, c in enumerate(candidates_arg)
+                ],
+            )
+
+        with patch("backend.rpa.api_monitor.manager.INTENT_PRUNE_CHUNK_SIZE", 6):
+            with patch("backend.rpa.api_monitor.manager.prune_candidates_by_intent", side_effect=mock_prune):
+                await manager._flush_intent_prune_buffer(session.id, model_config=None)
+        assert chunk_sizes_seen == [6, 6, 6, 6, 6]
+        assert len(enqueued) == 30
 
 
 # ── Reserve generation and force flow tests ────────────────────────────────

@@ -60,6 +60,7 @@ INTENT_PRUNE_TIMEOUT_S = 20.0
 INTENT_PRUNE_MAX_RETRIES = 2
 INTENT_PRUNE_RETRY_BASE_DELAY_S = 2.0
 INTENT_PRUNE_CONCURRENCY = 2
+INTENT_PRUNE_CHUNK_SIZE = 6
 
 # ── Interactive element scanner ──────────────────────────────────────
 
@@ -2558,19 +2559,51 @@ class ApiMonitorSessionManager:
 
         if not prune_candidates:
             return
-        prune_result = await self._prune_candidates_with_retry(
-            session,
-            candidates,
-            prune_candidates,
-            intent,
-            model_config=model_config,
-        )
-        by_key = {item.candidate_key: item for item in prune_result.items}
+
+        prune_key_to_candidate = {
+            self._candidate_key_for_prune(c): c for c in candidates
+        }
+        all_items: list[IntentPruneItem] = []
+        last_batch_id = ""
+        total_chunks = (len(prune_candidates) + INTENT_PRUNE_CHUNK_SIZE - 1) // INTENT_PRUNE_CHUNK_SIZE
+        for chunk_idx, chunk_start in enumerate(range(0, len(prune_candidates), INTENT_PRUNE_CHUNK_SIZE)):
+            prune_chunk = prune_candidates[chunk_start:chunk_start + INTENT_PRUNE_CHUNK_SIZE]
+            candidate_chunk = [
+                prune_key_to_candidate[pc.candidate_key]
+                for pc in prune_chunk
+                if pc.candidate_key in prune_key_to_candidate
+            ]
+            if not candidate_chunk:
+                continue
+            logger.info(
+                "[IntentPrune] session=%s chunk=%d/%d candidates=%d",
+                session_id, chunk_idx + 1, total_chunks, len(prune_chunk),
+            )
+            chunk_t0 = asyncio.get_event_loop().time()
+            chunk_result = await self._prune_candidates_with_retry(
+                session,
+                candidate_chunk,
+                prune_chunk,
+                intent,
+                model_config=model_config,
+            )
+            chunk_elapsed = asyncio.get_event_loop().time() - chunk_t0
+            group_counts: dict[str, int] = {}
+            for item in chunk_result.items:
+                group_counts[item.intent_group] = group_counts.get(item.intent_group, 0) + 1
+            logger.info(
+                "[IntentPrune] session=%s chunk=%d/%d done %.1fs groups=%s",
+                session_id, chunk_idx + 1, total_chunks, chunk_elapsed, group_counts,
+            )
+            all_items.extend(chunk_result.items)
+            last_batch_id = chunk_result.batch_id
+
+        by_key = {item.candidate_key: item for item in all_items}
         for candidate in candidates:
             item = by_key.get(self._candidate_key_for_prune(candidate))
             if item is None:
                 continue
-            self._apply_prune_item_to_candidate(session, candidate, item, batch_id=prune_result.batch_id)
+            self._apply_prune_item_to_candidate(session, candidate, item, batch_id=last_batch_id)
             self._emit_analysis_event(session_id, "api_candidate_intent_pruned", self._candidate_event_payload(candidate))
             if candidate.status not in ("intent_filtered",):
                 self._enqueue_generation_candidate(session_id, candidate.id, model_config=model_config, skip_filter=True)
