@@ -1,0 +1,339 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import re
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from playwright.async_api import async_playwright
+from pydantic import BaseModel, Field
+
+from backend.rpa.recording_runtime_agent import Planner, RecordingRuntimeAgent
+
+from .asset_validation import validate_harness_assets
+from .capture import (
+    HarnessCaptureSessionState,
+    capture_current_page_state,
+    capture_step_checkpoint,
+)
+from .compiler_regression import run_compiler_regression
+from .models import HarnessScenarioAsset
+from .skill_replay import _install_controlled_replay_routes, run_skill_replay_e2e
+from .snapshot_regression import run_snapshot_regression
+from .stateful_sop import run_stateful_sop_capture_to_skill
+from .store import HarnessAssetStore
+
+
+_RUNNER_MODES = [
+    "offline_core_chain",
+    "skill_replay_e2e",
+    "stateful_sop_capture_to_skill",
+]
+_CORE_CHAIN_COVERAGE = [
+    "html_to_raw_snapshot",
+    "raw_to_compact_snapshot",
+    "planner_action_selection",
+    "trace_to_skill",
+    "skill_replay",
+    "stateful_capture_to_skill",
+]
+
+
+class LiveAgentExpected(BaseModel):
+    output_key: str = ""
+    must_contain_text: list[str] = Field(default_factory=list)
+
+
+class LiveAgentScenario(BaseModel):
+    schema_version: str = "rpa-harness-live-agent-scenario-v0"
+    scenario_id: str
+    instruction: str
+    url: str
+    html: str = ""
+    html_path: str = ""
+    title: str = ""
+    expected: LiveAgentExpected = Field(default_factory=LiveAgentExpected)
+    page_patterns: list[str] = Field(default_factory=list)
+    asset_id: str = ""
+
+
+def _load_json(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _safe_slug(value: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", value.strip()).strip("-").lower()
+    return slug or "scenario"
+
+
+def _asset_id_for_scenario(scenario: LiveAgentScenario) -> str:
+    if scenario.asset_id.strip():
+        return _safe_slug(scenario.asset_id)
+    return f"hcap-live-{_safe_slug(scenario.scenario_id)}"
+
+
+def _load_scenario_html(path: Path, scenario: LiveAgentScenario) -> str:
+    if scenario.html:
+        return scenario.html
+    if not scenario.html_path:
+        raise ValueError("live-agent scenario requires html or html_path")
+    html_path = (path.parent / scenario.html_path).resolve()
+    return html_path.read_text(encoding="utf-8")
+
+
+def _json_contains_text(payload: Any, text: str) -> bool:
+    return text in json.dumps(payload, ensure_ascii=False, default=str)
+
+
+def _validate_expected_output(result_output: Any, expected: LiveAgentExpected) -> tuple[str, str, list[str]]:
+    missing = [
+        text
+        for text in expected.must_contain_text
+        if isinstance(text, str) and not _json_contains_text(result_output, text)
+    ]
+    if missing:
+        return "failed", "live-agent-output-missing-signal", missing
+    return "passed", "", []
+
+
+def _post_capture_checks(assets_root: Path, asset_id: str) -> dict[str, Any]:
+    asset_ids = {asset_id}
+    validation = validate_harness_assets(assets_root, asset_ids=asset_ids)
+    snapshot = run_snapshot_regression(assets_root, asset_ids=asset_ids)
+    compiler = run_compiler_regression(assets_root, asset_ids=asset_ids)
+    skill_replay = run_skill_replay_e2e(assets_root, asset_ids=asset_ids)
+    stateful_sop = run_stateful_sop_capture_to_skill(
+        assets_root,
+        asset_ids=asset_ids,
+        include_candidate_lite=True,
+    )
+    warning_count = (
+        int(validation["summary"]["issue_count"])
+        + int(snapshot["summary"]["failed"])
+        + int(compiler["summary"]["failed"])
+        + int(skill_replay["summary"]["failed"])
+        + int(stateful_sop["summary"]["failed"])
+    )
+    return {
+        "warning_count": warning_count,
+        "validation": validation,
+        "snapshot": snapshot,
+        "compiler": compiler,
+        "skill_replay": skill_replay,
+        "stateful_sop": stateful_sop,
+    }
+
+
+def _activate_candidate_lite_asset(
+    *,
+    assets_root: Path,
+    asset_id: str,
+    scenario: LiveAgentScenario,
+) -> None:
+    scenario_path = assets_root / asset_id / "scenario.json"
+    payload = _load_json(scenario_path)
+    asset = HarnessScenarioAsset.model_validate(payload)
+    asset.sop_intent = scenario.instruction
+    asset.asset_status = "active"
+    asset.sensitivity = "local-only"
+    asset.page_patterns = sorted({*asset.page_patterns, *scenario.page_patterns})
+    asset.environment = {
+        **dict(asset.environment or {}),
+        "runner": "live_agent_eval",
+        "controlled_fixture": True,
+        "start_url": scenario.url,
+    }
+    asset.governance.promotion_status = "candidate-lite"
+    asset.governance.runner_modes = list(_RUNNER_MODES)
+    asset.governance.core_chain_coverage = list(_CORE_CHAIN_COVERAGE)
+    asset.governance.expected_signals_reviewed = False
+    asset.governance.sensitivity_reviewed = False
+    asset.governance.review_notes = (
+        "Generated by live_agent_eval. Candidate-lite assets exercise live "
+        "RecordingRuntimeAgent planning against controlled HTML and must be reviewed "
+        "before candidate/golden promotion."
+    )
+    scenario_path.write_text(
+        json.dumps(asset.model_dump(mode="json"), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+async def _run_one_scenario(
+    *,
+    path: Path,
+    scenario: LiveAgentScenario,
+    assets_root: Path,
+    planner: Planner | None,
+    model_config: dict[str, Any] | None,
+) -> dict[str, Any]:
+    html = _load_scenario_html(path, scenario)
+    asset_id = _asset_id_for_scenario(scenario)
+    planner_invocation_count = 0
+
+    async def counting_planner(payload: dict[str, Any]) -> dict[str, Any]:
+        nonlocal planner_invocation_count
+        planner_invocation_count += 1
+        if planner is None:
+            raise RuntimeError("internal planner wrapper should not be used without planner")
+        return await planner(payload)
+
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=True)
+        page = await browser.new_page()
+        page.set_default_timeout(10000)
+        page.set_default_navigation_timeout(10000)
+        try:
+            await _install_controlled_replay_routes(page, {scenario.url: html})
+            await page.goto(scenario.url, wait_until="domcontentloaded")
+            before_state = await capture_current_page_state(page)
+            agent = RecordingRuntimeAgent(
+                planner=counting_planner if planner is not None else None,
+                model_config=model_config,
+            )
+            result = await agent.run(page=page, instruction=scenario.instruction, runtime_results={})
+            if planner is None:
+                planner_invocation_count = len(getattr(agent, "_planner_llm_calls", []) or [])
+            after_state = await capture_current_page_state(page)
+        finally:
+            await page.close()
+            await browser.close()
+
+    expected_status, expected_failure, missing_text = _validate_expected_output(
+        result.output,
+        scenario.expected,
+    )
+    status = "passed" if result.success and expected_status == "passed" else "failed"
+    failure_category = "" if status == "passed" else expected_failure or "live-agent-run-failed"
+    error = "" if result.success else result.message
+    trace_events = [result.trace.model_dump(mode="json")] if result.trace is not None else []
+
+    state = HarnessCaptureSessionState(
+        capture_id=asset_id,
+        session_id=f"live-agent-{scenario.scenario_id}",
+        capture_scope="full_sop",
+    )
+    store = HarnessAssetStore(assets_root)
+    checkpoint = await capture_step_checkpoint(
+        state,
+        store,
+        step_index=1,
+        step_id=result.trace.trace_id if result.trace is not None else f"live-agent-{scenario.scenario_id}",
+        step_intent=scenario.instruction,
+        recording_mode="natural_language",
+        before_state=before_state,
+        after_state=after_state,
+        trace_events=trace_events,
+        runtime_status="success" if result.success else "failed",
+        error=error or failure_category,
+    )
+
+    post_capture: dict[str, Any] = {"warning_count": 0}
+    if status == "passed" and checkpoint is not None:
+        _activate_candidate_lite_asset(
+            assets_root=assets_root,
+            asset_id=asset_id,
+            scenario=scenario,
+        )
+        post_capture = await asyncio.to_thread(_post_capture_checks, assets_root, asset_id)
+        if post_capture["warning_count"]:
+            status = "failed"
+            failure_category = "post-capture-regression-warning"
+
+    return {
+        "scenario_id": scenario.scenario_id,
+        "asset_id": asset_id,
+        "instruction": scenario.instruction,
+        "status": status,
+        "failure_category": failure_category,
+        "planner_invocation_count": planner_invocation_count,
+        "output_key": result.output_key or scenario.expected.output_key,
+        "actual_output": result.output,
+        "missing_text": missing_text,
+        "error": error,
+        "post_capture": post_capture,
+    }
+
+
+async def run_live_agent_eval(
+    *,
+    scenarios_root: str | Path,
+    assets_root: str | Path,
+    planner: Planner | None = None,
+    model_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    scenarios_path = Path(scenarios_root)
+    output_assets = Path(assets_root)
+    output_assets.mkdir(parents=True, exist_ok=True)
+
+    items: list[dict[str, Any]] = []
+    scenario_files = sorted(scenarios_path.glob("*.json"))
+    if not scenario_files:
+        return {
+            "schema_version": "rpa-harness-live-agent-eval-v0",
+            "generated_at": datetime.now().isoformat(),
+            "summary": {
+                "status": "failed",
+                "scenario_count": 0,
+                "passed": 0,
+                "failed": 1,
+                "planner_invocation_count": 0,
+            },
+            "scenarios": [
+                {
+                    "scenario_id": "",
+                    "asset_id": "",
+                    "instruction": "",
+                    "status": "failed",
+                    "failure_category": "no-live-agent-scenarios",
+                    "planner_invocation_count": 0,
+                    "output_key": "",
+                    "actual_output": None,
+                    "missing_text": [],
+                    "error": f"no scenario JSON files found under {scenarios_path}",
+                    "post_capture": {"warning_count": 0},
+                }
+            ],
+        }
+
+    for path in scenario_files:
+        try:
+            scenario = LiveAgentScenario.model_validate(_load_json(path))
+            item = await _run_one_scenario(
+                path=path,
+                scenario=scenario,
+                assets_root=output_assets,
+                planner=planner,
+                model_config=model_config,
+            )
+        except Exception as exc:
+            item = {
+                "scenario_id": path.stem,
+                "asset_id": "",
+                "instruction": "",
+                "status": "failed",
+                "failure_category": "live-agent-scenario-error",
+                "planner_invocation_count": 0,
+                "output_key": "",
+                "actual_output": None,
+                "missing_text": [],
+                "error": f"{type(exc).__name__}: {exc}",
+                "post_capture": {"warning_count": 0},
+            }
+        items.append(item)
+
+    failed = len([item for item in items if item["status"] == "failed"])
+    return {
+        "schema_version": "rpa-harness-live-agent-eval-v0",
+        "generated_at": datetime.now().isoformat(),
+        "summary": {
+            "status": "failed" if failed else "passed",
+            "scenario_count": len(items),
+            "passed": len(items) - failed,
+            "failed": failed,
+            "planner_invocation_count": sum(int(item.get("planner_invocation_count") or 0) for item in items),
+        },
+        "scenarios": items,
+    }
