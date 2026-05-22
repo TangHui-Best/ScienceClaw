@@ -11,6 +11,8 @@ updated: 2026-05-19
 ### Live Agent Eval For RPA Harness Internal Validation
 
 - Source: user needs Harness to validate the real natural-language SOP -> `RecordingRuntimeAgent` -> accepted trace -> Skill path before using it on the internal machine.
+- Feature: `docs/features/F012-live-agent-eval-for-rpa-harness.md`
+- Evidence: `docs/evidence/EV-012-live-agent-eval-for-rpa-harness.md`
 - Doc: `docs/rpa/harness/live-agent-eval.md`
 - Status: implementation completed on `codex/rpa-harness-region-integration`; awaiting internal LLM validation and iframe-specific scenario authoring.
 
