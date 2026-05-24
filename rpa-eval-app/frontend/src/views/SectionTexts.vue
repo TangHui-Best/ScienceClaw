@@ -10,7 +10,7 @@
 
     <section class="scenario-grid" aria-label="section text scenarios">
       <article class="scenario" data-testid="section-text-heading-sibling">
-        <p class="scenario-label">可靠 anchor</p>
+        <p class="scenario-label">保修政策</p>
         <h2 data-testid="policy-heading">Warranty Policy</h2>
         <p data-testid="policy-body">
           The selected asset includes a two-year warranty, quarterly inspection records,
@@ -19,24 +19,22 @@
       </article>
 
       <article class="scenario" data-testid="section-text-after-context-only">
-        <p class="scenario-label">缺少前置 anchor</p>
+        <p class="scenario-label">续约摘要</p>
         <p data-testid="orphan-body">
-          This paragraph is intentionally placed before the nearest visible heading so a
-          region selection over the paragraph should not promote the later heading as a
-          deterministic section anchor.
+          Renewal requests submitted before the last week of the quarter keep their
+          current discount band, support owner, and audit window.
         </p>
         <h2 data-testid="after-context-heading">Renewal Notes</h2>
       </article>
 
       <article class="scenario complex" data-testid="section-text-complex-container">
-        <p class="scenario-label">复杂 container</p>
+        <p class="scenario-label">风险控制</p>
         <div class="nested-shell">
           <h2 data-testid="complex-heading">Risk Controls</h2>
           <div class="nested-body">
             <p data-testid="complex-body">
               Critical controls are split across nested layout blocks, badges, and supporting
-              copy. Until compression can prove a stable container boundary, this fixture should
-              remain a missing-anchor runtime AI candidate.
+              copy for operational review, compliance sign-off, and renewal readiness.
             </p>
             <ul>
               <li>Evidence review every 30 days</li>

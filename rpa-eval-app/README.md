@@ -179,7 +179,7 @@ runner 执行时会打印当前进度，例如 `[3/12] START ...`、`[3/12] PASS
 - `report_async_download_001`：生成、轮询并下载异步报表，并通过下载审计确认报表下载被真实触发。
 - `empty_result_contract_001`：处理空结果检索场景。
 
-手动 region-scoped section text fixture 位于 `/section-texts`。该页面提供三类非 GitHub 通用 DOM 形态：heading + 同级正文、只有 after-context heading 的正文、以及复杂嵌套 container 正文，用于验证 F011 的“可靠 anchor 才确定性编译，缺 anchor 才 runtime AI fallback”边界。
+手动 region-scoped section text fixture 位于 `/section-texts`。该页面提供三类非 GitHub 通用 DOM 形态：heading + 同级正文、只有 after-context heading 的正文、以及复杂嵌套 container 正文。预期分类只记录在评测元信息中，不写入页面正文：heading + 同级正文应可产生 deterministic section extraction；after-context-only heading 应回退 runtime AI 或不生成 heading-scoped signal；复杂嵌套正文在没有稳定 container anchor evidence 前应保持 missing-anchor fallback。该页面目前只是手动 fixture，尚未接入 runner-backed golden case。
 
 这些用例使用固定业务编号，例如 `CT-2026-RPA-001`、`SUP-2026-002`、`PR-2026-RPA-NEW-001`、`PO-2026-RPA-NEW-001`、`RPT-2026-RPA-001`。
 

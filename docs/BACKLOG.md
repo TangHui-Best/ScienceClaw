@@ -27,6 +27,6 @@ updated: 2026-05-24
 
 ## Next Actions
 
-- 区域选择优化：继续在 `codex/rpa-region-selection-optimization-v2` 上推进。下一步补 region-scoped extract compile classification / eval evidence：证明可靠 section/container anchor 走确定性编译，缺 anchor 的自由文本走 runtime AI 且不嵌入录制现场文本。
+- 区域选择优化：继续在 `codex/rpa-region-selection-optimization-v2` 上推进。下一步把 `/section-texts` 手动 fixture 接入 runner-backed eval case，或保存一次手动 region selection 录制/编译 artifact，证明可靠 section/container anchor 走确定性编译，缺 anchor 的自由文本走 runtime AI 且不嵌入录制现场文本。
 - iframe 修复：先建立可复现 iframe scenario，再进入 `codex/rpa-iframe-frame-context-fix-v2`。
 - Harness 验证：内网运行 live-agent eval 时参考 `codex/rpa-harness-region-integration` 上的 F012/EV-012 和 `docs/rpa/harness/live-agent-eval.md`。
