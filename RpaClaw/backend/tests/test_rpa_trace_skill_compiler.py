@@ -1226,6 +1226,91 @@ def test_jalor_export_task_download_uses_scoped_row_selector_helper():
     assert "_results['table_row_action'] = _result" in body
 
 
+def test_jalor_export_task_download_with_region_context_preserves_action_replay():
+    trace = RPAAcceptedTrace(
+        trace_id="ai-click-jalor-export-file",
+        trace_type=RPATraceType.AI_OPERATION,
+        source="ai",
+        user_instruction="Click the file name in the first row of the export list",
+        description="Click the file name in the first row of the export list",
+        output_key="click_first_file_name",
+        output={"action_performed": True, "action_type": "click"},
+        signals={"download": {"filename": "ContractList20260427102109.xlsx"}},
+        region_context={
+            "inferred_kind": "table_region",
+            "table_summary": {
+                "selected_row_indexes": [0, 1, 2, 3, 4, 5, 6, 7],
+                "locator_candidates": [
+                    {
+                        "kind": "css",
+                        "locator": {"method": "css", "value": "#taskExportGridTable"},
+                    }
+                ],
+            },
+        },
+        ai_execution=RPAAIExecution(
+            language="python",
+            code=(
+                "async def run(page, results):\n"
+                "    _rows = page.locator('#taskExportGridTable tbody.igrid-data tr.grid-row')\n"
+                "    _row = _rows.nth(0)\n"
+                "    await _row.locator('td[field=\"tmpName\"] a').click()\n"
+                "    return {'action_performed': True, 'action_type': 'click'}"
+            ),
+        ),
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    body = _execute_body(script)
+
+    assert "_download_payload = await _download_from_export_task(" in body
+    assert "row_selector='#taskExportGridTable tbody.igrid-data tr.grid-row'" in body
+    assert "action_selector='td[field=\"tmpName\"] a'" in body
+    assert "selectedIndexes" not in body
+    assert ".evaluate(\"\"\"(table)" not in body
+    assert "_results['click_first_file_name'] = _result" in body
+
+
+def test_ai_table_region_click_without_download_preserves_action_replay():
+    trace = RPAAcceptedTrace(
+        trace_id="ai-click-table-row",
+        trace_type=RPATraceType.AI_OPERATION,
+        source="ai",
+        user_instruction="Click the first matching table row",
+        description="Click the first matching table row",
+        output_key="clicked_row",
+        output={"action_performed": True, "action_type": "click", "target": "Alpha"},
+        region_context={
+            "inferred_kind": "table_region",
+            "table_summary": {
+                "selected_row_indexes": [0],
+                "locator_candidates": [
+                    {
+                        "kind": "css",
+                        "locator": {"method": "css", "value": "table.results"},
+                    }
+                ],
+            },
+        },
+        ai_execution=RPAAIExecution(
+            language="python",
+            code=(
+                "async def run(page, results):\n"
+                "    await page.locator('table.results tbody tr').nth(0).click()\n"
+                "    return {'action_performed': True, 'action_type': 'click', 'target': 'Alpha'}"
+            ),
+        ),
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    body = _execute_body(script)
+
+    assert "await page.locator('table.results tbody tr').nth(0).click()" in body
+    assert ".evaluate(\"\"\"(table)" not in body
+    assert "selectedIndexes" not in body
+    assert "_results['clicked_row'] = _result" in body
+
+
 def test_manual_navigation_signal_click_compiles_to_expect_navigation():
     trace = RPAAcceptedTrace(
         trace_id="menu-settings",
@@ -1900,7 +1985,9 @@ def test_region_table_extract_filters_to_selected_row_indexes():
     body = _execute_body(script)
 
     assert "const selectedIndexes = new Set([2])" in body
+    assert "(table) => {const selectedIndexes = new Set([2]);return Array.from(table.querySelectorAll('tr'))" in body
     assert ".filter((row, index) => selectedIndexes.has(index))" in body
+    assert ";}})()" not in body
     assert "_execute_runtime_ai_instruction" not in body
 
 
@@ -1929,7 +2016,9 @@ def test_region_list_extract_filters_to_selected_item_indexes():
     body = _execute_body(script)
 
     assert "const selectedIndexes = new Set([1, 3])" in body
+    assert "(items) => {const selectedIndexes = new Set([1, 3]);return items" in body
     assert ".filter((item, index) => selectedIndexes.has(index))" in body
+    assert ";}})()" not in body
     assert "_execute_runtime_ai_instruction" not in body
 
 
@@ -2331,6 +2420,64 @@ def test_runtime_ai_preserve_signal_overrides_embedded_code():
 
     assert "_execute_runtime_ai_instruction(" in body
     assert "page.locator('a.project').nth(0).click()" not in body
+
+
+def test_runtime_ai_preserve_signal_with_table_region_requires_runtime_context():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        source="ai",
+        user_instruction="open the closest matching table row",
+        description="Click the selected table row",
+        output_key="selected_row",
+        output={"action_performed": True, "action_type": "click", "target": "alpha"},
+        signals={"runtime_ai": {"preserve": True, "reason": "semantic_table_selection"}},
+        region_context={
+            "inferred_kind": "table_region",
+            "table_summary": {
+                "locator_candidates": [
+                    {"kind": "css", "locator": {"method": "css", "value": "table.results"}}
+                ],
+            },
+        },
+        ai_execution=RPAAIExecution(
+            code=(
+                "async def run(page, results):\n"
+                "    await page.locator('table.results tbody tr').nth(0).click()\n"
+                "    return {'action_performed': True, 'action_type': 'click', 'target': 'alpha'}"
+            ),
+        ),
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    body = _execute_body(script)
+
+    assert "_execute_runtime_ai_instruction(" in body
+    assert trace_requires_runtime_ai_replay(trace) is True
+
+
+def test_side_effect_region_trace_without_embedded_code_requires_runtime_context():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        source="ai",
+        user_instruction="Click the first matching table row",
+        description="Click the first matching table row",
+        output_key="clicked_row",
+        output={"action_performed": True, "action_type": "click", "target": "Alpha"},
+        region_context={
+            "inferred_kind": "table_region",
+            "table_summary": {
+                "locator_candidates": [
+                    {"kind": "css", "locator": {"method": "css", "value": "table.results"}}
+                ],
+            },
+        },
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    body = _execute_body(script)
+
+    assert "_execute_runtime_ai_instruction(" in body
+    assert trace_requires_runtime_ai_replay(trace) is True
 
 
 def test_generic_chinese_related_extraction_keeps_embedded_code():

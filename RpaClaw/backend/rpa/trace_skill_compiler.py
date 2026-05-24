@@ -857,13 +857,17 @@ class TraceSkillCompiler:
             return self._render_heading_scoped_text_extract_trace(index, trace, used_output_keys)
         if _is_region_scoped_free_text_extract(trace):
             return self._render_runtime_ai_instruction_trace(index, trace, used_output_keys)
+        if _should_preserve_runtime_ai_instruction(trace):
+            return self._render_runtime_ai_instruction_trace(index, trace, used_output_keys)
+        if _trace_has_side_effect_evidence(trace):
+            if trace.ai_execution and trace.ai_execution.code:
+                return self._render_embedded_ai_code_trace(index, trace, previous_traces, used_output_keys)
+            return self._render_runtime_ai_instruction_trace(index, trace, used_output_keys)
         region_lines = self._render_region_extract_trace(index, trace, used_output_keys)
         if region_lines:
             return region_lines
         region_runtime_requirement = _trace_region_runtime_ai_requirement(trace)
         if region_runtime_requirement is True:
-            return self._render_runtime_ai_instruction_trace(index, trace, used_output_keys)
-        if _should_preserve_runtime_ai_instruction(trace):
             return self._render_runtime_ai_instruction_trace(index, trace, used_output_keys)
         if _embedded_ai_code_has_weak_empty_extract_evidence(trace):
             return self._render_runtime_ai_instruction_trace(index, trace, used_output_keys)
@@ -944,18 +948,23 @@ class TraceSkillCompiler:
         selected_indexes = _selected_indexes(table_summary.get("selected_row_indexes"))
         row_source = "Array.from(table.querySelectorAll('tr'))"
         if selected_indexes:
-            row_source = (
-                f"(() => {{const selectedIndexes = new Set({json.dumps(selected_indexes)});"
-                "return Array.from(table.querySelectorAll('tr'))"
-                ".filter((row, index) => selectedIndexes.has(index));}})()"
-            )
-        lines.append(
-            f"    _result = await {_locator_expression(scope_var, locator)}.evaluate("
-            f"\"\"\"(table) => {row_source}"
+            row_source += ".filter((row, index) => selectedIndexes.has(index))"
+        row_mapping = (
+            f"{row_source}"
             ".map((row) => Array.from(row.querySelectorAll('th,td'))"
             ".map((cell) => (cell.innerText || cell.textContent || '').trim())"
             ".filter(Boolean))"
-            ".filter((row) => row.length)\"\"\")"
+            ".filter((row) => row.length)"
+        )
+        table_js = f"(table) => {row_mapping}"
+        if selected_indexes:
+            table_js = (
+                f"(table) => {{const selectedIndexes = new Set({json.dumps(selected_indexes)});"
+                f"return {row_mapping};}}"
+            )
+        lines.append(
+            f"    _result = await {_locator_expression(scope_var, locator)}.evaluate("
+            f"\"\"\"{table_js}\"\"\")"
         )
         lines.append(f"    _results[{key!r}] = _result")
         return lines
@@ -977,13 +986,17 @@ class TraceSkillCompiler:
         selected_indexes = _selected_indexes(list_summary.get("selected_item_indexes"))
         item_source = "items"
         if selected_indexes:
-            item_source = (
-                f"(() => {{const selectedIndexes = new Set({json.dumps(selected_indexes)});"
-                "return items.filter((item, index) => selectedIndexes.has(index));}})()"
+            item_source += ".filter((item, index) => selectedIndexes.has(index))"
+        item_mapping = f"{item_source}.map((item) => (item.innerText || item.textContent || '').trim()).filter(Boolean)"
+        list_js = f"(items) => {item_mapping}"
+        if selected_indexes:
+            list_js = (
+                f"(items) => {{const selectedIndexes = new Set({json.dumps(selected_indexes)});"
+                f"return {item_mapping};}}"
             )
         lines.append(
             f"    _result = await {_locator_expression(scope_var, locator)}.locator({item_selector!r}).evaluate_all("
-            f"\"\"\"(items) => {item_source}.map((item) => (item.innerText || item.textContent || '').trim()).filter(Boolean)\"\"\")"
+            f"\"\"\"{list_js}\"\"\")"
         )
         lines.append(f"    _results[{key!r}] = _result")
         return lines
@@ -1511,6 +1524,21 @@ def _trace_output_is_action_evidence(output: Any) -> bool:
     return output_type in {"click", "fill", "select", "press", "hover", "navigate", "download"}
 
 
+def _trace_has_side_effect_evidence(trace: RPAAcceptedTrace) -> bool:
+    if _trace_output_is_action_evidence(trace.output):
+        return True
+    if trace.ai_execution and _trace_output_is_action_evidence(trace.ai_execution.output):
+        return True
+    for signal_name in ("download", "navigation", "post_navigation", "popup", "tab", "set_input_files"):
+        if _trace_signal(trace, signal_name):
+            return True
+    decision = _trace_signal(trace, "region_context_decision")
+    if str(decision.get("used_as") or "").strip() == "action_targeting":
+        return True
+    action_type = str(decision.get("action_type") or "").strip().lower()
+    return action_type in {"click", "fill", "select", "press", "hover", "goto", "navigate", "download"}
+
+
 def _looks_like_extract_instruction(trace: RPAAcceptedTrace) -> bool:
     text = f"{trace.user_instruction or ''} {trace.description or ''}".lower()
     if not text.strip():
@@ -1719,11 +1747,13 @@ def trace_requires_runtime_ai_replay(trace: RPAAcceptedTrace) -> bool:
         return True
     if _is_region_scoped_free_text_extract(trace):
         return True
+    if _should_preserve_runtime_ai_instruction(trace):
+        return True
+    if _trace_has_side_effect_evidence(trace) and not (trace.ai_execution and trace.ai_execution.code):
+        return True
     region_runtime_requirement = _trace_region_runtime_ai_requirement(trace)
     if region_runtime_requirement is not None:
         return region_runtime_requirement
-    if _should_preserve_runtime_ai_instruction(trace):
-        return True
     if _embedded_ai_code_has_weak_empty_extract_evidence(trace):
         return True
     if trace.ai_execution and trace.ai_execution.code:

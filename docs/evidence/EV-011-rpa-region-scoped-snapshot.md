@@ -6,8 +6,8 @@ status: ready_for_review
 feature_ids: [F011]
 feature_refs: [F011]
 created: 2026-05-19
-updated: 2026-05-24
-scope: RPA region-scoped snapshot capture, compression, and bounded section text compilation
+updated: 2026-05-25
+scope: RPA region-scoped snapshot capture, compression, bounded section text compilation, and action replay compile boundaries
 ---
 
 # EV-011 RPA Region-Scoped Snapshot Evidence
@@ -15,6 +15,8 @@ scope: RPA region-scoped snapshot capture, compression, and bounded section text
 ## Current Review State
 
 PR #55 review comments are accepted and the follow-up implementation is verified. Fresh evidence covers: compiler/replay no longer carries recorded `region_context`, scoped geometry fallback is frame-safe, `region_scoped_snapshot` honors `char_budget` above the minimum identity payload, and empty extract outputs are allowed by default unless explicitly required/non-empty.
+
+2026-05-25 update: A post-review compiler regression for region-backed export-table actions is fixed and verified. AI traces with action/download side-effect evidence are no longer compiled as deterministic table extraction solely because they carry `table_region` context.
 
 ## Evidence Targets And Follow-ups
 
@@ -132,6 +134,8 @@ PR #55 review comments are accepted and the follow-up implementation is verified
 - Section-text regression set after the 2026-05-23 fix: full compiler suite GREEN `88 passed`; snapshot compression suite GREEN `32 passed`; selected runtime agent subset GREEN `7 passed`.
 - Independent subagent review: evidence explorer confirmed `scopeRelationForRect()` produced `About=inside_region` and `Topics=ancestor_context`, while compression promoted only ancestor headings. Vision/risk reviewer required deterministic compile to depend on explicit `section_anchor` evidence and to fallback to runtime AI when only after-context headings exist; the implementation follows that boundary.
 - Region-scoped compile classification evidence (2026-05-24): added compiler coverage for reliable `section_anchor` versus missing-anchor free text, and for broad extract/read markers not overriding structured table/list/single-value/action evidence. Focused added tests GREEN `2 passed`; full compiler suite GREEN `90 passed`. This is evidence hardening only; no production compiler keyword narrowing was needed.
+- Region action replay regression (2026-05-25): initial RED tests showed an AI click on the first Jalor/export-table file name with `table_region`, `output_key`, `action_performed=True`, and a download signal compiled to table `evaluate()` instead of `_download_from_export_task()`, and selected row/list extraction templates contained the invalid `;}})()` JavaScript shape. GREEN after compiler evidence-gate fix: `test_rpa_trace_skill_compiler.py` passed `94 passed`; `test_rpa_recording_runtime_agent.py -k region_context` passed `5 passed, 76 deselected`. Full `test_rpa_recording_runtime_agent.py` remained blocked by missing local dependency `langchain_openai` in four default planner tests, unrelated to this compiler change.
+- Independent subagent review for the 2026-05-25 regression: explorer confirmed the smallest guard matrix should cover export-table click/download with `region_context`, no-download table-region click action, table/list selected-index template shape, and nearby export/helper plus region extract tests. A follow-up reviewer found a runtime metadata mismatch where `trace_requires_runtime_ai_replay()` could return false even though render output used `_execute_runtime_ai_instruction()` for region-backed runtime-AI preserve or no-code side-effect traces; added RED/GREEN coverage and aligned the helper ordering with the render branch.
 - Generic rpa-eval-app manual fixture (2026-05-24): added `/section-texts`, a non-GitHub page with heading + sibling body, after-context-only heading, and complex nested container scenarios. `npm.cmd run build` in `rpa-eval-app/frontend` passed; Vite reported only the existing chunk-size warning. This proves the fixture exists and builds; it is not yet runner-backed eval evidence or a recorded RPA compile artifact.
 - Review correction (2026-05-24): clarified that `/section-texts` is a manual fixture, not completed eval evidence; moved expected classification out of page DOM text and into README/Evidence metadata. `npm.cmd run build` in `rpa-eval-app/frontend` passed again; `git diff --check` reported only Windows line-ending warnings.
 - Harness feature check: `6 errors` from pre-existing `F001-rpa-trace-source-convergence.md` missing required sections; F011 produced no feature-structure error.
