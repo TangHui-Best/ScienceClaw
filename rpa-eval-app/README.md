@@ -179,6 +179,8 @@ runner 执行时会打印当前进度，例如 `[3/12] START ...`、`[3/12] PASS
 - `report_async_download_001`：生成、轮询并下载异步报表，并通过下载审计确认报表下载被真实触发。
 - `empty_result_contract_001`：处理空结果检索场景。
 
+手动 region-scoped section text fixture 位于 `/section-texts`。该页面提供三类非 GitHub 通用 DOM 形态：heading + 同级正文、只有 after-context heading 的正文、以及复杂嵌套 container 正文，用于验证 F011 的“可靠 anchor 才确定性编译，缺 anchor 才 runtime AI fallback”边界。
+
 这些用例使用固定业务编号，例如 `CT-2026-RPA-001`、`SUP-2026-002`、`PR-2026-RPA-NEW-001`、`PO-2026-RPA-NEW-001`、`RPT-2026-RPA-001`。
 
 其中带 `e2e` 标签的用例用于评估连续业务流，不只验证单个页面操作。例如先读取合同详情中的字段，再把这些字段带入后续采购申请；或先创建采购申请，再基于新申请生成采购订单。

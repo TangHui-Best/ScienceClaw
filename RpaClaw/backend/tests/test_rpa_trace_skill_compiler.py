@@ -1700,6 +1700,79 @@ def test_heading_scoped_region_text_extract_compiles_to_deterministic_script():
     assert trace_requires_runtime_ai_replay(trace) is False
 
 
+def test_heading_scoped_region_text_extract_classification_requires_durable_anchor():
+    recorded_text = "Stable section text"
+    deterministic_trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        user_instruction="Read selected section text",
+        description="Read selected section text",
+        output_key="section_text",
+        output=recorded_text,
+        signals={
+            "region_selection": {"region_id": "region-1", "inferred_kind": "text_region"},
+            "region_context_decision": {
+                "used_as": "extraction",
+                "region_id": "region-1",
+                "action_type": "run_python",
+                "output_key": "section_text",
+            },
+            "region_text_extract": {
+                "source": "region_scoped_snapshot",
+                "kind": "heading_scoped_text",
+                "section_title": "Warranty",
+                "heading_locator": {"method": "text", "value": "Warranty", "exact": True},
+                "heading_relation": "preceding_heading",
+                "text_strategy": "bounded_section_text",
+                "output_key": "section_text",
+                "frame_path": [],
+            },
+        },
+        region_scope={"region_id": "region-1", "mode": "region_scoped_snapshot"},
+        region_context={"region_id": "region-1", "inferred_kind": "text_region"},
+    )
+    missing_anchor_trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        user_instruction="Read selected section text",
+        description="Read selected section text",
+        output_key="section_text",
+        output=recorded_text,
+        signals={
+            "region_selection": {"region_id": "region-1", "inferred_kind": "text_region"},
+            "region_context_decision": {
+                "used_as": "extraction",
+                "region_id": "region-1",
+                "action_type": "run_python",
+                "output_key": "section_text",
+            },
+        },
+        region_scope={"region_id": "region-1", "mode": "region_scoped_snapshot"},
+        region_context={
+            "region_id": "region-1",
+            "inferred_kind": "text_region",
+            "local_text": [recorded_text],
+        },
+        ai_execution=RPAAIExecution(
+            language="python",
+            code=(
+                "async def run(page, results):\n"
+                f"    return await page.get_by_text({recorded_text!r}).inner_text()"
+            ),
+            output=recorded_text,
+        ),
+    )
+
+    deterministic_body = _execute_body(TraceSkillCompiler().generate_script([deterministic_trace], is_local=True))
+    fallback_body = _execute_body(TraceSkillCompiler().generate_script([missing_anchor_trace], is_local=True))
+
+    assert trace_requires_runtime_ai_replay(deterministic_trace) is False
+    assert "_extract_bounded_section_text" in deterministic_body
+    assert "_execute_runtime_ai_instruction" not in deterministic_body
+    assert trace_requires_runtime_ai_replay(missing_anchor_trace) is True
+    assert "_execute_runtime_ai_instruction" in fallback_body
+    assert "get_by_text('Stable section text'" not in fallback_body
+    assert recorded_text not in fallback_body
+
+
 def test_heading_scoped_region_text_extract_rejects_after_context_anchor():
     trace = RPAAcceptedTrace(
         trace_type=RPATraceType.AI_OPERATION,
@@ -1736,6 +1809,70 @@ def test_heading_scoped_region_text_extract_rejects_after_context_anchor():
     assert "get_by_text('Topics'" not in body
     assert "_execute_runtime_ai_instruction" in body
     assert trace_requires_runtime_ai_replay(trace) is True
+
+
+def test_broad_extract_markers_do_not_override_structured_region_or_action_evidence():
+    single_value = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        user_instruction="Read selected total",
+        description="Read selected total",
+        output_key="total_due",
+        region_context={"inferred_kind": "single_value"},
+        locator_candidates=[{"selected": True, "locator": {"method": "css", "value": "[data-field='total']"}}],
+    )
+    table = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        user_instruction="Get selected table rows",
+        description="Get selected table rows",
+        output_key="selected_rows",
+        region_context={
+            "inferred_kind": "table_region",
+            "table_summary": {
+                "selected_row_indexes": [1],
+                "locator_candidates": [{"locator": {"method": "css", "value": "table.orders"}}],
+            },
+        },
+    )
+    selected_list = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        user_instruction="Read selected list items",
+        description="Read selected list items",
+        output_key="selected_items",
+        region_context={
+            "inferred_kind": "list_region",
+            "list_summary": {
+                "item_selector": "li",
+                "selected_item_indexes": [0],
+                "container_locator_candidates": [{"locator": {"method": "css", "value": "ul.results"}}],
+            },
+        },
+    )
+    action = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        user_instruction="Get the selected project open",
+        description="Open selected project",
+        output_key="open_project",
+        output={"action_performed": True, "action_type": "click", "target": "Alpha"},
+        region_scope={"region_id": "region-1", "mode": "region_scoped_snapshot"},
+        region_context={"region_id": "region-1", "inferred_kind": "text_region"},
+        ai_execution=RPAAIExecution(
+            language="python",
+            code=(
+                "async def run(page, results):\n"
+                "    await page.get_by_text('Alpha').click()\n"
+                "    return {'action_performed': True, 'action_type': 'click', 'target': 'Alpha'}"
+            ),
+            output={"action_performed": True, "action_type": "click", "target": "Alpha"},
+        ),
+    )
+
+    for trace in (single_value, table, selected_list, action):
+        script = TraceSkillCompiler().generate_script([trace], is_local=True)
+        _assert_script_loads(script)
+        body = _execute_body(script)
+
+        assert trace_requires_runtime_ai_replay(trace) is False
+        assert "_execute_runtime_ai_instruction" not in body
 
 
 def test_region_table_extract_filters_to_selected_row_indexes():

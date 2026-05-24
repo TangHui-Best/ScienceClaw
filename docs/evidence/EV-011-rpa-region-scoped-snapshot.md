@@ -4,8 +4,9 @@ id: EV-011
 title: RPA Region-Scoped Snapshot Evidence
 status: ready_for_review
 feature_ids: [F011]
+feature_refs: [F011]
 created: 2026-05-19
-updated: 2026-05-23
+updated: 2026-05-24
 scope: RPA region-scoped snapshot capture, compression, and bounded section text compilation
 ---
 
@@ -14,6 +15,13 @@ scope: RPA region-scoped snapshot capture, compression, and bounded section text
 ## Current Review State
 
 PR #55 review comments are accepted and the follow-up implementation is verified. Fresh evidence covers: compiler/replay no longer carries recorded `region_context`, scoped geometry fallback is frame-safe, `region_scoped_snapshot` honors `char_budget` above the minimum identity payload, and empty extract outputs are allowed by default unless explicitly required/non-empty.
+
+## Evidence Targets And Follow-ups
+
+- Completed: region-scoped text compile classification backend coverage proves that `region_text_extract.kind=heading_scoped_text` plus a reliable `section_anchor` uses deterministic `_extract_bounded_section_text`, while region-scoped free-text extraction without a reliable anchor preserves `_execute_runtime_ai_instruction` and does not embed recording-time selected text locators.
+- Completed: guardrail coverage proves table, list, single-value, and action traces are not reclassified into runtime AI solely because `_looks_like_extract_instruction()` recognizes broad verbs such as `获取`, `读取`, `get`, or `read`.
+- Completed: generic eval fixture coverage adds rpa-eval-app section text scenarios that are not GitHub-specific: heading plus same-section body, after-context-only heading, and nested/complex container text.
+- Follow-up: consider recording region compile classification in accepted trace or generated skill metadata, for example `compiled_structured`, `compiled_heading_scoped_text`, `runtime_ai_missing_anchor`, and `runtime_ai_semantic_selection`. This should be treated as verifiable trace/skill evidence, not ordinary debug logging.
 
 ## Commands
 
@@ -72,6 +80,13 @@ PR #55 review comments are accepted and the follow-up implementation is verified
 - `npm.cmd run test -- src/utils/rpaRegionSelection.test.ts src/pages/rpa/RecorderPage.test.ts --testTimeout 15000`
 - `npm.cmd run build`
 - `npm.cmd run type-check`
+- `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_heading_scoped_region_text_extract_classification_requires_durable_anchor RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_broad_extract_markers_do_not_override_structured_region_or_action_evidence -q`
+- `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q`
+- `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py -q`
+- `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_snapshot_compression.py -q`
+- `cd rpa-eval-app/frontend; npm.cmd run build`
+- `python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root . --docs-path docs/features`
+- `python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root . --docs-path docs/evidence`
 
 ## Results
 
@@ -115,7 +130,10 @@ PR #55 review comments are accepted and the follow-up implementation is verified
 - Section-text contract RED/GREEN (2026-05-23): initial focused tests failed for missing `inside_headings`, missing accepted trace signal from `section_anchor`, and compiler rejection of the new `bounded_section_text` strategy. After the fix, focused snapshot tests GREEN `2 passed`, runtime signal tests GREEN `3 passed`, and compiler section tests GREEN `2 passed`.
 - Section-text regression set after the 2026-05-23 fix: full compiler suite GREEN `88 passed`; snapshot compression suite GREEN `32 passed`; selected runtime agent subset GREEN `7 passed`.
 - Independent subagent review: evidence explorer confirmed `scopeRelationForRect()` produced `About=inside_region` and `Topics=ancestor_context`, while compression promoted only ancestor headings. Vision/risk reviewer required deterministic compile to depend on explicit `section_anchor` evidence and to fallback to runtime AI when only after-context headings exist; the implementation follows that boundary.
+- Region-scoped compile classification evidence (2026-05-24): added compiler coverage for reliable `section_anchor` versus missing-anchor free text, and for broad extract/read markers not overriding structured table/list/single-value/action evidence. Focused added tests GREEN `2 passed`; full compiler suite GREEN `90 passed`. This is evidence hardening only; no production compiler keyword narrowing was needed.
+- Generic rpa-eval-app fixture (2026-05-24): added `/section-texts`, a non-GitHub page with heading + sibling body, after-context-only heading, and complex nested container scenarios. `npm.cmd run build` in `rpa-eval-app/frontend` passed; Vite reported only the existing chunk-size warning.
 - Harness feature check: `6 errors` from pre-existing `F001-rpa-trace-source-convergence.md` missing required sections; F011 produced no feature-structure error.
+- Harness docs check after the 2026-05-24 pre-work update: `docs/features` still reports `6 errors` from pre-existing `F001-rpa-trace-source-convergence.md`; F011 has no feature-structure error. `docs/evidence` still reports EV-001 structure debt and, when scanned alone, cannot resolve EV-011's `feature_refs: [F011]` because the feature document is outside the scan path. EV-011 now carries both `feature_ids` and `feature_refs`.
 - Harness all-docs check: `23 errors, 3 warnings` from pre-existing ADR-001/ADR-002, EV-001, and F001 structure/link debt. The earlier F011 evidence backlink warning was removed by changing the Feature evidence entry to a Markdown link.
 - Frontend dependency installation: `npm.cmd ci` succeeded in the PR worktree. It reported `25 vulnerabilities` via npm audit and deprecation warnings; these are existing dependency-maintenance issues, not F011 implementation changes.
 - Frontend full test run: `npm.cmd run test` produced `219 passed, 3 timed out`. The failures were timeouts in existing RPA page tests under the default 5000 ms per-test limit, not assertion failures in F011 region selection.

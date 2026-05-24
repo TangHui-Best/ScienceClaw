@@ -5,7 +5,7 @@ title: RPA Region-Scoped Snapshot
 status: ready_for_review
 feature_ids: [F011]
 created: 2026-05-19
-updated: 2026-05-23
+updated: 2026-05-24
 specs:
   - docs/superpowers/specs/2026-05-19-rpa-region-scoped-snapshot-design.md
 plans:
@@ -71,6 +71,7 @@ Ready for review after PR #55 follow-up. RegionScope conversion, region-prioriti
 - 2026-05-22: Manual validation follow-up fixed for selected GitHub repository About text. Raw and compact `region_scoped_snapshot` already contained the selected free text, but the planner produced successful `run_python` code that located by the exact observed text, so the compiler embedded recording-time content into replay. Compiler replay now treats region-backed free-text extraction without structured snapshot fields as runtime semantic replay, while preserving structured table/list/single-value region compilation and action evidence paths. Runtime planner guidance now names `region_scoped_snapshot` and forbids exact observed selected text as replay selector logic.
 - 2026-05-22: Added a narrower deterministic compile path for heading-scoped selected text. `region_scoped_snapshot` now preserves ancestor heading evidence for selected text regions; `RecordingRuntimeAgent` records a `region_text_extract` signal only when the compact snapshot has both context heading evidence and selected text evidence; `TraceSkillCompiler` compiles that signal to a same-sibling text-block extraction (`following_sibling_block`) instead of replaying runtime AI. This remains a generic section-text contract, not a GitHub About template, and still falls back to runtime AI when the accepted trace lacks the heading-scoped evidence.
 - 2026-05-23: Fixed the section-text contract after manual validation generated a deterministic script anchored on `Topics` and returned an empty About result. The root cause was that selected in-region headings were emitted as generic text while nearby/downstream headings were emitted as `context_headings`, and the accepted trace promoted `context_headings[0]` into replay anchor evidence. Scoped compression now separates `inside_headings`, `selected_body_texts`, `before_context_headings`, `after_context_headings`, and an explicit `section_anchor`. Accepted traces only create `region_text_extract` from `section_anchor` with `inside_heading` or `preceding_heading` relation, and the compiler only scripts `bounded_section_text`; after-context headings fall back to runtime AI.
+- 2026-05-24: Active follow-up is evidence hardening for region-scoped free-text extraction. The current `runtime_ai_missing_anchor` fallback direction is accepted because replay must not hard-code recording-time selected text when no reusable section/container anchor exists. Do not narrow `_looks_like_extract_instruction()` markers such as `获取` / `读取` / `get` / `read` yet; the stronger preconditions already limit this path to region-scoped, non-action, non-table/list/single-value traces without snapshot fields and with extract intent. The next useful increment is proving the compile classification boundary: reliable `section_anchor` evidence compiles deterministically, while missing or after-context-only anchors preserve runtime AI.
 
 ## Patch Churn Review
 
@@ -86,4 +87,4 @@ Ready for review after PR #55 follow-up. RegionScope conversion, region-prioriti
 
 ## Next Step
 
-Keep PR #55 open against upstream `master` for reviewer confirmation. Keep the strict-mode locator repair issue as a separate follow-up because it belongs to runtime repair/locator disambiguation, not region-scoped snapshot capture or compression.
+Add focused backend evidence and generic rpa-eval-app scenarios for region-scoped text compile classification. The long-term direction is to reduce `runtime_ai_missing_anchor` by moving more free-text cases into deterministic section/container extraction, but only after capture/compression can provide durable anchor evidence. Keep the strict-mode locator repair issue as a separate follow-up because it belongs to runtime repair/locator disambiguation, not region-scoped snapshot capture or compression.
