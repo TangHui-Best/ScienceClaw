@@ -1585,6 +1585,159 @@ def test_selected_region_local_text_without_fields_does_not_inject_recorded_regi
     assert trace_requires_runtime_ai_replay(trace) is True
 
 
+def test_region_scoped_text_extract_does_not_embed_recorded_text_locator():
+    recorded_text = "Official, Anthropic-managed directory of high quality Claude Code Plugins."
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        user_instruction="获取这段项目介绍",
+        description="提取项目介绍文本",
+        output_key="project_description",
+        output=recorded_text,
+        signals={
+            "region_selection": {
+                "region_id": "region-1",
+                "inferred_kind": "text_region",
+                "local_text_preview": [recorded_text],
+            },
+            "region_context_decision": {
+                "used_as": "extraction",
+                "region_id": "region-1",
+                "action_type": "run_python",
+                "output_key": "project_description",
+            },
+            "output_contract": {"allow_empty": True},
+        },
+        region_scope={"region_id": "region-1", "mode": "region_scoped_snapshot"},
+        region_context={
+            "region_id": "region-1",
+            "inferred_kind": "text_region",
+            "local_text": [recorded_text],
+        },
+        ai_execution=RPAAIExecution(
+            language="python",
+            code=(
+                "async def run(page, results):\n"
+                f"    locator = page.get_by_text({recorded_text!r}, exact=True)\n"
+                "    if await locator.count() > 0:\n"
+                "        return await locator.inner_text()\n"
+                "    return ''"
+            ),
+            output=recorded_text,
+        ),
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    _assert_script_loads(script)
+    body = _execute_body(script)
+
+    assert (
+        "_execute_runtime_ai_instruction(current_page, _results, kwargs, "
+        "'获取这段项目介绍', 'project_description')"
+    ) in body
+    assert recorded_text not in body
+    assert "get_by_text" not in body
+    assert trace_requires_runtime_ai_replay(trace) is True
+
+
+def test_heading_scoped_region_text_extract_compiles_to_deterministic_script():
+    recorded_text = "Reusable project description"
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        user_instruction="Get About description",
+        description="Extract About description",
+        output_key="about_content",
+        output=recorded_text,
+        signals={
+            "region_selection": {
+                "region_id": "region-1",
+                "inferred_kind": "text_region",
+                "local_text_preview": [recorded_text],
+            },
+            "region_context_decision": {
+                "used_as": "extraction",
+                "region_id": "region-1",
+                "action_type": "run_python",
+                "output_key": "about_content",
+            },
+            "region_text_extract": {
+                "source": "region_scoped_snapshot",
+                "kind": "heading_scoped_text",
+                "section_title": "About",
+                "heading_locator": {"method": "text", "value": "About", "exact": True},
+                "heading_relation": "inside_heading",
+                "text_strategy": "bounded_section_text",
+                "output_key": "about_content",
+                "frame_path": [],
+            },
+            "output_contract": {"allow_empty": True},
+        },
+        region_scope={"region_id": "region-1", "mode": "region_scoped_snapshot"},
+        region_context={
+            "region_id": "region-1",
+            "inferred_kind": "text_region",
+            "local_text": [recorded_text],
+        },
+        ai_execution=RPAAIExecution(
+            language="python",
+            code=(
+                "async def run(page, results):\n"
+                f"    locator = page.get_by_text({recorded_text!r}, exact=True)\n"
+                "    return await locator.inner_text()"
+            ),
+            output=recorded_text,
+        ),
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    _assert_script_loads(script)
+    body = _execute_body(script)
+
+    assert "_execute_runtime_ai_instruction" not in body
+    assert "get_by_text('About', exact=True)" in body
+    assert "_extract_bounded_section_text" in body
+    assert recorded_text not in body
+    assert "_results['about_content'] = _result" in body
+    assert trace_requires_runtime_ai_replay(trace) is False
+
+
+def test_heading_scoped_region_text_extract_rejects_after_context_anchor():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        user_instruction="Get About description",
+        description="Extract About description",
+        output_key="about_content",
+        signals={
+            "region_selection": {"region_id": "region-1", "inferred_kind": "text_region"},
+            "region_context_decision": {
+                "used_as": "extraction",
+                "region_id": "region-1",
+                "action_type": "run_python",
+                "output_key": "about_content",
+            },
+            "region_text_extract": {
+                "source": "region_scoped_snapshot",
+                "kind": "heading_scoped_text",
+                "section_title": "Topics",
+                "heading_locator": {"method": "text", "value": "Topics"},
+                "heading_relation": "after_context",
+                "text_strategy": "bounded_section_text",
+                "output_key": "about_content",
+                "frame_path": [],
+            },
+        },
+        region_scope={"region_id": "region-1", "mode": "region_scoped_snapshot"},
+        region_context={"region_id": "region-1", "inferred_kind": "text_region"},
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    _assert_script_loads(script)
+    body = _execute_body(script)
+
+    assert "get_by_text('Topics'" not in body
+    assert "_execute_runtime_ai_instruction" in body
+    assert trace_requires_runtime_ai_replay(trace) is True
+
+
 def test_region_table_extract_filters_to_selected_row_indexes():
     trace = RPAAcceptedTrace(
         trace_type=RPATraceType.AI_OPERATION,

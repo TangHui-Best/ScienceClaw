@@ -67,7 +67,8 @@ Rules:
 - If code is returned, it must define async def run(page, results).
 - Use action_type="extract_snapshot" only when the requested extract-only data is already present in snapshot.detail_views fields.
 - For extract_snapshot, return the relevant observed detail fields in the plan itself, including the detail view frame_path when present; do not generate Python code and do not reference `snapshot` inside `run()`.
-- For snapshot.mode="selected_region_snapshot", selected_region evidence is the authoritative scope. If you use extract_snapshot, fields must contain labels copied from selected_region evidence; empty values are valid unless the field is explicitly required or the user's task requires non-empty output.
+- For snapshot.mode="region_scoped_snapshot", selected-region evidence is the authoritative scope. If you use extract_snapshot, fields must contain labels copied from selected region evidence; empty values are valid unless the field is explicitly required or the user's task requires non-empty output.
+- Do not generate replay code that locates selected free text by the exact observed text value. Observed selected text is evidence, not a stable replay selector.
 - If payload.plan_validation is present, correct the failed plan contract issue before execution; do not repeat a failed extract_snapshot plan without fields.
 - `snapshot` is planner-only evidence. Generated Python can access only `page` and `results`.
 - 结果返回规则：
@@ -279,6 +280,7 @@ class RecordingRuntimeAgent:
                 before,
                 repair_attempted=False,
                 snapshot=snapshot,
+                compact_snapshot=compact_snapshot,
                 region_context=compact_region_context,
                 region_scope=region_scope,
             )
@@ -453,6 +455,7 @@ class RecordingRuntimeAgent:
                 before,
                 repair_attempted=True,
                 snapshot=failed_snapshot,
+                compact_snapshot=compact_failed_snapshot,
                 region_context=compact_region_context,
                 region_scope=region_scope,
             )
@@ -510,6 +513,7 @@ class RecordingRuntimeAgent:
         *,
         repair_attempted: bool,
         snapshot: Optional[Dict[str, Any]] = None,
+        compact_snapshot: Optional[Dict[str, Any]] = None,
         region_context: Optional[Dict[str, Any]] = None,
         region_scope: Optional[Dict[str, Any]] = None,
     ) -> RPAAcceptedTrace:
@@ -522,6 +526,9 @@ class RecordingRuntimeAgent:
         if compact_region_context:
             signals["region_selection"] = _region_selection_signal(compact_region_context)
             signals["region_context_decision"] = _region_context_decision_signal(plan, compact_region_context)
+            region_text_extract = _region_text_extract_signal(plan, compact_snapshot or {}, compact_region_context)
+            if region_text_extract:
+                signals["region_text_extract"] = region_text_extract
         if _normalize_bool(plan.get("allow_empty_output")):
             output_contract = signals.get("output_contract") if isinstance(signals.get("output_contract"), dict) else {}
             signals["output_contract"] = {**output_contract, "allow_empty": True}
@@ -2476,6 +2483,52 @@ def _region_context_decision_signal(plan: Dict[str, Any], region_context: Dict[s
     _set_if_present(signal, "action_type", action_type)
     _set_if_present(signal, "output_key", output_key)
     return signal
+
+
+def _region_text_extract_signal(
+    plan: Dict[str, Any],
+    compact_snapshot: Dict[str, Any],
+    region_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    action_type = str(plan.get("action_type") or "").strip()
+    expected_effect = str(plan.get("expected_effect") or "").strip()
+    output_key = _normalize_result_key(plan.get("output_key"))
+    if action_type != "run_python" or expected_effect != "extract" or not output_key:
+        return {}
+    if str(compact_snapshot.get("mode") or "") != "region_scoped_snapshot":
+        return {}
+    if str(region_context.get("inferred_kind") or "").strip() != "text_region":
+        return {}
+
+    for region in list(compact_snapshot.get("expanded_regions") or []):
+        if not isinstance(region, dict):
+            continue
+        evidence = region.get("evidence") if isinstance(region.get("evidence"), dict) else {}
+        anchor = evidence.get("section_anchor") if isinstance(evidence.get("section_anchor"), dict) else {}
+        body_texts = [item for item in list(evidence.get("selected_body_texts") or []) if isinstance(item, dict)]
+        if not anchor or not body_texts:
+            continue
+        relation = str(anchor.get("relation") or "").strip()
+        if relation not in {"inside_heading", "preceding_heading"}:
+            continue
+        strategy = str(anchor.get("text_strategy") or "bounded_section_text").strip()
+        if strategy != "bounded_section_text":
+            continue
+        heading_text = str(anchor.get("text") or "").strip()
+        heading_locator = anchor.get("locator") if isinstance(anchor.get("locator"), dict) else {}
+        if not heading_text or not heading_locator:
+            continue
+        return {
+            "source": "region_scoped_snapshot",
+            "kind": "heading_scoped_text",
+            "section_title": heading_text,
+            "heading_locator": dict(heading_locator),
+            "heading_relation": relation,
+            "text_strategy": "bounded_section_text",
+            "output_key": output_key,
+            "frame_path": list(region.get("frame_path") or []),
+        }
+    return {}
 
 
 def _object_dict(value: Any) -> Dict[str, Any]:

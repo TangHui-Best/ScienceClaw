@@ -395,6 +395,50 @@ class TraceSkillCompiler:
             "            continue",
             "    return ''",
             "",
+            "async def _extract_bounded_section_text(heading):",
+            "    try:",
+            "        if not await heading.count():",
+            "            return ''",
+            "        handle = await heading.element_handle()",
+            "        if handle is None:",
+            "            return ''",
+            "        value = await handle.evaluate(\"\"\"",
+            "node => {",
+            "  const blockTags = new Set(['P', 'DIV', 'SPAN', 'LI', 'DD']);",
+            "  const stopTags = new Set(['H1', 'H2', 'H3', 'H4', 'H5', 'H6']);",
+            "  const excludedTags = new Set(['A', 'BUTTON', 'NAV', 'UL', 'OL', 'FORM', 'INPUT', 'TEXTAREA', 'SELECT']);",
+            "  const clean = value => String(value || '').replace(/\\\\s+/g, ' ').trim();",
+            "  const visible = el => {",
+            "    const style = window.getComputedStyle(el);",
+            "    const rect = el.getBoundingClientRect();",
+            "    return style && style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 1 && rect.height > 1;",
+            "  };",
+            "  const usable = el => {",
+            "    if (!el || excludedTags.has(el.tagName) || stopTags.has(el.tagName) || !visible(el)) return false;",
+            "    if (!blockTags.has(el.tagName)) return false;",
+            "    const text = clean(el.innerText || el.textContent);",
+            "    if (!text) return false;",
+            "    const linkText = clean(Array.from(el.querySelectorAll('a')).map(a => a.innerText || a.textContent).join(' '));",
+            "    return !linkText || linkText.length < text.length;",
+            "  };",
+            "  const root = node.parentElement;",
+            "  if (!root) return '';",
+            "  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);",
+            "  let seenHeading = false;",
+            "  while (walker.nextNode()) {",
+            "    const el = walker.currentNode;",
+            "    if (el === node) { seenHeading = true; continue; }",
+            "    if (!seenHeading) continue;",
+            "    if (stopTags.has(el.tagName)) break;",
+            "    if (usable(el)) return clean(el.innerText || el.textContent);",
+            "  }",
+            "  return '';",
+            "}",
+            "\"\"\")",
+            "        return str(value or '').strip()",
+            "    except Exception:",
+            "        return ''",
+            "",
             "async def _execute_runtime_ai_instruction(page, results, kwargs, instruction, output_key):",
             "    from backend.rpa.recording_runtime_agent import RecordingRuntimeAgent",
             "    agent = RecordingRuntimeAgent(model_config=_runtime_ai_model_config(kwargs))",
@@ -809,6 +853,10 @@ class TraceSkillCompiler:
             return self._render_snapshot_extract_trace(index, trace, used_output_keys)
         if _is_selected_region_local_text_extract(trace):
             return self._render_runtime_ai_instruction_trace(index, trace, used_output_keys)
+        if _has_heading_scoped_text_extract(trace):
+            return self._render_heading_scoped_text_extract_trace(index, trace, used_output_keys)
+        if _is_region_scoped_free_text_extract(trace):
+            return self._render_runtime_ai_instruction_trace(index, trace, used_output_keys)
         region_lines = self._render_region_extract_trace(index, trace, used_output_keys)
         if region_lines:
             return region_lines
@@ -986,6 +1034,28 @@ class TraceSkillCompiler:
             lines.append("    if await _field.count():")
             lines.append("        _value = await _extract_display_field_value(_field)")
             lines.append(f"        _result[{label!r}] = _value")
+        lines.append(f"    _results[{key!r}] = _result")
+        return lines
+
+    def _render_heading_scoped_text_extract_trace(
+        self,
+        index: int,
+        trace: RPAAcceptedTrace,
+        used_output_keys: Dict[str, int],
+    ) -> List[str]:
+        signal = _trace_signal(trace, "region_text_extract")
+        key = self._allocate_output_key(trace, trace.output_key or signal.get("output_key") or f"region_text_{index}", used_output_keys)
+        heading_locator = signal.get("heading_locator") if isinstance(signal.get("heading_locator"), dict) else {}
+        frame_path = signal.get("frame_path") if isinstance(signal.get("frame_path"), list) else trace.frame_path
+        scope_lines, scope_var = self._frame_scope_lines(list(frame_path or []))
+        heading_expr = _locator_expression(scope_var, normalize_locator(heading_locator))
+        if not heading_expr.endswith(".first"):
+            heading_expr = f"{heading_expr}.first"
+        lines = ["", f"    # trace {index}: {trace.description or 'heading scoped text extract'}"]
+        lines.extend(scope_lines)
+        lines.append("    _result = ''")
+        lines.append(f"    _heading = {heading_expr}")
+        lines.append("    _result = await _extract_bounded_section_text(_heading)")
         lines.append(f"    _results[{key!r}] = _result")
         return lines
 
@@ -1391,6 +1461,80 @@ def _is_selected_region_local_text_extract(trace: RPAAcceptedTrace) -> bool:
     return str(signal.get("source") or "").strip() == "selected_region.local_text"
 
 
+def _has_heading_scoped_text_extract(trace: RPAAcceptedTrace) -> bool:
+    signal = _trace_signal(trace, "region_text_extract")
+    if str(signal.get("kind") or "").strip() != "heading_scoped_text":
+        return False
+    strategy = str(signal.get("text_strategy") or "").strip()
+    if strategy != "bounded_section_text":
+        return False
+    relation = str(signal.get("heading_relation") or "").strip()
+    if relation not in {"inside_heading", "preceding_heading"}:
+        return False
+    heading_locator = signal.get("heading_locator")
+    return has_valid_locator(normalize_locator(heading_locator if isinstance(heading_locator, dict) else {}))
+
+
+def _is_region_scoped_free_text_extract(trace: RPAAcceptedTrace) -> bool:
+    if trace.trace_type != RPATraceType.AI_OPERATION:
+        return False
+    if TraceSkillCompiler._has_usable_snapshot_extract_fields(trace):
+        return False
+    if not (trace.region_scope or trace.region_context or _trace_signal(trace, "region_selection")):
+        return False
+    if _trace_output_is_action_evidence(trace.output):
+        return False
+
+    region_kind = _trace_region_kind(trace)
+    if region_kind in {"table_region", "list_sample", "list_region", "single_value"}:
+        return False
+    if region_kind and region_kind != "text_region":
+        return False
+
+    decision = _trace_signal(trace, "region_context_decision")
+    used_as = str(decision.get("used_as") or "").strip()
+    action_type = str(decision.get("action_type") or "").strip()
+    if used_as == "action_targeting":
+        return False
+    if used_as == "extraction" and action_type in {"", "run_python", "extract_snapshot"}:
+        return True
+
+    return bool(trace.output_key and _looks_like_extract_instruction(trace))
+
+
+def _trace_output_is_action_evidence(output: Any) -> bool:
+    if not isinstance(output, dict):
+        return False
+    if output.get("action_performed") is True or output.get("downloaded") is True:
+        return True
+    output_type = str(output.get("type") or output.get("action_type") or "").strip().lower()
+    return output_type in {"click", "fill", "select", "press", "hover", "navigate", "download"}
+
+
+def _looks_like_extract_instruction(trace: RPAAcceptedTrace) -> bool:
+    text = f"{trace.user_instruction or ''} {trace.description or ''}".lower()
+    if not text.strip():
+        return False
+    markers = (
+        "extract",
+        "get ",
+        "collect",
+        "return",
+        "read",
+        "summary",
+        "description",
+        "获取",
+        "提取",
+        "读取",
+        "收集",
+        "返回",
+        "简介",
+        "介绍",
+        "摘要",
+    )
+    return any(marker in text for marker in markers)
+
+
 def _locator_candidate_dicts(value: Any) -> List[Dict[str, Any]]:
     if not isinstance(value, list):
         return []
@@ -1569,7 +1713,11 @@ def trace_requires_runtime_ai_replay(trace: RPAAcceptedTrace) -> bool:
         return False
     if _trace_signal(trace, "extract_snapshot") and TraceSkillCompiler._has_usable_snapshot_extract_fields(trace):
         return False
+    if _has_heading_scoped_text_extract(trace):
+        return False
     if _is_selected_region_local_text_extract(trace):
+        return True
+    if _is_region_scoped_free_text_extract(trace):
         return True
     region_runtime_requirement = _trace_region_runtime_ai_requirement(trace)
     if region_runtime_requirement is not None:
