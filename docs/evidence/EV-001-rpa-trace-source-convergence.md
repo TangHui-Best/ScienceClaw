@@ -5,7 +5,7 @@ title: RPA Trace Source Convergence Evidence
 status: active
 feature_ids: [F001]
 created: 2026-05-13
-updated: 2026-05-17
+updated: 2026-05-25
 evidence_level: exhaustive
 ---
 
@@ -800,6 +800,40 @@ Manual smoke:
     - Result: passed.
     - Full related-file attempt: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_manager.py RpaClaw/backend/tests/test_rpa_trace_recorder.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_region_context.py RpaClaw/backend/tests/test_rpa_recorder_runtime_asset.py -q`
     - Result: `225 passed, 6 failed`; all six failures import `backend.route.rpa` and stop on missing local dependency `langchain_openai`, matching the existing environment limitation rather than the changed recording path.
+
+## Task 7N - Frame-context tab ids must not materialize blank replay pages
+
+- User report:
+  - A trace-first skill logged in successfully, clicked `操作`, then failed on `点击 text("确定")` with `Locator.click: Timeout 30000ms exceeded`.
+  - Runtime trace logging showed the failure step started on the business page but errored with `url=about:blank`, while the generated script had inserted `_ensure_recorded_tab(..., "tab-frame")` before the iframe action.
+  - The accepted trace for `确定` carried `frame_path=["iframe:nth-of-type(2)"]` and `signals.reported_frame_path=[iframe[src=...kweweb-b4...]]`; the different `tab_id` represented iframe/frame context evidence, not a proven Playwright `Page`.
+- Attribution:
+  - Existing Feature: F001.
+  - Vision Anchor: `RPAAcceptedTrace` remains the single compile source, but compiler strategy must follow evidence quality. `frame_path` / `reported_frame_path` is frame-context evidence and must not be treated as popup/new-tab materialization evidence.
+- Root cause:
+  - `TraceSkillCompiler._render_trace_tab_alignment()` treated any unknown `signals.tab.tab_id` change as a recorded tab to materialize.
+  - For iframe-origin manual events, that created a new `about:blank` page before replaying `frame_locator(...)`, so the later iframe locator searched the wrong page.
+- Decision:
+  - Do not add a site-specific Huawei/KWE rule.
+  - Do not globally disable older-recording tab-id backfill, because true multi-tab recordings still need page materialization.
+  - Narrow the guard to unknown `tab_id` traces that also carry frame context evidence; known tabs, explicit popup signals, `switch_tab`, and URL-backed tab restoration keep their existing behavior.
+- Implementation:
+  - Added `TraceSkillCompiler._trace_has_frame_context()` to detect `trace.frame_path` or `signals.reported_frame_path`.
+  - `_render_trace_tab_alignment()` now skips materializing an unknown tab id when the current trace is frame-scoped, leaving replay on the current page and allowing the existing frame scope generation to run there.
+- RED verification:
+  - Command: `$env:PYTHONPATH='RpaClaw'; pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -k "manual_action_with_new_tab_id_and_frame_path" -q`
+  - Result before fix: `1 failed`; the generated body contained `current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, "tab-frame")` before the frame-scoped `确定` click.
+- GREEN verification:
+  - Focused command: `$env:PYTHONPATH='RpaClaw'; pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -k "manual_action_with_new_tab_id_and_frame_path" -q`
+  - Focused result: `1 passed, 96 deselected`.
+  - Multi-tab regression command: `$env:PYTHONPATH='RpaClaw'; pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -k "new_tab_id or popup_click or switch_tab or close_tab or frame_path_stays" -q`
+  - Multi-tab regression result: `11 passed, 86 deselected`.
+  - Compiler suite command: `$env:PYTHONPATH='RpaClaw'; pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q`
+  - Compiler suite result: `97 passed`.
+  - Trace-related command: `$env:PYTHONPATH='RpaClaw'; pytest RpaClaw/backend/tests/test_rpa_trace_models.py RpaClaw/backend/tests/test_rpa_trace_recorder.py RpaClaw/backend/tests/test_rpa_trace_e2e.py -q`
+  - Trace-related result: `25 passed`.
+- Residual risk:
+  - This patch intentionally does not replace positional `iframe:nth-of-type(...)` with `reported_frame_path` during replay. The immediate failure was wrong page materialization; selector-strengthening can be handled as a separate evidence-backed compiler/frame-selector improvement.
 
 ## Current Evidence
 

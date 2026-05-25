@@ -300,6 +300,43 @@ def test_navigation_trace_with_new_tab_id_activates_materialized_page_for_previe
     assert body.index(activation) < body.index(second_url)
 
 
+def test_manual_action_with_new_tab_id_and_frame_path_stays_on_current_page():
+    traces = [
+        RPAAcceptedTrace(
+            trace_id="click-menu",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            action="click",
+            description='点击 text("操作")',
+            locator_candidates=[
+                {"locator": {"method": "text", "value": "操作", "exact": True}, "selected": True},
+            ],
+            signals={"tab": {"tab_id": "tab-root"}},
+        ),
+        RPAAcceptedTrace(
+            trace_id="click-confirm",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            action="click",
+            description='点击 text("确定")',
+            frame_path=["iframe:nth-of-type(2)"],
+            locator_candidates=[
+                {"locator": {"method": "text", "value": "确定", "exact": True}, "selected": True},
+            ],
+            signals={
+                "reported_frame_path": ['iframe[src*="kweweb-b4.huawei.com/pr/"]'],
+                "tab": {"tab_id": "tab-frame"},
+            },
+        ),
+    ]
+
+    script = TraceSkillCompiler().generate_script(traces, is_local=True)
+    body = _execute_body(script)
+
+    assert 'current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, "tab-frame")' not in body
+    assert "Materialize recorded tab tab-frame" not in body
+    assert "frame_scope = current_page.frame_locator(\"iframe:nth-of-type(2)\")" in body
+    assert "frame_scope.get_by_text('确定', exact=True).click()" in body
+
+
 def test_navigation_url_difference_without_tab_fact_does_not_create_new_page():
     traces = [
         RPAAcceptedTrace(

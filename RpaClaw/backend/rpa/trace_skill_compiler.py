@@ -529,6 +529,13 @@ class TraceSkillCompiler:
         tab_signal = _trace_signal(trace, "tab")
         return str(tab_signal.get("tab_id") or "").strip()
 
+    @staticmethod
+    def _trace_has_frame_context(trace: RPAAcceptedTrace) -> bool:
+        if trace.frame_path:
+            return True
+        reported_frame_path = trace.signals.get("reported_frame_path") if isinstance(trace.signals, dict) else None
+        return isinstance(reported_frame_path, list) and any(str(item or "").strip() for item in reported_frame_path)
+
     @classmethod
     def _render_trace_tab_alignment(
         cls,
@@ -546,6 +553,8 @@ class TraceSkillCompiler:
                 "",
                 f"    current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, {tab_id_literal})",
             ], tab_id
+        if cls._trace_has_frame_context(trace):
+            return [], current_tab_id
 
         known_tab_ids.add(tab_id)
         return [
