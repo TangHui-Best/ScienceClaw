@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional
 
 
 _VALUE_METHODS = {"text", "testid", "label", "placeholder", "alt", "title", "css"}
+_DATA_TEST_ATTR_RE = re.compile(
+    r"\[\s*(?:data-testid|data-test-id|data-test)\s*=\s*['\"]?([^'\"\]\s]+)",
+    re.IGNORECASE,
+)
+_CSS_ID_TOKEN_RE = re.compile(r"#([A-Za-z_][\w:-]*)")
+_CSS_CLASS_TOKEN_RE = re.compile(r"\.([A-Za-z_][\w:-]*)")
 
 
 def normalize_locator(locator: Any) -> Dict[str, Any]:
@@ -117,3 +124,77 @@ def normalize_locator_candidates(
 
 def has_valid_locator(locator: Any) -> bool:
     return bool(normalize_locator(locator))
+
+
+def locator_instability_penalty(
+    locator: Any,
+    *,
+    extra_values: Optional[List[Any]] = None,
+) -> float:
+    normalized = normalize_locator(locator)
+    penalty = _locator_instability_penalty(normalized)
+    for value in extra_values or []:
+        penalty += _selector_instability_penalty(str(value or ""))
+    return penalty
+
+
+def locator_has_unstable_identity(locator: Any) -> bool:
+    return locator_instability_penalty(locator) >= 10000.0
+
+
+def _locator_instability_penalty(locator: Dict[str, Any]) -> float:
+    method = str(locator.get("method") or "").lower()
+    if method == "nth":
+        return 10000.0 + _locator_instability_penalty(normalize_locator(locator.get("locator")))
+    if method == "nested":
+        return (
+            _locator_instability_penalty(normalize_locator(locator.get("parent")))
+            + _locator_instability_penalty(normalize_locator(locator.get("child")))
+        )
+    if method == "testid":
+        value = str(locator.get("value") or "")
+        return 10000.0 if _is_random_like_identity_token(value) else 0.0
+    if method == "css":
+        return _selector_instability_penalty(str(locator.get("value") or ""))
+    return 0.0
+
+
+def _selector_instability_penalty(selector: str) -> float:
+    if not selector:
+        return 0.0
+    penalty = 0.0
+    if re.search(r"\bdata-v-[0-9a-f]{6,}\b", selector, re.IGNORECASE):
+        penalty += 10000.0
+    for value in _DATA_TEST_ATTR_RE.findall(selector):
+        if _is_random_like_identity_token(value):
+            penalty += 10000.0
+    for value in _CSS_ID_TOKEN_RE.findall(selector):
+        if _is_random_like_identity_token(value):
+            penalty += 10000.0
+    for value in _CSS_CLASS_TOKEN_RE.findall(selector):
+        if _is_random_like_identity_token(value):
+            penalty += 5000.0
+    if selector.count(">") >= 4:
+        penalty += 5000.0
+    if ">> nth=" in selector or ".nth(" in selector:
+        penalty += 5000.0
+    if len(selector) >= 160:
+        penalty += 1000.0
+    return penalty
+
+
+def _is_random_like_identity_token(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    if re.search(r"\bdata-v-[0-9a-f]{6,}\b", lowered):
+        return True
+    if re.match(r"^[a-z]+-[\w-]+-id-\d{5,}$", text, re.IGNORECASE):
+        return True
+    if re.search(r"(?:^|[-_])(?:id|uid|uuid)[-_]?\d{5,}$", lowered):
+        return True
+    suffix_match = re.search(r"[-_]([0-9a-f]{8,})$", lowered)
+    if suffix_match and re.search(r"[a-f]", suffix_match.group(1)) and re.search(r"\d", suffix_match.group(1)):
+        return True
+    return False

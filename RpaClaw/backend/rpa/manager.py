@@ -17,6 +17,7 @@ from .manual_recording_models import ManualRecordedAction, ManualRecordingDiagno
 from .manual_recording_normalizer import build_manual_recording_outcome
 from .playwright_security import get_context_kwargs
 from .region_context import RPARegionContext
+from .trace_locator_utils import locator_instability_penalty
 from .trace_models import RPAAcceptedTrace, RPATraceDiagnostic, RPARuntimeResults
 from .trace_recorder import infer_dataflow_for_ai_fill, infer_dataflow_for_fill, manual_step_to_trace
 
@@ -1009,33 +1010,13 @@ class RPASessionManager:
         if not isinstance(resolved_locator, dict):
             return 0.0
 
-        method = str(resolved_locator.get("method") or candidate.get("kind") or "").lower()
-        if method == "nth":
-            return 10000.0
-        if method != "css":
-            return 0.0
-
-        selector = str(
-            resolved_locator.get("value")
-            or candidate.get("selector")
-            or candidate.get("playwright_locator")
-            or ""
+        return locator_instability_penalty(
+            resolved_locator,
+            extra_values=[
+                candidate.get("selector"),
+                candidate.get("playwright_locator"),
+            ],
         )
-        if not selector:
-            return 0.0
-
-        penalty = 0.0
-        if re.search(r"\bdata-v-[0-9a-f]{6,}\b", selector, re.IGNORECASE):
-            penalty += 10000.0
-        if re.search(r"#[A-Za-z_][\w-]*-\d{2,}\b", selector):
-            penalty += 10000.0
-        if selector.count(">") >= 4:
-            penalty += 5000.0
-        if ">> nth=" in selector or ".nth(" in selector:
-            penalty += 5000.0
-        if len(selector) >= 160:
-            penalty += 1000.0
-        return penalty
 
     @classmethod
     def _candidate_is_nth(cls, candidate: Dict[str, Any], locator: Optional[Dict[str, Any]] = None) -> bool:

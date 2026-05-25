@@ -6,7 +6,12 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from backend.rpa.playwright_security import get_chromium_launch_kwargs, get_context_kwargs
 
-from .trace_locator_utils import has_valid_locator, normalize_locator
+from .trace_locator_utils import (
+    has_valid_locator,
+    locator_has_unstable_identity,
+    locator_instability_penalty,
+    normalize_locator,
+)
 from .trace_models import RPAAcceptedTrace, RPATraceType
 
 
@@ -1223,9 +1228,29 @@ class TraceSkillCompiler:
             return {}
         ordered = [item for item in candidates if item.get("selected")]
         ordered.extend(item for item in candidates if not item.get("selected"))
+        normalized_ordered: List[Dict[str, Any]] = []
         for candidate in ordered:
             locator = candidate.get("locator") if isinstance(candidate, dict) else None
             normalized = normalize_locator(locator if isinstance(locator, dict) else candidate)
+            if has_valid_locator(normalized):
+                normalized_ordered.append(normalized)
+        if not normalized_ordered:
+            return {}
+        selected = normalized_ordered[0]
+        if locator_has_unstable_identity(selected):
+            stable_candidates = []
+            seen = set()
+            for candidate in normalized_ordered[1:]:
+                if locator_instability_penalty(candidate) > 0:
+                    continue
+                key = repr(candidate)
+                if key in seen:
+                    continue
+                seen.add(key)
+                stable_candidates.append(candidate)
+            if len(stable_candidates) == 1:
+                return stable_candidates[0]
+        for normalized in normalized_ordered:
             if has_valid_locator(normalized):
                 return normalized
         return {}

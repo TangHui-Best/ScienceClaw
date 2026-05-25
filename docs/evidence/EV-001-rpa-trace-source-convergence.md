@@ -715,6 +715,44 @@ Manual smoke:
   - Did not patch only the frontend timeline sort, because the accepted timeline ordering invariant belongs in shared backend trace ordering.
   - Did not remove manager-internal `RPASession.steps` / `recorded_actions` in this patch, because the review issue is public response leakage, not private DTO quarantine.
 
+## Task 7M - Random-like testid locator evidence must not become stable replay fact
+
+- User report:
+  - A previously stable manual recording now generated a trace-first script that recorded successfully but failed in test replay.
+  - The failing step compiled to chained `get_by_test_id(...)` calls using values such as `DIV-_standingActiveManage_standingBook-id-611090413` and `DIV-_standingActiveManage_standingBook-id-1064443668`.
+  - The user correctly identified these as likely random/generated UI identifiers rather than stable business locators.
+- Attribution:
+  - Existing Feature: F001.
+  - Vision Anchor: keep `session.traces` / `RPAAcceptedTrace` as the single compile source; fix evidence quality instead of restoring legacy generator fallback.
+- Root cause:
+  - `RPASessionManager._locator_instability_penalty()` only penalized CSS selectors, so `method="testid"` values with generated numeric suffixes could remain selected.
+  - `TraceSkillCompiler._best_locator()` trusted the selected trace locator without a shared stability check.
+  - `region_context._has_stable_scope_locator_candidate()` treated every test id as a stable scope, including generated container ids.
+- Decision:
+  - Do not ban all `testid` locators. Semantic test ids such as `login-username`, `order-card`, and `search-button` remain valid evidence.
+  - Do not add a site-specific Huawei/Jalor rule.
+  - Do not post-process generated script strings.
+  - Add a shared conservative locator stability classifier and use it at the locator evidence boundary.
+- Implementation:
+  - Added shared `locator_instability_penalty()` / `locator_has_unstable_identity()` helpers in `RpaClaw/backend/rpa/trace_locator_utils.py`.
+  - Manager candidate scoring now penalizes random-like `testid`, nested random `testid`, CSS `[data-testid=...]`, `data-v-*`, deep CSS, and positional locator shapes through the same helper.
+  - Compiler fallback now replaces a selected unstable locator only when there is exactly one candidate with zero instability penalty.
+  - Region context pruning no longer preserves oversized containers merely because they have a random-like test id.
+- RED verification:
+  - Command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_handle_event_prefers_stable_candidate_over_random_like_testid RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_manual_action_prefers_stable_candidate_over_selected_random_like_testid RpaClaw/backend/tests/test_rpa_region_context.py::test_region_evidence_pruning_does_not_keep_oversized_container_for_random_like_testid -q`
+  - Result before fix: `3 failed`. Failures showed manager kept the nested random `testid`, compiler emitted the random `get_by_test_id(...)` chain, and region pruning kept the oversized generated-id container.
+- GREEN verification:
+  - Focused regression command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_handle_event_prefers_stable_candidate_over_random_like_testid RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_manual_action_prefers_stable_candidate_over_selected_random_like_testid RpaClaw/backend/tests/test_rpa_region_context.py::test_region_evidence_pruning_does_not_keep_oversized_container_for_random_like_testid -q`
+  - Focused regression result: `3 passed`.
+  - Broader related command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_manager.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_region_context.py -k "not analyze_region_route and not chat_ and not resolve_chat_region_context" -q`
+  - Broader related result: `209 passed, 6 deselected`.
+  - Full related-file attempt: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_manager.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_region_context.py -q`
+  - Full related-file result: `209 passed, 6 failed`; all six failures import `backend.route.rpa` and stop on missing local dependency `langchain_openai`, not on the changed locator stability path.
+  - Diff hygiene command: `git diff --check -- RpaClaw/backend/rpa/trace_locator_utils.py RpaClaw/backend/rpa/manager.py RpaClaw/backend/rpa/trace_skill_compiler.py RpaClaw/backend/rpa/region_context.py RpaClaw/backend/tests/test_rpa_manager.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_region_context.py`
+  - Diff hygiene result: passed with line-ending warnings only.
+- Residual risk:
+  - The classifier is intentionally conservative. Some generated ids may still be preserved when no unique stable replacement exists; that is preferable to inventing replay locators or globally rejecting numeric business ids.
+
 ## Current Evidence
 
 2026-05-17:

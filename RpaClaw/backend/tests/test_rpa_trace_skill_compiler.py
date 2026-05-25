@@ -173,6 +173,44 @@ def test_compiler_renders_multiple_manual_set_input_files_trace():
     assert ".set_input_files(['C:/tmp/a.txt', 'C:/tmp/b.txt'])" in body
 
 
+def test_manual_action_prefers_stable_candidate_over_selected_random_like_testid():
+    trace = RPAAcceptedTrace(
+        trace_id="trace-search-field",
+        trace_type=RPATraceType.MANUAL_ACTION,
+        source="manual",
+        action="click",
+        description="Click ESN search field",
+        locator_candidates=[
+            {
+                "kind": "testid",
+                "selected": True,
+                "locator": {
+                    "method": "nested",
+                    "parent": {
+                        "method": "testid",
+                        "value": "DIV-_standingActiveManage_standingBook-id-611090413",
+                    },
+                    "child": {
+                        "method": "testid",
+                        "value": "DIV-_standingActiveManage_standingBook-id-1064443668",
+                    },
+                },
+            },
+            {
+                "kind": "role",
+                "selected": False,
+                "locator": {"method": "role", "role": "textbox", "name": "ESN"},
+            },
+        ],
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    body = _execute_body(script)
+
+    assert "get_by_role('textbox', name='ESN', exact=True)" in body
+    assert "get_by_test_id('DIV-_standingActiveManage_standingBook-id-611090413')" not in body
+
+
 def test_navigation_trace_with_new_tab_id_materializes_page_before_goto():
     traces = [
         RPAAcceptedTrace(
