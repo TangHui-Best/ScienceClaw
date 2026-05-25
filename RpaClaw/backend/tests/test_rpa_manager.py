@@ -933,6 +933,82 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
             "unstable_target_locator",
         )
 
+    async def test_fill_drops_prior_unstable_non_interactive_focus_click(self):
+        page = _FakePage("https://example.com", "Example")
+        tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "click",
+                "tab_id": tab_id,
+                "tag": "DIV",
+                "timestamp": 1234567890,
+                "locator": {
+                    "method": "nested",
+                    "parent": {
+                        "method": "testid",
+                        "value": "DIV-_standingActiveManage_standingBook-id-1213867279",
+                    },
+                    "child": {
+                        "method": "testid",
+                        "value": "DIV-_standingActiveManage_standingBook-id-1064443668",
+                    },
+                },
+                "locator_candidates": [
+                    {
+                        "kind": "testid",
+                        "score": 1,
+                        "strict_match_count": 1,
+                        "visible_match_count": 1,
+                        "selected": True,
+                        "locator": {
+                            "method": "nested",
+                            "parent": {
+                                "method": "testid",
+                                "value": "DIV-_standingActiveManage_standingBook-id-1213867279",
+                            },
+                            "child": {
+                                "method": "testid",
+                                "value": "DIV-_standingActiveManage_standingBook-id-1064443668",
+                            },
+                        },
+                    }
+                ],
+                "element_snapshot": {"tag": "div", "role": "", "name": "", "text": ""},
+                "validation": {"status": "ok"},
+            },
+        )
+
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "fill",
+                "tab_id": tab_id,
+                "tag": "TEXTAREA",
+                "timestamp": 1234568090,
+                "value": "7260316102147H,000484261001AF",
+                "locator": {"method": "role", "role": "textbox"},
+                "locator_candidates": [
+                    {
+                        "kind": "role",
+                        "score": 1,
+                        "strict_match_count": 1,
+                        "visible_match_count": 1,
+                        "selected": True,
+                        "locator": {"method": "role", "role": "textbox"},
+                    }
+                ],
+                "validation": {"status": "ok"},
+            },
+        )
+
+        self.assertEqual(len(self.session.steps), 1)
+        self.assertEqual(self.session.steps[0].action, "fill")
+        self.assertEqual(len(self.session.recording_diagnostics), 0)
+        self.assertEqual(len(self.session.trace_diagnostics), 0)
+        self.assertEqual(len(self.session.traces), 1)
+
     async def test_select_step_locator_candidate_rejects_random_like_testid(self):
         await self.manager.add_step(
             self.session.id,

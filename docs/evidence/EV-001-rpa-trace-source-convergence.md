@@ -775,6 +775,31 @@ Manual smoke:
     - `test_select_step_locator_candidate_rejects_random_like_testid` asserts backend promotion rejects unstable locator candidates.
   - Additional GREEN command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_manual_recording_normalizer.py RpaClaw/backend/tests/test_rpa_manager.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_region_context.py -k "not analyze_region_route and not chat_ and not resolve_chat_region_context" -q`
   - Additional GREEN result: `222 passed, 6 deselected`.
+  - Second follow-up user report: after hiding unstable diagnostic candidates, Configure could only delete the three pending steps. This still failed the original SOP goal because required button actions would be lost instead of repaired into replayable facts.
+  - Zero-base conclusion: rejecting random `testid` locators is necessary but insufficient. The durable fix must restore stable locator evidence before diagnostics are produced, and must avoid treating a non-interactive focus click before a fill as an SOP action.
+  - Additional root cause:
+    - `playwright_recorder_runtime.js` only returned Playwright's generated selector list. When Playwright chose a strict unique generated `data-testid`, no independent role/name, label, placeholder, title, or text candidate was guaranteed to reach backend normalization.
+    - `_handle_event()` therefore had no stable replacement to promote for search/export buttons, while the search-field focus click became an unresolved diagnostic even though the following fill carried the real SOP fact.
+  - Additional implementation:
+    - The recorder runtime now appends DOM-counted semantic locator candidates (`role`, `label`, `placeholder`, `title`, `text`) to Playwright-generated candidates without removing the original candidates.
+    - Manager fill insertion now drops a preceding unresolved non-interactive focus click when it is adjacent in sequence/time, same tab/frame, and followed by a stable fill. Interactive clicks such as buttons, links, tabs, menu items, and inputs are not folded.
+    - Added `test_rpa_recorder_runtime_asset.py` to lock the runtime asset contract that generated selector candidates must be augmented with semantic candidates.
+  - Additional RED verification:
+    - Command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_recorder_runtime_asset.py -q`
+    - Result before fix: `1 failed`, showing the runtime asset had no semantic candidate augmentation contract.
+    - Command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_fill_drops_prior_unstable_non_interactive_focus_click -q`
+    - Result before fix: `1 failed`, showing the unstable focus click diagnostic remained beside the fill.
+  - Additional GREEN verification:
+    - Command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_recorder_runtime_asset.py RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_handle_event_prefers_stable_candidate_over_random_like_testid RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_handle_event_routes_only_random_like_testid_to_diagnostic RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_fill_drops_prior_unstable_non_interactive_focus_click RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_handle_event_accepts_testid_locator_candidate RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_select_step_locator_candidate_rejects_random_like_testid RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_manual_action_prefers_stable_candidate_over_selected_random_like_testid RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_manual_action_rejects_selected_random_like_testid_without_stable_candidate -q`
+    - Result: `8 passed`.
+    - Command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_manager.py RpaClaw/backend/tests/test_rpa_trace_recorder.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_recorder_runtime_asset.py -q`
+    - Result: `201 passed`.
+    - Command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_region_context.py -q -k "random_like or pruning or locator"`
+    - Result: `9 passed, 21 deselected`.
+    - Command: `node --check RpaClaw/backend/rpa/vendor/playwright_recorder_runtime.js`
+    - Result: passed.
+    - Full related-file attempt: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_manager.py RpaClaw/backend/tests/test_rpa_trace_recorder.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_region_context.py RpaClaw/backend/tests/test_rpa_recorder_runtime_asset.py -q`
+    - Result: `225 passed, 6 failed`; all six failures import `backend.route.rpa` and stop on missing local dependency `langchain_openai`, matching the existing environment limitation rather than the changed recording path.
 
 ## Current Evidence
 

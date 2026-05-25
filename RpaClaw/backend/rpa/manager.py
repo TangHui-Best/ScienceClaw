@@ -1671,6 +1671,7 @@ class RPASessionManager:
                 break
 
         if step.action == "fill" and step.source == "record":
+            insert_at = self._drop_redundant_pre_fill_focus_click(session, insert_at, step)
             previous_step = session.steps[insert_at - 1] if insert_at > 0 else None
             if self._is_same_fill_target(previous_step, step):
                 self._merge_fill_step(previous_step, step)
@@ -1852,6 +1853,72 @@ class RPASessionManager:
         existing_step.sequence = incoming_step.sequence
         existing_step.event_timestamp_ms = incoming_step.event_timestamp_ms
         existing_step.timestamp = incoming_step.timestamp
+
+    @classmethod
+    def _is_redundant_pre_fill_focus_click(
+        cls,
+        session: RPASession,
+        click_step: Optional[RPAStep],
+        fill_step: RPAStep,
+    ) -> bool:
+        if click_step is None:
+            return False
+        if click_step.action != "click" or fill_step.action != "fill":
+            return False
+        if click_step.source != "record" or fill_step.source != "record":
+            return False
+        if click_step.tab_id != fill_step.tab_id or click_step.frame_path != fill_step.frame_path:
+            return False
+        if not cls._has_manual_trace_diagnostic_for_step(session, click_step.id):
+            return False
+
+        click_sequence = click_step.sequence
+        fill_sequence = fill_step.sequence
+        if click_sequence is not None and fill_sequence is not None:
+            if fill_sequence - click_sequence != 1:
+                return False
+        else:
+            click_ts = cls._step_event_ts_ms(click_step)
+            fill_ts = cls._step_event_ts_ms(fill_step)
+            if fill_ts < click_ts or fill_ts - click_ts > 3000:
+                return False
+
+        snapshot = click_step.element_snapshot if isinstance(click_step.element_snapshot, dict) else {}
+        tag = str(click_step.tag or snapshot.get("tag") or "").strip().lower()
+        role = str(snapshot.get("role") or "").strip().lower()
+        interactive_tags = {"a", "button", "input", "select", "textarea"}
+        interactive_roles = {
+            "button",
+            "link",
+            "checkbox",
+            "radio",
+            "tab",
+            "menuitem",
+            "option",
+            "switch",
+            "combobox",
+        }
+        return tag not in interactive_tags and role not in interactive_roles
+
+    @classmethod
+    def _drop_redundant_pre_fill_focus_click(
+        cls,
+        session: RPASession,
+        insert_at: int,
+        fill_step: RPAStep,
+    ) -> int:
+        previous_index = insert_at - 1
+        if previous_index < 0:
+            return insert_at
+        previous_step = session.steps[previous_index]
+        if not cls._is_redundant_pre_fill_focus_click(session, previous_step, fill_step):
+            return insert_at
+
+        removed_step = session.steps.pop(previous_index)
+        removed_trace_id = f"trace-{removed_step.id}"
+        session.traces = [trace for trace in session.traces if trace.trace_id != removed_trace_id]
+        cls._rebuild_manual_recording_state(session)
+        return previous_index
 
     async def _broadcast_step(self, session_id: str, step: RPAStep):
         if session_id in self.ws_connections:
