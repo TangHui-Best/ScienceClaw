@@ -333,7 +333,8 @@ def test_manual_action_with_new_tab_id_and_frame_path_stays_on_current_page():
 
     assert 'current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, "tab-frame")' not in body
     assert "Materialize recorded tab tab-frame" not in body
-    assert "frame_scope = current_page.frame_locator(\"iframe:nth-of-type(2)\")" in body
+    assert 'frame_scope = current_page.frame_locator("iframe[src*=\\"kweweb-b4.huawei.com/pr/\\"]")' in body
+    assert "iframe:nth-of-type(2)" not in body
     assert "frame_scope.get_by_text('确定', exact=True).click()" in body
 
 

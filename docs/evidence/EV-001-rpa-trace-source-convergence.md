@@ -834,6 +834,19 @@ Manual smoke:
   - Trace-related result: `25 passed`.
 - Residual risk:
   - This patch intentionally does not replace positional `iframe:nth-of-type(...)` with `reported_frame_path` during replay. The immediate failure was wrong page materialization; selector-strengthening can be handled as a separate evidence-backed compiler/frame-selector improvement.
+- 2026-05-25 follow-up:
+  - User reran the same scenario and the generated script no longer materialized `about:blank`, but still timed out on the target page while waiting for `locator("iframe:nth-of-type(2)").content_frame.get_by_text("确定", exact=True)`.
+  - Root cause: the first Task 7N patch used `signals.reported_frame_path` only as evidence to avoid page materialization; manual replay still rendered `trace.frame_path`, which could be the weaker server fallback `iframe:nth-of-type(2)`.
+  - Additional decision: for manual replay, browser-reported `signals.reported_frame_path` should be the preferred frame chain when present, because Recorder V2 treats browser-side frame-path capture as the source of truth. The server `frame_path` remains fallback when reported evidence is absent.
+  - Additional implementation: added `TraceSkillCompiler._trace_replay_frame_path()` and used it for manual `navigate_click` / `navigate_press` and regular manual actions. The existing tab-context guard now delegates to the same helper so frame evidence is interpreted consistently.
+  - Additional RED command: `$env:PYTHONPATH='RpaClaw'; pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -k "manual_action_with_new_tab_id_and_frame_path" -q`
+  - Additional RED result: `1 failed`, showing the compiled script still emitted `iframe:nth-of-type(2)` instead of `signals.reported_frame_path`.
+  - Additional GREEN command: `$env:PYTHONPATH='RpaClaw'; pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -k "manual_action_with_new_tab_id_and_frame_path" -q`
+  - Additional GREEN result: `1 passed, 96 deselected`.
+  - Regression command: `$env:PYTHONPATH='RpaClaw'; pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q`
+  - Regression result: `97 passed`.
+  - Trace-related command: `$env:PYTHONPATH='RpaClaw'; pytest RpaClaw/backend/tests/test_rpa_trace_models.py RpaClaw/backend/tests/test_rpa_trace_recorder.py RpaClaw/backend/tests/test_rpa_trace_e2e.py -q`
+  - Trace-related result: `25 passed`.
 
 ## Current Evidence
 

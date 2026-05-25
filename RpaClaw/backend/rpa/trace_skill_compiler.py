@@ -531,10 +531,16 @@ class TraceSkillCompiler:
 
     @staticmethod
     def _trace_has_frame_context(trace: RPAAcceptedTrace) -> bool:
-        if trace.frame_path:
-            return True
+        return bool(TraceSkillCompiler._trace_replay_frame_path(trace))
+
+    @staticmethod
+    def _trace_replay_frame_path(trace: RPAAcceptedTrace) -> List[str]:
         reported_frame_path = trace.signals.get("reported_frame_path") if isinstance(trace.signals, dict) else None
-        return isinstance(reported_frame_path, list) and any(str(item or "").strip() for item in reported_frame_path)
+        if isinstance(reported_frame_path, list):
+            normalized = [str(item).strip() for item in reported_frame_path if str(item or "").strip()]
+            if normalized:
+                return normalized
+        return list(trace.frame_path or [])
 
     @classmethod
     def _render_trace_tab_alignment(
@@ -676,7 +682,7 @@ class TraceSkillCompiler:
             if not locator:
                 lines.extend(self._invalid_manual_action_lines(action))
                 return lines
-            scope_lines, scope_var = self._frame_scope_lines(trace.frame_path)
+            scope_lines, scope_var = self._frame_scope_lines(self._trace_replay_frame_path(trace))
             lines.extend(scope_lines)
             expr = _locator_expression(scope_var, locator)
             lines.append("    async with current_page.expect_navigation(wait_until='domcontentloaded'):")
@@ -702,7 +708,7 @@ class TraceSkillCompiler:
         if not locator:
             lines.append("    # No stable locator was recorded for this manual action.")
             return lines
-        scope_lines, scope_var = self._frame_scope_lines(trace.frame_path)
+        scope_lines, scope_var = self._frame_scope_lines(self._trace_replay_frame_path(trace))
         lines.extend(scope_lines)
         expr = _locator_expression(scope_var, locator)
         popup_signal = _trace_signal(trace, "popup")
