@@ -17,7 +17,7 @@ from .manual_recording_models import ManualRecordedAction, ManualRecordingDiagno
 from .manual_recording_normalizer import build_manual_recording_outcome
 from .playwright_security import get_context_kwargs
 from .region_context import RPARegionContext
-from .trace_locator_utils import locator_instability_penalty
+from .trace_locator_utils import locator_has_unstable_identity, locator_instability_penalty
 from .trace_models import RPAAcceptedTrace, RPATraceDiagnostic, RPARuntimeResults
 from .trace_recorder import infer_dataflow_for_ai_fill, infer_dataflow_for_fill, manual_step_to_trace
 
@@ -1186,6 +1186,8 @@ class RPASessionManager:
 
         selected_candidate = step.locator_candidates[candidate_index]
         locator = self._resolve_candidate_locator(selected_candidate)
+        if locator_has_unstable_identity(locator):
+            raise ValueError("Locator candidate is unstable and cannot be selected")
 
         for index, candidate in enumerate(step.locator_candidates):
             candidate["selected"] = index == candidate_index
@@ -1224,6 +1226,8 @@ class RPASessionManager:
 
         selected_candidate = trace.locator_candidates[candidate_index]
         locator = self._resolve_candidate_locator(selected_candidate)
+        if locator_has_unstable_identity(locator):
+            raise ValueError("Locator candidate is unstable and cannot be selected")
 
         for index, candidate in enumerate(trace.locator_candidates):
             candidate["selected"] = index == candidate_index
@@ -1692,11 +1696,15 @@ class RPASessionManager:
     ) -> RPATraceDiagnostic:
         related_step_id = diagnostic.related_step_id or ""
         page_state = dict(diagnostic.page_state or {})
+        repairable_candidates, rejected_candidates = RPASessionManager._split_repairable_locator_candidates(
+            diagnostic.raw_candidates or []
+        )
         raw = {
             "related_step_id": related_step_id,
             "failure_reason": diagnostic.failure_reason,
             "action": diagnostic.related_action_kind.value,
-            "locator_candidates": list(diagnostic.raw_candidates or []),
+            "locator_candidates": repairable_candidates,
+            "rejected_locator_candidates": rejected_candidates,
             "element_snapshot": dict(diagnostic.element_snapshot or {}),
             "page_state": page_state,
             "url": str(page_state.get("url", "") or ""),
@@ -1708,6 +1716,30 @@ class RPASessionManager:
             message=diagnostic.failure_reason,
             raw=raw,
         )
+
+    @classmethod
+    def _split_repairable_locator_candidates(
+        cls,
+        candidates: List[Dict[str, Any]],
+    ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        repairable: List[Dict[str, Any]] = []
+        rejected: List[Dict[str, Any]] = []
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            copied = dict(candidate)
+            try:
+                locator = cls._resolve_candidate_locator(copied)
+            except ValueError:
+                repairable.append(copied)
+                continue
+            copied["locator"] = locator
+            if locator_has_unstable_identity(locator):
+                copied["rejected_reason"] = "unstable_target_locator"
+                rejected.append(copied)
+            else:
+                repairable.append(copied)
+        return repairable, rejected
 
     @classmethod
     def _sync_manual_trace_diagnostics(cls, session: RPASession) -> None:

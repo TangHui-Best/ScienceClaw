@@ -927,6 +927,36 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.session.recording_diagnostics[0].failure_reason, "unstable_target_locator")
         self.assertEqual(len(self.session.trace_diagnostics), 1)
         self.assertEqual(self.session.trace_diagnostics[0].raw["failure_reason"], "unstable_target_locator")
+        self.assertEqual(self.session.trace_diagnostics[0].raw["locator_candidates"], [])
+        self.assertEqual(
+            self.session.trace_diagnostics[0].raw["rejected_locator_candidates"][0]["rejected_reason"],
+            "unstable_target_locator",
+        )
+
+    async def test_select_step_locator_candidate_rejects_random_like_testid(self):
+        await self.manager.add_step(
+            self.session.id,
+            {
+                "action": "click",
+                "target": "",
+                "description": "点击 Broken",
+                "source": "record",
+                "locator_candidates": [
+                    {
+                        "kind": "testid",
+                        "selected": True,
+                        "locator": {
+                            "method": "testid",
+                            "value": "DIV-_standingActiveManage_standingBook-id-812632017",
+                        },
+                    }
+                ],
+                "validation": {"status": "broken"},
+            },
+        )
+
+        with self.assertRaisesRegex(ValueError, "unstable"):
+            await self.manager.select_step_locator_candidate(self.session.id, 0, 0)
 
     async def test_handle_event_prefers_best_scored_strict_candidate_over_earlier_nth(self):
         page = _FakePage("https://example.com", "Example")

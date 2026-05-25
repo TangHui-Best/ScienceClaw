@@ -767,6 +767,14 @@ Manual smoke:
     - `TraceSkillCompiler._best_locator()` now returns no locator when the selected locator has random identity and no unique stable replacement exists.
   - GREEN command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_manual_recording_normalizer.py RpaClaw/backend/tests/test_rpa_manager.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_region_context.py -k "not analyze_region_route and not chat_ and not resolve_chat_region_context" -q`
   - GREEN result: `221 passed, 6 deselected`.
+  - Follow-up user report: Configure showed three `unstable_target_locator` diagnostics, but each diagnostic still displayed the same random `testid` as a `使用此定位器` candidate.
+  - Root cause: the first follow-up routed random-only manual actions to diagnostics, but `_manual_trace_diagnostic_from_recording()` projected `raw_candidates` directly into `locator_candidates`, and `select_step_locator_candidate()` / `select_trace_locator_candidate()` did not reject random-identity locators.
+  - Additional fix: diagnostic projection now exposes only repairable locator candidates and stores random candidates under `rejected_locator_candidates` for evidence; backend candidate promotion rejects unstable locators even if a client posts their index.
+  - Additional RED tests:
+    - `test_handle_event_routes_only_random_like_testid_to_diagnostic` now asserts projected `locator_candidates` is empty and rejected candidates carry `rejected_reason=unstable_target_locator`.
+    - `test_select_step_locator_candidate_rejects_random_like_testid` asserts backend promotion rejects unstable locator candidates.
+  - Additional GREEN command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_manual_recording_normalizer.py RpaClaw/backend/tests/test_rpa_manager.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_region_context.py -k "not analyze_region_route and not chat_ and not resolve_chat_region_context" -q`
+  - Additional GREEN result: `222 passed, 6 deselected`.
 
 ## Current Evidence
 
