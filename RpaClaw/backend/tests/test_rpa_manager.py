@@ -875,6 +875,59 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(step.locator_candidates[1]["selected"])
         self.assertEqual(step.validation["selected_candidate_kind"], "role")
 
+    async def test_handle_event_routes_only_random_like_testid_to_diagnostic(self):
+        page = _FakePage("https://example.com", "Example")
+        tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "click",
+                "tab_id": tab_id,
+                "tag": "DIV",
+                "timestamp": 1234567890,
+                "locator": {
+                    "method": "nested",
+                    "parent": {
+                        "method": "testid",
+                        "value": "DIV-_standingActiveManage_standingBook-id-1213867279",
+                    },
+                    "child": {
+                        "method": "testid",
+                        "value": "DIV-_standingActiveManage_standingBook-id-1064443668",
+                    },
+                },
+                "locator_candidates": [
+                    {
+                        "kind": "testid",
+                        "score": 1,
+                        "strict_match_count": 1,
+                        "visible_match_count": 1,
+                        "selected": True,
+                        "locator": {
+                            "method": "nested",
+                            "parent": {
+                                "method": "testid",
+                                "value": "DIV-_standingActiveManage_standingBook-id-1213867279",
+                            },
+                            "child": {
+                                "method": "testid",
+                                "value": "DIV-_standingActiveManage_standingBook-id-1064443668",
+                            },
+                        },
+                    }
+                ],
+                "validation": {"status": "ok"},
+            },
+        )
+
+        self.assertEqual(len(self.session.recorded_actions), 0)
+        self.assertEqual(len(self.session.traces), 0)
+        self.assertEqual(len(self.session.recording_diagnostics), 1)
+        self.assertEqual(self.session.recording_diagnostics[0].failure_reason, "unstable_target_locator")
+        self.assertEqual(len(self.session.trace_diagnostics), 1)
+        self.assertEqual(self.session.trace_diagnostics[0].raw["failure_reason"], "unstable_target_locator")
+
     async def test_handle_event_prefers_best_scored_strict_candidate_over_earlier_nth(self):
         page = _FakePage("https://example.com", "Example")
         tab_id = await self.manager.register_page(self.session.id, page, make_active=True)

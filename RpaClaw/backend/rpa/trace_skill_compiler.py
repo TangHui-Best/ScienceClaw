@@ -1250,6 +1250,7 @@ class TraceSkillCompiler:
                 stable_candidates.append(candidate)
             if len(stable_candidates) == 1:
                 return stable_candidates[0]
+            return {}
         for normalized in normalized_ordered:
             if has_valid_locator(normalized):
                 return normalized

@@ -90,6 +90,20 @@ def test_build_outcome_accepts_testid_interactive_action():
     }
 
 
+def test_build_outcome_routes_random_like_testid_to_diagnostic():
+    outcome = build_manual_recording_outcome(
+        action="click",
+        description='click testid("DIV-_standingActiveManage_standingBook-id-1213867279")',
+        target='{"method":"testid","value":"DIV-_standingActiveManage_standingBook-id-1213867279"}',
+        locator_candidates=[],
+        validation={"status": "ok"},
+    )
+
+    assert outcome.accepted_action is None
+    assert outcome.diagnostic is not None
+    assert outcome.diagnostic.failure_reason == "unstable_target_locator"
+
+
 def test_build_outcome_routes_missing_canonical_target_to_diagnostic():
     outcome = build_manual_recording_outcome(
         action="fill",

@@ -139,7 +139,7 @@ def locator_instability_penalty(
 
 
 def locator_has_unstable_identity(locator: Any) -> bool:
-    return locator_instability_penalty(locator) >= 10000.0
+    return _locator_has_unstable_identity(normalize_locator(locator))
 
 
 def _locator_instability_penalty(locator: Dict[str, Any]) -> float:
@@ -157,6 +157,22 @@ def _locator_instability_penalty(locator: Dict[str, Any]) -> float:
     if method == "css":
         return _selector_instability_penalty(str(locator.get("value") or ""))
     return 0.0
+
+
+def _locator_has_unstable_identity(locator: Dict[str, Any]) -> bool:
+    method = str(locator.get("method") or "").lower()
+    if method == "nth":
+        return _locator_has_unstable_identity(normalize_locator(locator.get("locator")))
+    if method == "nested":
+        return (
+            _locator_has_unstable_identity(normalize_locator(locator.get("parent")))
+            or _locator_has_unstable_identity(normalize_locator(locator.get("child")))
+        )
+    if method == "testid":
+        return _is_random_like_identity_token(str(locator.get("value") or ""))
+    if method == "css":
+        return _selector_has_unstable_identity(str(locator.get("value") or ""))
+    return False
 
 
 def _selector_instability_penalty(selector: str) -> float:
@@ -181,6 +197,23 @@ def _selector_instability_penalty(selector: str) -> float:
     if len(selector) >= 160:
         penalty += 1000.0
     return penalty
+
+
+def _selector_has_unstable_identity(selector: str) -> bool:
+    if not selector:
+        return False
+    if re.search(r"\bdata-v-[0-9a-f]{6,}\b", selector, re.IGNORECASE):
+        return True
+    for value in _DATA_TEST_ATTR_RE.findall(selector):
+        if _is_random_like_identity_token(value):
+            return True
+    for value in _CSS_ID_TOKEN_RE.findall(selector):
+        if _is_random_like_identity_token(value):
+            return True
+    for value in _CSS_CLASS_TOKEN_RE.findall(selector):
+        if _is_random_like_identity_token(value):
+            return True
+    return False
 
 
 def _is_random_like_identity_token(value: str) -> bool:

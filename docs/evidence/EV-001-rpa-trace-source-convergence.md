@@ -752,6 +752,21 @@ Manual smoke:
   - Diff hygiene result: passed with line-ending warnings only.
 - Residual risk:
   - The classifier is intentionally conservative. Some generated ids may still be preserved when no unique stable replacement exists; that is preferable to inventing replay locators or globally rejecting numeric business ids.
+- 2026-05-25 follow-up:
+  - User reran the scenario and generated script still contained chained random `get_by_test_id(...)` calls with new generated ids such as `DIV-_standingActiveManage_standingBook-id-1213867279`.
+  - Local HEAD reproduction confirmed the first Task 7M fix only handled the case where a unique stable replacement candidate existed. If a trace carried only the random test id chain, the compiler still emitted it.
+  - Additional decision: a random-like locator with no stable replacement must not become an accepted manual replay fact. During recording it should route to locator diagnostic/repair; during compilation of old traces it should produce the existing explicit "missing valid target locator" failure instead of a 60s Playwright timeout.
+  - Added RED tests:
+    - `test_build_outcome_routes_random_like_testid_to_diagnostic`
+    - `test_handle_event_routes_only_random_like_testid_to_diagnostic`
+    - `test_manual_action_rejects_selected_random_like_testid_without_stable_candidate`
+  - RED result: `3 failed`, showing the random-only target was accepted and compiled.
+  - Implementation follow-up:
+    - `manual_recording_normalizer` now rejects canonical targets with unstable identity while still accepting weaker but non-random locators such as `nth(role(...), 0)`.
+    - `trace_locator_utils.locator_has_unstable_identity()` is now separated from scoring penalty so `nth` can be downgraded without being treated as random identity.
+    - `TraceSkillCompiler._best_locator()` now returns no locator when the selected locator has random identity and no unique stable replacement exists.
+  - GREEN command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_manual_recording_normalizer.py RpaClaw/backend/tests/test_rpa_manager.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_region_context.py -k "not analyze_region_route and not chat_ and not resolve_chat_region_context" -q`
+  - GREEN result: `221 passed, 6 deselected`.
 
 ## Current Evidence
 

@@ -211,6 +211,39 @@ def test_manual_action_prefers_stable_candidate_over_selected_random_like_testid
     assert "get_by_test_id('DIV-_standingActiveManage_standingBook-id-611090413')" not in body
 
 
+def test_manual_action_rejects_selected_random_like_testid_without_stable_candidate():
+    trace = RPAAcceptedTrace(
+        trace_id="trace-search-field",
+        trace_type=RPATraceType.MANUAL_ACTION,
+        source="manual",
+        action="click",
+        description="Click generated test id",
+        locator_candidates=[
+            {
+                "kind": "testid",
+                "selected": True,
+                "locator": {
+                    "method": "nested",
+                    "parent": {
+                        "method": "testid",
+                        "value": "DIV-_standingActiveManage_standingBook-id-1213867279",
+                    },
+                    "child": {
+                        "method": "testid",
+                        "value": "DIV-_standingActiveManage_standingBook-id-1064443668",
+                    },
+                },
+            },
+        ],
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    body = _execute_body(script)
+
+    assert "get_by_test_id('DIV-_standingActiveManage_standingBook-id-1213867279')" not in body
+    assert "Recorded click action is missing a valid target locator" in body
+
+
 def test_navigation_trace_with_new_tab_id_materializes_page_before_goto():
     traces = [
         RPAAcceptedTrace(
