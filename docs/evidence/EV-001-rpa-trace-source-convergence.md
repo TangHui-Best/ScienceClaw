@@ -847,6 +847,18 @@ Manual smoke:
   - Regression result: `97 passed`.
   - Trace-related command: `$env:PYTHONPATH='RpaClaw'; pytest RpaClaw/backend/tests/test_rpa_trace_models.py RpaClaw/backend/tests/test_rpa_trace_recorder.py RpaClaw/backend/tests/test_rpa_trace_e2e.py -q`
   - Trace-related result: `25 passed`.
+- 2026-05-25 second follow-up:
+  - User reran a related scenario and replay stayed on the correct outer page, but timed out on `iframe[src="https://kweweb-b4.huawei.com/pr/#!purpr/shoppingcar/index.html?...prHeadId=...&sourceSystemAppId=..."]`.
+  - Root cause: the second Task 7N patch correctly preferred `signals.reported_frame_path`, but it still treated the browser-reported exact iframe `src` as a stable replay selector. In this case the `src` contained recording-time dynamic URL state, so replay waited for an iframe selector that could legitimately differ at runtime.
+  - Vision check: iframe actions are real SOP steps. Missing or dynamic frame context must become a frame replay strategy problem, not a delete-step or "needs removal" workflow.
+  - Additional decision: distinguish frame identity evidence from replay selector evidence. Stable frame selectors such as `iframe[title]`, `iframe[name]`, and existing `iframe[src*=...]` continue to compile through `frame_locator(...)`; exact iframe `src` values with dynamic query/hash state compile to a runtime `_resolve_recorded_frame(...)` helper keyed by stable origin/path/hash evidence.
+  - Additional implementation: added dynamic exact-src detection and CSS-unescape handling in `TraceSkillCompiler._dynamic_frame_url_contains()` / `_exact_iframe_src()`. `_frame_scope_lines()` now emits `_resolve_recorded_frame(current_page, url_contains=...)` only for that dynamic exact-src shape, preserving the iframe-scoped click/fill action.
+  - Additional RED command: `$env:PYTHONPATH='RpaClaw'; pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -k "dynamic_reported_frame_src" -q`
+  - Additional RED result: `1 failed`, showing generated replay still lacked `_resolve_recorded_frame(...)` and preserved the dynamic iframe selector behavior.
+  - Additional focused GREEN command: `$env:PYTHONPATH='RpaClaw'; pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -k "dynamic_reported_frame_src or manual_action_with_new_tab_id_and_frame_path" -q`
+  - Additional focused GREEN result: `2 passed, 96 deselected`.
+  - Additional compiler regression command: `$env:PYTHONPATH='RpaClaw'; pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q`
+  - Additional compiler regression result: `98 passed`.
 
 ## Current Evidence
 

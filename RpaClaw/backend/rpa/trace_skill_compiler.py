@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from typing import Any, Dict, Iterable, List, Optional
+from urllib.parse import urlparse
 
 from backend.rpa.playwright_security import get_chromium_launch_kwargs, get_context_kwargs
 
@@ -485,6 +486,23 @@ class TraceSkillCompiler:
             "    await page.bring_to_front()",
             "    await _activate_recorded_page(page, kwargs, tab_id)",
             "    return page",
+            "",
+            "async def _resolve_recorded_frame(page_or_frame, *, url_contains='', timeout_ms=60000):",
+            "    deadline = time.perf_counter() + (timeout_ms / 1000)",
+            "    last_urls = []",
+            "    while time.perf_counter() < deadline:",
+            "        frames = list(getattr(page_or_frame, 'frames', None) or getattr(page_or_frame, 'child_frames', []) or [])",
+            "        last_urls = []",
+            "        for frame in frames:",
+            "            frame_url = str(getattr(frame, 'url', '') or '')",
+            "            if frame_url:",
+            "                last_urls.append(frame_url)",
+            "            if url_contains and url_contains in frame_url:",
+            "                return frame",
+            "        await asyncio.sleep(0.5)",
+            "    observed = ', '.join(last_urls[:5])",
+            "    detail = f' Observed frames: {observed}' if observed else ''",
+            "    raise RuntimeError(f'Recorded iframe context was not found for url_contains={url_contains!r}.{detail}')",
             "",
             "async def execute_skill(page, **kwargs):",
             '    """Auto-generated skill from RPA trace recording."""',
@@ -1333,18 +1351,49 @@ class TraceSkillCompiler:
             normalized.pop("exact", None)
         return normalized
 
-    @staticmethod
-    def _frame_scope_lines(frame_path: List[str]) -> tuple[List[str], str]:
+    @classmethod
+    def _frame_scope_lines(cls, frame_path: List[str]) -> tuple[List[str], str]:
         if not frame_path:
             return [], "current_page"
         lines: List[str] = []
         frame_parent = "current_page"
         for frame_selector in frame_path:
-            lines.append(
-                f"    frame_scope = {frame_parent}.frame_locator({json.dumps(str(frame_selector), ensure_ascii=False)})"
-            )
+            stable_url = cls._dynamic_frame_url_contains(str(frame_selector))
+            if stable_url:
+                lines.append(
+                    f"    frame_scope = await _resolve_recorded_frame({frame_parent}, "
+                    f"url_contains={json.dumps(stable_url, ensure_ascii=False)})"
+                )
+            else:
+                lines.append(
+                    f"    frame_scope = {frame_parent}.frame_locator({json.dumps(str(frame_selector), ensure_ascii=False)})"
+                )
             frame_parent = "frame_scope"
         return lines, "frame_scope"
+
+    @classmethod
+    def _dynamic_frame_url_contains(cls, frame_selector: str) -> str:
+        src = cls._exact_iframe_src(frame_selector)
+        if not src:
+            return ""
+        parsed = urlparse(src)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return ""
+        has_dynamic_url_state = bool(parsed.query or "?" in parsed.fragment or "&" in parsed.fragment)
+        if not has_dynamic_url_state:
+            return ""
+        stable = f"{parsed.netloc}{parsed.path or '/'}"
+        fragment_path = parsed.fragment.split("?", 1)[0].split("&", 1)[0].strip()
+        if fragment_path:
+            stable = f"{stable}#{fragment_path}"
+        return stable
+
+    @staticmethod
+    def _exact_iframe_src(frame_selector: str) -> str:
+        match = re.fullmatch(r"""iframe\[src=(["'])(?P<src>.*)\1\]""", str(frame_selector or "").strip())
+        if not match:
+            return ""
+        return re.sub(r"\\(.)", r"\1", match.group("src"))
 
     def _effective_manual_action(self, trace: RPAAcceptedTrace) -> str:
         action = trace.action or ""

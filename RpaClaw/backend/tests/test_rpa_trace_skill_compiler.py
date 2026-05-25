@@ -338,6 +338,51 @@ def test_manual_action_with_new_tab_id_and_frame_path_stays_on_current_page():
     assert "frame_scope.get_by_text('确定', exact=True).click()" in body
 
 
+def test_manual_action_with_dynamic_reported_frame_src_uses_stable_frame_resolver():
+    dynamic_frame = (
+        'iframe[src="https\\:\\/\\/kweweb-b4\\.huawei\\.com\\/pr\\/\\#\\!purpr'
+        '\\/shoppingcar\\/index\\.html\\?prHeadId\\=33533937\\&interfaceSourceCode\\=iPlatform'
+        '\\&sourceSystemAppId\\=3548124130716926322"]'
+    )
+    traces = [
+        RPAAcceptedTrace(
+            trace_id="click-menu",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            action="click",
+            description='click text("operation")',
+            locator_candidates=[
+                {"locator": {"method": "text", "value": "operation", "exact": True}, "selected": True},
+            ],
+            signals={"tab": {"tab_id": "tab-root"}},
+        ),
+        RPAAcceptedTrace(
+            trace_id="click-confirm",
+            trace_type=RPATraceType.MANUAL_ACTION,
+            action="click",
+            description="click confirm icon",
+            frame_path=["iframe:nth-of-type(2)"],
+            locator_candidates=[
+                {"locator": {"method": "css", "value": ".jalor-icon.confirm"}, "selected": True},
+            ],
+            signals={
+                "reported_frame_path": [dynamic_frame],
+                "tab": {"tab_id": "tab-frame"},
+            },
+        ),
+    ]
+
+    script = TraceSkillCompiler().generate_script(traces, is_local=True)
+    body = _execute_body(script)
+
+    assert 'current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, "tab-frame")' not in body
+    assert "_resolve_recorded_frame(" in body
+    assert "kweweb-b4.huawei.com/pr/" in body
+    assert "prHeadId" not in body
+    assert "sourceSystemAppId" not in body
+    assert "iframe:nth-of-type(2)" not in body
+    assert "frame_scope.locator('.jalor-icon.confirm').first.click()" in body
+
+
 def test_navigation_url_difference_without_tab_fact_does_not_create_new_page():
     traces = [
         RPAAcceptedTrace(
