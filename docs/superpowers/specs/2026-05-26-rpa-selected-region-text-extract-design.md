@@ -110,6 +110,8 @@ date: 2026-05-26
 - 只能得到 `get_by_text(observed_text)`、`get_by_title(observed_text)` 或 `get_by_role(..., name=observed_text)`。
 - 只能得到大容器、rect、local_text 或现场输出值。
 - 选区更像表格、列表或操作控件。
+- 选区命中 collapse / accordion / panel / section header 等结构区域标题；这些通常代表“区域内容”入口，而不是单值文本。
+- 可用 locator 是框架动态 id，例如 `#aui-collapse-head-09521894`。
 
 这个 producer 逻辑是证据提升，不是 compiler 规则化 selector 选择：它只把录制阶段已经足够明确的目标写入 trace；证据不足仍回 runtime AI。
 

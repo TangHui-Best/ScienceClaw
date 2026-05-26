@@ -2005,6 +2005,82 @@ def test_selected_region_text_extract_rejects_observed_role_name_locator():
     assert trace_requires_runtime_ai_replay(trace) is True
 
 
+def test_selected_region_text_extract_rejects_dynamic_framework_id_locator():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        user_instruction="Get purchase info content",
+        description="Get purchase info content",
+        output_key="purchase_info",
+        output="采购信息",
+        signals={
+            "region_selection": {"region_id": "region-1", "inferred_kind": "text_region"},
+            "region_context_decision": {
+                "used_as": "extraction",
+                "region_id": "region-1",
+                "action_type": "run_python",
+                "output_key": "purchase_info",
+            },
+            "selected_region_text_extract": {
+                "source": "region_context",
+                "region_id": "region-1",
+                "output_key": "purchase_info",
+                "locator": {"method": "css", "value": "#aui-collapse-head-09521894"},
+                "frame_path": [],
+                "observed_text": "采购信息",
+            },
+        },
+        region_scope={"region_id": "region-1", "mode": "region_scoped_snapshot"},
+        region_context={"region_id": "region-1", "inferred_kind": "text_region", "local_text": ["采购信息"]},
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    _assert_script_loads(script)
+    body = _execute_body(script)
+
+    assert "_execute_runtime_ai_instruction(current_page, _results, kwargs, 'Get purchase info content', 'purchase_info')" in body
+    assert "#aui-collapse-head-09521894" not in body
+    assert "inner_text()" not in body
+    assert trace_requires_runtime_ai_replay(trace) is True
+
+
+def test_selected_region_text_extract_rejects_structural_region_header_locator():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        user_instruction="Get purchase info content",
+        description="Get purchase info content",
+        output_key="purchase_info",
+        output="采购信息",
+        signals={
+            "region_selection": {"region_id": "region-1", "inferred_kind": "text_region"},
+            "region_context_decision": {
+                "used_as": "extraction",
+                "region_id": "region-1",
+                "action_type": "run_python",
+                "output_key": "purchase_info",
+            },
+            "selected_region_text_extract": {
+                "source": "region_context",
+                "region_id": "region-1",
+                "output_key": "purchase_info",
+                "locator": {"method": "css", "value": ".aui-collapse-item__word-overflow"},
+                "frame_path": [],
+                "observed_text": "采购信息",
+            },
+        },
+        region_scope={"region_id": "region-1", "mode": "region_scoped_snapshot"},
+        region_context={"region_id": "region-1", "inferred_kind": "text_region", "local_text": ["采购信息"]},
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    _assert_script_loads(script)
+    body = _execute_body(script)
+
+    assert "_execute_runtime_ai_instruction(current_page, _results, kwargs, 'Get purchase info content', 'purchase_info')" in body
+    assert ".aui-collapse-item__word-overflow" not in body
+    assert "inner_text()" not in body
+    assert trace_requires_runtime_ai_replay(trace) is True
+
+
 def test_selected_region_local_text_without_fields_does_not_inject_recorded_region_context():
     trace = RPAAcceptedTrace(
         trace_type=RPATraceType.AI_OPERATION,

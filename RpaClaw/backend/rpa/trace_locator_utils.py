@@ -151,6 +151,10 @@ def locator_has_unstable_identity(locator: Any) -> bool:
     return _locator_has_unstable_identity(normalize_locator(locator))
 
 
+def locator_is_structural_region_header(locator: Any) -> bool:
+    return _locator_is_structural_region_header(normalize_locator(locator))
+
+
 def _locator_instability_penalty(locator: Dict[str, Any]) -> float:
     method = str(locator.get("method") or "").lower()
     if method == "nth":
@@ -229,11 +233,44 @@ def _selector_has_unstable_identity(selector: str) -> bool:
     return False
 
 
+def _locator_is_structural_region_header(locator: Dict[str, Any]) -> bool:
+    method = str(locator.get("method") or "").lower()
+    if method == "css":
+        return _selector_is_structural_region_header(str(locator.get("value") or ""))
+    if method == "nested":
+        return _locator_is_structural_region_header(normalize_locator(locator.get("parent"))) or _locator_is_structural_region_header(
+            normalize_locator(locator.get("child"))
+        )
+    if method in {"nth", "filter_has_text"}:
+        return _locator_is_structural_region_header(normalize_locator(locator.get("locator") or locator.get("base")))
+    return False
+
+
+def _selector_is_structural_region_header(selector: str) -> bool:
+    text = str(selector or "").lower()
+    if not text:
+        return False
+    structural_markers = (
+        "collapse",
+        "accordion",
+        "panel-head",
+        "panel-header",
+        "section-head",
+        "section-header",
+    )
+    return any(marker in text for marker in structural_markers)
+
+
 def _is_random_like_identity_token(value: str) -> bool:
     text = str(value or "").strip()
     if not text:
         return False
     lowered = text.lower()
+    if re.match(
+        r"^(?:aui|el|ant|rc|van|arco|semi)-[\w-]*(?:head|header|body|panel|content|item|trigger)-\d{5,}$",
+        lowered,
+    ):
+        return True
     if re.search(r"\bdata-v-[0-9a-f]{6,}\b", lowered):
         return True
     if re.match(r"^[a-z]+-[\w-]+-id-\d{5,}$", text, re.IGNORECASE):

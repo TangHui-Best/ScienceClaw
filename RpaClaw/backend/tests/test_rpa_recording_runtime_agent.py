@@ -1721,6 +1721,126 @@ def test_recording_runtime_agent_does_not_record_selected_region_text_extract_fr
     asyncio.run(run_test())
 
 
+def test_recording_runtime_agent_does_not_record_selected_region_text_extract_from_dynamic_collapse_id(monkeypatch):
+    async def run_test():
+        async def fake_snapshot(_page, region_scope=None):
+            return {"url": "https://example.test/detail", "title": "Detail", "region_scope": region_scope}
+
+        def fake_compact_snapshot(_snapshot, _instruction, region_scope=None):
+            return {
+                "mode": "region_scoped_snapshot",
+                "url": "https://example.test/detail",
+                "title": "Detail",
+                "region_scope": region_scope,
+                "expanded_regions": [],
+            }
+
+        async def planner(_payload):
+            return {
+                "description": "Get purchase info content",
+                "action_type": "run_python",
+                "expected_effect": "extract",
+                "output_key": "purchase_info",
+                "allow_empty_output": True,
+                "code": "async def run(page, results):\n    return 'ok'",
+            }
+
+        monkeypatch.setattr("backend.rpa.recording_runtime_agent._safe_page_snapshot", fake_snapshot)
+        monkeypatch.setattr("backend.rpa.recording_runtime_agent._compact_snapshot", fake_compact_snapshot)
+
+        result = await RecordingRuntimeAgent(planner=planner).run(
+            page=_FakePage(),
+            instruction="Get purchase info content",
+            runtime_results={},
+            region_context={
+                "region_id": "region-1",
+                "page_url": "https://example.test/detail",
+                "evidence": {
+                    "inferred_kind": "text_region",
+                    "local_text": ["采购信息"],
+                    "intersecting_elements": [
+                        {
+                            "tag": "div",
+                            "text": "采购信息",
+                            "locator_candidates": [
+                                {
+                                    "kind": "css",
+                                    "selected": True,
+                                    "locator": {"method": "css", "value": "#aui-collapse-head-09521894"},
+                                }
+                            ],
+                        }
+                    ],
+                },
+            },
+        )
+
+        assert result.success is True
+        assert "selected_region_text_extract" not in result.trace.signals
+
+    asyncio.run(run_test())
+
+
+def test_recording_runtime_agent_does_not_record_selected_region_text_extract_from_collapse_header(monkeypatch):
+    async def run_test():
+        async def fake_snapshot(_page, region_scope=None):
+            return {"url": "https://example.test/detail", "title": "Detail", "region_scope": region_scope}
+
+        def fake_compact_snapshot(_snapshot, _instruction, region_scope=None):
+            return {
+                "mode": "region_scoped_snapshot",
+                "url": "https://example.test/detail",
+                "title": "Detail",
+                "region_scope": region_scope,
+                "expanded_regions": [],
+            }
+
+        async def planner(_payload):
+            return {
+                "description": "Get purchase info content",
+                "action_type": "run_python",
+                "expected_effect": "extract",
+                "output_key": "purchase_info",
+                "allow_empty_output": True,
+                "code": "async def run(page, results):\n    return 'ok'",
+            }
+
+        monkeypatch.setattr("backend.rpa.recording_runtime_agent._safe_page_snapshot", fake_snapshot)
+        monkeypatch.setattr("backend.rpa.recording_runtime_agent._compact_snapshot", fake_compact_snapshot)
+
+        result = await RecordingRuntimeAgent(planner=planner).run(
+            page=_FakePage(),
+            instruction="Get purchase info content",
+            runtime_results={},
+            region_context={
+                "region_id": "region-1",
+                "page_url": "https://example.test/detail",
+                "evidence": {
+                    "inferred_kind": "text_region",
+                    "local_text": ["采购信息"],
+                    "intersecting_elements": [
+                        {
+                            "tag": "div",
+                            "text": "采购信息",
+                            "locator_candidates": [
+                                {
+                                    "kind": "css",
+                                    "selected": True,
+                                    "locator": {"method": "css", "value": ".aui-collapse-item__word-overflow"},
+                                }
+                            ],
+                        }
+                    ],
+                },
+            },
+        )
+
+        assert result.success is True
+        assert "selected_region_text_extract" not in result.trace.signals
+
+    asyncio.run(run_test())
+
+
 def test_recording_runtime_agent_reasks_planner_when_region_extract_snapshot_missing_fields(monkeypatch):
     async def run_test():
         captured_payloads = []

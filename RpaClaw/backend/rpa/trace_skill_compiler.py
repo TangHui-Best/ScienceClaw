@@ -10,6 +10,7 @@ from backend.rpa.playwright_security import get_chromium_launch_kwargs, get_cont
 from .trace_locator_utils import (
     has_valid_locator,
     locator_has_unstable_identity,
+    locator_is_structural_region_header,
     locator_instability_penalty,
     normalize_locator,
 )
@@ -1609,6 +1610,10 @@ def _has_selected_region_text_extract(trace: RPAAcceptedTrace) -> bool:
     signal = _trace_signal(trace, "selected_region_text_extract")
     locator = normalize_locator(signal.get("locator") if isinstance(signal.get("locator"), dict) else {})
     if not has_valid_locator(locator):
+        return False
+    if locator_has_unstable_identity(locator):
+        return False
+    if locator_is_structural_region_header(locator):
         return False
     return not _locator_is_observed_text_driven(locator, trace, signal)
 

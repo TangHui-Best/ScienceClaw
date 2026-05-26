@@ -28,7 +28,12 @@ from .trace_models import (
     RPATraceDiagnostic,
     RPATraceType,
 )
-from .trace_locator_utils import has_valid_locator, locator_has_unstable_identity, normalize_locator
+from .trace_locator_utils import (
+    has_valid_locator,
+    locator_has_unstable_identity,
+    locator_is_structural_region_header,
+    normalize_locator,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -2639,6 +2644,8 @@ def _selected_region_safe_locator(candidates: Any, observed_values: set[str]) ->
         if not has_valid_locator(locator):
             continue
         if locator_has_unstable_identity(locator):
+            continue
+        if locator_is_structural_region_header(locator):
             continue
         if _selected_region_locator_is_observed_text_driven(locator, observed_values):
             continue
