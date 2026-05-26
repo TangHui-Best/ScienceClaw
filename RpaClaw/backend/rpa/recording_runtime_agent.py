@@ -28,6 +28,7 @@ from .trace_models import (
     RPATraceDiagnostic,
     RPATraceType,
 )
+from .trace_locator_utils import has_valid_locator, locator_has_unstable_identity, normalize_locator
 
 
 logger = logging.getLogger(__name__)
@@ -529,6 +530,10 @@ class RecordingRuntimeAgent:
             region_text_extract = _region_text_extract_signal(plan, compact_snapshot or {}, compact_region_context)
             if region_text_extract:
                 signals["region_text_extract"] = region_text_extract
+            else:
+                selected_text_extract = _selected_region_text_extract_signal(plan, result, compact_region_context)
+                if selected_text_extract:
+                    signals["selected_region_text_extract"] = selected_text_extract
         if _normalize_bool(plan.get("allow_empty_output")):
             output_contract = signals.get("output_contract") if isinstance(signals.get("output_contract"), dict) else {}
             signals["output_contract"] = {**output_contract, "allow_empty": True}
@@ -2529,6 +2534,169 @@ def _region_text_extract_signal(
             "frame_path": list(region.get("frame_path") or []),
         }
     return {}
+
+
+def _selected_region_text_extract_signal(
+    plan: Dict[str, Any],
+    result: Dict[str, Any],
+    region_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    action_type = str(plan.get("action_type") or "").strip()
+    expected_effect = str(plan.get("expected_effect") or "").strip()
+    output_key = _normalize_result_key(plan.get("output_key"))
+    if action_type not in {"run_python", "extract_snapshot", ""} or not output_key:
+        return {}
+    if expected_effect and expected_effect != "extract":
+        return {}
+    if str(region_context.get("inferred_kind") or "").strip() != "text_region":
+        return {}
+    if _selected_region_has_structured_region_evidence(region_context):
+        return {}
+
+    label = _selected_region_text_label(plan, result)
+    observed_values = _selected_region_observed_text_values(plan, result, region_context)
+    locator, observed_text = _selected_region_text_target_locator(region_context, observed_values)
+    if not locator or not observed_text:
+        return {}
+
+    signal: Dict[str, Any] = {
+        "source": "region_context",
+        "output_key": output_key,
+        "locator": locator,
+        "frame_path": list(region_context.get("frame_path") or []),
+        "observed_text": observed_text,
+    }
+    _set_if_present(signal, "region_id", region_context.get("region_id"))
+    _set_if_present(signal, "label", label)
+    return signal
+
+
+def _selected_region_has_structured_region_evidence(region_context: Dict[str, Any]) -> bool:
+    table_summary = region_context.get("table_summary") if isinstance(region_context.get("table_summary"), dict) else {}
+    list_summary = region_context.get("list_summary") if isinstance(region_context.get("list_summary"), dict) else {}
+    action_summary = region_context.get("action_summary") if isinstance(region_context.get("action_summary"), dict) else {}
+    if table_summary.get("locator_candidates") or table_summary.get("headers") or table_summary.get("sample_rows"):
+        return True
+    if list_summary.get("item_selector") or list_summary.get("container_locator_candidates"):
+        return True
+    controls = action_summary.get("controls")
+    return isinstance(controls, list) and bool(controls)
+
+
+def _selected_region_text_label(plan: Dict[str, Any], result: Dict[str, Any]) -> str:
+    fields = _snapshot_plan_fields(plan)
+    labels = [str(field.get("label") or "").strip() for field in fields if str(field.get("label") or "").strip()]
+    if len(labels) == 1:
+        return labels[0]
+    output = result.get("output")
+    if isinstance(output, dict) and len(output) == 1:
+        return str(next(iter(output.keys())) or "").strip()
+    return ""
+
+
+def _selected_region_text_target_locator(
+    region_context: Dict[str, Any],
+    observed_values: set[str],
+) -> tuple[Dict[str, Any], str]:
+    local_texts = [
+        str(item or "").strip()
+        for item in list(region_context.get("local_text") or [])
+        if str(item or "").strip()
+    ]
+    if not local_texts:
+        return {}, ""
+    min_len = min(len(text) for text in local_texts)
+    target_texts = {text for text in local_texts if len(text) == min_len}
+    explicit_target = region_context.get("selected_text_target")
+    if isinstance(explicit_target, dict):
+        text = str(explicit_target.get("text") or "").strip()
+        locator = _selected_region_safe_locator(explicit_target.get("locator_candidates"), observed_values)
+        if text in target_texts and locator:
+            return locator, text
+
+    intersecting_elements = region_context.get("intersecting_elements")
+    if not isinstance(intersecting_elements, list):
+        return {}, ""
+    for element in intersecting_elements:
+        if not isinstance(element, dict):
+            continue
+        text = str(element.get("text") or element.get("name") or "").strip()
+        if text not in target_texts:
+            continue
+        locator = _selected_region_safe_locator(element.get("locator_candidates"), observed_values)
+        if locator:
+            return locator, text
+    return {}, ""
+
+
+def _selected_region_safe_locator(candidates: Any, observed_values: set[str]) -> Dict[str, Any]:
+    if not isinstance(candidates, list):
+        return {}
+    ordered = [candidate for candidate in candidates if isinstance(candidate, dict) and candidate.get("selected")]
+    ordered.extend(candidate for candidate in candidates if isinstance(candidate, dict) and not candidate.get("selected"))
+    for candidate in ordered:
+        locator = normalize_locator(candidate.get("locator") if isinstance(candidate.get("locator"), dict) else candidate)
+        if not has_valid_locator(locator):
+            continue
+        if locator_has_unstable_identity(locator):
+            continue
+        if _selected_region_locator_is_observed_text_driven(locator, observed_values):
+            continue
+        return locator
+    return {}
+
+
+def _selected_region_locator_is_observed_text_driven(locator: Dict[str, Any], observed_values: set[str]) -> bool:
+    method = str(locator.get("method") or "").strip()
+    value = str(locator.get("value") or "").strip()
+    if method in {"text", "title"} and value and value in observed_values:
+        return True
+    if method == "role":
+        name = str(locator.get("name") or "").strip()
+        return bool(name and name in observed_values)
+    if method == "nested":
+        parent = normalize_locator(locator.get("parent"))
+        child = normalize_locator(locator.get("child"))
+        return _selected_region_locator_is_observed_text_driven(
+            parent,
+            observed_values,
+        ) or _selected_region_locator_is_observed_text_driven(child, observed_values)
+    if method in {"nth", "filter_has_text"}:
+        base = normalize_locator(locator.get("locator") or locator.get("base"))
+        if base and _selected_region_locator_is_observed_text_driven(base, observed_values):
+            return True
+        has_text = str(locator.get("has_text") or "").strip()
+        return bool(has_text and has_text in observed_values)
+    return False
+
+
+def _selected_region_observed_text_values(
+    plan: Dict[str, Any],
+    result: Dict[str, Any],
+    region_context: Dict[str, Any],
+) -> set[str]:
+    values: set[str] = set()
+
+    def add(value: Any) -> None:
+        if isinstance(value, str) and value.strip():
+            values.add(value.strip())
+
+    for item in list(region_context.get("local_text") or []):
+        add(item)
+    add(plan.get("section_title"))
+
+    def walk(value: Any) -> None:
+        if isinstance(value, str):
+            add(value)
+        elif isinstance(value, dict):
+            for nested in value.values():
+                walk(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                walk(nested)
+
+    walk(result.get("output"))
+    return values
 
 
 def _object_dict(value: Any) -> Dict[str, Any]:

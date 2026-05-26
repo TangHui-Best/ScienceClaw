@@ -1575,6 +1575,152 @@ def test_recording_runtime_agent_does_not_create_heading_scoped_signal_from_afte
     asyncio.run(run_test())
 
 
+def test_recording_runtime_agent_records_selected_region_text_extract_signal(monkeypatch):
+    async def run_test():
+        recorded_text = "Recorded purchase title 3333"
+
+        async def fake_snapshot(_page, region_scope=None):
+            return {"url": "https://example.test/detail", "title": "Detail", "region_scope": region_scope}
+
+        def fake_compact_snapshot(_snapshot, _instruction, region_scope=None):
+            return {
+                "mode": "region_scoped_snapshot",
+                "url": "https://example.test/detail",
+                "title": "Detail",
+                "region_scope": region_scope,
+                "expanded_regions": [],
+            }
+
+        async def planner(_payload):
+            return {
+                "description": "Get title info",
+                "action_type": "run_python",
+                "expected_effect": "extract",
+                "output_key": "title_info",
+                "allow_empty_output": True,
+                "code": (
+                    "async def run(page, results):\n"
+                    f"    return {{'Title': {recorded_text!r}}}"
+                ),
+            }
+
+        monkeypatch.setattr("backend.rpa.recording_runtime_agent._safe_page_snapshot", fake_snapshot)
+        monkeypatch.setattr("backend.rpa.recording_runtime_agent._compact_snapshot", fake_compact_snapshot)
+
+        result = await RecordingRuntimeAgent(planner=planner).run(
+            page=_FakePage(),
+            instruction="Get title info",
+            runtime_results={},
+            region_context={
+                "region_id": "region-1",
+                "page_url": "https://example.test/detail",
+                "evidence": {
+                    "inferred_kind": "text_region",
+                    "local_text": [recorded_text],
+                    "intersecting_elements": [
+                        {
+                            "tag": "div",
+                            "text": "Other header text",
+                            "locator_candidates": [
+                                {"kind": "css", "locator": {"method": "css", "value": ".header-info-box"}}
+                            ],
+                        },
+                        {
+                            "tag": "h5",
+                            "text": recorded_text,
+                            "locator_candidates": [
+                                {
+                                    "kind": "text",
+                                    "selected": True,
+                                    "locator": {"method": "text", "value": recorded_text, "exact": True},
+                                },
+                                {
+                                    "kind": "css",
+                                    "locator": {"method": "css", "value": ".titlePanel-left"},
+                                },
+                            ],
+                        },
+                    ],
+                },
+            },
+        )
+
+        assert result.success is True
+        assert result.trace.signals["selected_region_text_extract"] == {
+            "source": "region_context",
+            "region_id": "region-1",
+            "output_key": "title_info",
+            "label": "Title",
+            "locator": {"method": "css", "value": ".titlePanel-left"},
+            "frame_path": [],
+            "observed_text": recorded_text,
+        }
+
+    asyncio.run(run_test())
+
+
+def test_recording_runtime_agent_does_not_record_selected_region_text_extract_from_observed_text_locator(monkeypatch):
+    async def run_test():
+        recorded_text = "Recorded purchase title 3333"
+
+        async def fake_snapshot(_page, region_scope=None):
+            return {"url": "https://example.test/detail", "title": "Detail", "region_scope": region_scope}
+
+        def fake_compact_snapshot(_snapshot, _instruction, region_scope=None):
+            return {
+                "mode": "region_scoped_snapshot",
+                "url": "https://example.test/detail",
+                "title": "Detail",
+                "region_scope": region_scope,
+                "expanded_regions": [],
+            }
+
+        async def planner(_payload):
+            return {
+                "description": "Get title info",
+                "action_type": "run_python",
+                "expected_effect": "extract",
+                "output_key": "title_info",
+                "allow_empty_output": True,
+                "code": "async def run(page, results):\n    return 'ok'",
+            }
+
+        monkeypatch.setattr("backend.rpa.recording_runtime_agent._safe_page_snapshot", fake_snapshot)
+        monkeypatch.setattr("backend.rpa.recording_runtime_agent._compact_snapshot", fake_compact_snapshot)
+
+        result = await RecordingRuntimeAgent(planner=planner).run(
+            page=_FakePage(),
+            instruction="Get title info",
+            runtime_results={},
+            region_context={
+                "region_id": "region-1",
+                "page_url": "https://example.test/detail",
+                "evidence": {
+                    "inferred_kind": "text_region",
+                    "local_text": [recorded_text],
+                    "intersecting_elements": [
+                        {
+                            "tag": "h5",
+                            "text": recorded_text,
+                            "locator_candidates": [
+                                {
+                                    "kind": "text",
+                                    "selected": True,
+                                    "locator": {"method": "text", "value": recorded_text, "exact": True},
+                                }
+                            ],
+                        }
+                    ],
+                },
+            },
+        )
+
+        assert result.success is True
+        assert "selected_region_text_extract" not in result.trace.signals
+
+    asyncio.run(run_test())
+
+
 def test_recording_runtime_agent_reasks_planner_when_region_extract_snapshot_missing_fields(monkeypatch):
     async def run_test():
         captured_payloads = []

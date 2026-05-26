@@ -1957,6 +1957,54 @@ def test_selected_region_text_extract_rejects_observed_text_driven_locator():
     assert trace_requires_runtime_ai_replay(trace) is True
 
 
+def test_selected_region_text_extract_rejects_observed_role_name_locator():
+    recorded_text = "Recorded purchase title 3333"
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        user_instruction="Get title info",
+        description="Get title info",
+        output_key="title_info",
+        output={"Title": recorded_text},
+        signals={
+            "region_selection": {
+                "region_id": "region-1",
+                "inferred_kind": "text_region",
+                "local_text_preview": [recorded_text],
+            },
+            "region_context_decision": {
+                "used_as": "extraction",
+                "region_id": "region-1",
+                "action_type": "run_python",
+                "output_key": "title_info",
+            },
+            "selected_region_text_extract": {
+                "source": "region_context",
+                "region_id": "region-1",
+                "output_key": "title_info",
+                "label": "Title",
+                "locator": {"method": "role", "role": "heading", "name": recorded_text},
+                "frame_path": [],
+                "observed_text": recorded_text,
+            },
+        },
+        region_scope={"region_id": "region-1", "mode": "region_scoped_snapshot"},
+        region_context={
+            "region_id": "region-1",
+            "inferred_kind": "text_region",
+            "local_text": [recorded_text],
+        },
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    _assert_script_loads(script)
+    body = _execute_body(script)
+
+    assert "_execute_runtime_ai_instruction(current_page, _results, kwargs, 'Get title info', 'title_info')" in body
+    assert recorded_text not in body
+    assert "get_by_role" not in body
+    assert trace_requires_runtime_ai_replay(trace) is True
+
+
 def test_selected_region_local_text_without_fields_does_not_inject_recorded_region_context():
     trace = RPAAcceptedTrace(
         trace_type=RPATraceType.AI_OPERATION,

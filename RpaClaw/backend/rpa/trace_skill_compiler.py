@@ -1673,6 +1673,9 @@ def _locator_is_observed_text_driven(
     value = str(locator.get("value") or "").strip()
     if method in {"text", "title"} and value and value in observed_values:
         return True
+    if method == "role":
+        name = str(locator.get("name") or "").strip()
+        return bool(name and name in observed_values)
     if method == "nested":
         parent = locator.get("parent") if isinstance(locator.get("parent"), dict) else {}
         child = locator.get("child") if isinstance(locator.get("child"), dict) else {}

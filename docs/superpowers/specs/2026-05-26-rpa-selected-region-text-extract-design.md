@@ -93,6 +93,26 @@ date: 2026-05-26
 
 该 signal 的核心不是让 compiler 重新选择 locator，而是把录制阶段已经确认的“用户选区目标文本元素”显式传给 compiler。若 trace 里没有这样的明确 locator，compiler 不应自行推断，应回退 runtime AI。
 
+### Producer 边界
+
+真实录制链路中，`selected_region_text_extract` 应由 recording runtime 在接受 trace 前生成，而不是由 compiler 从候选列表中临时猜测。
+
+允许生成该 signal 的条件：
+
+- 当前 region 是 `text_region`。
+- 当前步骤是 extraction，且有 `output_key`。
+- 选区没有 table/list/action controls 等更强结构证据。
+- `local_text` 中存在一个最小文本片段，且 `intersecting_elements` 中有元素文本与该片段完全一致。
+- 该元素存在稳定、可执行、非 observed-value 驱动 locator。
+
+不允许生成该 signal 的情况：
+
+- 只能得到 `get_by_text(observed_text)`、`get_by_title(observed_text)` 或 `get_by_role(..., name=observed_text)`。
+- 只能得到大容器、rect、local_text 或现场输出值。
+- 选区更像表格、列表或操作控件。
+
+这个 producer 逻辑是证据提升，不是 compiler 规则化 selector 选择：它只把录制阶段已经足够明确的目标写入 trace；证据不足仍回 runtime AI。
+
 ## 触发条件
 
 只有同时满足以下条件时，才进入 selected-region 文本读取路径：
