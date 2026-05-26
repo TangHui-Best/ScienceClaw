@@ -392,6 +392,9 @@ class RPASessionManager:
         step = self._find_recent_action_step(session_id, tab_id=source_tab_id)
         if not step:
             return
+        session = self.sessions.get(session_id)
+        if not session:
+            return
 
         step.source_tab_id = source_tab_id
         step.target_tab_id = target_tab_id
@@ -404,6 +407,8 @@ class RPASessionManager:
             },
         )
         self._append_step_description(step, " 并在新标签页打开")
+        self._rebuild_manual_recording_state(session)
+        await self._record_manual_trace_for_step(session_id, step)
         await self._broadcast_step(session_id, step)
         logger.debug(f"[RPA] Attached popup signal: source={source_tab_id} target={target_tab_id}")
 

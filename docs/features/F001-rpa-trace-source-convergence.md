@@ -5,7 +5,7 @@ title: RPA Trace Source Convergence
 status: active
 feature_ids: [F001]
 created: 2026-05-13
-updated: 2026-05-16
+updated: 2026-05-26
 specs:
   - docs/superpowers/specs/2026-04-28-rpa-trace-first-full-migration-design.md
 plans:
@@ -80,3 +80,5 @@ Continue the active migration plan with a focused compiler gate: prevent weak/ou
 2026-05-25 Task 7N follow-up: after the page-context fix, replay still timed out on `iframe:nth-of-type(2)`. Manual replay now prefers browser-reported `signals.reported_frame_path` over the weaker server fallback `trace.frame_path`, while retaining `trace.frame_path` as fallback when reported evidence is absent. Evidence is recorded in `docs/evidence/EV-001-rpa-trace-source-convergence.md` under "Task 7N".
 
 2026-05-25 Task 7N second follow-up: a browser-reported `iframe[src="..."]` frame path can still contain recording-time dynamic URL state such as request ids or app ids. Manual replay now treats that shape as frame identity evidence, not as a stable selector: exact dynamic iframe src values are converted to a runtime frame resolver keyed by stable origin/path/hash evidence. The SOP action is preserved; unresolved frame context must not be solved by deleting the iframe step. Evidence is recorded in `docs/evidence/EV-001-rpa-trace-source-convergence.md` under "Task 7N".
+
+2026-05-26 Task 7N third follow-up: user-provided trace evidence showed the real failure was not another iframe selector issue. The opener action `点击 text("操作")` and the confirm action `点击 .jalor-icon.confirm` had different `tab_id` values, but the opener trace lacked `signals.popup` even though popup metadata is asynchronously attached to the backing step after `register_context_page()`. `RPASessionManager._upgrade_recent_click_to_open_tab()` now rebuilds manual recording state and refreshes the accepted trace after attaching popup signal, so trace-only compilation can emit `expect_popup()` from the actual accepted timeline. Evidence is recorded in `docs/evidence/EV-001-rpa-trace-source-convergence.md` under "Task 7N".

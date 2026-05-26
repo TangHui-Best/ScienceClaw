@@ -5,7 +5,7 @@ title: RPA Trace Source Convergence Evidence
 status: active
 feature_ids: [F001]
 created: 2026-05-13
-updated: 2026-05-25
+updated: 2026-05-26
 evidence_level: exhaustive
 ---
 
@@ -859,6 +859,23 @@ Manual smoke:
   - Additional focused GREEN result: `2 passed, 96 deselected`.
   - Additional compiler regression command: `$env:PYTHONPATH='RpaClaw'; pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q`
   - Additional compiler regression result: `98 passed`.
+- 2026-05-26 third follow-up:
+  - User supplied the accepted trace data from the failed recording. The opener trace `点击 text("操作")` used tab `a5934128-a207-417f-be56-698e915dc1d8` and lacked `signals.popup`; the next confirm trace `点击 .jalor-icon.confirm` used tab `ad416614-5ca0-4c11-ac45-53ecc7143e8a` and carried frame context for the new page.
+  - Root cause: `register_context_page()` asynchronously attached popup metadata to the recent opener `RPAStep`, but `_upgrade_recent_click_to_open_tab()` only broadcast the step. Because F001 generation compiles from `session.traces`, the previously emitted accepted trace remained stale and did not carry popup evidence, so the compiler could not emit `expect_popup()` from the trace timeline.
+  - Rejected path: adding another iframe selector repair would keep treating the symptom. The user-provided trace proved the first missing evidence was opener-tab popup propagation, not Jalor button selection or dynamic iframe URL matching.
+  - Implementation: after attaching popup signal to the opener step, `RPASessionManager._upgrade_recent_click_to_open_tab()` now rebuilds manual recording state and refreshes the corresponding accepted trace before broadcasting the step.
+  - RED verification command: `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_register_context_page_syncs_popup_signal_to_trace -q`
+  - RED result before fix: `1 failed`; failure was `KeyError: 'popup'` on the accepted trace.
+  - Focused GREEN command: `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_register_context_page_syncs_popup_signal_to_trace -q`
+  - Focused GREEN result: `1 passed`.
+  - Related manager command: `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_register_context_page_attaches_popup_signal_to_recent_click RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_register_context_page_syncs_popup_signal_to_trace RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_navigation_after_popup_signal_click_is_skipped RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_popup_download_attaches_signals_to_original_click_step -q`
+  - Related manager result: `4 passed`.
+  - Related compiler command: `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -k "popup_click or manual_action_with_new_tab_id_and_frame_path or dynamic_reported_frame_src or switch_tab" -q`
+  - Related compiler result: `7 passed, 91 deselected`.
+  - File-level manager command: `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_manager.py -q`
+  - File-level manager result: `94 passed`.
+  - Compiler suite command: `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q`
+  - Compiler suite result: `98 passed`.
 
 ## Current Evidence
 

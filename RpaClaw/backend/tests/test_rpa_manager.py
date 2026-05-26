@@ -2606,6 +2606,35 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.session.steps[-1].target_tab_id, target_tab_id)
         self.assertEqual(self.session.steps[-1].signals["popup"]["target_tab_id"], target_tab_id)
 
+    async def test_register_context_page_syncs_popup_signal_to_trace(self):
+        source_page = _FakePage("https://example.com", "Example")
+        target_page = _FakePage("https://example.com/new", "Popup", context=source_page.context)
+        source_tab_id = await self.manager.register_page(self.session.id, source_page, make_active=True)
+        await self.manager.add_step(
+            self.session.id,
+            {
+                "action": "click",
+                "target": json.dumps({"method": "text", "value": "操作"}),
+                "value": "",
+                "label": "",
+                "tag": "A",
+                "url": "https://example.com",
+                "description": '点击 text("操作")',
+                "sensitive": False,
+                "tab_id": source_tab_id,
+            },
+        )
+
+        trace_id = f"trace-{self.session.steps[-1].id}"
+        self.assertEqual(len(self.session.traces), 1)
+        self.assertNotIn("popup", self.session.traces[0].signals)
+
+        target_tab_id = await self.manager.register_context_page(self.session.id, target_page, make_active=True)
+
+        trace = next(item for item in self.session.traces if item.trace_id == trace_id)
+        self.assertEqual(trace.signals["popup"]["source_tab_id"], source_tab_id)
+        self.assertEqual(trace.signals["popup"]["target_tab_id"], target_tab_id)
+
     async def test_register_context_page_bootstraps_current_page_recorder_runtime(self):
         source_page = _FakePage("https://example.com", "Example")
         target_page = _FakePage("https://example.com/new", "Popup", context=source_page.context)
