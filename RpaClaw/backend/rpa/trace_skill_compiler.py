@@ -887,6 +887,10 @@ class TraceSkillCompiler:
         previous_traces: List[RPAAcceptedTrace],
         used_output_keys: Dict[str, int],
     ) -> List[str]:
+        if _has_selected_region_text_extract(trace):
+            return self._render_selected_region_text_extract_trace(index, trace, used_output_keys)
+        if _snapshot_extract_is_selected_text_region_evidence(trace):
+            return self._render_runtime_ai_instruction_trace(index, trace, used_output_keys)
         if self._has_usable_snapshot_extract_fields(trace):
             return self._render_snapshot_extract_trace(index, trace, used_output_keys)
         if _is_selected_region_local_text_extract(trace):
@@ -1107,6 +1111,37 @@ class TraceSkillCompiler:
         lines.append("    _result = ''")
         lines.append(f"    _heading = {heading_expr}")
         lines.append("    _result = await _extract_bounded_section_text(_heading)")
+        lines.append(f"    _results[{key!r}] = _result")
+        return lines
+
+    def _render_selected_region_text_extract_trace(
+        self,
+        index: int,
+        trace: RPAAcceptedTrace,
+        used_output_keys: Dict[str, int],
+    ) -> List[str]:
+        signal = _trace_signal(trace, "selected_region_text_extract")
+        key = self._allocate_output_key(
+            trace,
+            trace.output_key or signal.get("output_key") or f"region_text_{index}",
+            used_output_keys,
+        )
+        locator = normalize_locator(signal.get("locator") if isinstance(signal.get("locator"), dict) else {})
+        frame_path = signal.get("frame_path") if isinstance(signal.get("frame_path"), list) else trace.frame_path
+        label = str(signal.get("label") or "").strip()
+        scope_lines, scope_var = self._frame_scope_lines(list(frame_path or []))
+        locator_expr = _locator_expression(scope_var, locator)
+        if not locator_expr.endswith(".first"):
+            locator_expr = f"{locator_expr}.first"
+
+        lines = ["", f"    # trace {index}: {trace.description or 'selected region text extract'}"]
+        lines.extend(scope_lines)
+        if label:
+            lines.append("    _result = {}")
+            lines.append(f"    _value = (await {locator_expr}.inner_text()).strip()")
+            lines.append(f"    _result[{label!r}] = _value")
+        else:
+            lines.append(f"    _result = (await {locator_expr}.inner_text()).strip()")
         lines.append(f"    _results[{key!r}] = _result")
         return lines
 
@@ -1570,6 +1605,23 @@ def _is_selected_region_local_text_extract(trace: RPAAcceptedTrace) -> bool:
     return str(signal.get("source") or "").strip() == "selected_region.local_text"
 
 
+def _has_selected_region_text_extract(trace: RPAAcceptedTrace) -> bool:
+    signal = _trace_signal(trace, "selected_region_text_extract")
+    locator = normalize_locator(signal.get("locator") if isinstance(signal.get("locator"), dict) else {})
+    if not has_valid_locator(locator):
+        return False
+    return not _locator_is_observed_text_driven(locator, trace, signal)
+
+
+def _snapshot_extract_is_selected_text_region_evidence(trace: RPAAcceptedTrace) -> bool:
+    if not _trace_signal(trace, "extract_snapshot"):
+        return False
+    if _trace_region_kind(trace) != "text_region":
+        return False
+    source = str(_trace_signal(trace, "extract_snapshot").get("source") or "").strip()
+    return source in {"selected_region.local_text", "region_scoped_snapshot", "expanded_regions"}
+
+
 def _has_heading_scoped_text_extract(trace: RPAAcceptedTrace) -> bool:
     signal = _trace_signal(trace, "region_text_extract")
     if str(signal.get("kind") or "").strip() != "heading_scoped_text":
@@ -1609,6 +1661,63 @@ def _is_region_scoped_free_text_extract(trace: RPAAcceptedTrace) -> bool:
         return True
 
     return bool(trace.output_key and _looks_like_extract_instruction(trace))
+
+
+def _locator_is_observed_text_driven(
+    locator: Dict[str, Any],
+    trace: RPAAcceptedTrace,
+    signal: Dict[str, Any],
+) -> bool:
+    observed_values = _observed_text_values(trace, signal)
+    method = str(locator.get("method") or "").strip()
+    value = str(locator.get("value") or "").strip()
+    if method in {"text", "title"} and value and value in observed_values:
+        return True
+    if method == "nested":
+        parent = locator.get("parent") if isinstance(locator.get("parent"), dict) else {}
+        child = locator.get("child") if isinstance(locator.get("child"), dict) else {}
+        return _locator_is_observed_text_driven(parent, trace, signal) or _locator_is_observed_text_driven(
+            child,
+            trace,
+            signal,
+        )
+    if method in {"nth", "filter_has_text"}:
+        base = locator.get("locator") or locator.get("base")
+        if isinstance(base, dict) and _locator_is_observed_text_driven(base, trace, signal):
+            return True
+        has_text = str(locator.get("has_text") or "").strip()
+        return bool(has_text and has_text in observed_values)
+    return False
+
+
+def _observed_text_values(trace: RPAAcceptedTrace, signal: Dict[str, Any]) -> set[str]:
+    values: set[str] = set()
+
+    def add(value: Any) -> None:
+        if isinstance(value, str) and value.strip():
+            values.add(value.strip())
+
+    add(signal.get("observed_text"))
+    context = _trace_region_context(trace)
+    for item in list(context.get("local_text") or []):
+        add(item)
+    for item in list(_trace_signal(trace, "region_selection").get("local_text_preview") or []):
+        add(item)
+
+    def walk(value: Any) -> None:
+        if isinstance(value, str):
+            add(value)
+        elif isinstance(value, dict):
+            for nested in value.values():
+                walk(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                walk(nested)
+
+    walk(trace.output)
+    if trace.ai_execution:
+        walk(trace.ai_execution.output)
+    return values
 
 
 def _trace_output_is_action_evidence(output: Any) -> bool:
@@ -1835,6 +1944,10 @@ def _should_preserve_runtime_ai_instruction(trace: RPAAcceptedTrace) -> bool:
 def trace_requires_runtime_ai_replay(trace: RPAAcceptedTrace) -> bool:
     if trace.trace_type != RPATraceType.AI_OPERATION:
         return False
+    if _has_selected_region_text_extract(trace):
+        return False
+    if _snapshot_extract_is_selected_text_region_evidence(trace):
+        return True
     if _trace_signal(trace, "extract_snapshot") and TraceSkillCompiler._has_usable_snapshot_extract_fields(trace):
         return False
     if _has_heading_scoped_text_extract(trace):

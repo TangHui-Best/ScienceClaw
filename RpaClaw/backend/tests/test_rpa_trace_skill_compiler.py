@@ -1790,7 +1790,54 @@ def test_region_single_value_falls_back_when_first_nested_locator_is_invalid():
     assert "_execute_runtime_ai_instruction" not in body
 
 
-def test_selected_region_local_text_extract_with_fields_uses_snapshot_extract_not_runtime_ai():
+def test_selected_region_text_extract_with_explicit_locator_compiles_to_inner_text():
+    recorded_text = "Recorded purchase title 3333"
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        user_instruction="Get title info",
+        description="Get title info",
+        output_key="title_info",
+        output={"Title": recorded_text},
+        signals={
+            "region_selection": {"region_id": "region-1", "inferred_kind": "text_region"},
+            "region_context_decision": {
+                "used_as": "extraction",
+                "region_id": "region-1",
+                "action_type": "run_python",
+                "output_key": "title_info",
+            },
+            "selected_region_text_extract": {
+                "source": "region_context",
+                "region_id": "region-1",
+                "output_key": "title_info",
+                "label": "Title",
+                "locator": {"method": "css", "value": ".titlePanel-left"},
+                "frame_path": [],
+                "observed_text": recorded_text,
+            },
+        },
+        region_scope={"region_id": "region-1", "mode": "region_scoped_snapshot"},
+        region_context={
+            "region_id": "region-1",
+            "inferred_kind": "text_region",
+            "local_text": [recorded_text],
+        },
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    _assert_script_loads(script)
+    body = _execute_body(script)
+
+    assert "_execute_runtime_ai_instruction" not in body
+    assert "current_page.locator('.titlePanel-left').first.inner_text()" in body
+    assert "_result['Title'] = _value" in body
+    assert "_results['title_info'] = _result" in body
+    assert recorded_text not in body
+    assert "aui-form-item" not in body
+    assert trace_requires_runtime_ai_replay(trace) is False
+
+
+def test_selected_region_local_text_fields_fall_back_to_runtime_ai_without_explicit_locator():
     trace = RPAAcceptedTrace(
         trace_type=RPATraceType.AI_OPERATION,
         user_instruction="获取框选区域的模型数量",
@@ -1814,11 +1861,100 @@ def test_selected_region_local_text_extract_with_fields_uses_snapshot_extract_no
     _assert_script_loads(script)
     body = _execute_body(script)
 
-    assert "_execute_runtime_ai_instruction" not in body
+    assert "_execute_runtime_ai_instruction" in body
     assert "'region_id': 'region-1'" not in body
     assert "Total 99 models" not in body
-    assert "_results['model_count'] = _result" in body
-    assert trace_requires_runtime_ai_replay(trace) is False
+    assert "aui-form-item" not in body
+    assert trace_requires_runtime_ai_replay(trace) is True
+
+
+def test_selected_region_expanded_region_fields_fall_back_to_runtime_ai_without_explicit_locator():
+    recorded_text = "Recorded purchase title 3333"
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        user_instruction="Get title info",
+        description="Get title info",
+        output_key="title_info",
+        output={"Title": recorded_text},
+        signals={
+            "extract_snapshot": {
+                "source": "expanded_regions",
+                "section_title": recorded_text,
+                "fields": [{"label": "Title", "value": recorded_text, "visible": True}],
+            },
+            "region_selection": {"region_id": "region-1", "inferred_kind": "text_region"},
+            "region_context_decision": {
+                "used_as": "extraction",
+                "region_id": "region-1",
+                "action_type": "extract_snapshot",
+                "output_key": "title_info",
+            },
+        },
+        region_scope={"region_id": "region-1", "mode": "region_scoped_snapshot"},
+        region_context={
+            "region_id": "region-1",
+            "inferred_kind": "text_region",
+            "local_text": [recorded_text],
+        },
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    _assert_script_loads(script)
+    body = _execute_body(script)
+
+    assert "_execute_runtime_ai_instruction(current_page, _results, kwargs, 'Get title info', 'title_info')" in body
+    assert recorded_text not in body
+    assert "aui-form-item" not in body
+    assert "xpath=//*[normalize-space()='Title']" not in body
+    assert trace_requires_runtime_ai_replay(trace) is True
+
+
+def test_selected_region_text_extract_rejects_observed_text_driven_locator():
+    recorded_text = "Recorded purchase title 3333"
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        user_instruction="Get title info",
+        description="Get title info",
+        output_key="title_info",
+        output={"Title": recorded_text},
+        signals={
+            "region_selection": {
+                "region_id": "region-1",
+                "inferred_kind": "text_region",
+                "local_text_preview": [recorded_text],
+            },
+            "region_context_decision": {
+                "used_as": "extraction",
+                "region_id": "region-1",
+                "action_type": "run_python",
+                "output_key": "title_info",
+            },
+            "selected_region_text_extract": {
+                "source": "region_context",
+                "region_id": "region-1",
+                "output_key": "title_info",
+                "label": "Title",
+                "locator": {"method": "text", "value": recorded_text, "exact": True},
+                "frame_path": [],
+                "observed_text": recorded_text,
+            },
+        },
+        region_scope={"region_id": "region-1", "mode": "region_scoped_snapshot"},
+        region_context={
+            "region_id": "region-1",
+            "inferred_kind": "text_region",
+            "local_text": [recorded_text],
+        },
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    _assert_script_loads(script)
+    body = _execute_body(script)
+
+    assert "_execute_runtime_ai_instruction(current_page, _results, kwargs, 'Get title info', 'title_info')" in body
+    assert recorded_text not in body
+    assert "get_by_text" not in body
+    assert trace_requires_runtime_ai_replay(trace) is True
 
 
 def test_selected_region_local_text_without_fields_does_not_inject_recorded_region_context():
