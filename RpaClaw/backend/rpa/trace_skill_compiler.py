@@ -1511,6 +1511,12 @@ def _locator_expression(scope: str, locator: Dict[str, Any]) -> str:
     if method == "nth":
         base = _locator_expression(scope, locator.get("locator") or locator.get("base") or {"method": "css", "value": "body"})
         return f"{base}.nth({int(locator.get('index') or 0)})"
+    if method == "filter_has_text":
+        base_locator = locator.get("locator") or locator.get("base") or {"method": "css", "value": "body"}
+        has_text = locator.get("has_text", "")
+        if isinstance(base_locator, dict) and base_locator.get("method") == "css":
+            return f"{scope}.locator({base_locator.get('value', 'body')!r}).filter(has_text={has_text!r}).first"
+        return f"{_locator_expression(scope, base_locator)}.filter(has_text={has_text!r})"
     if method == "css":
         return f"{scope}.locator({locator.get('value', '')!r}).first"
     return f"{scope}.locator({locator.get('value', 'body')!r}).first"

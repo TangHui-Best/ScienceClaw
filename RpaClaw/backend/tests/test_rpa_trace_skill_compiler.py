@@ -952,6 +952,30 @@ def test_manual_hover_compiles_to_locator_hover():
     assert "get_by_role('button', name='Export', exact=True).hover()" in body
 
 
+def test_manual_click_filter_has_text_locator_compiles_to_playwright_filter():
+    trace = RPAAcceptedTrace(
+        trace_id="click-confirm",
+        trace_type=RPATraceType.MANUAL_ACTION,
+        action="click",
+        description="点击确定",
+        locator_candidates=[
+            {
+                "locator": {
+                    "method": "filter_has_text",
+                    "locator": {"method": "css", "value": "span"},
+                    "has_text": "确定",
+                },
+                "selected": True,
+            },
+        ],
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    body = _execute_body(script)
+
+    assert "current_page.locator('span').filter(has_text='确定').first.click()" in body
+
+
 def test_manual_popup_click_compiles_to_expect_popup_and_switches_page():
     trace = RPAAcceptedTrace(
         trace_id="popup-export",

@@ -49,6 +49,21 @@ def test_normalize_playwright_locator_placeholder_first_into_nth_locator():
     }
 
 
+def test_normalize_playwright_locator_filter_has_text():
+    normalized = normalize_manual_candidate(
+        {
+            "kind": "css",
+            "playwright_locator": 'page.locator("span").filter(has_text="确定")',
+            "selected": True,
+        }
+    )
+    assert normalized["locator"] == {
+        "method": "filter_has_text",
+        "locator": {"method": "css", "value": "span"},
+        "has_text": "确定",
+    }
+
+
 def test_build_outcome_accepts_canonicalized_interactive_action():
     outcome = build_manual_recording_outcome(
         action="click",

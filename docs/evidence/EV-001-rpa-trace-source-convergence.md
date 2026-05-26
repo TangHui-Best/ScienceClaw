@@ -876,6 +876,21 @@ Manual smoke:
   - File-level manager result: `94 passed`.
   - Compiler suite command: `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q`
   - Compiler suite result: `98 passed`.
+- 2026-05-26 fourth follow-up:
+  - User reran the same new-tab/Jalor-confirm scenario. When the confirm click recorded as a repair diagnostic, Configure displayed candidate `page.locator("span").filter(has_text="确定")`; clicking "使用该步骤" failed with `Locator candidate is missing locator payload`.
+  - Root cause: repair candidates could preserve a Playwright expression that was valid for replay, but neither `manual_recording_normalizer.parse_playwright_locator_string()` nor `RPASessionManager._parse_playwright_locator_expression()` could parse `.filter(has_text=...)`. The UI therefore displayed a candidate that backend repair could not promote into a canonical target.
+  - Rejected path: do not special-case Jalor, `确定`, or empty diagnostic deletion. The general missing abstraction is a locator shape: base locator filtered by visible text.
+  - Implementation: added canonical `filter_has_text` locator support in `trace_locator_utils`, `manual_recording_models`, recording normalizer parsing, diagnostic repair parsing, and `TraceSkillCompiler._locator_expression()`.
+  - RED commands:
+    - `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_manual_recording_normalizer.py::test_normalize_playwright_locator_filter_has_text -q`
+    - `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_select_trace_locator_candidate_accepts_filter_has_text_playwright_locator -q`
+    - `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_manual_click_filter_has_text_locator_compiles_to_playwright_filter -q`
+  - RED results before fix: normalizer failed with missing `locator`; manager failed with `Locator candidate is missing locator payload`; compiler failed to emit `.filter(has_text=...)`.
+  - GREEN focused results after fix: all three focused tests passed.
+  - File-level GREEN commands/results:
+    - `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_manual_recording_normalizer.py -q` -> `11 passed`.
+    - `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_manager.py -q` -> `95 passed`.
+    - `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q` -> `99 passed`.
 
 ## Current Evidence
 

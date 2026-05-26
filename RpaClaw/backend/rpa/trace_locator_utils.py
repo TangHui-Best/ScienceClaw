@@ -68,6 +68,15 @@ def normalize_locator(locator: Any) -> Dict[str, Any]:
         normalized["index"] = max(index, 0)
         return normalized
 
+    if method == "filter_has_text":
+        base = normalize_locator(locator.get("locator") or locator.get("base"))
+        has_text = str(locator.get("has_text") or "").strip()
+        if not base or not has_text:
+            return {}
+        normalized["locator"] = base
+        normalized["has_text"] = has_text
+        return normalized
+
     return {}
 
 
@@ -151,6 +160,8 @@ def _locator_instability_penalty(locator: Dict[str, Any]) -> float:
             _locator_instability_penalty(normalize_locator(locator.get("parent")))
             + _locator_instability_penalty(normalize_locator(locator.get("child")))
         )
+    if method == "filter_has_text":
+        return _locator_instability_penalty(normalize_locator(locator.get("locator")))
     if method == "testid":
         value = str(locator.get("value") or "")
         return 10000.0 if _is_random_like_identity_token(value) else 0.0
@@ -168,6 +179,8 @@ def _locator_has_unstable_identity(locator: Dict[str, Any]) -> bool:
             _locator_has_unstable_identity(normalize_locator(locator.get("parent")))
             or _locator_has_unstable_identity(normalize_locator(locator.get("child")))
         )
+    if method == "filter_has_text":
+        return _locator_has_unstable_identity(normalize_locator(locator.get("locator")))
     if method == "testid":
         return _is_random_like_identity_token(str(locator.get("value") or ""))
     if method == "css":

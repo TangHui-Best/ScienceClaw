@@ -26,6 +26,9 @@ _VALUE_FIRST_PATTERNS = (
     ("text", re.compile(rf'^page\.get_by_text\({_LITERAL_RE}(?:,\s*exact=True)?\)\.first(?:\(\))?$')),
     ("css", re.compile(rf'^page\.locator\({_LITERAL_RE}\)\.first(?:\(\))?$')),
 )
+_FILTER_HAS_TEXT_RE = re.compile(
+    rf'^page\.locator\({_LITERAL_RE}\)\.filter\(has_text={_LITERAL_RE}\)(?:\.first(?:\(\))?)?$'
+)
 
 _INTERACTIVE_ACTIONS = {
     ManualActionKind.HOVER.value,
@@ -48,6 +51,13 @@ class ManualRecordingOutcome:
 
 def parse_playwright_locator_string(value: str) -> Dict[str, Any]:
     text = str(value or "").strip()
+    filter_match = _FILTER_HAS_TEXT_RE.match(text)
+    if filter_match:
+        return {
+            "method": "filter_has_text",
+            "locator": {"method": "css", "value": _match_literal(filter_match, 1)},
+            "has_text": _match_literal(filter_match, 3),
+        }
     match = _ROLE_RE.match(text)
     if match:
         role = _match_literal(match, 1)

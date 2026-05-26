@@ -40,6 +40,7 @@ CANONICAL_TARGET_METHODS = {
     "title",
     "alt",
     "css",
+    "filter_has_text",
     "nested",
     "nth",
 }
@@ -63,6 +64,13 @@ def _canonicalize_target(target: Dict[str, Any]) -> Dict[str, Any]:
         return canonical_target
 
     if method == "nth":
+        if "locator" not in canonical_target and "base" in canonical_target:
+            canonical_target["locator"] = canonical_target.pop("base")
+        if isinstance(canonical_target.get("locator"), dict):
+            canonical_target["locator"] = _canonicalize_target(canonical_target["locator"])
+        return canonical_target
+
+    if method == "filter_has_text":
         if "locator" not in canonical_target and "base" in canonical_target:
             canonical_target["locator"] = canonical_target.pop("base")
         if isinstance(canonical_target.get("locator"), dict):
@@ -100,6 +108,13 @@ def _is_canonical_target(target: Dict[str, Any]) -> bool:
             and _is_canonical_target(base)
             and isinstance(index, int)
             and index >= 0
+        )
+    if method == "filter_has_text":
+        base = target.get("locator")
+        return (
+            isinstance(base, dict)
+            and _is_canonical_target(base)
+            and _is_non_empty_string(target.get("has_text"))
         )
     return False
 

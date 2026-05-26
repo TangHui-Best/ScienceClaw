@@ -494,6 +494,47 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.session.trace_diagnostics), 0)
         self.assertEqual(len(self.session.traces), 1)
 
+    async def test_select_trace_locator_candidate_accepts_filter_has_text_playwright_locator(self):
+        await self.manager.add_step(
+            self.session.id,
+            {
+                "action": "click",
+                "target": "",
+                "description": "点击 None",
+                "source": "record",
+                "locator_candidates": [
+                    {
+                        "kind": "css",
+                        "playwright_locator": 'page.locator(".unknown")',
+                        "selected": True,
+                        "strict_match_count": 0,
+                    },
+                    {
+                        "kind": "css",
+                        "playwright_locator": 'page.locator("span").filter(has_text="确定")',
+                        "selected": False,
+                        "strict_match_count": 1,
+                    },
+                ],
+                "validation": {"status": "fallback"},
+            },
+        )
+        diagnostic = self.session.trace_diagnostics[0]
+
+        trace = await self.manager.resolve_trace_diagnostic_locator_candidate(
+            self.session.id,
+            diagnostic.diagnostic_id,
+            1,
+        )
+
+        self.assertEqual(trace.locator_candidates[0]["locator"], {
+            "method": "filter_has_text",
+            "locator": {"method": "css", "value": "span"},
+            "has_text": "确定",
+        })
+        self.assertEqual(len(self.session.trace_diagnostics), 0)
+        self.assertEqual(len(self.session.traces), 1)
+
     async def test_delete_step_rebuilds_manual_recording_outcomes(self):
         await self.manager.add_step(
             self.session.id,
