@@ -10,7 +10,7 @@ from .manual_recording_models import (
     ManualRecordedAction,
     ManualRecordingDiagnostic,
 )
-from .trace_locator_utils import normalize_locator
+from .trace_locator_utils import locator_has_unstable_identity, normalize_locator
 
 
 _LITERAL_RE = r'(?:"((?:\\.|[^"\\])*)"|\'((?:\\.|[^\'\\])*)\')'
@@ -25,6 +25,9 @@ _VALUE_FIRST_PATTERNS = (
     ("title", re.compile(rf'^page\.get_by_title\({_LITERAL_RE}(?:,\s*exact=True)?\)\.first(?:\(\))?$')),
     ("text", re.compile(rf'^page\.get_by_text\({_LITERAL_RE}(?:,\s*exact=True)?\)\.first(?:\(\))?$')),
     ("css", re.compile(rf'^page\.locator\({_LITERAL_RE}\)\.first(?:\(\))?$')),
+)
+_FILTER_HAS_TEXT_RE = re.compile(
+    rf'^page\.locator\({_LITERAL_RE}\)\.filter\(has_text={_LITERAL_RE}\)(?:\.first(?:\(\))?)?$'
 )
 
 _INTERACTIVE_ACTIONS = {
@@ -48,6 +51,13 @@ class ManualRecordingOutcome:
 
 def parse_playwright_locator_string(value: str) -> Dict[str, Any]:
     text = str(value or "").strip()
+    filter_match = _FILTER_HAS_TEXT_RE.match(text)
+    if filter_match:
+        return {
+            "method": "filter_has_text",
+            "locator": {"method": "css", "value": _match_literal(filter_match, 1)},
+            "has_text": _match_literal(filter_match, 3),
+        }
     match = _ROLE_RE.match(text)
     if match:
         role = _match_literal(match, 1)
@@ -108,6 +118,8 @@ def _coerce_locator_payload(value: Any) -> Dict[str, Any]:
 def resolve_canonical_target(*, target: Any, locator_candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
     normalized_target = normalize_locator(_coerce_locator_payload(target))
     if normalized_target:
+        if locator_has_unstable_identity(normalized_target):
+            return {}
         return normalized_target
 
     selected_candidate = next(
@@ -119,8 +131,23 @@ def resolve_canonical_target(*, target: Any, locator_candidates: List[Dict[str, 
             selected_candidate.get("locator") if "locator" in selected_candidate else selected_candidate
         )
         if locator:
+            if locator_has_unstable_identity(locator):
+                return {}
             return locator
     return {}
+
+
+def _has_unstable_target_evidence(target: Any, locator_candidates: List[Dict[str, Any]]) -> bool:
+    normalized_target = normalize_locator(_coerce_locator_payload(target))
+    if normalized_target and locator_has_unstable_identity(normalized_target):
+        return True
+    for candidate in locator_candidates:
+        if not isinstance(candidate, dict):
+            continue
+        locator = normalize_locator(candidate.get("locator") if "locator" in candidate else candidate)
+        if locator and locator_has_unstable_identity(locator):
+            return True
+    return False
 
 
 def build_manual_recording_outcome(
@@ -154,12 +181,17 @@ def build_manual_recording_outcome(
     )
 
     if action in _INTERACTIVE_ACTIONS and not canonical_target:
+        failure_reason = (
+            "unstable_target_locator"
+            if _has_unstable_target_evidence(target, normalized_candidates)
+            else "canonical_target_missing"
+        )
         return ManualRecordingOutcome(
             accepted_action=None,
             diagnostic=ManualRecordingDiagnostic(
                 related_step_id=step_id,
                 related_action_kind=action_kind,
-                failure_reason="canonical_target_missing",
+                failure_reason=failure_reason,
                 raw_candidates=normalized_candidates,
                 element_snapshot=dict(element_snapshot or {}),
                 page_state=dict(page_state or {}),

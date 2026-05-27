@@ -49,6 +49,21 @@ def test_normalize_playwright_locator_placeholder_first_into_nth_locator():
     }
 
 
+def test_normalize_playwright_locator_filter_has_text():
+    normalized = normalize_manual_candidate(
+        {
+            "kind": "css",
+            "playwright_locator": 'page.locator("span").filter(has_text="确定")',
+            "selected": True,
+        }
+    )
+    assert normalized["locator"] == {
+        "method": "filter_has_text",
+        "locator": {"method": "css", "value": "span"},
+        "has_text": "确定",
+    }
+
+
 def test_build_outcome_accepts_canonicalized_interactive_action():
     outcome = build_manual_recording_outcome(
         action="click",
@@ -88,6 +103,20 @@ def test_build_outcome_accepts_testid_interactive_action():
         "method": "testid",
         "value": "login-username",
     }
+
+
+def test_build_outcome_routes_random_like_testid_to_diagnostic():
+    outcome = build_manual_recording_outcome(
+        action="click",
+        description='click testid("DIV-_standingActiveManage_standingBook-id-1213867279")',
+        target='{"method":"testid","value":"DIV-_standingActiveManage_standingBook-id-1213867279"}',
+        locator_candidates=[],
+        validation={"status": "ok"},
+    )
+
+    assert outcome.accepted_action is None
+    assert outcome.diagnostic is not None
+    assert outcome.diagnostic.failure_reason == "unstable_target_locator"
 
 
 def test_build_outcome_routes_missing_canonical_target_to_diagnostic():

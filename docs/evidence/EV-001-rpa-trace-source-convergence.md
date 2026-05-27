@@ -5,7 +5,7 @@ title: RPA Trace Source Convergence Evidence
 status: active
 feature_ids: [F001]
 created: 2026-05-13
-updated: 2026-05-17
+updated: 2026-05-26
 evidence_level: exhaustive
 ---
 
@@ -714,6 +714,183 @@ Manual smoke:
   - Did not fallback from `TraceSkillCompiler` to legacy `PlaywrightGenerator`, because that would reintroduce a second accepted compile source.
   - Did not patch only the frontend timeline sort, because the accepted timeline ordering invariant belongs in shared backend trace ordering.
   - Did not remove manager-internal `RPASession.steps` / `recorded_actions` in this patch, because the review issue is public response leakage, not private DTO quarantine.
+
+## Task 7M - Random-like testid locator evidence must not become stable replay fact
+
+- User report:
+  - A previously stable manual recording now generated a trace-first script that recorded successfully but failed in test replay.
+  - The failing step compiled to chained `get_by_test_id(...)` calls using values such as `DIV-_standingActiveManage_standingBook-id-611090413` and `DIV-_standingActiveManage_standingBook-id-1064443668`.
+  - The user correctly identified these as likely random/generated UI identifiers rather than stable business locators.
+- Attribution:
+  - Existing Feature: F001.
+  - Vision Anchor: keep `session.traces` / `RPAAcceptedTrace` as the single compile source; fix evidence quality instead of restoring legacy generator fallback.
+- Root cause:
+  - `RPASessionManager._locator_instability_penalty()` only penalized CSS selectors, so `method="testid"` values with generated numeric suffixes could remain selected.
+  - `TraceSkillCompiler._best_locator()` trusted the selected trace locator without a shared stability check.
+  - `region_context._has_stable_scope_locator_candidate()` treated every test id as a stable scope, including generated container ids.
+- Decision:
+  - Do not ban all `testid` locators. Semantic test ids such as `login-username`, `order-card`, and `search-button` remain valid evidence.
+  - Do not add a site-specific Huawei/Jalor rule.
+  - Do not post-process generated script strings.
+  - Add a shared conservative locator stability classifier and use it at the locator evidence boundary.
+- Implementation:
+  - Added shared `locator_instability_penalty()` / `locator_has_unstable_identity()` helpers in `RpaClaw/backend/rpa/trace_locator_utils.py`.
+  - Manager candidate scoring now penalizes random-like `testid`, nested random `testid`, CSS `[data-testid=...]`, `data-v-*`, deep CSS, and positional locator shapes through the same helper.
+  - Compiler fallback now replaces a selected unstable locator only when there is exactly one candidate with zero instability penalty.
+  - Region context pruning no longer preserves oversized containers merely because they have a random-like test id.
+- RED verification:
+  - Command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_handle_event_prefers_stable_candidate_over_random_like_testid RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_manual_action_prefers_stable_candidate_over_selected_random_like_testid RpaClaw/backend/tests/test_rpa_region_context.py::test_region_evidence_pruning_does_not_keep_oversized_container_for_random_like_testid -q`
+  - Result before fix: `3 failed`. Failures showed manager kept the nested random `testid`, compiler emitted the random `get_by_test_id(...)` chain, and region pruning kept the oversized generated-id container.
+- GREEN verification:
+  - Focused regression command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_handle_event_prefers_stable_candidate_over_random_like_testid RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_manual_action_prefers_stable_candidate_over_selected_random_like_testid RpaClaw/backend/tests/test_rpa_region_context.py::test_region_evidence_pruning_does_not_keep_oversized_container_for_random_like_testid -q`
+  - Focused regression result: `3 passed`.
+  - Broader related command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_manager.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_region_context.py -k "not analyze_region_route and not chat_ and not resolve_chat_region_context" -q`
+  - Broader related result: `209 passed, 6 deselected`.
+  - Full related-file attempt: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_manager.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_region_context.py -q`
+  - Full related-file result: `209 passed, 6 failed`; all six failures import `backend.route.rpa` and stop on missing local dependency `langchain_openai`, not on the changed locator stability path.
+  - Diff hygiene command: `git diff --check -- RpaClaw/backend/rpa/trace_locator_utils.py RpaClaw/backend/rpa/manager.py RpaClaw/backend/rpa/trace_skill_compiler.py RpaClaw/backend/rpa/region_context.py RpaClaw/backend/tests/test_rpa_manager.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_region_context.py`
+  - Diff hygiene result: passed with line-ending warnings only.
+- Residual risk:
+  - The classifier is intentionally conservative. Some generated ids may still be preserved when no unique stable replacement exists; that is preferable to inventing replay locators or globally rejecting numeric business ids.
+- 2026-05-25 follow-up:
+  - User reran the scenario and generated script still contained chained random `get_by_test_id(...)` calls with new generated ids such as `DIV-_standingActiveManage_standingBook-id-1213867279`.
+  - Local HEAD reproduction confirmed the first Task 7M fix only handled the case where a unique stable replacement candidate existed. If a trace carried only the random test id chain, the compiler still emitted it.
+  - Additional decision: a random-like locator with no stable replacement must not become an accepted manual replay fact. During recording it should route to locator diagnostic/repair; during compilation of old traces it should produce the existing explicit "missing valid target locator" failure instead of a 60s Playwright timeout.
+  - Added RED tests:
+    - `test_build_outcome_routes_random_like_testid_to_diagnostic`
+    - `test_handle_event_routes_only_random_like_testid_to_diagnostic`
+    - `test_manual_action_rejects_selected_random_like_testid_without_stable_candidate`
+  - RED result: `3 failed`, showing the random-only target was accepted and compiled.
+  - Implementation follow-up:
+    - `manual_recording_normalizer` now rejects canonical targets with unstable identity while still accepting weaker but non-random locators such as `nth(role(...), 0)`.
+    - `trace_locator_utils.locator_has_unstable_identity()` is now separated from scoring penalty so `nth` can be downgraded without being treated as random identity.
+    - `TraceSkillCompiler._best_locator()` now returns no locator when the selected locator has random identity and no unique stable replacement exists.
+  - GREEN command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_manual_recording_normalizer.py RpaClaw/backend/tests/test_rpa_manager.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_region_context.py -k "not analyze_region_route and not chat_ and not resolve_chat_region_context" -q`
+  - GREEN result: `221 passed, 6 deselected`.
+  - Follow-up user report: Configure showed three `unstable_target_locator` diagnostics, but each diagnostic still displayed the same random `testid` as a `使用此定位器` candidate.
+  - Root cause: the first follow-up routed random-only manual actions to diagnostics, but `_manual_trace_diagnostic_from_recording()` projected `raw_candidates` directly into `locator_candidates`, and `select_step_locator_candidate()` / `select_trace_locator_candidate()` did not reject random-identity locators.
+  - Additional fix: diagnostic projection now exposes only repairable locator candidates and stores random candidates under `rejected_locator_candidates` for evidence; backend candidate promotion rejects unstable locators even if a client posts their index.
+  - Additional RED tests:
+    - `test_handle_event_routes_only_random_like_testid_to_diagnostic` now asserts projected `locator_candidates` is empty and rejected candidates carry `rejected_reason=unstable_target_locator`.
+    - `test_select_step_locator_candidate_rejects_random_like_testid` asserts backend promotion rejects unstable locator candidates.
+  - Additional GREEN command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_manual_recording_normalizer.py RpaClaw/backend/tests/test_rpa_manager.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_region_context.py -k "not analyze_region_route and not chat_ and not resolve_chat_region_context" -q`
+  - Additional GREEN result: `222 passed, 6 deselected`.
+  - Second follow-up user report: after hiding unstable diagnostic candidates, Configure could only delete the three pending steps. This still failed the original SOP goal because required button actions would be lost instead of repaired into replayable facts.
+  - Zero-base conclusion: rejecting random `testid` locators is necessary but insufficient. The durable fix must restore stable locator evidence before diagnostics are produced, and must avoid treating a non-interactive focus click before a fill as an SOP action.
+  - Additional root cause:
+    - `playwright_recorder_runtime.js` only returned Playwright's generated selector list. When Playwright chose a strict unique generated `data-testid`, no independent role/name, label, placeholder, title, or text candidate was guaranteed to reach backend normalization.
+    - `_handle_event()` therefore had no stable replacement to promote for search/export buttons, while the search-field focus click became an unresolved diagnostic even though the following fill carried the real SOP fact.
+  - Additional implementation:
+    - The recorder runtime now appends DOM-counted semantic locator candidates (`role`, `label`, `placeholder`, `title`, `text`) to Playwright-generated candidates without removing the original candidates.
+    - Manager fill insertion now drops a preceding unresolved non-interactive focus click when it is adjacent in sequence/time, same tab/frame, and followed by a stable fill. Interactive clicks such as buttons, links, tabs, menu items, and inputs are not folded.
+    - Added `test_rpa_recorder_runtime_asset.py` to lock the runtime asset contract that generated selector candidates must be augmented with semantic candidates.
+  - Additional RED verification:
+    - Command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_recorder_runtime_asset.py -q`
+    - Result before fix: `1 failed`, showing the runtime asset had no semantic candidate augmentation contract.
+    - Command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_fill_drops_prior_unstable_non_interactive_focus_click -q`
+    - Result before fix: `1 failed`, showing the unstable focus click diagnostic remained beside the fill.
+  - Additional GREEN verification:
+    - Command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_recorder_runtime_asset.py RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_handle_event_prefers_stable_candidate_over_random_like_testid RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_handle_event_routes_only_random_like_testid_to_diagnostic RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_fill_drops_prior_unstable_non_interactive_focus_click RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_handle_event_accepts_testid_locator_candidate RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_select_step_locator_candidate_rejects_random_like_testid RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_manual_action_prefers_stable_candidate_over_selected_random_like_testid RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_manual_action_rejects_selected_random_like_testid_without_stable_candidate -q`
+    - Result: `8 passed`.
+    - Command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_manager.py RpaClaw/backend/tests/test_rpa_trace_recorder.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_recorder_runtime_asset.py -q`
+    - Result: `201 passed`.
+    - Command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_region_context.py -q -k "random_like or pruning or locator"`
+    - Result: `9 passed, 21 deselected`.
+    - Command: `node --check RpaClaw/backend/rpa/vendor/playwright_recorder_runtime.js`
+    - Result: passed.
+    - Full related-file attempt: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_manager.py RpaClaw/backend/tests/test_rpa_trace_recorder.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_region_context.py RpaClaw/backend/tests/test_rpa_recorder_runtime_asset.py -q`
+    - Result: `225 passed, 6 failed`; all six failures import `backend.route.rpa` and stop on missing local dependency `langchain_openai`, matching the existing environment limitation rather than the changed recording path.
+
+## Task 7N - Frame-context tab ids must not materialize blank replay pages
+
+- User report:
+  - A trace-first skill logged in successfully, clicked `操作`, then failed on `点击 text("确定")` with `Locator.click: Timeout 30000ms exceeded`.
+  - Runtime trace logging showed the failure step started on the business page but errored with `url=about:blank`, while the generated script had inserted `_ensure_recorded_tab(..., "tab-frame")` before the iframe action.
+  - The accepted trace for `确定` carried `frame_path=["iframe:nth-of-type(2)"]` and `signals.reported_frame_path=[iframe[src=...kweweb-b4...]]`; the different `tab_id` represented iframe/frame context evidence, not a proven Playwright `Page`.
+- Attribution:
+  - Existing Feature: F001.
+  - Vision Anchor: `RPAAcceptedTrace` remains the single compile source, but compiler strategy must follow evidence quality. `frame_path` / `reported_frame_path` is frame-context evidence and must not be treated as popup/new-tab materialization evidence.
+- Root cause:
+  - `TraceSkillCompiler._render_trace_tab_alignment()` treated any unknown `signals.tab.tab_id` change as a recorded tab to materialize.
+  - For iframe-origin manual events, that created a new `about:blank` page before replaying `frame_locator(...)`, so the later iframe locator searched the wrong page.
+- Decision:
+  - Do not add a site-specific Huawei/KWE rule.
+  - Do not globally disable older-recording tab-id backfill, because true multi-tab recordings still need page materialization.
+  - Narrow the guard to unknown `tab_id` traces that also carry frame context evidence; known tabs, explicit popup signals, `switch_tab`, and URL-backed tab restoration keep their existing behavior.
+- Implementation:
+  - Added `TraceSkillCompiler._trace_has_frame_context()` to detect `trace.frame_path` or `signals.reported_frame_path`.
+  - `_render_trace_tab_alignment()` now skips materializing an unknown tab id when the current trace is frame-scoped, leaving replay on the current page and allowing the existing frame scope generation to run there.
+- RED verification:
+  - Command: `$env:PYTHONPATH='RpaClaw'; pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -k "manual_action_with_new_tab_id_and_frame_path" -q`
+  - Result before fix: `1 failed`; the generated body contained `current_page = await _ensure_recorded_tab(tabs, current_page, kwargs, "tab-frame")` before the frame-scoped `确定` click.
+- GREEN verification:
+  - Focused command: `$env:PYTHONPATH='RpaClaw'; pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -k "manual_action_with_new_tab_id_and_frame_path" -q`
+  - Focused result: `1 passed, 96 deselected`.
+  - Multi-tab regression command: `$env:PYTHONPATH='RpaClaw'; pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -k "new_tab_id or popup_click or switch_tab or close_tab or frame_path_stays" -q`
+  - Multi-tab regression result: `11 passed, 86 deselected`.
+  - Compiler suite command: `$env:PYTHONPATH='RpaClaw'; pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q`
+  - Compiler suite result: `97 passed`.
+  - Trace-related command: `$env:PYTHONPATH='RpaClaw'; pytest RpaClaw/backend/tests/test_rpa_trace_models.py RpaClaw/backend/tests/test_rpa_trace_recorder.py RpaClaw/backend/tests/test_rpa_trace_e2e.py -q`
+  - Trace-related result: `25 passed`.
+- Residual risk:
+  - This patch intentionally does not replace positional `iframe:nth-of-type(...)` with `reported_frame_path` during replay. The immediate failure was wrong page materialization; selector-strengthening can be handled as a separate evidence-backed compiler/frame-selector improvement.
+- 2026-05-25 follow-up:
+  - User reran the same scenario and the generated script no longer materialized `about:blank`, but still timed out on the target page while waiting for `locator("iframe:nth-of-type(2)").content_frame.get_by_text("确定", exact=True)`.
+  - Root cause: the first Task 7N patch used `signals.reported_frame_path` only as evidence to avoid page materialization; manual replay still rendered `trace.frame_path`, which could be the weaker server fallback `iframe:nth-of-type(2)`.
+  - Additional decision: for manual replay, browser-reported `signals.reported_frame_path` should be the preferred frame chain when present, because Recorder V2 treats browser-side frame-path capture as the source of truth. The server `frame_path` remains fallback when reported evidence is absent.
+  - Additional implementation: added `TraceSkillCompiler._trace_replay_frame_path()` and used it for manual `navigate_click` / `navigate_press` and regular manual actions. The existing tab-context guard now delegates to the same helper so frame evidence is interpreted consistently.
+  - Additional RED command: `$env:PYTHONPATH='RpaClaw'; pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -k "manual_action_with_new_tab_id_and_frame_path" -q`
+  - Additional RED result: `1 failed`, showing the compiled script still emitted `iframe:nth-of-type(2)` instead of `signals.reported_frame_path`.
+  - Additional GREEN command: `$env:PYTHONPATH='RpaClaw'; pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -k "manual_action_with_new_tab_id_and_frame_path" -q`
+  - Additional GREEN result: `1 passed, 96 deselected`.
+  - Regression command: `$env:PYTHONPATH='RpaClaw'; pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q`
+  - Regression result: `97 passed`.
+  - Trace-related command: `$env:PYTHONPATH='RpaClaw'; pytest RpaClaw/backend/tests/test_rpa_trace_models.py RpaClaw/backend/tests/test_rpa_trace_recorder.py RpaClaw/backend/tests/test_rpa_trace_e2e.py -q`
+  - Trace-related result: `25 passed`.
+- 2026-05-25 second follow-up:
+  - User reran a related scenario and replay stayed on the correct outer page, but timed out on `iframe[src="https://kweweb-b4.huawei.com/pr/#!purpr/shoppingcar/index.html?...prHeadId=...&sourceSystemAppId=..."]`.
+  - Root cause: the second Task 7N patch correctly preferred `signals.reported_frame_path`, but it still treated the browser-reported exact iframe `src` as a stable replay selector. In this case the `src` contained recording-time dynamic URL state, so replay waited for an iframe selector that could legitimately differ at runtime.
+  - Vision check: iframe actions are real SOP steps. Missing or dynamic frame context must become a frame replay strategy problem, not a delete-step or "needs removal" workflow.
+  - Additional decision: distinguish frame identity evidence from replay selector evidence. Stable frame selectors such as `iframe[title]`, `iframe[name]`, and existing `iframe[src*=...]` continue to compile through `frame_locator(...)`; exact iframe `src` values with dynamic query/hash state compile to a runtime `_resolve_recorded_frame(...)` helper keyed by stable origin/path/hash evidence.
+  - Additional implementation: added dynamic exact-src detection and CSS-unescape handling in `TraceSkillCompiler._dynamic_frame_url_contains()` / `_exact_iframe_src()`. `_frame_scope_lines()` now emits `_resolve_recorded_frame(current_page, url_contains=...)` only for that dynamic exact-src shape, preserving the iframe-scoped click/fill action.
+  - Additional RED command: `$env:PYTHONPATH='RpaClaw'; pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -k "dynamic_reported_frame_src" -q`
+  - Additional RED result: `1 failed`, showing generated replay still lacked `_resolve_recorded_frame(...)` and preserved the dynamic iframe selector behavior.
+  - Additional focused GREEN command: `$env:PYTHONPATH='RpaClaw'; pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -k "dynamic_reported_frame_src or manual_action_with_new_tab_id_and_frame_path" -q`
+  - Additional focused GREEN result: `2 passed, 96 deselected`.
+  - Additional compiler regression command: `$env:PYTHONPATH='RpaClaw'; pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q`
+  - Additional compiler regression result: `98 passed`.
+- 2026-05-26 third follow-up:
+  - User supplied the accepted trace data from the failed recording. The opener trace `点击 text("操作")` used tab `a5934128-a207-417f-be56-698e915dc1d8` and lacked `signals.popup`; the next confirm trace `点击 .jalor-icon.confirm` used tab `ad416614-5ca0-4c11-ac45-53ecc7143e8a` and carried frame context for the new page.
+  - Root cause: `register_context_page()` asynchronously attached popup metadata to the recent opener `RPAStep`, but `_upgrade_recent_click_to_open_tab()` only broadcast the step. Because F001 generation compiles from `session.traces`, the previously emitted accepted trace remained stale and did not carry popup evidence, so the compiler could not emit `expect_popup()` from the trace timeline.
+  - Rejected path: adding another iframe selector repair would keep treating the symptom. The user-provided trace proved the first missing evidence was opener-tab popup propagation, not Jalor button selection or dynamic iframe URL matching.
+  - Implementation: after attaching popup signal to the opener step, `RPASessionManager._upgrade_recent_click_to_open_tab()` now rebuilds manual recording state and refreshes the corresponding accepted trace before broadcasting the step.
+  - RED verification command: `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_register_context_page_syncs_popup_signal_to_trace -q`
+  - RED result before fix: `1 failed`; failure was `KeyError: 'popup'` on the accepted trace.
+  - Focused GREEN command: `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_register_context_page_syncs_popup_signal_to_trace -q`
+  - Focused GREEN result: `1 passed`.
+  - Related manager command: `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_register_context_page_attaches_popup_signal_to_recent_click RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_register_context_page_syncs_popup_signal_to_trace RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_navigation_after_popup_signal_click_is_skipped RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_popup_download_attaches_signals_to_original_click_step -q`
+  - Related manager result: `4 passed`.
+  - Related compiler command: `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -k "popup_click or manual_action_with_new_tab_id_and_frame_path or dynamic_reported_frame_src or switch_tab" -q`
+  - Related compiler result: `7 passed, 91 deselected`.
+  - File-level manager command: `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_manager.py -q`
+  - File-level manager result: `94 passed`.
+  - Compiler suite command: `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q`
+  - Compiler suite result: `98 passed`.
+- 2026-05-26 fourth follow-up:
+  - User reran the same new-tab/Jalor-confirm scenario. When the confirm click recorded as a repair diagnostic, Configure displayed candidate `page.locator("span").filter(has_text="确定")`; clicking "使用该步骤" failed with `Locator candidate is missing locator payload`.
+  - Root cause: repair candidates could preserve a Playwright expression that was valid for replay, but neither `manual_recording_normalizer.parse_playwright_locator_string()` nor `RPASessionManager._parse_playwright_locator_expression()` could parse `.filter(has_text=...)`. The UI therefore displayed a candidate that backend repair could not promote into a canonical target.
+  - Rejected path: do not special-case Jalor, `确定`, or empty diagnostic deletion. The general missing abstraction is a locator shape: base locator filtered by visible text.
+  - Implementation: added canonical `filter_has_text` locator support in `trace_locator_utils`, `manual_recording_models`, recording normalizer parsing, diagnostic repair parsing, and `TraceSkillCompiler._locator_expression()`.
+  - RED commands:
+    - `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_manual_recording_normalizer.py::test_normalize_playwright_locator_filter_has_text -q`
+    - `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_select_trace_locator_candidate_accepts_filter_has_text_playwright_locator -q`
+    - `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_manual_click_filter_has_text_locator_compiles_to_playwright_filter -q`
+  - RED results before fix: normalizer failed with missing `locator`; manager failed with `Locator candidate is missing locator payload`; compiler failed to emit `.filter(has_text=...)`.
+  - GREEN focused results after fix: all three focused tests passed.
+  - File-level GREEN commands/results:
+    - `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_manual_recording_normalizer.py -q` -> `11 passed`.
+    - `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_manager.py -q` -> `95 passed`.
+    - `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q` -> `99 passed`.
 
 ## Current Evidence
 

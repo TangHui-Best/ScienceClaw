@@ -5,7 +5,7 @@ title: RPA Trace Source Convergence
 status: active
 feature_ids: [F001]
 created: 2026-05-13
-updated: 2026-05-16
+updated: 2026-05-26
 specs:
   - docs/superpowers/specs/2026-04-28-rpa-trace-first-full-migration-design.md
 plans:
@@ -70,3 +70,17 @@ Continue the active migration plan with a focused compiler gate: prevent weak/ou
 2026-05-16 Task 6 update: manager-internal `RPAStep`, `recorded_actions`, and `recording_diagnostics` are quarantined rather than hard-deleted in this pass. They remain private transitional browser-event normalization DTOs inside `RpaClaw/backend/rpa/manager.py`; public API responses, generate/test/save, saved metadata, MCP/export, and public step-index routes no longer use them as new-path facts. `stop_rpa_session()` now also uses the projected session response.
 
 2026-05-16 Task 7L update: weak embedded AI extraction code that only produced empty output is no longer frozen as deterministic replay unless the trace explicitly carries an allow-empty output contract. This addresses the latest star-count regression as a generic evidence-quality issue rather than a GitHub-specific rule or a global "empty means failure" validator. Evidence is recorded under "Task 7L".
+
+2026-05-25 Task 7M update: manual replay no longer treats random-like `data-testid` / `testid` values as stable trace facts. The fix keeps trace-first as the only compile source, preserves semantic test ids such as `login-username`, and moves the protection into shared locator stability scoring used by recording normalization, compiler fallback, and region context pruning. Evidence is recorded in `docs/evidence/EV-001-rpa-trace-source-convergence.md` under "Task 7M".
+
+2026-05-25 Task 7M follow-up: the initial protection still left users with delete-only pending steps when Playwright supplied only random `testid` candidates. Recording now augments generated selectors with DOM-counted semantic candidates and folds unstable non-interactive focus clicks into the following fill, so the fix restores replayable SOP facts instead of merely blocking bad locators. Evidence is recorded in `docs/evidence/EV-001-rpa-trace-source-convergence.md` under "Task 7M".
+
+2026-05-25 Task 7N update: iframe-origin manual traces with a changed `tab_id` are no longer treated as new Playwright pages when `frame_path` / `reported_frame_path` evidence is present. This preserves trace-first tab handling for real popup/switch flows while preventing blank `about:blank` page materialization before frame-scoped replay. Evidence is recorded in `docs/evidence/EV-001-rpa-trace-source-convergence.md` under "Task 7N".
+
+2026-05-25 Task 7N follow-up: after the page-context fix, replay still timed out on `iframe:nth-of-type(2)`. Manual replay now prefers browser-reported `signals.reported_frame_path` over the weaker server fallback `trace.frame_path`, while retaining `trace.frame_path` as fallback when reported evidence is absent. Evidence is recorded in `docs/evidence/EV-001-rpa-trace-source-convergence.md` under "Task 7N".
+
+2026-05-25 Task 7N second follow-up: a browser-reported `iframe[src="..."]` frame path can still contain recording-time dynamic URL state such as request ids or app ids. Manual replay now treats that shape as frame identity evidence, not as a stable selector: exact dynamic iframe src values are converted to a runtime frame resolver keyed by stable origin/path/hash evidence. The SOP action is preserved; unresolved frame context must not be solved by deleting the iframe step. Evidence is recorded in `docs/evidence/EV-001-rpa-trace-source-convergence.md` under "Task 7N".
+
+2026-05-26 Task 7N third follow-up: user-provided trace evidence showed the real failure was not another iframe selector issue. The opener action `点击 text("操作")` and the confirm action `点击 .jalor-icon.confirm` had different `tab_id` values, but the opener trace lacked `signals.popup` even though popup metadata is asynchronously attached to the backing step after `register_context_page()`. `RPASessionManager._upgrade_recent_click_to_open_tab()` now rebuilds manual recording state and refreshes the accepted trace after attaching popup signal, so trace-only compilation can emit `expect_popup()` from the actual accepted timeline. Evidence is recorded in `docs/evidence/EV-001-rpa-trace-source-convergence.md` under "Task 7N".
+
+2026-05-26 Task 7N fourth follow-up: Configure could show a repair candidate `page.locator("span").filter(has_text="确定")`, but selecting it failed with `Locator candidate is missing locator payload`. The candidate was a valid Playwright locator shape, but the recording normalizer, diagnostic repair path, and compiler did not share a canonical representation for `filter(has_text=...)`. A generic `filter_has_text` locator method now carries that evidence through repair and script compilation. Evidence is recorded in `docs/evidence/EV-001-rpa-trace-source-convergence.md` under "Task 7N".

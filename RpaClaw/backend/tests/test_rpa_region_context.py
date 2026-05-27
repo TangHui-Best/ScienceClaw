@@ -226,6 +226,50 @@ def test_region_evidence_pruning_does_not_restore_text_when_all_elements_pruned(
     assert pruned["local_text"] == []
 
 
+def test_region_evidence_pruning_does_not_keep_oversized_container_for_random_like_testid():
+    oversized_text = " ".join(["Generated container content"] * 12)
+    raw = {
+        "rect": {"x": 100, "y": 100, "width": 200, "height": 100},
+        "intersecting_elements": [
+            {
+                "tag": "div",
+                "text": oversized_text,
+                "rect": {"x": 0, "y": 0, "width": 1200, "height": 900},
+                "locator_candidates": [
+                    {
+                        "kind": "testid",
+                        "locator": {
+                            "method": "testid",
+                            "value": "DIV-_standingActiveManage_standingBook-id-611090413",
+                        },
+                    }
+                ],
+            },
+        ],
+        "dominant_container": {
+            "tag": "div",
+            "text": oversized_text,
+            "rect": {"x": 0, "y": 0, "width": 1200, "height": 900},
+            "locator_candidates": [
+                {
+                    "kind": "testid",
+                    "locator": {
+                        "method": "testid",
+                        "value": "DIV-_standingActiveManage_standingBook-id-611090413",
+                    },
+                }
+            ],
+        },
+        "local_text": [oversized_text],
+    }
+
+    pruned = prune_region_evidence(raw)
+
+    assert pruned["intersecting_elements"] == []
+    assert pruned["dominant_container"] == {}
+    assert pruned["local_text"] == []
+
+
 def test_region_evidence_pruning_keeps_oversized_container_with_stable_locator():
     oversized_text = " ".join(["Order card content with stable test id"] * 8)
     raw = {

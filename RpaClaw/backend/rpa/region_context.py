@@ -8,6 +8,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field, field_validator
 
 from .frame_selectors import build_frame_path
+from .trace_locator_utils import locator_has_unstable_identity
 
 
 _SEMANTIC_CONTAINER_TAGS = {
@@ -612,6 +613,8 @@ def _css_locator_has_stable_scope(value: Any) -> bool:
     css = str(value or "").strip().lower()
     if not css:
         return False
+    if locator_has_unstable_identity({"method": "css", "value": css}):
+        return False
     return (
         "[data-testid" in css
         or "[data-test" in css
@@ -633,7 +636,9 @@ def _has_stable_scope_locator_candidate(record: Dict[str, Any]) -> bool:
         locator = candidate.get("locator") if isinstance(candidate.get("locator"), dict) else {}
         method = str(locator.get("method") or "").lower()
         if kind == "testid" or method == "testid":
-            return True
+            if not locator_has_unstable_identity(locator):
+                return True
+            continue
         if kind == "text" or method == "text":
             continue
         if (

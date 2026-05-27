@@ -535,6 +535,162 @@ def test_region_scoped_snapshot_keeps_selected_text_in_action_group_and_filters_
     assert "37,451" not in str(expanded)
 
 
+def test_region_scoped_snapshot_keeps_context_heading_for_selected_text():
+    snapshot = {
+        "url": "https://example.test/repo",
+        "title": "Repository",
+        "region_scope": {
+            "region_id": "about-region",
+            "frame_path": [],
+            "frame_rect": {"x": 700, "y": 240, "width": 300, "height": 80},
+        },
+        "content_nodes": [
+            {
+                "node_id": "about-heading",
+                "container_id": "repo-about",
+                "semantic_kind": "heading",
+                "role": "heading",
+                "text": "About",
+                "scope_relation": "ancestor_context",
+                "bbox": {"x": 700, "y": 200, "width": 300, "height": 24},
+                "locator": {"method": "text", "value": "About", "exact": True},
+            },
+            {
+                "node_id": "about-description",
+                "container_id": "repo-about",
+                "semantic_kind": "text",
+                "role": "paragraph",
+                "text": "Reusable project description",
+                "scope_relation": "inside_region",
+                "bbox": {"x": 700, "y": 245, "width": 300, "height": 48},
+                "locator": {"method": "text", "value": "Reusable project description"},
+            },
+            {
+                "node_id": "homepage-link",
+                "container_id": "repo-about",
+                "semantic_kind": "link",
+                "role": "link",
+                "text": "example.test/docs",
+                "scope_relation": "ancestor_context",
+                "bbox": {"x": 700, "y": 310, "width": 300, "height": 20},
+                "locator": {"method": "text", "value": "example.test/docs"},
+            },
+        ],
+        "actionable_nodes": [
+            {
+                "node_id": "homepage-action",
+                "container_id": "repo-about",
+                "semantic_kind": "link",
+                "role": "link",
+                "name": "example.test/docs",
+                "text": "example.test/docs",
+                "scope_relation": "ancestor_context",
+                "bbox": {"x": 700, "y": 310, "width": 300, "height": 20},
+                "locator": {"method": "text", "value": "example.test/docs"},
+            },
+        ],
+        "containers": [
+            {
+                "container_id": "repo-about",
+                "frame_path": [],
+                "container_kind": "",
+                "name": "Repository side panel",
+                "summary": "",
+            }
+        ],
+        "frames": [],
+    }
+
+    compact = compact_recording_snapshot(
+        snapshot,
+        "get about description",
+        region_scope=snapshot["region_scope"],
+        char_budget=100000,
+    )
+
+    expanded = compact["expanded_regions"][0]
+    assert expanded["evidence"]["context_headings"] == [
+        {
+            "text": "About",
+            "locator": {"method": "text", "value": "About", "exact": True},
+        }
+    ]
+
+
+def test_region_scoped_snapshot_keeps_inside_heading_separate_from_after_context_heading():
+    snapshot = {
+        "url": "https://example.test/repo",
+        "title": "Repository",
+        "region_scope": {
+            "region_id": "about-region",
+            "frame_path": [],
+            "frame_rect": {"x": 700, "y": 200, "width": 300, "height": 105},
+        },
+        "content_nodes": [
+            {
+                "node_id": "about-heading",
+                "container_id": "repo-about",
+                "semantic_kind": "heading",
+                "role": "heading",
+                "text": "About",
+                "scope_relation": "inside_region",
+                "bbox": {"x": 700, "y": 206, "width": 300, "height": 24},
+                "locator": {"method": "text", "value": "About", "exact": True},
+            },
+            {
+                "node_id": "about-description",
+                "container_id": "repo-about",
+                "semantic_kind": "text",
+                "role": "paragraph",
+                "text": "Reusable project description",
+                "scope_relation": "inside_region",
+                "bbox": {"x": 700, "y": 246, "width": 300, "height": 48},
+                "locator": {"method": "text", "value": "Reusable project description"},
+            },
+            {
+                "node_id": "topics-heading",
+                "container_id": "repo-about",
+                "semantic_kind": "heading",
+                "role": "heading",
+                "text": "Topics",
+                "scope_relation": "ancestor_context",
+                "bbox": {"x": 700, "y": 347, "width": 1, "height": 1},
+                "locator": {"method": "text", "value": "Topics"},
+            },
+        ],
+        "actionable_nodes": [],
+        "containers": [
+            {
+                "container_id": "repo-about",
+                "frame_path": [],
+                "container_kind": "",
+                "name": "Repository side panel",
+                "summary": "",
+            }
+        ],
+        "frames": [],
+    }
+
+    compact = compact_recording_snapshot(
+        snapshot,
+        "get about description",
+        region_scope=snapshot["region_scope"],
+        char_budget=100000,
+    )
+
+    evidence = compact["expanded_regions"][0]["evidence"]
+    assert evidence["inside_headings"][0]["text"] == "About"
+    assert evidence["selected_body_texts"][0]["text"] == "Reusable project description"
+    assert evidence["after_context_headings"][0]["text"] == "Topics"
+    assert evidence["section_anchor"] == {
+        "text": "About",
+        "locator": {"method": "text", "value": "About", "exact": True},
+        "relation": "inside_heading",
+        "text_strategy": "bounded_section_text",
+    }
+    assert "Topics" not in [item["text"] for item in evidence.get("context_headings", [])]
+
+
 def test_region_scoped_snapshot_keeps_selected_action_group_text_by_geometry_when_scope_relation_missing():
     snapshot = {
         "url": "https://github.com/trending",
