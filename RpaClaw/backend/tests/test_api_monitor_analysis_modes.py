@@ -114,11 +114,11 @@ def _route_app() -> FastAPI:
 def test_analyze_route_empty_body_dispatches_free_mode(monkeypatch):
     calls: list[dict] = []
 
-    async def fake_analyze_page(session_id, model_config=None):
+    async def fake_analyze_page(session_id, model_config=None, intent=None):
         calls.append({"session_id": session_id, "model_config": model_config})
         yield {"event": "analysis_complete", "data": json.dumps({"tools_generated": 0, "total_calls": 0})}
 
-    async def fake_resolve_user_model_config(user_id):
+    async def fake_resolve_user_model_config(user_id, model_id=None):
         return None
 
     monkeypatch.setattr(api_monitor_route.api_monitor_manager, "get_session", lambda session_id: _route_session())
@@ -133,7 +133,7 @@ def test_analyze_route_empty_body_dispatches_free_mode(monkeypatch):
 
 
 def test_analyze_route_streams_candidate_events_before_completion(monkeypatch):
-    async def fake_analyze_page(session_id, model_config=None):
+    async def fake_analyze_page(session_id, model_config=None, intent=None):
         api_monitor_route.api_monitor_manager._emit_analysis_event(
             session_id,
             "api_candidate_created",
@@ -147,7 +147,7 @@ def test_analyze_route_streams_candidate_events_before_completion(monkeypatch):
         )
         yield {"event": "analysis_complete", "data": json.dumps({"tools_generated": 0, "total_calls": 1})}
 
-    async def fake_resolve_user_model_config(user_id):
+    async def fake_resolve_user_model_config(user_id, model_id=None):
         return None
 
     monkeypatch.setattr(api_monitor_route.api_monitor_manager, "get_session", lambda session_id: _route_session())
@@ -206,7 +206,7 @@ def test_analyze_route_dispatches_safe_directed_mode(monkeypatch):
         )
         yield {"event": "analysis_complete", "data": json.dumps({"mode": mode, "tools_generated": 0, "total_calls": 0})}
 
-    async def fake_resolve_user_model_config(user_id):
+    async def fake_resolve_user_model_config(user_id, model_id=None):
         return None
 
     monkeypatch.setattr(api_monitor_route.api_monitor_manager, "get_session", lambda session_id: _route_session())
@@ -245,7 +245,7 @@ def test_analyze_route_dispatches_user_controlled_directed_mode(monkeypatch):
         calls.append({"mode": mode, "business_safety": business_safety, "instruction": instruction})
         yield {"event": "analysis_complete", "data": json.dumps({"mode": mode, "tools_generated": 0, "total_calls": 0})}
 
-    async def fake_resolve_user_model_config(user_id):
+    async def fake_resolve_user_model_config(user_id, model_id=None):
         return None
 
     monkeypatch.setattr(api_monitor_route.api_monitor_manager, "get_session", lambda session_id: _route_session())

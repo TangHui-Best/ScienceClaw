@@ -16,6 +16,8 @@ export type ApiToolGenerationStatus =
   | 'failed'
   | 'rate_limited'
   | 'stale'
+  | 'confidence_rejected'
+  | 'intent_filtered'
 
 export interface ApiToolGenerationCandidate {
   id: string
@@ -34,6 +36,8 @@ export interface ApiToolGenerationCandidate {
   capture_page_url: string
   capture_title: string
   capture_dom_digest: string
+  rejection_reason?: string | null
+  intent_filter_reason?: string | null
   created_at: string
   updated_at: string
 }
@@ -83,6 +87,8 @@ export interface ApiToolDefinition {
   confidence_reasons: string[]
   source_evidence: Record<string, unknown>
   generation_candidate_id?: string | null
+  validation_status?: 'valid' | 'invalid'
+  validation_errors?: string[]
   created_at: string
   updated_at: string
 }
@@ -93,6 +99,7 @@ export interface ApiMonitorSession {
   sandbox_session_id: string
   status: 'idle' | 'analyzing' | 'recording' | 'stopped'
   target_url?: string
+  intent?: string | null
   captured_calls: CapturedApiCall[]
   tool_definitions: ApiToolDefinition[]
   generation_candidates: ApiToolGenerationCandidate[]
@@ -116,6 +123,8 @@ export type AnalysisModeKey = 'free' | 'safe_directed' | 'directed'
 export interface AnalyzeSessionPayload {
   mode?: AnalysisModeKey | string
   instruction?: string
+  intent?: string
+  model_id?: string
 }
 
 export type ApiMonitorCredentialType = 'placeholder' | 'test'
@@ -263,6 +272,8 @@ export function analyzeSession(
   const body = {
     mode: payload.mode || 'free',
     instruction: payload.instruction || '',
+    intent: payload.intent || '',
+    ...(payload.model_id ? { model_id: payload.model_id } : {}),
   }
 
   createSSEConnection<unknown>(
@@ -285,8 +296,8 @@ export function analyzeSession(
 /**
  * Start recording API calls in the session.
  */
-export async function startRecording(sessionId: string): Promise<void> {
-  await apiClient.post(`/api-monitor/session/${sessionId}/record/start`)
+export async function startRecording(sessionId: string, intent?: string): Promise<void> {
+  await apiClient.post(`/api-monitor/session/${sessionId}/record/start`, { intent: intent || '' })
 }
 
 /**
@@ -347,6 +358,19 @@ export async function updateToolSelection(
 }
 
 /**
+ * Regenerate a tool's YAML by re-calling LLM with source calls.
+ */
+export async function regenerateTool(
+  sessionId: string,
+  toolId: string,
+): Promise<ApiToolDefinition> {
+  const response = await apiClient.post(
+    `/api-monitor/session/${sessionId}/tools/${toolId}/regenerate`,
+  )
+  return response.data.tool
+}
+
+/**
  * Publish the current session tool definitions as one MCP server.
  */
 export async function publishMcpToolBundle(
@@ -392,6 +416,38 @@ export async function retryGenerationCandidate(
 ): Promise<ApiToolGenerationCandidate> {
   const response = await apiClient.post(
     `/api-monitor/session/${sessionId}/generation-candidates/${candidateId}/retry`,
+  )
+  return response.data.candidate
+}
+
+/**
+ * Delete a generation candidate.
+ */
+export async function deleteGenerationCandidate(
+  sessionId: string,
+  candidateId: string,
+): Promise<void> {
+  await apiClient.delete(
+    `/api-monitor/session/${sessionId}/generation-candidates/${candidateId}`,
+  )
+}
+
+/**
+ * Update the intent description for a session.
+ */
+export async function updateSessionIntent(sessionId: string, intent: string): Promise<void> {
+  await apiClient.put(`/api-monitor/session/${sessionId}/intent`, { intent })
+}
+
+/**
+ * Force-generate a tool definition for a rejected/filtered candidate.
+ */
+export async function forceGenerateCandidate(
+  sessionId: string,
+  candidateId: string,
+): Promise<ApiToolGenerationCandidate> {
+  const response = await apiClient.post(
+    `/api-monitor/session/${sessionId}/generation-candidates/${candidateId}/force-generate`,
   )
   return response.data.candidate
 }

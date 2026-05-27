@@ -119,15 +119,11 @@ async def test_local_launch_uses_relaxed_security_browser_args(monkeypatch):
 
     _pw, _browser = await cdp_connector.LocalCDPConnector._launch()
 
+    from backend.rpa.playwright_security import RPA_RELAXED_CHROMIUM_ARGS
+
     assert fake_playwright.chromium.launch_calls == [
         {
             "headless": False,
-            "args": [
-                "--ignore-certificate-errors",
-                "--allow-insecure-localhost",
-                "--allow-running-insecure-content",
-                "--test-type",
-                "--disable-notifications",
-            ],
+            "args": list(RPA_RELAXED_CHROMIUM_ARGS),
         }
     ]

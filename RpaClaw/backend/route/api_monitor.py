@@ -3,6 +3,7 @@
 Prefix: /api/v1/api-monitor
 """
 
+import datetime
 import json
 import logging
 from typing import Optional
@@ -12,7 +13,7 @@ from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
 from backend.config import settings
-from backend.user.dependencies import User, get_current_user
+from backend.user.dependencies import User, get_current_user, get_user_from_session_id
 from backend.storage import get_repository
 from backend.rpa.api_monitor import api_monitor_manager
 from backend.rpa.api_monitor.models import (
@@ -23,6 +24,8 @@ from backend.rpa.api_monitor.models import (
     PublishMcpRequest,
     UpdateToolRequest,
     UpdateToolSelectionRequest,
+    UpdateSessionIntentRequest,
+    ForceGenerateRequest,
 )
 from backend.rpa.api_monitor.analysis_modes import get_analysis_mode_config
 from backend.rpa.api_monitor_mcp_registry import ApiMonitorMcpRegistry
@@ -41,34 +44,19 @@ router = APIRouter(prefix="/api-monitor", tags=["API Monitor"])
 
 async def _get_ws_user(websocket: WebSocket) -> Optional[User]:
     """Resolve the current user for a WebSocket request."""
-    if settings.storage_backend == "local":
-        return User(id="local_admin", username="admin", role="admin")
-
     if getattr(settings, "auth_provider", "local") == "none":
-        return User(id="anonymous", username="Anonymous", role="user")
+        repo = get_repository("users")
+        admin_username = str(getattr(settings, "bootstrap_admin_username", "admin") or "admin").strip()
+        admin_doc = await repo.find_one({"username": admin_username})
+        if admin_doc:
+            return User(id=str(admin_doc["_id"]), username=admin_username, role="admin")
+        return User(id="local_admin", username="admin", role="admin")
 
     session_id = (
         websocket.query_params.get("token")
         or websocket.cookies.get(settings.session_cookie)
     )
-    if not session_id:
-        return None
-
-    repo = get_repository("user_sessions")
-    session_doc = await repo.find_one({"_id": session_id})
-    if not session_doc:
-        return None
-
-    import time
-    if session_doc.get("expires_at", 0) < time.time():
-        await repo.delete_one({"_id": session_id})
-        return None
-
-    return User(
-        id=str(session_doc["user_id"]),
-        username=session_doc["username"],
-        role=session_doc.get("role", "user"),
-    )
+    return await get_user_from_session_id(session_id)
 
 
 def _verify_session_owner(session: Optional[ApiMonitorSession], user: User) -> None:
@@ -195,8 +183,23 @@ async def screencast_ws(websocket: WebSocket, session_id: str):
         await screencast.stop()
 
 
-async def _resolve_user_model_config(user_id: str) -> Optional[dict]:
+async def _resolve_user_model_config(user_id: str, model_id: Optional[str] = None) -> Optional[dict]:
     """Resolve the user's model config, same logic as RPA recorder."""
+    if model_id:
+        doc = await get_repository("models").find_one({
+            "_id": model_id,
+            "$or": [{"user_id": user_id}, {"is_system": True}],
+            "is_active": True,
+            "api_key": {"$nin": ["", None]},
+        })
+        if doc:
+            return {
+                "model_name": doc.get("model_name"),
+                "base_url": doc.get("base_url"),
+                "api_key": doc.get("api_key"),
+                "context_window": doc.get("context_window"),
+                "provider": doc.get("provider", ""),
+            }
     docs = await get_repository("models").find_many(
         {"$or": [{"user_id": user_id}, {"is_system": True}], "is_active": True, "api_key": {"$nin": ["", None]}},
         sort=[("is_system", 1), ("updated_at", -1)],
@@ -233,13 +236,14 @@ async def analyze_session(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     instruction = payload.instruction.strip()
+    intent = payload.intent or instruction or None
     if mode_config.requires_instruction and not instruction:
         raise HTTPException(
             status_code=400,
             detail=f"Instruction is required for {mode_config.key} analysis",
         )
 
-    model_config = await _resolve_user_model_config(str(current_user.id))
+    model_config = await _resolve_user_model_config(str(current_user.id), model_id=payload.model_id)
 
     async def event_generator():
         import asyncio as _asyncio
@@ -254,7 +258,7 @@ async def analyze_session(
         api_monitor_manager._analysis_event_sinks[session_id] = sink
         try:
             source = (
-                api_monitor_manager.analyze_page(session_id, model_config=model_config)
+                api_monitor_manager.analyze_page(session_id, model_config=model_config, intent=intent)
                 if mode_config.handler == "free"
                 else api_monitor_manager.analyze_directed_page(
                     session_id,
@@ -307,12 +311,14 @@ async def analyze_session(
 @router.post("/session/{session_id}/record/start")
 async def start_recording(
     session_id: str,
+    request: UpdateSessionIntentRequest | None = Body(default=None),
     current_user: User = Depends(get_current_user),
 ):
     session = api_monitor_manager.get_session(session_id)
     _verify_session_owner(session, current_user)
     model_config = await _resolve_user_model_config(str(current_user.id))
-    await api_monitor_manager.start_recording(session_id, model_config=model_config)
+    intent = request.intent if request else None
+    await api_monitor_manager.start_recording(session_id, model_config=model_config, intent=intent)
     return {"status": "success"}
 
 
@@ -377,7 +383,62 @@ async def retry_generation_candidate(
             model_config=model_config,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"status": "success", "candidate": candidate.model_dump(mode="json")}
+
+
+@router.delete("/session/{session_id}/generation-candidates/{candidate_id}")
+async def delete_generation_candidate(
+    session_id: str,
+    candidate_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    session = api_monitor_manager.get_session(session_id)
+    _verify_session_owner(session, current_user)
+    try:
+        api_monitor_manager.delete_generation_candidate(
+            session_id,
+            candidate_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"status": "success"}
+
+
+@router.put("/session/{session_id}/intent")
+async def update_session_intent(
+    session_id: str,
+    request: UpdateSessionIntentRequest,
+    current_user: User = Depends(get_current_user),
+):
+    session = api_monitor_manager.get_session(session_id)
+    _verify_session_owner(session, current_user)
+    session.intent = request.intent or None
+    session.updated_at = datetime.datetime.now()
+    return {"status": "success", "intent": session.intent}
+
+
+@router.post("/session/{session_id}/generation-candidates/{candidate_id}/force-generate")
+async def force_generate_candidate(
+    session_id: str,
+    candidate_id: str,
+    request: ForceGenerateRequest | None = Body(default=None),
+    current_user: User = Depends(get_current_user),
+):
+    session = api_monitor_manager.get_session(session_id)
+    _verify_session_owner(session, current_user)
+    model_config = await _resolve_user_model_config(
+        str(current_user.id),
+        model_id=request.model_id if request else None,
+    )
+    try:
+        candidate = api_monitor_manager.force_generate_candidate(
+            session_id,
+            candidate_id,
+            model_config=model_config,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "success", "candidate": candidate.model_dump(mode="json")}
 
 
@@ -396,9 +457,35 @@ async def update_tool(
             tool.yaml_definition = request.yaml_definition
             from datetime import datetime
             tool.updated_at = datetime.now()
+
+            from backend.rpa.api_monitor_mcp_contract import parse_api_monitor_tool_yaml
+            contract = parse_api_monitor_tool_yaml(request.yaml_definition)
+            tool.validation_status = "valid" if contract.valid else "invalid"
+            tool.validation_errors = contract.validation_errors if contract.validation_errors else []
+
             return {"status": "success", "tool": tool.model_dump()}
 
     raise HTTPException(status_code=404, detail="Tool not found")
+
+
+@router.post("/session/{session_id}/tools/{tool_id}/regenerate")
+async def regenerate_tool(
+    session_id: str,
+    tool_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    session = api_monitor_manager.get_session(session_id)
+    _verify_session_owner(session, current_user)
+    model_config = await _resolve_user_model_config(str(current_user.id))
+    try:
+        tool = await api_monitor_manager.regenerate_tool(
+            session_id,
+            tool_id,
+            model_config=model_config,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"status": "success", "tool": tool.model_dump()}
 
 
 @router.patch("/session/{session_id}/tools/{tool_id}/selection")

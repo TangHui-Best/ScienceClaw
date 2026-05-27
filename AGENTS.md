@@ -101,6 +101,7 @@ RPA architecture docs:
 - **API paths**: kebab-case.
 - **Frontend API calls**: use `apiClient`; paths are relative to `/api/v1`, so do not prefix `/api/v1` again.
 - **i18n**: update both `src/locales/en.ts` and `src/locales/zh.ts` when touching UI strings.
+- **Spec documents**: Design/spec documents under `docs/superpowers/specs/` must be written in Chinese by default unless the user explicitly requests another language.
 - **Commits**: use prefixes such as `feat:`, `fix:`, `refactor:`, `chore:`.
 
 ## Common Pitfalls

@@ -762,10 +762,8 @@ class PlaywrightGeneratorTests(unittest.TestCase):
 
         script = generator.generate_script([], is_local=True)
 
-        self.assertIn("--ignore-certificate-errors", script)
-        self.assertIn("--allow-insecure-localhost", script)
         self.assertIn("--allow-running-insecure-content", script)
-        self.assertIn("--test-type", script)
+        self.assertIn("--disable-web-security", script)
         self.assertIn("'ignore_https_errors': True", script)
 
     def test_generate_script_docker_runner_ignores_https_errors_in_context(self):

@@ -110,7 +110,7 @@ class TestParseOpenApiGet:
         assert contract.name == "search_orders"
         assert contract.description == "Search orders by keyword"
         assert contract.method == "GET"
-        assert contract.url == "/orders"
+        assert contract.url == "/v1/orders"
         assert len(contract.openapi_parameters) == 2
         assert contract.openapi_parameters[0]["name"] == "keyword"
         assert contract.openapi_parameters[0]["in"] == "query"
@@ -150,7 +150,7 @@ class TestParseOpenApiPathParam:
     def test_path_param_in_url(self):
         contract = parse_api_monitor_tool_yaml(PATH_PARAM_YAML)
         assert contract.valid
-        assert contract.url == "/users/{user_id}"
+        assert contract.url == "/v1/users/{user_id}"
         assert contract.openapi_parameters[0]["in"] == "path"
 
 
@@ -174,6 +174,57 @@ class TestParseOpenApiValidation:
         yaml_str = 'swagger: "2.0"\ninfo:\n  title: test\n  version: "1.0"\npaths:\n  /a:\n    get:\n      operationId: a\n  /b:\n    get:\n      operationId: b\n'
         contract = parse_api_monitor_tool_yaml(yaml_str)
         assert not contract.valid
+
+    def test_path_key_is_endpoint_when_base_path_is_omitted(self):
+        yaml_str = """\
+swagger: "2.0"
+info:
+  title: query_contract_information
+  version: "1.0"
+host: isales.huawei.com
+paths:
+  /isales/ssdmdoc/services/api/solr/contractsearch/query/contract/information:
+    post:
+      operationId: query_contract_information
+      responses:
+        "200":
+          description: Success
+"""
+        contract = parse_api_monitor_tool_yaml(yaml_str)
+
+        assert contract.valid
+        assert contract.method == "POST"
+        assert (
+            contract.url
+            == "/isales/ssdmdoc/services/api/solr/contractsearch/query/contract/information"
+        )
+        assert "basePath" not in contract.openapi_spec
+
+    def test_legacy_base_path_specs_still_parse(self):
+        yaml_str = """\
+swagger: "2.0"
+info:
+  title: get_user
+  version: "1.0"
+host: api.example.com
+basePath: /v1
+paths:
+  /users/{user_id}:
+    get:
+      operationId: get_user
+      parameters:
+        - name: user_id
+          in: path
+          type: string
+          required: true
+      responses:
+        "200":
+          description: Success
+"""
+        contract = parse_api_monitor_tool_yaml(yaml_str)
+
+        assert contract.valid
+        assert contract.url == "/v1/users/{user_id}"
 
 
 class TestLegacyFormatFallback:
@@ -276,3 +327,41 @@ class TestOpenApiExecutionParts:
         assert parts["query"] == {}
         assert parts["body"] == {}
         assert parts["url"] == "https://api.example.com/api/test"
+
+    def test_execute_deep_endpoint_path_without_base_path(self):
+        from backend.deepagent.mcp_runtime import _execute_openapi_request
+
+        doc = {
+            "method": "POST",
+            "url": "/isales/ssdmdoc/services/api/solr/contractsearch/query/contract/information",
+            "openapi_parameters": [
+                {"name": "body", "in": "body", "schema": {"type": "object", "properties": {}}},
+            ],
+        }
+        parts = _execute_openapi_request(doc, {"keyword": "abc"}, "https://isales.huawei.com")
+
+        assert (
+            parts["url"]
+            == "https://isales.huawei.com/isales/ssdmdoc/services/api/solr/contractsearch/query/contract/information"
+        )
+        assert parts["body"] == {"keyword": "abc"}
+
+
+class TestOpenApiPromptContract:
+    def test_tool_generation_prompt_omits_base_path(self):
+        from backend.rpa.api_monitor import llm_analyzer
+
+        assert "basePath:" not in llm_analyzer.TOOL_GEN_SYSTEM
+        assert "basePath should be extracted" not in llm_analyzer.TOOL_GEN_SYSTEM
+        assert "paths keys MUST be relative to basePath" not in llm_analyzer.TOOL_GEN_SYSTEM
+        assert "Do NOT output basePath" in llm_analyzer.TOOL_GEN_SYSTEM
+
+    def test_host_info_does_not_include_inferred_base_path(self):
+        from backend.rpa.api_monitor.llm_analyzer import _host_and_endpoint_path_for_prompt
+
+        host, endpoint_path = _host_and_endpoint_path_for_prompt(
+            "https://api.example.com/isales/ssdmdoc/services/api/query?keyword=a"
+        )
+
+        assert host == "api.example.com"
+        assert endpoint_path == "/isales/ssdmdoc/services/api/query"
