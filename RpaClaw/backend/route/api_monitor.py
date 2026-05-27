@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
 from backend.config import settings
-from backend.user.dependencies import User, get_current_user
+from backend.user.dependencies import User, get_current_user, get_user_from_session_id
 from backend.storage import get_repository
 from backend.rpa.api_monitor import api_monitor_manager
 from backend.rpa.api_monitor.models import (
@@ -44,34 +44,19 @@ router = APIRouter(prefix="/api-monitor", tags=["API Monitor"])
 
 async def _get_ws_user(websocket: WebSocket) -> Optional[User]:
     """Resolve the current user for a WebSocket request."""
-    if settings.storage_backend == "local":
-        return User(id="local_admin", username="admin", role="admin")
-
     if getattr(settings, "auth_provider", "local") == "none":
-        return User(id="anonymous", username="Anonymous", role="user")
+        repo = get_repository("users")
+        admin_username = str(getattr(settings, "bootstrap_admin_username", "admin") or "admin").strip()
+        admin_doc = await repo.find_one({"username": admin_username})
+        if admin_doc:
+            return User(id=str(admin_doc["_id"]), username=admin_username, role="admin")
+        return User(id="local_admin", username="admin", role="admin")
 
     session_id = (
         websocket.query_params.get("token")
         or websocket.cookies.get(settings.session_cookie)
     )
-    if not session_id:
-        return None
-
-    repo = get_repository("user_sessions")
-    session_doc = await repo.find_one({"_id": session_id})
-    if not session_doc:
-        return None
-
-    import time
-    if session_doc.get("expires_at", 0) < time.time():
-        await repo.delete_one({"_id": session_id})
-        return None
-
-    return User(
-        id=str(session_doc["user_id"]),
-        username=session_doc["username"],
-        role=session_doc.get("role", "user"),
-    )
+    return await get_user_from_session_id(session_id)
 
 
 def _verify_session_owner(session: Optional[ApiMonitorSession], user: User) -> None:

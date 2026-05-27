@@ -8189,27 +8189,36 @@ function deepEquals(a, b) {
             index: parseInt(matched[1], 10)
           };
         } else {
-          matched = remaining.match(/^\.locator\("((?:\\.|[^"\\])*)"\)/);
+          matched = remaining.match(/^\.first(?:\(\))?/);
           if (matched) {
-            step = { method: 'css', value: unescapeLiteral(matched[1]) };
+            current = {
+              method: 'nth',
+              locator: current,
+              index: 0
+            };
           } else {
-            matched = remaining.match(/^\.get_by_role\("((?:\\.|[^"\\])*)"(?:,\s*name="((?:\\.|[^"\\])*)"(?:,\s*exact=True)?)?\)/);
+            matched = remaining.match(/^\.locator\("((?:\\.|[^"\\])*)"\)/);
             if (matched) {
-              step = makeRoleLocator(matched);
+              step = { method: 'css', value: unescapeLiteral(matched[1]) };
             } else {
-              const valuePatterns = [
-                ['testid', /^\.get_by_test_id\("((?:\\.|[^"\\])*)"\)/],
-                ['label', /^\.get_by_label\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)/],
-                ['placeholder', /^\.get_by_placeholder\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)/],
-                ['alt', /^\.get_by_alt_text\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)/],
-                ['title', /^\.get_by_title\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)/],
-                ['text', /^\.get_by_text\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)/]
-              ];
-              for (const [method, pattern] of valuePatterns) {
-                matched = remaining.match(pattern);
-                if (matched) {
-                  step = makeValueLocator(method, matched);
-                  break;
+              matched = remaining.match(/^\.get_by_role\("((?:\\.|[^"\\])*)"(?:,\s*name="((?:\\.|[^"\\])*)"(?:,\s*exact=True)?)?\)/);
+              if (matched) {
+                step = makeRoleLocator(matched);
+              } else {
+                const valuePatterns = [
+                  ['testid', /^\.get_by_test_id\("((?:\\.|[^"\\])*)"\)/],
+                  ['label', /^\.get_by_label\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)/],
+                  ['placeholder', /^\.get_by_placeholder\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)/],
+                  ['alt', /^\.get_by_alt_text\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)/],
+                  ['title', /^\.get_by_title\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)/],
+                  ['text', /^\.get_by_text\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)/]
+                ];
+                for (const [method, pattern] of valuePatterns) {
+                  matched = remaining.match(pattern);
+                  if (matched) {
+                    step = makeValueLocator(method, matched);
+                    break;
+                  }
                 }
               }
             }
@@ -8277,6 +8286,160 @@ function deepEquals(a, b) {
     return prefix + ' strict matches = ' + candidate.strict_match_count;
   }
 
+  function cleanText(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function allElements(document) {
+    try {
+      return Array.from(document.querySelectorAll('*'));
+    } catch (error) {
+      return [];
+    }
+  }
+
+  function elementRole(element) {
+    try {
+      return injectedScript.utils.getAriaRole(element) || '';
+    } catch (error) {
+      return '';
+    }
+  }
+
+  function elementName(element) {
+    try {
+      return cleanText(injectedScript.utils.getElementAccessibleName(element, false) || '');
+    } catch (error) {
+      return '';
+    }
+  }
+
+  function labelText(element) {
+    const labels = [];
+    try {
+      if (element.labels) {
+        for (const label of Array.from(element.labels)) {
+          const text = cleanText(label.innerText || label.textContent || '');
+          if (text)
+            labels.push(text);
+        }
+      }
+    } catch (error) {
+    }
+    if (!labels.length && element.closest) {
+      const label = element.closest('label');
+      if (label) {
+        const text = cleanText(label.innerText || label.textContent || '');
+        if (text)
+          labels.push(text);
+      }
+    }
+    return labels[0] || '';
+  }
+
+  function semanticMatches(target, predicate) {
+    return allElements(target.ownerDocument).filter(element => {
+      try {
+        return predicate(element);
+      } catch (error) {
+        return false;
+      }
+    });
+  }
+
+  function semanticCandidate(kind, locator, matches, score, selected) {
+    const strictMatchCount = matches.length;
+    const candidate = {
+      kind,
+      score,
+      strict_match_count: strictMatchCount,
+      visible_match_count: visibleCount(matches),
+      selected: !!selected,
+      locator
+    };
+    const prefix = selected ? 'selected semantic candidate' : 'semantic candidate';
+    if (strictMatchCount === 1)
+      candidate.reason = prefix + ' is strict unique';
+    else if (strictMatchCount === 0)
+      candidate.reason = prefix + ' resolves to no elements';
+    else
+      candidate.reason = prefix + ' strict matches = ' + strictMatchCount;
+    return candidate;
+  }
+
+  function semanticLocatorCandidates(target) {
+    const candidates = [];
+    if (!target || !target.ownerDocument)
+      return candidates;
+
+    const role = elementRole(target);
+    const name = elementName(target);
+    if (role && name) {
+      const locator = { method: 'role', role, name };
+      const matches = semanticMatches(target, element => elementRole(element) === role && elementName(element) === name);
+      candidates.push(semanticCandidate('role', locator, matches, 10, false));
+    }
+
+    const label = labelText(target);
+    if (label) {
+      const locator = { method: 'label', value: label };
+      const matches = semanticMatches(target, element => labelText(element) === label);
+      candidates.push(semanticCandidate('label', locator, matches, 12, false));
+    }
+
+    const placeholder = cleanText(target.getAttribute && target.getAttribute('placeholder'));
+    if (placeholder) {
+      const locator = { method: 'placeholder', value: placeholder };
+      const matches = semanticMatches(target, element => cleanText(element.getAttribute && element.getAttribute('placeholder')) === placeholder);
+      candidates.push(semanticCandidate('placeholder', locator, matches, 14, false));
+    }
+
+    const title = cleanText(target.getAttribute && target.getAttribute('title'));
+    if (title) {
+      const locator = { method: 'title', value: title };
+      const matches = semanticMatches(target, element => cleanText(element.getAttribute && element.getAttribute('title')) === title);
+      candidates.push(semanticCandidate('title', locator, matches, 18, false));
+    }
+
+    const text = cleanText(target.innerText || target.textContent || '');
+    const targetRole = role || cleanText(target.getAttribute && target.getAttribute('role'));
+    const textLocatorEligible = text && text.length <= 120 && (
+      ['button', 'link', 'tab', 'menuitem', 'option'].includes(targetRole)
+      || ['BUTTON', 'A'].includes(target.tagName)
+    );
+    if (textLocatorEligible) {
+      const locator = { method: 'text', value: text };
+      const matches = semanticMatches(target, element => cleanText(element.innerText || element.textContent || '') === text);
+      candidates.push(semanticCandidate('text', locator, matches, 30, false));
+    }
+
+    return candidates;
+  }
+
+  function locatorCandidateKey(candidate) {
+    if (!candidate || !candidate.locator)
+      return '';
+    try {
+      return JSON.stringify(candidate.locator);
+    } catch (error) {
+      return '';
+    }
+  }
+
+  function mergeLocatorCandidates(generatedCandidates, semanticCandidates) {
+    const merged = [];
+    const seen = new Set();
+    for (const candidate of [...generatedCandidates, ...semanticCandidates]) {
+      const key = locatorCandidateKey(candidate);
+      if (key && seen.has(key))
+        continue;
+      if (key)
+        seen.add(key);
+      merged.push(candidate);
+    }
+    return merged;
+  }
+
   function buildCandidate(selector, index, target) {
     const parsed = injectedScript.parseSelector(selector);
     const matches = injectedScript.querySelectorAll(parsed, target.ownerDocument);
@@ -8304,7 +8467,10 @@ function deepEquals(a, b) {
       multiple: true,
       testIdAttributeName: 'data-testid'
     });
-    const candidates = generated.selectors.map((selector, index) => buildCandidate(selector, index, target));
+    const generatedCandidates = generated.selectors.map((selector, index) => buildCandidate(selector, index, target));
+    const candidates = mergeLocatorCandidates(generatedCandidates, semanticLocatorCandidates(target));
+    if (!generatedCandidates.length && candidates.length)
+      candidates[0].selected = true;
     const primaryCandidate = candidates[0] || null;
     const validation = primaryCandidate ? {
       status: primaryCandidate.strict_match_count === 1 ? 'ok' : 'fallback',

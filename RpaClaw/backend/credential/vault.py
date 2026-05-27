@@ -183,7 +183,7 @@ async def inject_credentials(user_id: str, params: dict, kwargs: dict) -> dict:
 
     For each param in params (if not already provided in kwargs):
     - If it has a credential_id: decrypt and inject the credential password.
-    - If it has an original_value (non-sensitive): inject as default.
+    - If it has a default_value (non-sensitive): inject the configured default.
 
     User-provided kwargs always take precedence.
     """
@@ -203,6 +203,10 @@ async def inject_credentials(user_id: str, params: dict, kwargs: dict) -> dict:
                 result[param_name] = plaintext
             continue
         # Default value injection
+        default_value = param_info.get("default_value")
+        if default_value not in (None, ""):
+            result[param_name] = default_value
+            continue
         original = param_info.get("original_value", "")
         if original and original != "{{credential}}":
             result[param_name] = original

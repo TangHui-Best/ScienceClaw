@@ -16,8 +16,10 @@ from .frame_selectors import build_frame_path
 from .manual_recording_models import ManualRecordedAction, ManualRecordingDiagnostic
 from .manual_recording_normalizer import build_manual_recording_outcome
 from .playwright_security import get_context_kwargs
+from .region_context import RPARegionContext
+from .trace_locator_utils import locator_has_unstable_identity, locator_instability_penalty
 from .trace_models import RPAAcceptedTrace, RPATraceDiagnostic, RPARuntimeResults
-from .trace_recorder import infer_dataflow_for_fill, manual_step_to_trace
+from .trace_recorder import infer_dataflow_for_ai_fill, infer_dataflow_for_fill, manual_step_to_trace
 
 logger = logging.getLogger(__name__)
 
@@ -66,10 +68,30 @@ class RPATab(BaseModel):
     status: str = "open"
 
 
+class RPASkillConfigParam(BaseModel):
+    original_value: str = ""
+    default_value: Optional[str] = None
+    enabled: bool = True
+    sensitive: bool = False
+    credential_id: str = ""
+    type: str = "string"
+    description: str = ""
+    required: bool = False
+
+
+class RPASkillConfigDraft(BaseModel):
+    skill_name: str = ""
+    description: str = ""
+    params: Dict[str, RPASkillConfigParam] = Field(default_factory=dict)
+    updated_at: datetime = Field(default_factory=datetime.now)
+
+
 class RPASession(BaseModel):
     id: str
     user_id: str
     start_time: datetime = Field(default_factory=datetime.now)
+    last_activity_at: datetime = Field(default_factory=datetime.now)
+    stopped_at: Optional[datetime] = None
     status: str = "recording"  # recording, stopped, testing, saved
     steps: List[RPAStep] = Field(default_factory=list)
     recorded_actions: List[ManualRecordedAction] = Field(default_factory=list)
@@ -77,6 +99,8 @@ class RPASession(BaseModel):
     traces: List[RPAAcceptedTrace] = Field(default_factory=list)
     trace_diagnostics: List[RPATraceDiagnostic] = Field(default_factory=list)
     runtime_results: RPARuntimeResults = Field(default_factory=RPARuntimeResults)
+    skill_config_draft: Optional[RPASkillConfigDraft] = None
+    llm_model_config: Optional[Dict[str, Any]] = None
     pending_download_events: List[Dict[str, Any]] = Field(default_factory=list)
     sandbox_session_id: str
     paused: bool = False  # pause event recording during AI execution
@@ -110,6 +134,66 @@ class RPASessionManager:
         self._pending_hover_candidates: Dict[str, List[Dict[str, Any]]] = {}
         self._pending_event_counts: Dict[str, int] = {}
         self._pending_event_idle: Dict[str, asyncio.Event] = {}
+        self._pending_region_contexts: Dict[str, Dict[str, RPARegionContext]] = {}
+
+    def touch_session(self, session_id: str) -> None:
+        session = self.sessions.get(session_id)
+        if session:
+            session.last_activity_at = datetime.now()
+
+    def update_skill_config_draft(
+        self,
+        session_id: str,
+        draft: RPASkillConfigDraft,
+    ) -> RPASkillConfigDraft:
+        session = self.sessions.get(session_id)
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+        draft.updated_at = datetime.now()
+        session.skill_config_draft = draft
+        self.touch_session(session_id)
+        return draft
+
+    async def cleanup_expired_sessions(self, max_idle_seconds: int) -> List[str]:
+        now = datetime.now()
+        removed: List[str] = []
+        for session_id, session in list(self.sessions.items()):
+            if session.status == "saved":
+                continue
+            idle_seconds = (now - session.last_activity_at).total_seconds()
+            if idle_seconds <= max_idle_seconds:
+                continue
+            await self._dispose_session_resources(session_id)
+            self.sessions.pop(session_id, None)
+            self.ws_connections.pop(session_id, None)
+            removed.append(session_id)
+        return removed
+
+    async def _dispose_session_resources(self, session_id: str) -> None:
+        try:
+            await asyncio.wait_for(self.wait_for_pending_events(session_id), timeout=2.0)
+        except Exception as e:
+            logger.warning(f"[RPA] Error waiting for pending events during cleanup: {e}")
+
+        context = self._contexts.pop(session_id, None)
+        self.detach_context(session_id)
+        if context:
+            try:
+                await context.close()
+            except Exception as e:
+                logger.warning(f"[RPA] Error closing context during cleanup: {e}")
+
+        connections = list(self.ws_connections.get(session_id, []) or [])
+        for ws in connections:
+            close = getattr(ws, "close", None)
+            if not callable(close):
+                continue
+            try:
+                result = close()
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception as e:
+                logger.warning(f"[RPA] Error closing websocket during cleanup: {e}")
 
     def attach_context(self, session_id: str, context: BrowserContext):
         self._contexts[session_id] = context
@@ -141,6 +225,7 @@ class RPASessionManager:
         self._bridged_context_ids.pop(session_id, None)
         self._pending_event_counts.pop(session_id, None)
         self._pending_event_idle.pop(session_id, None)
+        self._pending_region_contexts.pop(session_id, None)
 
         session = self.sessions.get(session_id)
         if session:
@@ -187,6 +272,12 @@ class RPASessionManager:
         if session_id not in self.sessions:
             raise ValueError(f"Session {session_id} not found")
 
+        existing_tab_id = self._page_tab_ids.setdefault(session_id, {}).get(id(page))
+        if existing_tab_id:
+            if make_active or not self.sessions[session_id].active_tab_id:
+                await self.activate_tab(session_id, existing_tab_id, source="auto")
+            return existing_tab_id
+
         tab_id = str(uuid.uuid4())
         self._tabs.setdefault(session_id, {})[tab_id] = page
         self._page_tab_ids.setdefault(session_id, {})[id(page)] = tab_id
@@ -224,6 +315,19 @@ class RPASessionManager:
         if opener_tab_id:
             await self._upgrade_recent_click_to_open_tab(session_id, opener_tab_id, tab_id)
         return tab_id
+
+    async def activate_page(self, session_id: str, page: Page, tab_id: Optional[str] = None) -> str:
+        existing_tab_id = self._page_tab_ids.get(session_id, {}).get(id(page))
+        if existing_tab_id:
+            await self.activate_tab(session_id, existing_tab_id, source="execution")
+            return existing_tab_id
+
+        return await self.register_page(
+            session_id,
+            page,
+            opener_tab_id=None,
+            make_active=True,
+        )
 
     @classmethod
     def _step_popup_target_tab_id(cls, step: RPAStep) -> Optional[str]:
@@ -288,6 +392,9 @@ class RPASessionManager:
         step = self._find_recent_action_step(session_id, tab_id=source_tab_id)
         if not step:
             return
+        session = self.sessions.get(session_id)
+        if not session:
+            return
 
         step.source_tab_id = source_tab_id
         step.target_tab_id = target_tab_id
@@ -300,6 +407,8 @@ class RPASessionManager:
             },
         )
         self._append_step_description(step, " 并在新标签页打开")
+        self._rebuild_manual_recording_state(session)
+        await self._record_manual_trace_for_step(session_id, step)
         await self._broadcast_step(session_id, step)
         logger.debug(f"[RPA] Attached popup signal: source={source_tab_id} target={target_tab_id}")
 
@@ -481,6 +590,11 @@ class RPASessionManager:
             return None
         return self._tabs.get(session_id, {}).get(active_tab_id)
 
+    def get_page_for_tab(self, session_id: str, tab_id: Optional[str] = None) -> Optional[Page]:
+        if not tab_id:
+            return self.get_page(session_id)
+        return self._tabs.get(session_id, {}).get(tab_id)
+
     async def _ensure_context_recorder(self, session_id: str, context: BrowserContext):
         bridged_context_ids = self._bridged_context_ids.setdefault(session_id, set())
         context_key = id(context)
@@ -632,6 +746,8 @@ class RPASessionManager:
         await self.wait_for_pending_events(session_id)
         if session_id in self.sessions:
             self.sessions[session_id].status = "stopped"
+            self.sessions[session_id].stopped_at = datetime.now()
+            self.touch_session(session_id)
 
         context = self._contexts.pop(session_id, None)
         self.detach_context(session_id)
@@ -676,17 +792,40 @@ class RPASessionManager:
         session = self.sessions.get(session_id)
         if not session or not trace_id:
             return False
-        target_trace = next((trace for trace in session.traces if trace.trace_id == trace_id), None)
-        if target_trace and target_trace.source == "manual" and trace_id.startswith("trace-"):
-            step_id = trace_id.removeprefix("trace-")
-            if any(step.id == step_id for step in session.steps):
-                return await self.delete_step_by_id(session_id, step_id)
         original_count = len(session.traces)
         session.traces = [trace for trace in session.traces if trace.trace_id != trace_id]
         deleted = len(session.traces) != original_count
         if deleted:
             self._rebuild_runtime_results(session)
         return deleted
+
+    async def delete_trace_diagnostic(self, session_id: str, diagnostic_id: str) -> bool:
+        session = self.sessions.get(session_id)
+        if not session or not diagnostic_id:
+            return False
+        diagnostic = next(
+            (
+                item
+                for item in session.trace_diagnostics
+                if item.diagnostic_id == diagnostic_id
+            ),
+            None,
+        )
+        if (
+            diagnostic is not None
+            and diagnostic.source == "manual_recording"
+            and isinstance(diagnostic.raw, dict)
+        ):
+            related_step_id = str(diagnostic.raw.get("related_step_id") or "")
+            if related_step_id:
+                return await self.delete_step_by_id(session_id, related_step_id)
+        original_count = len(session.trace_diagnostics)
+        session.trace_diagnostics = [
+            diagnostic
+            for diagnostic in session.trace_diagnostics
+            if diagnostic.diagnostic_id != diagnostic_id
+        ]
+        return len(session.trace_diagnostics) != original_count
 
     @staticmethod
     def _rebuild_runtime_results(session: RPASession) -> None:
@@ -699,6 +838,17 @@ class RPASessionManager:
     def _unescape_playwright_literal(value: str) -> str:
         return value.replace('\\"', '"').replace("\\\\", "\\")
 
+    @staticmethod
+    def _playwright_literal_pattern() -> str:
+        return r'(?:"((?:\\.|[^"\\])*)"|\'((?:\\.|[^\'\\])*)\')'
+
+    @staticmethod
+    def _playwright_literal_value(match: re.Match, first_group: int) -> str:
+        value = match.group(first_group)
+        if value is None:
+            value = match.group(first_group + 1)
+        return RPASessionManager._unescape_playwright_literal(value or "")
+
     @classmethod
     def _parse_playwright_locator_expression(cls, expression: str) -> Optional[Dict[str, Any]]:
         if not expression:
@@ -707,14 +857,15 @@ class RPASessionManager:
         if remaining.startswith("page."):
             remaining = remaining[5:]
 
+        literal = cls._playwright_literal_pattern()
         current: Optional[Dict[str, Any]] = None
         value_patterns = (
-            ("testid", r'get_by_test_id\("((?:\\.|[^"\\])*)"\)'),
-            ("label", r'get_by_label\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)'),
-            ("placeholder", r'get_by_placeholder\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)'),
-            ("alt", r'get_by_alt_text\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)'),
-            ("title", r'get_by_title\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)'),
-            ("text", r'get_by_text\("((?:\\.|[^"\\])*)"(?:,\s*exact=True)?\)'),
+            ("testid", rf'get_by_test_id\({literal}\)'),
+            ("label", rf'get_by_label\({literal}(?:,\s*exact=True)?\)'),
+            ("placeholder", rf'get_by_placeholder\({literal}(?:,\s*exact=True)?\)'),
+            ("alt", rf'get_by_alt_text\({literal}(?:,\s*exact=True)?\)'),
+            ("title", rf'get_by_title\({literal}(?:,\s*exact=True)?\)'),
+            ("text", rf'get_by_text\({literal}(?:,\s*exact=True)?\)'),
         )
 
         while remaining:
@@ -722,25 +873,21 @@ class RPASessionManager:
             step: Optional[Dict[str, Any]] = None
 
             if current is None:
-                locator_match = re.match(r'locator\("((?:\\.|[^"\\])*)"\)', remaining)
+                locator_match = re.match(rf'locator\({literal}\)', remaining)
                 if locator_match:
                     matched_text = locator_match.group(0)
-                    step = {"method": "css", "value": cls._unescape_playwright_literal(locator_match.group(1))}
+                    step = {"method": "css", "value": cls._playwright_literal_value(locator_match, 1)}
                 else:
                     role_match = re.match(
-                        r'get_by_role\("((?:\\.|[^"\\])*)"(?:,\s*name="((?:\\.|[^"\\])*)"(?:,\s*exact=True)?)?\)',
+                        rf'get_by_role\({literal}(?:,\s*name={literal}(?:,\s*exact=True)?)?\)',
                         remaining,
                     )
                     if role_match:
                         matched_text = role_match.group(0)
                         step = {
                             "method": "role",
-                            "role": cls._unescape_playwright_literal(role_match.group(1)),
-                            "name": (
-                                cls._unescape_playwright_literal(role_match.group(2))
-                                if role_match.group(2) is not None
-                                else ""
-                            ),
+                            "role": cls._playwright_literal_value(role_match, 1),
+                            "name": cls._playwright_literal_value(role_match, 3),
                         }
                     else:
                         for method, pattern in value_patterns:
@@ -748,46 +895,60 @@ class RPASessionManager:
                             if not match:
                                 continue
                             matched_text = match.group(0)
-                            step = {"method": method, "value": cls._unescape_playwright_literal(match.group(1))}
+                            step = {"method": method, "value": cls._playwright_literal_value(match, 1)}
                             break
             else:
-                nth_match = re.match(r'\.nth\((\d+)\)', remaining)
-                if nth_match:
-                    matched_text = nth_match.group(0)
+                filter_match = re.match(rf'\.filter\(has_text={literal}\)', remaining)
+                if filter_match:
+                    matched_text = filter_match.group(0)
                     current = {
-                        "method": "nth",
+                        "method": "filter_has_text",
                         "locator": current,
-                        "index": int(nth_match.group(1)),
+                        "has_text": cls._playwright_literal_value(filter_match, 1),
                     }
                 else:
-                    locator_match = re.match(r'\.locator\("((?:\\.|[^"\\])*)"\)', remaining)
-                    if locator_match:
-                        matched_text = locator_match.group(0)
-                        step = {"method": "css", "value": cls._unescape_playwright_literal(locator_match.group(1))}
+                    nth_match = re.match(r'\.nth\((\d+)\)', remaining)
+                    if nth_match:
+                        matched_text = nth_match.group(0)
+                        current = {
+                            "method": "nth",
+                            "locator": current,
+                            "index": int(nth_match.group(1)),
+                        }
                     else:
-                        role_match = re.match(
-                            r'\.get_by_role\("((?:\\.|[^"\\])*)"(?:,\s*name="((?:\\.|[^"\\])*)"(?:,\s*exact=True)?)?\)',
-                            remaining,
-                        )
-                        if role_match:
-                            matched_text = role_match.group(0)
-                            step = {
-                                "method": "role",
-                                "role": cls._unescape_playwright_literal(role_match.group(1)),
-                                "name": (
-                                    cls._unescape_playwright_literal(role_match.group(2))
-                                    if role_match.group(2) is not None
-                                    else ""
-                                ),
+                        first_match = re.match(r'\.first(?:\(\))?', remaining)
+                        if first_match:
+                            matched_text = first_match.group(0)
+                            current = {
+                                "method": "nth",
+                                "locator": current,
+                                "index": 0,
                             }
                         else:
-                            for method, pattern in value_patterns:
-                                match = re.match(r"\." + pattern, remaining)
-                                if not match:
-                                    continue
-                                matched_text = match.group(0)
-                                step = {"method": method, "value": cls._unescape_playwright_literal(match.group(1))}
-                                break
+                            locator_match = re.match(rf'\.locator\({literal}\)', remaining)
+                            if locator_match:
+                                matched_text = locator_match.group(0)
+                                step = {"method": "css", "value": cls._playwright_literal_value(locator_match, 1)}
+                            else:
+                                role_match = re.match(
+                                    rf'\.get_by_role\({literal}(?:,\s*name={literal}(?:,\s*exact=True)?)?\)',
+                                    remaining,
+                                )
+                                if role_match:
+                                    matched_text = role_match.group(0)
+                                    step = {
+                                        "method": "role",
+                                        "role": cls._playwright_literal_value(role_match, 1),
+                                        "name": cls._playwright_literal_value(role_match, 3),
+                                    }
+                                else:
+                                    for method, pattern in value_patterns:
+                                        match = re.match(r"\." + pattern, remaining)
+                                        if not match:
+                                            continue
+                                        matched_text = match.group(0)
+                                        step = {"method": method, "value": cls._playwright_literal_value(match, 1)}
+                                        break
 
             if not matched_text:
                 return None
@@ -863,33 +1024,13 @@ class RPASessionManager:
         if not isinstance(resolved_locator, dict):
             return 0.0
 
-        method = str(resolved_locator.get("method") or candidate.get("kind") or "").lower()
-        if method == "nth":
-            return 10000.0
-        if method != "css":
-            return 0.0
-
-        selector = str(
-            resolved_locator.get("value")
-            or candidate.get("selector")
-            or candidate.get("playwright_locator")
-            or ""
+        return locator_instability_penalty(
+            resolved_locator,
+            extra_values=[
+                candidate.get("selector"),
+                candidate.get("playwright_locator"),
+            ],
         )
-        if not selector:
-            return 0.0
-
-        penalty = 0.0
-        if re.search(r"\bdata-v-[0-9a-f]{6,}\b", selector, re.IGNORECASE):
-            penalty += 10000.0
-        if re.search(r"#[A-Za-z_][\w-]*-\d{2,}\b", selector):
-            penalty += 10000.0
-        if selector.count(">") >= 4:
-            penalty += 5000.0
-        if ">> nth=" in selector or ".nth(" in selector:
-            penalty += 5000.0
-        if len(selector) >= 160:
-            penalty += 1000.0
-        return penalty
 
     @classmethod
     def _candidate_is_nth(cls, candidate: Dict[str, Any], locator: Optional[Dict[str, Any]] = None) -> bool:
@@ -1059,6 +1200,8 @@ class RPASessionManager:
 
         selected_candidate = step.locator_candidates[candidate_index]
         locator = self._resolve_candidate_locator(selected_candidate)
+        if locator_has_unstable_identity(locator):
+            raise ValueError("Locator candidate is unstable and cannot be selected")
 
         for index, candidate in enumerate(step.locator_candidates):
             candidate["selected"] = index == candidate_index
@@ -1078,6 +1221,84 @@ class RPASessionManager:
         await self._record_manual_trace_for_step(session_id, step)
         await self._broadcast_step(session_id, step)
         return step
+
+    async def select_trace_locator_candidate(
+        self,
+        session_id: str,
+        trace_id: str,
+        candidate_index: int,
+    ) -> RPAAcceptedTrace:
+        session = self.sessions.get(session_id)
+        if not session or not trace_id:
+            raise ValueError("Invalid trace id")
+
+        trace = next((item for item in session.traces if item.trace_id == trace_id), None)
+        if trace is None:
+            raise ValueError("Invalid trace id")
+        if candidate_index < 0 or candidate_index >= len(trace.locator_candidates):
+            raise ValueError("Invalid locator candidate index")
+
+        selected_candidate = trace.locator_candidates[candidate_index]
+        locator = self._resolve_candidate_locator(selected_candidate)
+        if locator_has_unstable_identity(locator):
+            raise ValueError("Locator candidate is unstable and cannot be selected")
+
+        for index, candidate in enumerate(trace.locator_candidates):
+            candidate["selected"] = index == candidate_index
+
+        selected_candidate["locator"] = locator
+        trace.validation = dict(trace.validation or {})
+        trace.validation["selected_candidate_index"] = candidate_index
+        trace.validation["selected_candidate_kind"] = selected_candidate.get("kind", "")
+        strict_match_count = selected_candidate.get("strict_match_count")
+        if isinstance(strict_match_count, int):
+            trace.validation["status"] = "ok" if strict_match_count == 1 else "fallback"
+        if selected_candidate.get("reason"):
+            trace.validation["details"] = selected_candidate["reason"]
+
+        if trace.dataflow and trace.dataflow.target_field:
+            trace.dataflow.target_field.locator_candidates = [
+                dict(candidate) for candidate in trace.locator_candidates
+            ]
+        return trace
+
+    async def resolve_trace_diagnostic_locator_candidate(
+        self,
+        session_id: str,
+        diagnostic_id: str,
+        candidate_index: int,
+    ) -> RPAAcceptedTrace:
+        session = self.sessions.get(session_id)
+        if not session or not diagnostic_id:
+            raise ValueError("Invalid diagnostic id")
+
+        diagnostic = next(
+            (item for item in session.trace_diagnostics if item.diagnostic_id == diagnostic_id),
+            None,
+        )
+        if diagnostic is None:
+            raise ValueError("Invalid diagnostic id")
+        if diagnostic.source != "manual_recording" or not isinstance(diagnostic.raw, dict):
+            raise ValueError("Diagnostic cannot be resolved by locator")
+
+        related_step_id = str(diagnostic.raw.get("related_step_id") or "")
+        step_index = next(
+            (
+                index
+                for index, step in enumerate(session.steps)
+                if step.id == related_step_id
+            ),
+            None,
+        )
+        if step_index is None:
+            raise ValueError("Diagnostic backing step not found")
+
+        await self.select_step_locator_candidate(session_id, step_index, candidate_index)
+        trace_id = diagnostic.trace_id or f"trace-{related_step_id}"
+        trace = next((item for item in session.traces if item.trace_id == trace_id), None)
+        if trace is None:
+            raise ValueError("Diagnostic did not resolve to trace")
+        return trace
 
     def pause_recording(self, session_id: str):
         """Pause event recording (used during AI execution)."""
@@ -1362,6 +1583,7 @@ class RPASessionManager:
                             last_step.action = "navigate_click"
                             last_step.url = evt.get("url", last_step.url)
                             last_step.description = f"{last_step.description} 并跳转页面"
+                            self._rebuild_manual_recording_state(session)
                             await self._record_manual_trace_for_step(session_id, last_step)
                             await self._broadcast_step(session_id, last_step)
                             logger.debug(f"[RPA] Upgraded click to navigate_click: {evt.get('url', '')[:60]}")
@@ -1369,6 +1591,7 @@ class RPASessionManager:
                         if last_step.action == "press":
                             last_step.action = "navigate_press"
                             last_step.url = evt.get("url", last_step.url)
+                            self._rebuild_manual_recording_state(session)
                             await self._record_manual_trace_for_step(session_id, last_step)
                             await self._broadcast_step(session_id, last_step)
                             logger.debug(f"[RPA] Upgraded press to navigate_press: {evt.get('url', '')[:60]}")
@@ -1462,6 +1685,7 @@ class RPASessionManager:
                 break
 
         if step.action == "fill" and step.source == "record":
+            insert_at = self._drop_redundant_pre_fill_focus_click(session, insert_at, step)
             previous_step = session.steps[insert_at - 1] if insert_at > 0 else None
             if self._is_same_fill_target(previous_step, step):
                 self._merge_fill_step(previous_step, step)
@@ -1480,6 +1704,83 @@ class RPASessionManager:
 
         await self._broadcast_step(session_id, step)
         return step
+
+    @staticmethod
+    def _manual_trace_diagnostic_from_recording(
+        diagnostic: ManualRecordingDiagnostic,
+    ) -> RPATraceDiagnostic:
+        related_step_id = diagnostic.related_step_id or ""
+        page_state = dict(diagnostic.page_state or {})
+        repairable_candidates, rejected_candidates = RPASessionManager._split_repairable_locator_candidates(
+            diagnostic.raw_candidates or []
+        )
+        raw = {
+            "related_step_id": related_step_id,
+            "failure_reason": diagnostic.failure_reason,
+            "action": diagnostic.related_action_kind.value,
+            "locator_candidates": repairable_candidates,
+            "rejected_locator_candidates": rejected_candidates,
+            "element_snapshot": dict(diagnostic.element_snapshot or {}),
+            "page_state": page_state,
+            "url": str(page_state.get("url", "") or ""),
+        }
+        return RPATraceDiagnostic(
+            diagnostic_id=f"diag-{related_step_id}" if related_step_id else "",
+            trace_id=f"trace-{related_step_id}" if related_step_id else None,
+            source="manual_recording",
+            message=diagnostic.failure_reason,
+            raw=raw,
+        )
+
+    @classmethod
+    def _split_repairable_locator_candidates(
+        cls,
+        candidates: List[Dict[str, Any]],
+    ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        repairable: List[Dict[str, Any]] = []
+        rejected: List[Dict[str, Any]] = []
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            copied = dict(candidate)
+            try:
+                locator = cls._resolve_candidate_locator(copied)
+            except ValueError:
+                repairable.append(copied)
+                continue
+            copied["locator"] = locator
+            if locator_has_unstable_identity(locator):
+                copied["rejected_reason"] = "unstable_target_locator"
+                rejected.append(copied)
+            else:
+                repairable.append(copied)
+        return repairable, rejected
+
+    @classmethod
+    def _sync_manual_trace_diagnostics(cls, session: RPASession) -> None:
+        preserved = [
+            diagnostic
+            for diagnostic in session.trace_diagnostics
+            if diagnostic.source != "manual_recording"
+        ]
+        manual_diagnostics = [
+            cls._manual_trace_diagnostic_from_recording(diagnostic)
+            for diagnostic in session.recording_diagnostics
+            if diagnostic.related_step_id
+        ]
+        session.trace_diagnostics = preserved + manual_diagnostics
+
+    @staticmethod
+    def _has_manual_trace_diagnostic_for_step(session: RPASession, step_id: str) -> bool:
+        trace_id = f"trace-{step_id}"
+        return any(
+            diagnostic.source == "manual_recording"
+            and (
+                diagnostic.trace_id == trace_id
+                or str((diagnostic.raw or {}).get("related_step_id") or "") == step_id
+            )
+            for diagnostic in session.trace_diagnostics
+        )
 
     @staticmethod
     def _rebuild_manual_recording_state(session: RPASession) -> None:
@@ -1505,7 +1806,10 @@ class RPASessionManager:
             if outcome.accepted_action is not None:
                 session.recorded_actions.append(outcome.accepted_action)
             if outcome.diagnostic is not None:
+                if step.action in {"navigate_click", "navigate_press"} and step.url:
+                    continue
                 session.recording_diagnostics.append(outcome.diagnostic)
+        RPASessionManager._sync_manual_trace_diagnostics(session)
 
     @staticmethod
     def _step_event_ts_ms(step: RPAStep) -> int:
@@ -1564,6 +1868,72 @@ class RPASessionManager:
         existing_step.event_timestamp_ms = incoming_step.event_timestamp_ms
         existing_step.timestamp = incoming_step.timestamp
 
+    @classmethod
+    def _is_redundant_pre_fill_focus_click(
+        cls,
+        session: RPASession,
+        click_step: Optional[RPAStep],
+        fill_step: RPAStep,
+    ) -> bool:
+        if click_step is None:
+            return False
+        if click_step.action != "click" or fill_step.action != "fill":
+            return False
+        if click_step.source != "record" or fill_step.source != "record":
+            return False
+        if click_step.tab_id != fill_step.tab_id or click_step.frame_path != fill_step.frame_path:
+            return False
+        if not cls._has_manual_trace_diagnostic_for_step(session, click_step.id):
+            return False
+
+        click_sequence = click_step.sequence
+        fill_sequence = fill_step.sequence
+        if click_sequence is not None and fill_sequence is not None:
+            if fill_sequence - click_sequence != 1:
+                return False
+        else:
+            click_ts = cls._step_event_ts_ms(click_step)
+            fill_ts = cls._step_event_ts_ms(fill_step)
+            if fill_ts < click_ts or fill_ts - click_ts > 3000:
+                return False
+
+        snapshot = click_step.element_snapshot if isinstance(click_step.element_snapshot, dict) else {}
+        tag = str(click_step.tag or snapshot.get("tag") or "").strip().lower()
+        role = str(snapshot.get("role") or "").strip().lower()
+        interactive_tags = {"a", "button", "input", "select", "textarea"}
+        interactive_roles = {
+            "button",
+            "link",
+            "checkbox",
+            "radio",
+            "tab",
+            "menuitem",
+            "option",
+            "switch",
+            "combobox",
+        }
+        return tag not in interactive_tags and role not in interactive_roles
+
+    @classmethod
+    def _drop_redundant_pre_fill_focus_click(
+        cls,
+        session: RPASession,
+        insert_at: int,
+        fill_step: RPAStep,
+    ) -> int:
+        previous_index = insert_at - 1
+        if previous_index < 0:
+            return insert_at
+        previous_step = session.steps[previous_index]
+        if not cls._is_redundant_pre_fill_focus_click(session, previous_step, fill_step):
+            return insert_at
+
+        removed_step = session.steps.pop(previous_index)
+        removed_trace_id = f"trace-{removed_step.id}"
+        session.traces = [trace for trace in session.traces if trace.trace_id != removed_trace_id]
+        cls._rebuild_manual_recording_state(session)
+        return previous_index
+
     async def _broadcast_step(self, session_id: str, step: RPAStep):
         if session_id in self.ws_connections:
             message = {"type": "step", "data": step.model_dump()}
@@ -1578,6 +1948,7 @@ class RPASessionManager:
         if not session:
             raise ValueError(f"Session {session_id} not found")
         self._merge_pending_downloads_into_trace(session, trace)
+        trace = infer_dataflow_for_ai_fill(trace, session.runtime_results)
         session.traces.append(trace)
         await self._broadcast_trace(session_id, trace)
         return session.traces
@@ -1627,6 +1998,42 @@ class RPASessionManager:
             raise ValueError(f"Session {session_id} not found")
         session.runtime_results.write(key, value)
 
+    def store_region_context(
+        self,
+        session_id: str,
+        context: RPARegionContext,
+    ) -> RPARegionContext:
+        if session_id not in self.sessions:
+            raise ValueError(f"Session {session_id} not found")
+        self._pending_region_contexts[session_id] = {context.region_id: context}
+        return context
+
+    def resolve_region_context(
+        self,
+        session_id: str,
+        region_id: str | None,
+        *,
+        current_url: str | None = None,
+    ) -> Optional[RPARegionContext]:
+        if not region_id:
+            return None
+        context = self._pending_region_contexts.get(session_id, {}).get(region_id)
+        if context is None:
+            return None
+        if current_url and context.page_url and context.page_url != current_url:
+            return None
+        return context
+
+    def clear_region_context(self, session_id: str, region_id: str | None = None) -> None:
+        if region_id:
+            contexts = self._pending_region_contexts.get(session_id)
+            if contexts is not None:
+                contexts.pop(region_id, None)
+                if not contexts:
+                    self._pending_region_contexts.pop(session_id, None)
+            return
+        self._pending_region_contexts.pop(session_id, None)
+
     async def _record_manual_trace_for_step(self, session_id: str, step: RPAStep) -> None:
         if step.source != "record":
             return
@@ -1634,6 +2041,12 @@ class RPASessionManager:
         if not session:
             return
         try:
+            trace_id = f"trace-{step.id}"
+            if self._has_manual_trace_diagnostic_for_step(session, step.id):
+                session.traces = [
+                    existing for existing in session.traces if existing.trace_id != trace_id
+                ]
+                return
             trace = manual_step_to_trace(step.model_dump())
             trace = infer_dataflow_for_fill(trace, session.runtime_results)
             session.traces = [existing for existing in session.traces if existing.trace_id != trace.trace_id]

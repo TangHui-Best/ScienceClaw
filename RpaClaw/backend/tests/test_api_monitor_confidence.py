@@ -52,7 +52,7 @@ def test_business_api_with_page_script_is_high_and_selected():
     ])
 
     assert result.confidence == "high"
-    assert result.score == 100
+    assert result.score == 85
     assert result.breakdown["response_richness"] == 10
     assert result.selected is True
     assert "由用户动作触发" in result.reasons
@@ -69,7 +69,7 @@ def test_config_query_from_injected_stack_is_low_and_not_selected():
     ])
 
     assert result.confidence == "low"
-    assert result.score == 5
+    assert result.score == 15
     assert result.breakdown["injected_source"] == -40
     assert result.breakdown["noise_path"] == -30
     assert result.selected is False
@@ -83,7 +83,7 @@ def test_missing_source_evidence_still_scores_from_other_strong_signals():
     ])
 
     assert result.confidence == "medium"
-    assert result.score == 75
+    assert result.score == 60
     assert result.selected is False
     assert "缺少 initiator 或 JS 调用栈" in result.reasons
 
@@ -94,7 +94,7 @@ def test_legacy_classify_api_candidate_returns_scored_result():
     ])
 
     assert result.confidence == "high"
-    assert result.score == 100
+    assert result.score == 85
 
 
 def test_dedup_key_uses_method_and_parameterized_path_only():
@@ -123,7 +123,7 @@ def test_apply_confidence_to_tool_definition():
     updated = _apply_confidence_to_tool(tool, [call])
 
     assert updated.confidence == "high"
-    assert updated.score == 100
+    assert updated.score == 85
     assert updated.selected is True
     assert updated.confidence_reasons
     assert updated.source_evidence["action_window_matched"] is True

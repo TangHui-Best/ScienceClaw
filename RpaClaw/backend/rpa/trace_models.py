@@ -72,7 +72,10 @@ class RPAAcceptedTrace(BaseModel):
     locator_candidates: List[Dict[str, Any]] = Field(default_factory=list)
     validation: Dict[str, Any] = Field(default_factory=dict)
     signals: Dict[str, Any] = Field(default_factory=dict)
+    region_context: Dict[str, Any] = Field(default_factory=dict)
+    region_scope: Dict[str, Any] = Field(default_factory=dict)
     value: Any = None
+    sensitive: bool = False
     output_key: Optional[str] = None
     output: Any = None
     ai_execution: Optional[RPAAIExecution] = None

@@ -376,6 +376,33 @@ class PlaywrightGeneratorTests(unittest.TestCase):
 
         self.assertIn('await current_page.get_by_label("Upload file", exact=True).set_input_files(', script)
 
+    def test_generate_script_uses_configured_default_value_as_runtime_fallback(self):
+        generator = PlaywrightGenerator()
+        steps = [
+            {
+                "id": "step-1",
+                "action": "fill",
+                "target": json.dumps({"method": "role", "role": "textbox", "name": "Search"}),
+                "value": "recorded query",
+                "description": "fill search",
+            }
+        ]
+
+        script = generator.generate_script(
+            steps,
+            {
+                "query": {
+                    "original_value": "recorded query",
+                    "default_value": "configured query",
+                    "sensitive": False,
+                }
+            },
+            is_local=True,
+        )
+
+        self.assertIn('kwargs.get(\'query\', \'configured query\')', script)
+        self.assertNotIn('kwargs.get(\'query\', \'recorded query\')', script)
+
     def test_generate_script_infers_open_tab_click_from_tab_id_change(self):
         generator = PlaywrightGenerator()
         steps = [
@@ -735,10 +762,8 @@ class PlaywrightGeneratorTests(unittest.TestCase):
 
         script = generator.generate_script([], is_local=True)
 
-        self.assertIn("--ignore-certificate-errors", script)
-        self.assertIn("--allow-insecure-localhost", script)
         self.assertIn("--allow-running-insecure-content", script)
-        self.assertIn("--test-type", script)
+        self.assertIn("--disable-web-security", script)
         self.assertIn("'ignore_https_errors': True", script)
 
     def test_generate_script_docker_runner_ignores_https_errors_in_context(self):

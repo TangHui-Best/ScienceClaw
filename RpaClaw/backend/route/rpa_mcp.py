@@ -252,6 +252,7 @@ def _build_rpa_mcp_executor(*, current_user_id: str) -> RpaMcpExecutor:
         browser_factory=_browser_factory,
         pw_loop_runner=pw_loop_runner,
         downloads_dir_factory=lambda tool: str(Path(settings.workspace_dir) / 'rpa_mcp_downloads' / tool.id),
+        user_id=current_user_id,
     )
 
 

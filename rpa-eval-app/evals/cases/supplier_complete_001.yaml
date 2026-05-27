@@ -3,7 +3,6 @@ name: 补全供应商联系信息
 tags: [suppliers]
 user:
   username: buyer
-  password: buyer123
 start_path: /suppliers
 timeout_s: 120
 instruction: >

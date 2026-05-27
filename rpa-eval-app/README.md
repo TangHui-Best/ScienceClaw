@@ -19,6 +19,7 @@ rpa-eval-app/
 - Node.js 18+。
 - RpaClaw 后端可访问，默认地址为 `http://localhost:12001`。
 - RpaClaw 需要能访问本机评测前端 `http://localhost:5175`。
+- 后端和 runner 必须使用同一个 `RPA_EVAL_RESET_TOKEN`，用于重置 fixtures 和签发评测登录态。
 
 ## 1. 安装后端与评测依赖
 
@@ -43,6 +44,7 @@ python -m pip install -r requirements.txt
 继续在后端终端中执行：
 
 ```powershell
+$env:RPA_EVAL_RESET_TOKEN = "your-reset-token"
 python -m uvicorn main:app --host 127.0.0.1 --port 8085
 ```
 
@@ -93,9 +95,9 @@ runner 会对每个用例执行总时限控制。默认 `--case-timeout-s` 为 1
 
 | 用户名 | 密码 | 角色 |
 | --- | --- | --- |
-| `admin` | `admin123` | 管理员 |
-| `buyer` | `buyer123` | 采购员 |
-| `approver` | `approver123` | 审批人 |
+| `admin` | 运行时生成 | 管理员 |
+| `buyer` | 运行时生成 | 采购员 |
+| `approver` | 运行时生成 | 审批人 |
 
 评测 runner 会在每个用例开始前重置数据，并使用评测后端签发的 token 访问 `eval-auth.html` 写入浏览器登录态，再导航到用例起始页。发送给 RpaClaw 的指令只包含业务任务本身，避免“登录/导航前置步骤”被误判为业务完成。
 
@@ -107,10 +109,10 @@ runner 会对每个用例执行总时限控制。默认 `--case-timeout-s` 为 1
 Invoke-WebRequest `
   -Method POST `
   -Uri http://localhost:8085/api/eval/reset `
-  -Headers @{ "X-RPA-Eval-Reset-Token" = "rpa-eval-reset" }
+  -Headers @{ "X-RPA-Eval-Reset-Token" = $env:RPA_EVAL_RESET_TOKEN }
 ```
 
-重置 token 可通过环境变量覆盖：
+重置 token 必须通过环境变量提供，并在后端和 runner 中保持一致。通常在启动后端前已经设置过；如果这是新的终端，请重新设置：
 
 ```powershell
 $env:RPA_EVAL_RESET_TOKEN = "your-reset-token"
@@ -122,12 +124,14 @@ $env:RPA_EVAL_RESET_TOKEN = "your-reset-token"
 
 ```powershell
 cd D:\code\MyScienceClaw
+$env:RPA_EVAL_RESET_TOKEN = "your-reset-token"
 python rpa-eval-app\evals\runner.py --tag smoke
 ```
 
 运行全部用例：
 
 ```powershell
+$env:RPA_EVAL_RESET_TOKEN = "your-reset-token"
 python rpa-eval-app\evals\runner.py --all
 ```
 
@@ -174,6 +178,8 @@ runner 执行时会打印当前进度，例如 `[3/12] START ...`、`[3/12] PASS
 - `report_contract_export_001`：导出合同报表，并通过业务系统下载审计确认导出接口被真实触发。
 - `report_async_download_001`：生成、轮询并下载异步报表，并通过下载审计确认报表下载被真实触发。
 - `empty_result_contract_001`：处理空结果检索场景。
+
+手动 region-scoped section text fixture 位于 `/section-texts`。该页面提供三类非 GitHub 通用 DOM 形态：heading + 同级正文、只有 after-context heading 的正文、以及复杂嵌套 container 正文。预期分类只记录在评测元信息中，不写入页面正文：heading + 同级正文应可产生 deterministic section extraction；after-context-only heading 应回退 runtime AI 或不生成 heading-scoped signal；复杂嵌套正文在没有稳定 container anchor evidence 前应保持 missing-anchor fallback。该页面目前只是手动 fixture，尚未接入 runner-backed golden case。
 
 这些用例使用固定业务编号，例如 `CT-2026-RPA-001`、`SUP-2026-002`、`PR-2026-RPA-NEW-001`、`PO-2026-RPA-NEW-001`、`RPT-2026-RPA-001`。
 

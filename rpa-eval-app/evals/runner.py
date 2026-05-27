@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import time
@@ -25,12 +26,6 @@ else:
 
 DEFAULT_REPORT_DIR = Path(__file__).resolve().parent / "reports"
 CASES_DIR = Path(__file__).resolve().parent / "cases"
-USER_PASSWORDS = {
-    "admin": "admin123",
-    "buyer": "buyer123",
-    "approver": "approver123",
-}
-
 
 class CaseAssertionError(AssertionError):
     def __init__(self, stage: str, message: str) -> None:
@@ -44,6 +39,11 @@ def main() -> int:
     cases = select_cases(load_cases(CASES_DIR), args)
     if not cases:
         print("No eval cases matched the requested selector.", file=sys.stderr)
+        return 2
+    try:
+        require_reset_token(args.reset_token)
+    except CaseAssertionError as exc:
+        print(str(exc), file=sys.stderr)
         return 2
 
     eval_client = EvalAppClient(args.eval_backend_url)
@@ -109,7 +109,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", default="", help="RpaClaw model name to use, matched against /api/v1/models.")
     parser.add_argument("--model-config-id", default="", help="RpaClaw model config id to use directly.")
     parser.add_argument("--report-dir", default=None)
-    parser.add_argument("--reset-token", default="rpa-eval-reset")
+    parser.add_argument("--reset-token", default=os.environ.get("RPA_EVAL_RESET_TOKEN", ""))
     parser.add_argument(
         "--case-timeout-s",
         type=float,
@@ -117,6 +117,15 @@ def parse_args() -> argparse.Namespace:
         help="Default wall-clock timeout for one eval case. A case can override it with timeout_s in YAML.",
     )
     return parser.parse_args()
+
+
+def require_reset_token(reset_token: str) -> None:
+    if not str(reset_token or "").strip():
+        raise CaseAssertionError(
+            "configuration",
+            "RPA_EVAL_RESET_TOKEN is required. Set it before starting the eval backend and runner, "
+            "or pass --reset-token with the same value used by the backend.",
+        )
 
 
 def load_cases(cases_dir: Path) -> list[dict[str, Any]]:
@@ -171,8 +180,7 @@ def run_case(
         eval_client.reset(args.reset_token)
         user = case.get("user") or {}
         username = user["username"]
-        password = USER_PASSWORDS[username]
-        eval_session = eval_client.login(username, password)
+        eval_session = eval_client.issue_eval_token(username, args.reset_token)
         result["eval_user"] = eval_session.user
         assert_api_assertions(case.get("pre_api_assertions", []), eval_client, eval_session.token)
 
@@ -184,8 +192,6 @@ def run_case(
             rpa_client=rpa_client,
             start_url=start_url,
             auth_token=eval_session.token,
-            username=username,
-            password=password,
             timeout_s=result["timeout_s"],
         )
         result["session_id"] = run.session_id
@@ -219,8 +225,6 @@ def run_rpa_case(
     rpa_client: RpaClawClient,
     start_url: str,
     auth_token: str,
-    username: str,
-    password: str,
     timeout_s: float,
 ) -> RpaRunResult:
     session_id = rpa_client.start_session(case_id)
@@ -231,8 +235,6 @@ def run_rpa_case(
             case=case,
             login_url="",
             start_url=start_url,
-            username=username,
-            password=password,
         )
         business_events = rpa_client.chat_with_wall_timeout(session_id, business_instruction, timeout_s=timeout_s)
 
@@ -273,8 +275,6 @@ def build_browser_instruction(
     case: dict[str, Any],
     login_url: str,
     start_url: str,
-    username: str,
-    password: str,
 ) -> str:
     return "\n".join(
         [

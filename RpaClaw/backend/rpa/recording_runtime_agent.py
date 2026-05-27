@@ -28,6 +28,12 @@ from .trace_models import (
     RPATraceDiagnostic,
     RPATraceType,
 )
+from .trace_locator_utils import (
+    has_valid_locator,
+    locator_has_unstable_identity,
+    locator_is_structural_region_header,
+    normalize_locator,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -36,6 +42,7 @@ logger = logging.getLogger(__name__)
 _GENERATED_CODE_FILENAME = "<recording_runtime_agent>"
 _RANDOM_LIKE_ATTR_RE = re.compile(r"(?i)(?:[a-z]+[-_])?[a-z0-9]{6,}[a-z][a-z0-9]*")
 _DOWNLOAD_EVENT_DRAIN_TIMEOUT_S = 0.5
+_RECORDING_PLANNER_MIN_OUTPUT_TOKENS = 8192
 
 
 RECORDING_RUNTIME_SYSTEM_PROMPT = """You operate exactly one RPA recording command.
@@ -51,7 +58,9 @@ Schema:
   "source": "detail_views",
   "section_title": "optional snapshot section title",
   "frame_path": "optional iframe selector chain for extract_snapshot",
-  "fields": "optional structured fields for extract_snapshot"
+  "fields": "optional structured fields for extract_snapshot",
+  "preserve_runtime_ai": false,
+  "semantic_intent": "optional reason when runtime AI must re-evaluate current page candidates"
 }
 Rules:
 - Complete only the current user command, not the full SOP.
@@ -59,9 +68,14 @@ Rules:
 - expected_effect describes the browser-visible outcome required by the user's current command.
 - Use expected_effect="navigate" when the user asks to open, go to, enter, visit, or navigate to a target.
 - Use expected_effect="extract" when the user only asks to find, collect, summarize, or return data without opening it.
+- Set preserve_runtime_ai=true when the command requires semantic judgment over current page candidates at replay time, such as selecting the most relevant, best matching, recommended, highest risk, or most suitable item.
+- Do not set preserve_runtime_ai for a simple deterministic click/fill/goto where the recorded locator or value is the intended reusable behavior.
 - If code is returned, it must define async def run(page, results).
 - Use action_type="extract_snapshot" only when the requested extract-only data is already present in snapshot.detail_views fields.
 - For extract_snapshot, return the relevant observed detail fields in the plan itself, including the detail view frame_path when present; do not generate Python code and do not reference `snapshot` inside `run()`.
+- For snapshot.mode="region_scoped_snapshot", selected-region evidence is the authoritative scope. If you use extract_snapshot, fields must contain labels copied from selected region evidence; empty values are valid unless the field is explicitly required or the user's task requires non-empty output.
+- Do not generate replay code that locates selected free text by the exact observed text value. Observed selected text is evidence, not a stable replay selector.
+- If payload.plan_validation is present, correct the failed plan contract issue before execution; do not repeat a failed extract_snapshot plan without fields.
 - `snapshot` is planner-only evidence. Generated Python can access only `page` and `results`.
 - 结果返回规则：
   - `results` 是普通 Python dict，只包含之前已成功步骤的输出结果。
@@ -81,6 +95,9 @@ Rules:
 - Do not leave the browser on API, JSON, raw, or other machine endpoints after an extract-only command.
 - For extract-only commands, prefer user-facing pages and restore the most recent user-facing page after any temporary helper navigation.
 - For extract-only commands, prefer snapshot.expanded_regions and snapshot.sampled_regions before broad DOM scans.
+- For count/stat/value extraction, do not accept a broad multi-match locator plus `.first` as the default strategy.
+  Inspect visible candidates, prefer candidates whose text shape matches the requested value, and only return empty data
+  when the user explicitly allows empty output.
 - Use the region title, heading, or catalogue summary as context when it matches the requested area.
 - If an expanded region is a label_value_group and the user asks for field names or values, keep extraction focused on that region or supporting locator evidence instead of scanning every table.
 - Avoid treating tables as the default fallback for field extraction when a more relevant label_value_group is present.
@@ -94,6 +111,9 @@ Rules:
   - For detail extraction, inspect `snapshot.detail_views` before scanning generic text or tables.
   - `detail_views[].fields` preserves label, value, data_prop, required, visible, and value_kind.
   - Treat hidden fields as diagnostic unless the user explicitly asks for hidden/default/internal values.
+  - For form fill/edit tasks, inspect `snapshot.form_views` before generic text, tables, or summary regions.
+  - `form_views[].fields[].control.locator` is executable locator evidence for fillable controls.
+  - Do not turn summary text into placeholder, label, name, or CSS selectors unless a form/detail/actionable locator explicitly exposes that attribute.
 - Snapshot 结构契约：
   - `evidence` 是页面事实，用于理解当前区域的文本、字段、表头、样例行或可操作项。
   - `locator_hints`、`locator`、`label_locator`、`value_locator`、`actions[].locator` 是可执行定位线索，生成 Playwright 代码时应优先使用这些字段。
@@ -101,9 +121,10 @@ Rules:
   - 不要把内部引用改写成 `#...`、`[id=...]` 或其他 selector。
   - 对表格提取任务，优先使用 `locator_hints`、可见表头、标题文本或角色语义来定位表格，不要使用内部引用作为 selector。
 - Do not include a separate done-check.
+- For run_python click/fill commands, return action evidence such as `{"action_performed": True, "action_type": "fill", "filled_value": value}` after the Playwright action completes.
 - If extracting data, return structured JSON-serializable Python values.
-- For extract-only commands, do not return null/empty output unless the user explicitly allows empty results.
-- Set allow_empty_output=true only when the user explicitly says no result, empty list, or empty output is acceptable.
+- For extract-only commands, preserve empty strings, empty lists, and empty tables as factual outputs unless the user explicitly requires non-empty results.
+- Set allow_empty_output=false only when the user explicitly requires a non-empty result; otherwise empty strings, empty lists, and empty tables may be valid extract outputs.
 - During repair, treat raw error logs and current page facts as authoritative. Any failure_analysis.hint is advisory only.
 - 修复规则：
   - 修复时必须优先参考原始错误日志、异常类型、traceback 行号和当前页面事实。
@@ -122,6 +143,14 @@ class RecordingAgentResult(BaseModel):
     message: str = ""
 
 
+class RecordingPlannerContractError(ValueError):
+    def __init__(self, message: str, *, raw_output: str = "", cause: Optional[BaseException] = None):
+        super().__init__(message)
+        self.raw_output = raw_output
+        self.llm_call: Dict[str, Any] = {}
+        self.__cause__ = cause
+
+
 Planner = Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]
 Executor = Callable[[Any, Dict[str, Any], Dict[str, Any]], Awaitable[Dict[str, Any]]]
 
@@ -136,6 +165,7 @@ class RecordingRuntimeAgent:
         self.planner = planner or self._default_planner
         self.executor = executor or self._default_executor
         self.model_config = model_config
+        self._planner_llm_calls: List[Dict[str, Any]] = []
 
     async def run(
         self,
@@ -144,18 +174,31 @@ class RecordingRuntimeAgent:
         instruction: str,
         runtime_results: Optional[Dict[str, Any]] = None,
         debug_context: Optional[Dict[str, Any]] = None,
+        region_context: Optional[Dict[str, Any]] = None,
     ) -> RecordingAgentResult:
         runtime_results = runtime_results if runtime_results is not None else {}
         debug_context = dict(debug_context or {})
         before = await _page_state(page)
-        snapshot = await _safe_page_snapshot(page)
-        compact_snapshot = _compact_snapshot(snapshot, instruction)
+        region_scope = _region_scope_from_context(region_context)
+        snapshot = await _capture_page_snapshot(page, region_scope=region_scope)
+        compact_snapshot = _compact_snapshot_for_runtime(snapshot, instruction, region_scope=region_scope or None)
+        compact_region_context = _compact_region_context(region_context)
+        raw_region_evidence = _raw_region_evidence(region_context)
         payload = {
             "instruction": instruction,
             "page": before.model_dump(mode="json"),
             "snapshot": compact_snapshot,
             "runtime_results": runtime_results,
         }
+        snapshot_extra: Dict[str, Any] = {}
+        if raw_region_evidence:
+            snapshot_extra["raw_region_evidence"] = raw_region_evidence
+        if region_scope:
+            snapshot_extra["region_scope"] = region_scope
+            snapshot_extra["region_scoped_snapshot"] = compact_snapshot
+        if compact_region_context:
+            snapshot_extra["planner_region_context"] = compact_region_context
+            snapshot_extra["region_context_decision"] = {}
         _write_recording_snapshot_debug(
             "initial",
             instruction=instruction,
@@ -164,13 +207,59 @@ class RecordingRuntimeAgent:
             compact_snapshot=compact_snapshot,
             runtime_results=runtime_results,
             debug_context=debug_context,
+            extra=snapshot_extra or None,
         )
 
-        first_plan = _build_table_ordinal_overlay_plan(instruction, snapshot)
+        first_plan = None
+        if not compact_region_context:
+            first_plan = _build_table_ordinal_overlay_plan(instruction, snapshot)
+            if not first_plan:
+                first_plan = _build_ordinal_overlay_plan(instruction, snapshot)
+        first_planner_call_index = len(self._planner_llm_calls)
         if not first_plan:
-            first_plan = _build_ordinal_overlay_plan(instruction, snapshot)
-        if not first_plan:
-            first_plan = await self.planner(payload)
+            try:
+                first_plan = await self.planner(payload)
+            except Exception as exc:
+                _write_recording_planner_failure_debug(
+                    "initial",
+                    instruction=instruction,
+                    page_state=before.model_dump(mode="json"),
+                    raw_snapshot=snapshot,
+                    compact_snapshot=compact_snapshot,
+                    exception=exc,
+                    model_config=self.model_config,
+                    debug_context=debug_context,
+                )
+                return RecordingAgentResult(
+                    success=False,
+                    diagnostics=[
+                        _planner_contract_diagnostic(
+                            exc,
+                            stage="initial",
+                            model_config=self.model_config,
+                        )
+                    ],
+                    message="Recording planner failed to return a valid plan.",
+                )
+        if compact_region_context:
+            plan_validation_error = _selected_region_extract_plan_validation_error(first_plan)
+            if plan_validation_error:
+                validation_payload = _build_region_plan_validation_payload(payload, first_plan, plan_validation_error)
+                try:
+                    first_plan = await self.planner(validation_payload)
+                except Exception as exc:
+                    return RecordingAgentResult(
+                        success=False,
+                        diagnostics=[
+                            _planner_contract_diagnostic(
+                                exc,
+                                stage="initial_plan_validation",
+                                model_config=self.model_config,
+                            )
+                        ],
+                        message="Recording planner failed to correct an invalid selected-region plan.",
+                    )
+        first_llm_call = self._planner_llm_call_since(first_planner_call_index)
         first_result = await self.executor(page, first_plan, runtime_results)
         first_result = await _ensure_expected_effect(
             page=page,
@@ -197,6 +286,9 @@ class RecordingRuntimeAgent:
                 before,
                 repair_attempted=False,
                 snapshot=snapshot,
+                compact_snapshot=compact_snapshot,
+                region_context=compact_region_context,
+                region_scope=region_scope,
             )
             return RecordingAgentResult(
                 success=True,
@@ -207,8 +299,13 @@ class RecordingRuntimeAgent:
             )
 
         failed_page = await _page_state(page)
-        failed_snapshot = await _safe_page_snapshot(page)
-        compact_failed_snapshot = _compact_snapshot(failed_snapshot, instruction)
+        failed_snapshot = await _capture_page_snapshot(page, region_scope=region_scope)
+        compact_failed_snapshot = _compact_snapshot_for_runtime(
+            failed_snapshot,
+            instruction,
+            region_scope=region_scope or None,
+        )
+        repair_snapshot = compact_failed_snapshot
         first_error = str(first_result.get("error") or "recording command failed")
         first_error_type = str(first_result.get("error_type") or "").strip()
         first_traceback = str(first_result.get("traceback") or "").strip()
@@ -223,6 +320,17 @@ class RecordingRuntimeAgent:
             "failed_plan": _safe_jsonable(first_plan),
             "error": first_error,
         }
+        if raw_region_evidence:
+            repair_snapshot_extra["raw_region_evidence"] = raw_region_evidence
+        if region_scope:
+            repair_snapshot_extra["region_scope"] = region_scope
+            repair_snapshot_extra["region_scoped_snapshot"] = compact_failed_snapshot
+        if compact_region_context:
+            repair_snapshot_extra["planner_region_context"] = compact_region_context
+            repair_snapshot_extra["region_context_decision"] = _region_context_decision_signal(
+                first_plan,
+                compact_region_context,
+            )
         if first_error_type:
             repair_snapshot_extra["error_type"] = first_error_type
         if first_traceback:
@@ -243,8 +351,10 @@ class RecordingRuntimeAgent:
             "plan": _safe_jsonable(first_plan),
             "result": _safe_jsonable(first_result),
             "page_after_failure": failed_page.model_dump(mode="json"),
-            "snapshot_after_failure": _safe_jsonable(compact_failed_snapshot),
+            "snapshot_after_failure": _safe_jsonable(repair_snapshot),
         }
+        if first_llm_call:
+            diagnostic_raw["llm_call"] = _safe_jsonable(first_llm_call)
         if first_error_type:
             diagnostic_raw["error_type"] = first_error_type
         if first_traceback:
@@ -263,7 +373,7 @@ class RecordingRuntimeAgent:
             "error": first_error,
             "failed_plan": first_plan,
             "page_after_failure": failed_page.model_dump(mode="json"),
-            "snapshot_after_failure": compact_failed_snapshot,
+            "snapshot_after_failure": repair_snapshot,
         }
         if first_error_type:
             repair_context["error_type"] = first_error_type
@@ -275,7 +385,56 @@ class RecordingRuntimeAgent:
             **payload,
             "repair": repair_context,
         }
-        repair_plan = await self.planner(repair_payload)
+        repair_planner_call_index = len(self._planner_llm_calls)
+        try:
+            repair_plan = await self.planner(repair_payload)
+        except Exception as exc:
+            _write_recording_planner_failure_debug(
+                "repair",
+                instruction=instruction,
+                page_state=failed_page.model_dump(mode="json"),
+                raw_snapshot=failed_snapshot,
+                compact_snapshot=compact_failed_snapshot,
+                exception=exc,
+                model_config=self.model_config,
+                debug_context=debug_context,
+            )
+            diagnostics.append(
+                _planner_contract_diagnostic(
+                    exc,
+                    stage="repair",
+                    model_config=self.model_config,
+                )
+            )
+            return RecordingAgentResult(
+                success=False,
+                diagnostics=diagnostics,
+                message="Recording planner failed to return a valid repair plan.",
+            )
+        if compact_region_context:
+            repair_plan_validation_error = _selected_region_extract_plan_validation_error(repair_plan)
+            if repair_plan_validation_error:
+                validation_payload = _build_region_plan_validation_payload(
+                    repair_payload,
+                    repair_plan,
+                    repair_plan_validation_error,
+                )
+                try:
+                    repair_plan = await self.planner(validation_payload)
+                except Exception as exc:
+                    diagnostics.append(
+                        _planner_contract_diagnostic(
+                            exc,
+                            stage="repair_plan_validation",
+                            model_config=self.model_config,
+                        )
+                    )
+                    return RecordingAgentResult(
+                        success=False,
+                        diagnostics=diagnostics,
+                        message="Recording planner failed to correct an invalid selected-region repair plan.",
+                    )
+        repair_llm_call = self._planner_llm_call_since(repair_planner_call_index)
         repair_result = await self.executor(page, repair_plan, runtime_results)
         repair_result = await _ensure_expected_effect(
             page=page,
@@ -302,6 +461,9 @@ class RecordingRuntimeAgent:
                 before,
                 repair_attempted=True,
                 snapshot=failed_snapshot,
+                compact_snapshot=compact_failed_snapshot,
+                region_context=compact_region_context,
+                region_scope=region_scope,
             )
             return RecordingAgentResult(
                 success=True,
@@ -326,6 +488,8 @@ class RecordingRuntimeAgent:
             "plan": _safe_jsonable(repair_plan),
             "result": _safe_jsonable(repair_result),
         }
+        if repair_llm_call:
+            repair_diagnostic_raw["llm_call"] = _safe_jsonable(repair_llm_call)
         if repair_error_type:
             repair_diagnostic_raw["error_type"] = repair_error_type
         if repair_traceback:
@@ -355,11 +519,29 @@ class RecordingRuntimeAgent:
         *,
         repair_attempted: bool,
         snapshot: Optional[Dict[str, Any]] = None,
+        compact_snapshot: Optional[Dict[str, Any]] = None,
+        region_context: Optional[Dict[str, Any]] = None,
+        region_scope: Optional[Dict[str, Any]] = None,
     ) -> RPAAcceptedTrace:
         after = await _page_state(page)
         output = result.get("output")
         output_key = _normalize_result_key(plan.get("output_key"))
         locator_stability = _build_locator_stability_metadata(plan, snapshot or {})
+        signals = _merge_runtime_ai_signal(dict(result.get("signals") or {}), plan)
+        compact_region_context = dict(region_context or {})
+        if compact_region_context:
+            signals["region_selection"] = _region_selection_signal(compact_region_context)
+            signals["region_context_decision"] = _region_context_decision_signal(plan, compact_region_context)
+            region_text_extract = _region_text_extract_signal(plan, compact_snapshot or {}, compact_region_context)
+            if region_text_extract:
+                signals["region_text_extract"] = region_text_extract
+            else:
+                selected_text_extract = _selected_region_text_extract_signal(plan, result, compact_region_context)
+                if selected_text_extract:
+                    signals["selected_region_text_extract"] = selected_text_extract
+        if _normalize_bool(plan.get("allow_empty_output")):
+            output_contract = signals.get("output_contract") if isinstance(signals.get("output_contract"), dict) else {}
+            signals["output_contract"] = {**output_contract, "allow_empty": True}
         return RPAAcceptedTrace(
             trace_type=RPATraceType.AI_OPERATION,
             source="ai",
@@ -367,7 +549,9 @@ class RecordingRuntimeAgent:
             description=str(plan.get("description") or instruction),
             before_page=before,
             after_page=after,
-            signals=dict(result.get("signals") or {}),
+            signals=signals,
+            region_context=compact_region_context,
+            region_scope=dict(region_scope or {}),
             output_key=output_key,
             output=output,
             ai_execution=RPAAIExecution(
@@ -381,17 +565,46 @@ class RecordingRuntimeAgent:
         )
 
     async def _default_planner(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        from backend.config import settings
         from backend.deepagent.engine import get_llm_model
         from langchain_core.messages import HumanMessage, SystemMessage
 
-        model = get_llm_model(config=self.model_config, streaming=False)
-        response = await model.ainvoke(
-            [
-                SystemMessage(content=RECORDING_RUNTIME_SYSTEM_PROMPT),
-                HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str)),
-            ]
+        planner_max_tokens = max(int(getattr(settings, "max_tokens", 0) or 0), _RECORDING_PLANNER_MIN_OUTPUT_TOKENS)
+        model = get_llm_model(
+            config=self.model_config,
+            max_tokens_override=planner_max_tokens,
+            streaming=False,
         )
-        return _parse_json_object(_extract_text(response))
+        messages = [
+            SystemMessage(content=RECORDING_RUNTIME_SYSTEM_PROMPT),
+            HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str)),
+        ]
+        llm_request = _build_planner_llm_request_summary(
+            model=model,
+            messages=messages,
+            model_config=self.model_config,
+        )
+        response = await model.ainvoke(messages)
+        response_text = _extract_text(response)
+        llm_call = {
+            "request": llm_request,
+            "response": _text_diagnostic(response_text, limit=8000),
+        }
+        self._planner_llm_calls.append(llm_call)
+        _log_planner_llm_call(llm_call)
+        try:
+            return _parse_json_object(response_text)
+        except Exception as exc:
+            try:
+                setattr(exc, "llm_call", llm_call)
+            except Exception:
+                pass
+            raise
+
+    def _planner_llm_call_since(self, start_index: int) -> Dict[str, Any]:
+        if len(self._planner_llm_calls) <= start_index:
+            return {}
+        return self._planner_llm_calls[-1]
 
     async def _default_executor(self, page: Any, plan: Dict[str, Any], runtime_results: Dict[str, Any]) -> Dict[str, Any]:
         action_type = str(plan.get("action_type") or "run_python").strip()
@@ -535,7 +748,6 @@ def _execute_extract_snapshot_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
     output: Dict[str, Any] = {}
     selected_fields: List[Dict[str, Any]] = []
     include_hidden = _normalize_bool(plan.get("include_hidden"))
-    include_empty = _normalize_bool(plan.get("include_empty"))
     for field in fields:
         label = str(field.get("label") or "").strip()
         if not label:
@@ -543,8 +755,6 @@ def _execute_extract_snapshot_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
         visible = bool(field.get("visible", True))
         value = field.get("value")
         if not visible and not include_hidden:
-            continue
-        if value == "" and not include_empty:
             continue
         output[label] = value
         selected_fields.append(
@@ -558,7 +768,16 @@ def _execute_extract_snapshot_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
             }
         )
 
-    if not output and not _normalize_bool(plan.get("allow_empty_output")):
+    empty_required_label = _empty_required_snapshot_field_label(plan)
+    if empty_required_label:
+        return {
+            "success": False,
+            "error": "extract_snapshot required field has empty value",
+            "output": "",
+            "diagnostics": {"field": empty_required_label},
+        }
+
+    if _requires_non_empty_extract_snapshot_output(plan) and not _extract_snapshot_plan_has_visible_value(plan):
         return {
             "success": False,
             "error": "extract_snapshot plan produced no visible non-empty fields",
@@ -600,6 +819,79 @@ def _snapshot_plan_fields(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
     return []
 
 
+def _extract_snapshot_plan_has_visible_value(plan: Dict[str, Any]) -> bool:
+    include_hidden = _normalize_bool(plan.get("include_hidden"))
+    include_empty = _normalize_bool(plan.get("include_empty"))
+    for field in _snapshot_plan_fields(plan):
+        if not str(field.get("label") or "").strip():
+            continue
+        if not bool(field.get("visible", True)) and not include_hidden:
+            continue
+        if field.get("value") == "" and not include_empty:
+            continue
+        return True
+    return False
+
+
+def _empty_required_snapshot_field_label(plan: Dict[str, Any]) -> str:
+    include_hidden = _normalize_bool(plan.get("include_hidden"))
+    for field in _snapshot_plan_fields(plan):
+        label = str(field.get("label") or "").strip()
+        if not label or not _normalize_bool(field.get("required")):
+            continue
+        if not bool(field.get("visible", True)) and not include_hidden:
+            continue
+        value = field.get("value")
+        if value in (None, ""):
+            return label
+        if isinstance(value, (list, dict)) and not value:
+            return label
+    return ""
+
+
+def _requires_non_empty_extract_snapshot_output(plan: Dict[str, Any]) -> bool:
+    if plan.get("_allow_empty_output_explicit") is False:
+        return False
+    if "allow_empty_output" not in plan:
+        return False
+    return not _normalize_bool(plan.get("allow_empty_output"))
+
+
+def _selected_region_extract_plan_validation_error(plan: Dict[str, Any]) -> str:
+    if str(plan.get("action_type") or "").strip() != "extract_snapshot":
+        return ""
+    fields = _snapshot_plan_fields(plan)
+    if not fields:
+        return "extract_snapshot plan missing fields"
+    if _empty_required_snapshot_field_label(plan):
+        return "extract_snapshot required field has empty value"
+    if _requires_non_empty_extract_snapshot_output(plan) and not _extract_snapshot_plan_has_visible_value(plan):
+        return "extract_snapshot plan produced no visible non-empty fields"
+    return ""
+
+
+def _build_region_plan_validation_payload(
+    payload: Dict[str, Any],
+    failed_plan: Dict[str, Any],
+    error: str,
+) -> Dict[str, Any]:
+    return {
+        **payload,
+        "plan_validation": {
+            "error": error,
+            "failed_plan": _safe_jsonable(failed_plan),
+            "snapshot": _safe_jsonable(payload.get("snapshot")),
+            "requirement": (
+                "The failed selected-region plan was not executable. "
+                "If using extract_snapshot, return a fields array with labels copied from "
+                "snapshot.detail_views or selected-region evidence. Empty values are allowed "
+                "unless the field is required or the plan explicitly disallows empty output. Otherwise return run_python "
+                "using selected-region locator evidence."
+            ),
+        },
+    }
+
+
 def _extract_snapshot_preview_code(plan: Dict[str, Any]) -> str:
     fields = _snapshot_plan_fields(plan)
     labels = [str(field.get("label") or "").strip() for field in fields if str(field.get("label") or "").strip()]
@@ -638,23 +930,229 @@ def _extract_text(response: Any) -> str:
 
 def _parse_json_object(text: str) -> Dict[str, Any]:
     raw = str(text or "").strip()
-    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
-    if fenced:
-        raw = fenced.group(1)
-    else:
-        start = raw.find("{")
-        end = raw.rfind("}")
-        if start >= 0 and end > start:
-            raw = raw[start : end + 1]
-    parsed = json.loads(raw)
+    original_raw = raw
+    decoder = json.JSONDecoder()
+    candidates: List[str] = [
+        match.group(1)
+        for match in re.finditer(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
+    ]
+    candidates.extend(raw[index:] for index, char in enumerate(raw) if char == "{")
+    if not candidates and raw:
+        candidates.append(raw)
+
+    last_json_error: Optional[json.JSONDecodeError] = None
+    last_contract_error: Optional[ValueError] = None
+    for candidate in candidates:
+        try:
+            parsed, _end = decoder.raw_decode(candidate)
+        except json.JSONDecodeError as exc:
+            last_json_error = exc
+            continue
+        try:
+            return _coerce_recording_plan(parsed)
+        except ValueError as exc:
+            last_contract_error = exc
+            continue
+
+    if last_contract_error is not None:
+        raise RecordingPlannerContractError(
+            str(last_contract_error),
+            raw_output=original_raw,
+            cause=last_contract_error,
+        ) from last_contract_error
+    if last_json_error is not None:
+        raise RecordingPlannerContractError(
+            f"Recording planner returned invalid JSON: {last_json_error.msg}",
+            raw_output=original_raw,
+            cause=last_json_error,
+        ) from last_json_error
+    raise RecordingPlannerContractError(
+        "Recording planner did not return a JSON object",
+        raw_output=original_raw,
+    )
+
+
+def _coerce_recording_plan(parsed: Any) -> Dict[str, Any]:
     if not isinstance(parsed, dict):
         raise ValueError("Recording planner must return a JSON object")
     parsed.setdefault("action_type", "run_python")
     parsed["expected_effect"] = _normalize_expected_effect(parsed.get("expected_effect"))
+    parsed["_allow_empty_output_explicit"] = "allow_empty_output" in parsed
     parsed["allow_empty_output"] = _normalize_bool(parsed.get("allow_empty_output"))
-    if parsed.get("action_type") == "run_python" and "async def run(page, results)" not in str(parsed.get("code") or ""):
-        raise ValueError("Recording planner must return Python code defining async def run(page, results)")
+    if parsed.get("action_type") == "run_python":
+        code = str(parsed.get("code") or "")
+        if "async def run(page, results)" not in code:
+            wrapped_code = _wrap_top_level_run_python_code(code)
+            if wrapped_code:
+                parsed["code"] = wrapped_code
+            else:
+                raise ValueError("Recording planner must return Python code defining async def run(page, results)")
     return parsed
+
+
+def _wrap_top_level_run_python_code(code: str) -> Optional[str]:
+    source = str(code or "").strip()
+    if not _looks_like_top_level_python(source):
+        return None
+    body = "\n".join(("    " + line) if line.strip() else "" for line in source.splitlines())
+    wrapped = "async def run(page, results):\n" + (body or "    return None")
+    try:
+        compile(wrapped, _GENERATED_CODE_FILENAME, "exec")
+    except SyntaxError:
+        return None
+    return wrapped
+
+
+def _looks_like_top_level_python(source: str) -> bool:
+    if not source or "async def run(page, results)" in source:
+        return False
+    python_signals = (
+        "page.",
+        "await ",
+        "results",
+    )
+    return any(signal in source for signal in python_signals)
+
+
+def _planner_contract_diagnostic(
+    exc: BaseException,
+    *,
+    stage: str,
+    model_config: Optional[Dict[str, Any]],
+) -> RPATraceDiagnostic:
+    raw_output = str(getattr(exc, "raw_output", "") or "")
+    raw: Dict[str, Any] = {
+        "error_type": "planner_contract",
+        "stage": stage,
+        "exception_type": type(exc).__name__,
+        "message": str(exc),
+        "model_config": _model_config_summary(model_config),
+    }
+    if raw_output:
+        raw["planner_raw_output"] = raw_output[:4000]
+        raw["planner_raw_output_truncated"] = len(raw_output) > 4000
+    llm_call = getattr(exc, "llm_call", None)
+    if isinstance(llm_call, dict) and llm_call:
+        raw["llm_call"] = _safe_jsonable(llm_call)
+    return RPATraceDiagnostic(
+        source="ai",
+        message=f"Recording planner failed to return a valid JSON plan: {exc}",
+        raw=raw,
+    )
+
+
+def _model_config_summary(model_config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(model_config, dict) or not model_config:
+        return {}
+    summary: Dict[str, Any] = {}
+    for key in (
+        "provider",
+        "model_name",
+        "base_url",
+        "context_window",
+        "id",
+        "name",
+        "requested_user_id",
+        "selected_owner",
+        "resolution_reason",
+        "user_id",
+    ):
+        value = model_config.get(key)
+        if value not in (None, ""):
+            summary[key] = value
+    return summary
+
+
+def _build_planner_llm_request_summary(
+    *,
+    model: Any,
+    messages: List[Any],
+    model_config: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    message_summaries = []
+    total_chars = 0
+    include_prompt_preview = _planner_prompt_preview_enabled()
+    for message in messages:
+        content = str(getattr(message, "content", "") or "")
+        total_chars += len(content)
+        summary = {
+            "type": type(message).__name__,
+            "chars": len(content),
+            "truncated": len(content) > 20000,
+        }
+        if include_prompt_preview:
+            summary["preview"] = _truncate_text(content, 20000)
+        message_summaries.append(summary)
+    return {
+        "configured_model": _model_config_summary(model_config),
+        "effective_model": _effective_llm_model_summary(model),
+        "message_count": len(messages),
+        "total_message_chars": total_chars,
+        "messages": message_summaries,
+    }
+
+
+def _planner_prompt_preview_enabled() -> bool:
+    return str(os.getenv("RPA_LLM_DIAGNOSTIC_PROMPT_PREVIEW", "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _effective_llm_model_summary(model: Any) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {}
+    attr_map = {
+        "model_name": ("model_name", "model"),
+        "base_url": ("openai_api_base", "base_url"),
+        "max_tokens": ("max_tokens",),
+        "temperature": ("temperature",),
+        "streaming": ("streaming",),
+        "request_timeout": ("request_timeout", "timeout"),
+        "max_retries": ("max_retries",),
+        "model_kwargs": ("model_kwargs",),
+        "disabled_params": ("disabled_params",),
+        "profile": ("profile",),
+    }
+    for key, candidates in attr_map.items():
+        for attr in candidates:
+            value = getattr(model, attr, None)
+            if value not in (None, ""):
+                summary[key] = _safe_jsonable(value)
+                break
+    return summary
+
+
+def _text_diagnostic(text: Any, *, limit: int) -> Dict[str, Any]:
+    value = str(text or "")
+    return {
+        "chars": len(value),
+        "preview": _truncate_text(value, limit),
+        "truncated": len(value) > limit,
+    }
+
+
+def _truncate_text(text: str, limit: int) -> str:
+    value = str(text or "")
+    if len(value) <= limit:
+        return value
+    return value[:limit]
+
+
+def _log_planner_llm_call(llm_call: Dict[str, Any]) -> None:
+    request = llm_call.get("request") if isinstance(llm_call, dict) else {}
+    response = llm_call.get("response") if isinstance(llm_call, dict) else {}
+    effective_model = request.get("effective_model") if isinstance(request, dict) else {}
+    logger.info(
+        "[RPA-LLM] planner call model=%s base_url=%s max_tokens=%s profile=%s input_chars=%s output_chars=%s",
+        effective_model.get("model_name"),
+        effective_model.get("base_url"),
+        effective_model.get("max_tokens"),
+        effective_model.get("profile"),
+        request.get("total_message_chars") if isinstance(request, dict) else None,
+        response.get("chars") if isinstance(response, dict) else None,
+    )
 
 
 def _build_table_ordinal_overlay_plan(instruction: str, snapshot: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -1473,6 +1971,20 @@ async def _ensure_expected_effect(
         effect = result.get("effect")
         if isinstance(effect, dict) and effect.get("action_performed"):
             return result
+        output = result.get("output")
+        if isinstance(output, dict) and output.get("action_performed"):
+            output_action_type = str(output.get("action_type") or output.get("type") or "").strip().lower()
+            has_fill_value = expected_effect != "fill" or "filled_value" in output or "value" in output
+            if has_fill_value and (not output_action_type or output_action_type == expected_effect):
+                effect = dict(effect or {})
+                effect.update(
+                    {
+                        "type": expected_effect,
+                        "action_performed": True,
+                        "source": "output_evidence",
+                    }
+                )
+                return {**result, "effect": effect}
         action_type = str(plan.get("action_type") or "").strip().lower()
         if action_type == expected_effect:
             return {**result, "effect": {"type": expected_effect, "action_performed": True}}
@@ -1541,6 +2053,19 @@ def _should_drain_download_events(plan: Dict[str, Any], code: str) -> bool:
             ".set_input_files(",
         )
     )
+
+
+def _merge_runtime_ai_signal(signals: Dict[str, Any], plan: Dict[str, Any]) -> Dict[str, Any]:
+    if not _normalize_bool(plan.get("preserve_runtime_ai")):
+        return signals
+    runtime_ai = signals.get("runtime_ai") if isinstance(signals.get("runtime_ai"), dict) else {}
+    reason = str(plan.get("semantic_intent") or runtime_ai.get("reason") or "semantic_candidate_selection").strip()
+    signals["runtime_ai"] = {
+        **runtime_ai,
+        "preserve": True,
+        "reason": reason or "semantic_candidate_selection",
+    }
+    return signals
 
 
 def _normalize_bool(value: Any) -> bool:
@@ -1731,16 +2256,488 @@ def _build_locator_stability_metadata(
     return fallback_metadata
 
 
-async def _safe_page_snapshot(page: Any) -> Dict[str, Any]:
+async def _safe_page_snapshot(page: Any, region_scope: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     try:
+        if region_scope:
+            try:
+                return await build_page_snapshot(page, build_frame_path, region_scope=region_scope)
+            except TypeError as exc:
+                if "region_scope" not in str(exc):
+                    raise
+                payload = await build_page_snapshot(page, build_frame_path)
+                if isinstance(payload, dict):
+                    payload.setdefault("region_scope", dict(region_scope))
+                return payload
         return await build_page_snapshot(page, build_frame_path)
     except Exception:
-        return {"url": getattr(page, "url", ""), "title": "", "frames": []}
+        payload = {"url": getattr(page, "url", ""), "title": "", "frames": []}
+        if region_scope:
+            payload["region_scope"] = dict(region_scope)
+        return payload
 
 
-def _compact_snapshot(snapshot: Dict[str, Any], instruction: str, limit: int = 80) -> Dict[str, Any]:
+async def _capture_page_snapshot(page: Any, *, region_scope: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    if not region_scope:
+        return await _safe_page_snapshot(page)
     try:
-        compact_snapshot = compact_recording_snapshot(snapshot, instruction)
+        return await _safe_page_snapshot(page, region_scope=region_scope)
+    except TypeError as exc:
+        if "region_scope" not in str(exc):
+            raise
+        snapshot = await _safe_page_snapshot(page)
+        if isinstance(snapshot, dict):
+            snapshot.setdefault("region_scope", dict(region_scope))
+        return snapshot
+
+
+def _compact_snapshot_for_runtime(
+    snapshot: Dict[str, Any],
+    instruction: str,
+    *,
+    region_scope: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    if not region_scope:
+        return _compact_snapshot(snapshot, instruction)
+    try:
+        return _compact_snapshot(snapshot, instruction, region_scope=region_scope)
+    except TypeError as exc:
+        if "region_scope" not in str(exc):
+            raise
+        compact = _compact_snapshot(snapshot, instruction)
+        if isinstance(compact, dict):
+            compact.setdefault("region_scope", dict(region_scope))
+        return compact
+
+
+def _region_scope_from_context(region_context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    context = _object_dict(region_context)
+    evidence = _object_dict(context.get("evidence"))
+    if not context and not evidence:
+        return {}
+    rect = _safe_jsonable(evidence.get("rect") or {})
+    if not isinstance(rect, dict):
+        rect = {}
+    return {
+        "region_id": str(context.get("region_id") or ""),
+        "session_id": str(context.get("session_id") or ""),
+        "tab_id": str(context.get("tab_id") or ""),
+        "page_url": str(context.get("page_url") or evidence.get("url") or ""),
+        "page_title": str(context.get("page_title") or evidence.get("title") or ""),
+        "viewport_rect": dict(rect),
+        "frame_path": _compact_list(evidence.get("frame_path")),
+        "frame_rect": dict(rect),
+        "warnings": _compact_list(evidence.get("warnings")),
+    }
+
+
+def _compact_region_context(region_context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    context = _object_dict(region_context)
+    evidence = _object_dict(context.get("evidence"))
+    if not evidence:
+        evidence = {
+            key: context.get(key)
+            for key in (
+                "inferred_kind",
+                "frame_path",
+                "rect",
+                "local_text",
+                "dominant_container",
+                "locator_candidates",
+                "scope_candidates",
+                "intersecting_elements",
+                "table_summary",
+                "list_summary",
+                "action_summary",
+                "warnings",
+            )
+            if key in context
+        }
+    if not context and not evidence:
+        return {}
+
+    compact: Dict[str, Any] = {}
+    _set_if_present(compact, "region_id", context.get("region_id"))
+    _set_if_present(compact, "tab_id", context.get("tab_id"))
+    _set_if_present(compact, "page_url", context.get("page_url") or evidence.get("url"))
+    _set_if_present(compact, "page_title", context.get("page_title") or evidence.get("title"))
+    _set_if_present(compact, "inferred_kind", evidence.get("inferred_kind"))
+    _set_if_present(compact, "frame_path", _compact_list(evidence.get("frame_path")))
+    _set_if_present(compact, "rect", evidence.get("rect"))
+    _set_if_present(compact, "local_text", _compact_list(evidence.get("local_text"), limit=20))
+    _set_if_present(compact, "dominant_container", evidence.get("dominant_container"))
+    _set_if_present(compact, "locator_candidates", _compact_list(evidence.get("locator_candidates"), limit=10))
+    _set_if_present(compact, "scope_candidates", _compact_list(evidence.get("scope_candidates"), limit=10))
+    _set_if_present(compact, "intersecting_elements", _compact_list(evidence.get("intersecting_elements"), limit=20))
+    _set_if_present(compact, "table_summary", evidence.get("table_summary"))
+    _set_if_present(compact, "list_summary", evidence.get("list_summary"))
+    _set_if_present(compact, "action_summary", evidence.get("action_summary"))
+    _set_if_present(compact, "warnings", _compact_list(evidence.get("warnings")))
+    return _safe_jsonable(compact) if compact else {}
+
+
+def _selected_region_snapshot(
+    compact_snapshot: Dict[str, Any],
+    page_state: RPAPageState,
+    region_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    snapshot = {
+        "mode": "selected_region_snapshot",
+        "url": str(compact_snapshot.get("url") or page_state.url or ""),
+        "title": str(compact_snapshot.get("title") or page_state.title or ""),
+        "selected_region": region_context,
+        "scope_note": (
+            "The user selected this page region for the current command. "
+            "Plan extraction or action targeting from selected_region evidence first."
+        ),
+    }
+    detail_views = _selected_region_detail_views(region_context)
+    if detail_views:
+        snapshot["detail_views"] = detail_views
+    return snapshot
+
+
+def _selected_region_detail_views(region_context: Dict[str, Any]) -> List[Dict[str, Any]]:
+    local_text = [str(item or "").strip() for item in list(region_context.get("local_text") or [])]
+    local_text = [item for item in local_text if item]
+    if not local_text:
+        return []
+    fields: List[Dict[str, Any]] = []
+    if len(local_text) > 1:
+        fields.append(
+            {
+                "label": "selected_region_text",
+                "value": "\n".join(local_text),
+                "visible": True,
+                "value_kind": "text",
+            }
+        )
+    fields.extend(
+        {
+            "label": f"selected_region_text_{index}",
+            "value": text,
+            "visible": True,
+            "value_kind": "text",
+        }
+        for index, text in enumerate(local_text, start=1)
+    )
+    return [
+        {
+            "source": "selected_region.local_text",
+            "section_title": "Selected region text",
+            "fields": fields,
+        }
+    ]
+
+
+def _build_recording_planner_payload(
+    *,
+    instruction: str,
+    page_state: RPAPageState,
+    compact_snapshot: Dict[str, Any],
+    runtime_results: Dict[str, Any],
+    compact_region_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    if compact_region_context:
+        return {
+            "instruction": instruction,
+            "page": {
+                "url": page_state.url,
+                "title": page_state.title,
+            },
+            "context_scope": "selected_region",
+            "snapshot": _selected_region_snapshot(compact_snapshot, page_state, compact_region_context),
+            "region_context": compact_region_context,
+            "runtime_results": runtime_results,
+        }
+    return {
+        "instruction": instruction,
+        "page": page_state.model_dump(mode="json"),
+        "context_scope": "full_page",
+        "snapshot": compact_snapshot,
+        "runtime_results": runtime_results,
+    }
+
+
+def _raw_region_evidence(region_context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    context = _object_dict(region_context)
+    evidence = _object_dict(context.get("evidence"))
+    return _safe_jsonable(evidence) if evidence else {}
+
+
+def _region_selection_signal(region_context: Dict[str, Any]) -> Dict[str, Any]:
+    signal: Dict[str, Any] = {}
+    _set_if_present(signal, "region_id", region_context.get("region_id"))
+    _set_if_present(signal, "inferred_kind", region_context.get("inferred_kind"))
+    _set_if_present(signal, "rect", region_context.get("rect"))
+    _set_if_present(signal, "frame_path", region_context.get("frame_path"))
+    _set_if_present(signal, "local_text_preview", region_context.get("local_text"))
+    _set_if_present(signal, "table", region_context.get("table_summary"))
+    _set_if_present(signal, "list", region_context.get("list_summary"))
+    _set_if_present(signal, "action", region_context.get("action_summary"))
+    _set_if_present(signal, "warnings", region_context.get("warnings"))
+    return signal
+
+
+def _region_context_decision_signal(plan: Dict[str, Any], region_context: Dict[str, Any]) -> Dict[str, Any]:
+    action_type = str(plan.get("action_type") or "").strip()
+    output_key = _normalize_result_key(plan.get("output_key"))
+    if output_key or action_type == "data_capture":
+        used_as = "extraction"
+    elif action_type in {"click", "fill", "select", "press", "hover", "run_python"}:
+        used_as = "action_targeting"
+    else:
+        used_as = "supporting_evidence"
+
+    signal: Dict[str, Any] = {"used_as": used_as}
+    _set_if_present(signal, "region_id", region_context.get("region_id"))
+    _set_if_present(signal, "action_type", action_type)
+    _set_if_present(signal, "output_key", output_key)
+    return signal
+
+
+def _region_text_extract_signal(
+    plan: Dict[str, Any],
+    compact_snapshot: Dict[str, Any],
+    region_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    action_type = str(plan.get("action_type") or "").strip()
+    expected_effect = str(plan.get("expected_effect") or "").strip()
+    output_key = _normalize_result_key(plan.get("output_key"))
+    if action_type != "run_python" or expected_effect != "extract" or not output_key:
+        return {}
+    if str(compact_snapshot.get("mode") or "") != "region_scoped_snapshot":
+        return {}
+    if str(region_context.get("inferred_kind") or "").strip() != "text_region":
+        return {}
+
+    for region in list(compact_snapshot.get("expanded_regions") or []):
+        if not isinstance(region, dict):
+            continue
+        evidence = region.get("evidence") if isinstance(region.get("evidence"), dict) else {}
+        anchor = evidence.get("section_anchor") if isinstance(evidence.get("section_anchor"), dict) else {}
+        body_texts = [item for item in list(evidence.get("selected_body_texts") or []) if isinstance(item, dict)]
+        if not anchor or not body_texts:
+            continue
+        relation = str(anchor.get("relation") or "").strip()
+        if relation not in {"inside_heading", "preceding_heading"}:
+            continue
+        strategy = str(anchor.get("text_strategy") or "bounded_section_text").strip()
+        if strategy != "bounded_section_text":
+            continue
+        heading_text = str(anchor.get("text") or "").strip()
+        heading_locator = anchor.get("locator") if isinstance(anchor.get("locator"), dict) else {}
+        if not heading_text or not heading_locator:
+            continue
+        return {
+            "source": "region_scoped_snapshot",
+            "kind": "heading_scoped_text",
+            "section_title": heading_text,
+            "heading_locator": dict(heading_locator),
+            "heading_relation": relation,
+            "text_strategy": "bounded_section_text",
+            "output_key": output_key,
+            "frame_path": list(region.get("frame_path") or []),
+        }
+    return {}
+
+
+def _selected_region_text_extract_signal(
+    plan: Dict[str, Any],
+    result: Dict[str, Any],
+    region_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    action_type = str(plan.get("action_type") or "").strip()
+    expected_effect = str(plan.get("expected_effect") or "").strip()
+    output_key = _normalize_result_key(plan.get("output_key"))
+    if action_type not in {"run_python", "extract_snapshot", ""} or not output_key:
+        return {}
+    if expected_effect and expected_effect != "extract":
+        return {}
+    if str(region_context.get("inferred_kind") or "").strip() != "text_region":
+        return {}
+    if _selected_region_has_structured_region_evidence(region_context):
+        return {}
+
+    label = _selected_region_text_label(plan, result)
+    observed_values = _selected_region_observed_text_values(plan, result, region_context)
+    locator, observed_text = _selected_region_text_target_locator(region_context, observed_values)
+    if not locator or not observed_text:
+        return {}
+
+    signal: Dict[str, Any] = {
+        "source": "region_context",
+        "output_key": output_key,
+        "locator": locator,
+        "frame_path": list(region_context.get("frame_path") or []),
+        "observed_text": observed_text,
+    }
+    _set_if_present(signal, "region_id", region_context.get("region_id"))
+    _set_if_present(signal, "label", label)
+    return signal
+
+
+def _selected_region_has_structured_region_evidence(region_context: Dict[str, Any]) -> bool:
+    table_summary = region_context.get("table_summary") if isinstance(region_context.get("table_summary"), dict) else {}
+    list_summary = region_context.get("list_summary") if isinstance(region_context.get("list_summary"), dict) else {}
+    action_summary = region_context.get("action_summary") if isinstance(region_context.get("action_summary"), dict) else {}
+    if table_summary.get("locator_candidates") or table_summary.get("headers") or table_summary.get("sample_rows"):
+        return True
+    if list_summary.get("item_selector") or list_summary.get("container_locator_candidates"):
+        return True
+    controls = action_summary.get("controls")
+    return isinstance(controls, list) and bool(controls)
+
+
+def _selected_region_text_label(plan: Dict[str, Any], result: Dict[str, Any]) -> str:
+    fields = _snapshot_plan_fields(plan)
+    labels = [str(field.get("label") or "").strip() for field in fields if str(field.get("label") or "").strip()]
+    if len(labels) == 1:
+        return labels[0]
+    output = result.get("output")
+    if isinstance(output, dict) and len(output) == 1:
+        return str(next(iter(output.keys())) or "").strip()
+    return ""
+
+
+def _selected_region_text_target_locator(
+    region_context: Dict[str, Any],
+    observed_values: set[str],
+) -> tuple[Dict[str, Any], str]:
+    local_texts = [
+        str(item or "").strip()
+        for item in list(region_context.get("local_text") or [])
+        if str(item or "").strip()
+    ]
+    if not local_texts:
+        return {}, ""
+    min_len = min(len(text) for text in local_texts)
+    target_texts = {text for text in local_texts if len(text) == min_len}
+    explicit_target = region_context.get("selected_text_target")
+    if isinstance(explicit_target, dict):
+        text = str(explicit_target.get("text") or "").strip()
+        locator = _selected_region_safe_locator(explicit_target.get("locator_candidates"), observed_values)
+        if text in target_texts and locator:
+            return locator, text
+
+    intersecting_elements = region_context.get("intersecting_elements")
+    if not isinstance(intersecting_elements, list):
+        return {}, ""
+    for element in intersecting_elements:
+        if not isinstance(element, dict):
+            continue
+        text = str(element.get("text") or element.get("name") or "").strip()
+        if text not in target_texts:
+            continue
+        locator = _selected_region_safe_locator(element.get("locator_candidates"), observed_values)
+        if locator:
+            return locator, text
+    return {}, ""
+
+
+def _selected_region_safe_locator(candidates: Any, observed_values: set[str]) -> Dict[str, Any]:
+    if not isinstance(candidates, list):
+        return {}
+    ordered = [candidate for candidate in candidates if isinstance(candidate, dict) and candidate.get("selected")]
+    ordered.extend(candidate for candidate in candidates if isinstance(candidate, dict) and not candidate.get("selected"))
+    for candidate in ordered:
+        locator = normalize_locator(candidate.get("locator") if isinstance(candidate.get("locator"), dict) else candidate)
+        if not has_valid_locator(locator):
+            continue
+        if locator_has_unstable_identity(locator):
+            continue
+        if locator_is_structural_region_header(locator):
+            continue
+        if _selected_region_locator_is_observed_text_driven(locator, observed_values):
+            continue
+        return locator
+    return {}
+
+
+def _selected_region_locator_is_observed_text_driven(locator: Dict[str, Any], observed_values: set[str]) -> bool:
+    method = str(locator.get("method") or "").strip()
+    value = str(locator.get("value") or "").strip()
+    if method in {"text", "title"} and value and value in observed_values:
+        return True
+    if method == "role":
+        name = str(locator.get("name") or "").strip()
+        return bool(name and name in observed_values)
+    if method == "nested":
+        parent = normalize_locator(locator.get("parent"))
+        child = normalize_locator(locator.get("child"))
+        return _selected_region_locator_is_observed_text_driven(
+            parent,
+            observed_values,
+        ) or _selected_region_locator_is_observed_text_driven(child, observed_values)
+    if method in {"nth", "filter_has_text"}:
+        base = normalize_locator(locator.get("locator") or locator.get("base"))
+        if base and _selected_region_locator_is_observed_text_driven(base, observed_values):
+            return True
+        has_text = str(locator.get("has_text") or "").strip()
+        return bool(has_text and has_text in observed_values)
+    return False
+
+
+def _selected_region_observed_text_values(
+    plan: Dict[str, Any],
+    result: Dict[str, Any],
+    region_context: Dict[str, Any],
+) -> set[str]:
+    values: set[str] = set()
+
+    def add(value: Any) -> None:
+        if isinstance(value, str) and value.strip():
+            values.add(value.strip())
+
+    for item in list(region_context.get("local_text") or []):
+        add(item)
+    add(plan.get("section_title"))
+
+    def walk(value: Any) -> None:
+        if isinstance(value, str):
+            add(value)
+        elif isinstance(value, dict):
+            for nested in value.values():
+                walk(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                walk(nested)
+
+    walk(result.get("output"))
+    return values
+
+
+def _object_dict(value: Any) -> Dict[str, Any]:
+    if isinstance(value, BaseModel):
+        value = value.model_dump(mode="json")
+    if isinstance(value, dict):
+        return dict(value)
+    return {}
+
+
+def _compact_list(value: Any, *, limit: Optional[int] = None) -> List[Any]:
+    if not isinstance(value, list):
+        return []
+    items = value[:limit] if limit is not None else value
+    return [_safe_jsonable(item) for item in items]
+
+
+def _set_if_present(target: Dict[str, Any], key: str, value: Any) -> None:
+    if value in (None, "", [], {}):
+        return
+    target[key] = _safe_jsonable(value)
+
+
+def _compact_snapshot(
+    snapshot: Dict[str, Any],
+    instruction: str,
+    limit: int = 80,
+    region_scope: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    try:
+        if region_scope is not None:
+            compact_snapshot = compact_recording_snapshot(snapshot, instruction, region_scope=region_scope)
+        else:
+            compact_snapshot = compact_recording_snapshot(snapshot, instruction)
         if isinstance(compact_snapshot, dict):
             return compact_snapshot
     except Exception:
@@ -1884,6 +2881,71 @@ def _write_recording_attempt_debug(
         return
 
 
+def _write_recording_planner_failure_debug(
+    stage: str,
+    *,
+    instruction: str,
+    page_state: Dict[str, Any],
+    raw_snapshot: Optional[Dict[str, Any]],
+    compact_snapshot: Dict[str, Any],
+    exception: BaseException,
+    model_config: Optional[Dict[str, Any]] = None,
+    debug_context: Optional[Dict[str, Any]] = None,
+) -> None:
+    debug_dir = _resolve_recording_snapshot_debug_dir()
+    if not debug_dir:
+        return
+
+    try:
+        debug_context = dict(debug_context or {})
+        target_dir = _resolve_recording_snapshot_debug_path(debug_dir, debug_context=debug_context)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        sequence = _next_debug_sequence(target_dir)
+        json_path = target_dir / _debug_filename(
+            sequence=sequence,
+            stage=stage,
+            kind="planner_failure",
+            label=instruction or stage,
+            extension="json",
+        )
+        raw_output = str(getattr(exception, "raw_output", "") or "")
+        llm_call = getattr(exception, "llm_call", None)
+        raw_snapshot = raw_snapshot or {}
+        payload: Dict[str, Any] = {
+            "stage": stage,
+            "debug_context": debug_context,
+            "instruction": instruction,
+            "page": page_state,
+            "exception": {
+                "type": type(exception).__name__,
+                "message": str(exception),
+            },
+            "model_config": _model_config_summary(model_config),
+            "compact_snapshot_summary": _compact_snapshot_debug_summary(compact_snapshot),
+            "snapshot_comparison": _compare_instruction_snapshot_presence(
+                instruction,
+                raw_snapshot,
+                compact_snapshot,
+            ),
+        }
+        if raw_snapshot:
+            payload["raw_snapshot_summary"] = _build_snapshot_debug_metrics(raw_snapshot, compact_snapshot)[
+                "raw_snapshot"
+            ]
+        if raw_output:
+            payload["planner_raw_output"] = _text_diagnostic(raw_output, limit=12000)
+        if isinstance(llm_call, dict) and llm_call:
+            payload["llm_call"] = _safe_jsonable(llm_call)
+        json_path.write_text(
+            json.dumps(_safe_jsonable(payload), ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
+        logger.info("[RPA-DIAG] planner failure dump written stage=%s path=%s", stage, json_path)
+    except Exception:
+        logger.warning("[RPA-DIAG] planner failure dump failed stage=%s", stage, exc_info=True)
+        return
+
+
 def _build_snapshot_debug_metrics(raw_snapshot: Dict[str, Any], compact_snapshot: Dict[str, Any]) -> Dict[str, Any]:
     content_nodes = list(raw_snapshot.get("content_nodes") or [])
     actionable_nodes = list(raw_snapshot.get("actionable_nodes") or [])
@@ -1922,6 +2984,37 @@ def _build_snapshot_debug_metrics(raw_snapshot: Dict[str, Any], compact_snapshot
             ],
             "region_kind_counts": _count_by_key(expanded_regions + sampled_regions + catalogue, "kind"),
         },
+    }
+
+
+def _compact_snapshot_debug_summary(compact_snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    expanded_regions = list(compact_snapshot.get("expanded_regions") or [])
+    sampled_regions = list(compact_snapshot.get("sampled_regions") or [])
+    catalogue = list(compact_snapshot.get("region_catalogue") or [])
+    table_views = list(compact_snapshot.get("table_views") or [])
+    detail_views = list(compact_snapshot.get("detail_views") or [])
+    form_views = list(compact_snapshot.get("form_views") or [])
+    return {
+        "mode": compact_snapshot.get("mode", ""),
+        "url": compact_snapshot.get("url", ""),
+        "title": compact_snapshot.get("title", ""),
+        "region_scope": _safe_jsonable(compact_snapshot.get("region_scope") or {}),
+        "char_size": len(json.dumps(_safe_jsonable(compact_snapshot), ensure_ascii=False, sort_keys=True, default=str)),
+        "expanded_region_count": len(expanded_regions),
+        "sampled_region_count": len(sampled_regions),
+        "catalogue_region_count": len(catalogue),
+        "table_view_count": len(table_views),
+        "detail_view_count": len(detail_views),
+        "form_view_count": len(form_views),
+        "expanded_region_titles": _region_titles(expanded_regions),
+        "sampled_region_titles": _region_titles(sampled_regions),
+        "catalogue_region_titles": _region_titles(catalogue),
+        "table_view_titles": _region_titles(table_views),
+        "detail_view_titles": [
+            str(view.get("section_title") or view.get("title") or "").strip()[:120]
+            for view in detail_views[:20]
+            if str(view.get("section_title") or view.get("title") or "").strip()
+        ],
     }
 
 
@@ -2025,7 +3118,16 @@ def _resolve_recording_snapshot_debug_path(debug_dir: str, *, debug_context: Opt
 
 def _next_debug_sequence(target_dir: Path) -> int:
     max_seen = 0
-    for pattern in ("*-snapshot-*.json", "*-attempt-*.json", "*-code-*.py", "snapshot-*.json", "attempt-*.json", "code-*.py"):
+    for pattern in (
+        "*-snapshot-*.json",
+        "*-attempt-*.json",
+        "*-planner_failure-*.json",
+        "*-code-*.py",
+        "snapshot-*.json",
+        "attempt-*.json",
+        "planner_failure-*.json",
+        "code-*.py",
+    ):
         for path in target_dir.glob(pattern):
             match = re.match(r"^(?:snapshot|attempt|code)-(\d+)-|^(\d+)-", path.name)
             if match:

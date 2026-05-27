@@ -31,6 +31,7 @@ class LocalPreviewShellBackend(LocalShellBackend):
     """Intercept local RPA skill execution so chat preview can stream the browser."""
 
     def __init__(self, session_id: str, *args, user_id: str = "", **kwargs) -> None:
+        self._session_model_config = kwargs.pop("session_model_config", None)
         super().__init__(*args, **kwargs)
         self._session_id = session_id
         self._user_id = user_id
@@ -80,6 +81,14 @@ class LocalPreviewShellBackend(LocalShellBackend):
         skill_kwargs = dict(parsed.kwargs)
         if self._user_id:
             skill_kwargs = await self._inject_credentials(parsed.script_path, skill_kwargs)
+            from backend.rpa.runtime_context import inject_runtime_context_kwargs, should_inject_runtime_ai_context
+
+            if should_inject_runtime_ai_context(self._read_skill_meta(parsed.script_path)):
+                skill_kwargs = await inject_runtime_context_kwargs(
+                    self._user_id,
+                    skill_kwargs,
+                    session_model_config=self._session_model_config,
+                )
         skill_kwargs.setdefault("_downloads_dir", str(Path(settings.workspace_dir) / self._session_id / "downloads"))
 
         connector = get_cdp_connector()
@@ -175,3 +184,15 @@ class LocalPreviewShellBackend(LocalShellBackend):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module
+
+    @staticmethod
+    def _read_skill_meta(script_path: Path) -> Dict[str, object]:
+        meta_path = script_path.parent / "skill.meta.json"
+        if not meta_path.is_file():
+            return {}
+        try:
+            data = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning(f"[LocalPreview] Failed to read skill metadata: {exc}")
+            return {}
+        return data if isinstance(data, dict) else {}

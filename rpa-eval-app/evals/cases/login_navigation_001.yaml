@@ -3,7 +3,6 @@ name: 登录并进入合同管理
 tags: [smoke, login, navigation]
 user:
   username: buyer
-  password: buyer123
 start_path: /dashboard
 timeout_s: 90
 instruction: >

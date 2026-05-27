@@ -6,7 +6,7 @@ import json
 import asyncio
 from types import SimpleNamespace
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
@@ -193,6 +193,58 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
             "https://github.com/owner/repo",
         )
 
+    async def test_session_keeps_skill_config_draft_per_session(self):
+        first = MANAGER_MODULE.RPASession(id="s1", user_id="u1", sandbox_session_id="box-1")
+        second = MANAGER_MODULE.RPASession(id="s2", user_id="u1", sandbox_session_id="box-2")
+        self.manager.sessions[first.id] = first
+        self.manager.sessions[second.id] = second
+
+        draft = MANAGER_MODULE.RPASkillConfigDraft(
+            skill_name="First Skill",
+            description="Only for session one",
+            params={
+                "query": {
+                    "original_value": "recorded",
+                    "default_value": "configured",
+                    "sensitive": False,
+                    "credential_id": "",
+                }
+            },
+        )
+
+        self.manager.update_skill_config_draft("s1", draft)
+
+        self.assertEqual(self.manager.sessions["s1"].skill_config_draft, draft)
+        self.assertIsNone(self.manager.sessions["s2"].skill_config_draft)
+
+    async def test_manager_cleans_expired_unsaved_sessions(self):
+        expired = MANAGER_MODULE.RPASession(id="expired", user_id="u1", sandbox_session_id="box-1")
+        active = MANAGER_MODULE.RPASession(id="active", user_id="u1", sandbox_session_id="box-2")
+        expired.last_activity_at = datetime.now() - timedelta(hours=3)
+        active.last_activity_at = datetime.now()
+        self.manager.sessions[expired.id] = expired
+        self.manager.sessions[active.id] = active
+
+        removed = await self.manager.cleanup_expired_sessions(max_idle_seconds=3600)
+
+        self.assertEqual(removed, ["expired"])
+        self.assertNotIn("expired", self.manager.sessions)
+        self.assertIn("active", self.manager.sessions)
+
+    async def test_manager_cleanup_closes_expired_session_context(self):
+        expired = MANAGER_MODULE.RPASession(id="expired", user_id="u1", sandbox_session_id="box-1")
+        expired.last_activity_at = datetime.now() - timedelta(hours=3)
+        context = _FakeContext()
+        self.manager.sessions[expired.id] = expired
+        self.manager.attach_context(expired.id, context)
+
+        removed = await self.manager.cleanup_expired_sessions(max_idle_seconds=3600)
+
+        self.assertEqual(removed, ["expired"])
+        self.assertTrue(context.closed)
+        self.assertNotIn("expired", self.manager.sessions)
+        self.assertNotIn("expired", self.manager._contexts)
+
     async def test_delete_trace_rebuilds_runtime_results_from_remaining_traces(self):
         deleted_trace = TRACE_MODELS_MODULE.RPAAcceptedTrace(
             trace_id="trace-delete",
@@ -288,8 +340,22 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(self.session.recorded_actions), 0)
         self.assertEqual(len(self.session.recording_diagnostics), 1)
+        self.assertEqual(len(self.session.trace_diagnostics), 1)
+        self.assertEqual(len(self.session.traces), 0)
         self.assertEqual(
             self.session.recording_diagnostics[0].failure_reason,
+            "canonical_target_missing",
+        )
+        self.assertEqual(
+            self.session.trace_diagnostics[0].diagnostic_id,
+            f"diag-{self.session.steps[0].id}",
+        )
+        self.assertEqual(
+            self.session.trace_diagnostics[0].trace_id,
+            f"trace-{self.session.steps[0].id}",
+        )
+        self.assertEqual(
+            self.session.trace_diagnostics[0].raw["failure_reason"],
             "canonical_target_missing",
         )
 
@@ -334,12 +400,140 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(self.session.recorded_actions), 0)
         self.assertEqual(len(self.session.recording_diagnostics), 1)
+        self.assertEqual(len(self.session.trace_diagnostics), 1)
 
         await self.manager.select_step_locator_candidate(self.session.id, 0, 1)
 
         self.assertEqual(len(self.session.recorded_actions), 1)
         self.assertEqual(len(self.session.recording_diagnostics), 0)
+        self.assertEqual(len(self.session.trace_diagnostics), 0)
+        self.assertEqual(len(self.session.traces), 1)
         self.assertEqual(self.session.recorded_actions[0].target["method"], "role")
+
+    async def test_select_trace_locator_candidate_promotes_manual_diagnostic_to_trace(self):
+        await self.manager.add_step(
+            self.session.id,
+            {
+                "action": "click",
+                "target": "",
+                "description": "点击 None",
+                "source": "record",
+                "locator_candidates": [
+                    {
+                        "kind": "role",
+                        "playwright_locator": 'page.locator(".unknown")',
+                        "selected": True,
+                    },
+                    {
+                        "kind": "role",
+                        "locator": {"method": "role", "role": "button", "name": "Search"},
+                        "selected": False,
+                        "strict_match_count": 1,
+                    },
+                ],
+                "validation": {"status": "ok"},
+            },
+        )
+        diagnostic = self.session.trace_diagnostics[0]
+        trace_id = diagnostic.trace_id
+
+        trace = await self.manager.resolve_trace_diagnostic_locator_candidate(
+            self.session.id,
+            diagnostic.diagnostic_id,
+            1,
+        )
+
+        self.assertEqual(trace.trace_id, trace_id)
+        self.assertEqual(len(trace.locator_candidates), 1)
+        self.assertEqual(trace.locator_candidates[0]["selected"], True)
+        self.assertEqual(trace.locator_candidates[0]["locator"]["role"], "button")
+        self.assertEqual(len(self.session.trace_diagnostics), 0)
+        self.assertEqual(len(self.session.traces), 1)
+        self.assertEqual(self.session.traces[0].trace_id, trace_id)
+
+    async def test_select_trace_locator_candidate_accepts_single_quoted_playwright_first(self):
+        await self.manager.add_step(
+            self.session.id,
+            {
+                "action": "click",
+                "target": "",
+                "description": "点击 None",
+                "source": "record",
+                "locator_candidates": [
+                    {
+                        "kind": "role",
+                        "playwright_locator": 'page.locator(".unknown")',
+                        "selected": True,
+                        "strict_match_count": 0,
+                    },
+                    {
+                        "kind": "role",
+                        "playwright_locator": "page.get_by_role('textbox', name='请输入').first",
+                        "selected": False,
+                        "strict_match_count": 0,
+                    },
+                ],
+                "validation": {"status": "fallback"},
+            },
+        )
+        diagnostic = self.session.trace_diagnostics[0]
+        trace_id = diagnostic.trace_id
+
+        trace = await self.manager.resolve_trace_diagnostic_locator_candidate(
+            self.session.id,
+            diagnostic.diagnostic_id,
+            1,
+        )
+
+        self.assertEqual(trace.trace_id, trace_id)
+        self.assertEqual(trace.locator_candidates[0]["locator"], {
+            "method": "nth",
+            "locator": {"method": "role", "role": "textbox", "name": "请输入"},
+            "index": 0,
+        })
+        self.assertEqual(len(self.session.trace_diagnostics), 0)
+        self.assertEqual(len(self.session.traces), 1)
+
+    async def test_select_trace_locator_candidate_accepts_filter_has_text_playwright_locator(self):
+        await self.manager.add_step(
+            self.session.id,
+            {
+                "action": "click",
+                "target": "",
+                "description": "点击 None",
+                "source": "record",
+                "locator_candidates": [
+                    {
+                        "kind": "css",
+                        "playwright_locator": 'page.locator(".unknown")',
+                        "selected": True,
+                        "strict_match_count": 0,
+                    },
+                    {
+                        "kind": "css",
+                        "playwright_locator": 'page.locator("span").filter(has_text="确定")',
+                        "selected": False,
+                        "strict_match_count": 1,
+                    },
+                ],
+                "validation": {"status": "fallback"},
+            },
+        )
+        diagnostic = self.session.trace_diagnostics[0]
+
+        trace = await self.manager.resolve_trace_diagnostic_locator_candidate(
+            self.session.id,
+            diagnostic.diagnostic_id,
+            1,
+        )
+
+        self.assertEqual(trace.locator_candidates[0]["locator"], {
+            "method": "filter_has_text",
+            "locator": {"method": "css", "value": "span"},
+            "has_text": "确定",
+        })
+        self.assertEqual(len(self.session.trace_diagnostics), 0)
+        self.assertEqual(len(self.session.traces), 1)
 
     async def test_delete_step_rebuilds_manual_recording_outcomes(self):
         await self.manager.add_step(
@@ -360,12 +554,15 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(len(self.session.recording_diagnostics), 1)
+        self.assertEqual(len(self.session.trace_diagnostics), 1)
 
         deleted = await self.manager.delete_step(self.session.id, 0)
 
         self.assertTrue(deleted)
         self.assertEqual(len(self.session.recorded_actions), 0)
         self.assertEqual(len(self.session.recording_diagnostics), 0)
+        self.assertEqual(len(self.session.trace_diagnostics), 0)
+        self.assertEqual(len(self.session.traces), 0)
 
     async def test_delete_step_removes_corresponding_manual_trace_only(self):
         step = await self.manager.add_step(
@@ -470,6 +667,18 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(page.bring_to_front_calls, 1)
         self.assertEqual(len(page.add_init_script_calls), 1)
         self.assertIn(tab_id, page.add_init_script_calls[0]["script"])
+
+    async def test_register_page_is_idempotent_for_same_page(self):
+        page = _FakePage("https://example.com", "Example")
+
+        first_tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+        second_tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+        tabs = self.manager.list_tabs(self.session.id)
+
+        self.assertEqual(second_tab_id, first_tab_id)
+        self.assertEqual(len(tabs), 1)
+        self.assertIs(self.manager.get_active_page(self.session.id), page)
+        self.assertEqual(len(page.add_init_script_calls), 1)
 
     async def test_register_page_injects_action_runtime_before_capture_script(self):
         context = _FakeContext()
@@ -641,6 +850,230 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
             self.session.recorded_actions[0].target,
             {"method": "testid", "value": "login-username"},
         )
+
+    async def test_handle_event_prefers_stable_candidate_over_random_like_testid(self):
+        page = _FakePage("https://example.com", "Example")
+        tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "click",
+                "tab_id": tab_id,
+                "tag": "DIV",
+                "timestamp": 1234567890,
+                "locator": {
+                    "method": "nested",
+                    "parent": {
+                        "method": "testid",
+                        "value": "DIV-_standingActiveManage_standingBook-id-611090413",
+                    },
+                    "child": {
+                        "method": "testid",
+                        "value": "DIV-_standingActiveManage_standingBook-id-1064443668",
+                    },
+                },
+                "locator_candidates": [
+                    {
+                        "kind": "testid",
+                        "score": 1,
+                        "strict_match_count": 1,
+                        "visible_match_count": 1,
+                        "selected": True,
+                        "locator": {
+                            "method": "nested",
+                            "parent": {
+                                "method": "testid",
+                                "value": "DIV-_standingActiveManage_standingBook-id-611090413",
+                            },
+                            "child": {
+                                "method": "testid",
+                                "value": "DIV-_standingActiveManage_standingBook-id-1064443668",
+                            },
+                        },
+                        "reason": "recorder selected generated test id chain",
+                    },
+                    {
+                        "kind": "role",
+                        "score": 20,
+                        "strict_match_count": 1,
+                        "visible_match_count": 1,
+                        "selected": False,
+                        "locator": {"method": "role", "role": "textbox", "name": "ESN"},
+                        "reason": "stable accessible candidate",
+                    },
+                ],
+                "validation": {"status": "ok", "details": "recorder selected generated test id chain"},
+            },
+        )
+
+        step = self.session.steps[-1]
+        self.assertEqual(
+            json.loads(step.target),
+            {"method": "role", "role": "textbox", "name": "ESN"},
+        )
+        self.assertFalse(step.locator_candidates[0]["selected"])
+        self.assertTrue(step.locator_candidates[1]["selected"])
+        self.assertEqual(step.validation["selected_candidate_kind"], "role")
+
+    async def test_handle_event_routes_only_random_like_testid_to_diagnostic(self):
+        page = _FakePage("https://example.com", "Example")
+        tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "click",
+                "tab_id": tab_id,
+                "tag": "DIV",
+                "timestamp": 1234567890,
+                "locator": {
+                    "method": "nested",
+                    "parent": {
+                        "method": "testid",
+                        "value": "DIV-_standingActiveManage_standingBook-id-1213867279",
+                    },
+                    "child": {
+                        "method": "testid",
+                        "value": "DIV-_standingActiveManage_standingBook-id-1064443668",
+                    },
+                },
+                "locator_candidates": [
+                    {
+                        "kind": "testid",
+                        "score": 1,
+                        "strict_match_count": 1,
+                        "visible_match_count": 1,
+                        "selected": True,
+                        "locator": {
+                            "method": "nested",
+                            "parent": {
+                                "method": "testid",
+                                "value": "DIV-_standingActiveManage_standingBook-id-1213867279",
+                            },
+                            "child": {
+                                "method": "testid",
+                                "value": "DIV-_standingActiveManage_standingBook-id-1064443668",
+                            },
+                        },
+                    }
+                ],
+                "validation": {"status": "ok"},
+            },
+        )
+
+        self.assertEqual(len(self.session.recorded_actions), 0)
+        self.assertEqual(len(self.session.traces), 0)
+        self.assertEqual(len(self.session.recording_diagnostics), 1)
+        self.assertEqual(self.session.recording_diagnostics[0].failure_reason, "unstable_target_locator")
+        self.assertEqual(len(self.session.trace_diagnostics), 1)
+        self.assertEqual(self.session.trace_diagnostics[0].raw["failure_reason"], "unstable_target_locator")
+        self.assertEqual(self.session.trace_diagnostics[0].raw["locator_candidates"], [])
+        self.assertEqual(
+            self.session.trace_diagnostics[0].raw["rejected_locator_candidates"][0]["rejected_reason"],
+            "unstable_target_locator",
+        )
+
+    async def test_fill_drops_prior_unstable_non_interactive_focus_click(self):
+        page = _FakePage("https://example.com", "Example")
+        tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "click",
+                "tab_id": tab_id,
+                "tag": "DIV",
+                "timestamp": 1234567890,
+                "locator": {
+                    "method": "nested",
+                    "parent": {
+                        "method": "testid",
+                        "value": "DIV-_standingActiveManage_standingBook-id-1213867279",
+                    },
+                    "child": {
+                        "method": "testid",
+                        "value": "DIV-_standingActiveManage_standingBook-id-1064443668",
+                    },
+                },
+                "locator_candidates": [
+                    {
+                        "kind": "testid",
+                        "score": 1,
+                        "strict_match_count": 1,
+                        "visible_match_count": 1,
+                        "selected": True,
+                        "locator": {
+                            "method": "nested",
+                            "parent": {
+                                "method": "testid",
+                                "value": "DIV-_standingActiveManage_standingBook-id-1213867279",
+                            },
+                            "child": {
+                                "method": "testid",
+                                "value": "DIV-_standingActiveManage_standingBook-id-1064443668",
+                            },
+                        },
+                    }
+                ],
+                "element_snapshot": {"tag": "div", "role": "", "name": "", "text": ""},
+                "validation": {"status": "ok"},
+            },
+        )
+
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "fill",
+                "tab_id": tab_id,
+                "tag": "TEXTAREA",
+                "timestamp": 1234568090,
+                "value": "7260316102147H,000484261001AF",
+                "locator": {"method": "role", "role": "textbox"},
+                "locator_candidates": [
+                    {
+                        "kind": "role",
+                        "score": 1,
+                        "strict_match_count": 1,
+                        "visible_match_count": 1,
+                        "selected": True,
+                        "locator": {"method": "role", "role": "textbox"},
+                    }
+                ],
+                "validation": {"status": "ok"},
+            },
+        )
+
+        self.assertEqual(len(self.session.steps), 1)
+        self.assertEqual(self.session.steps[0].action, "fill")
+        self.assertEqual(len(self.session.recording_diagnostics), 0)
+        self.assertEqual(len(self.session.trace_diagnostics), 0)
+        self.assertEqual(len(self.session.traces), 1)
+
+    async def test_select_step_locator_candidate_rejects_random_like_testid(self):
+        await self.manager.add_step(
+            self.session.id,
+            {
+                "action": "click",
+                "target": "",
+                "description": "点击 Broken",
+                "source": "record",
+                "locator_candidates": [
+                    {
+                        "kind": "testid",
+                        "selected": True,
+                        "locator": {
+                            "method": "testid",
+                            "value": "DIV-_standingActiveManage_standingBook-id-812632017",
+                        },
+                    }
+                ],
+                "validation": {"status": "broken"},
+            },
+        )
+
+        with self.assertRaisesRegex(ValueError, "unstable"):
+            await self.manager.select_step_locator_candidate(self.session.id, 0, 0)
 
     async def test_handle_event_prefers_best_scored_strict_candidate_over_earlier_nth(self):
         page = _FakePage("https://example.com", "Example")
@@ -825,6 +1258,45 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(step.locator_candidates[1]["selected"])
         self.assertEqual(step.validation["status"], "ok")
         self.assertEqual(step.validation["details"], "strict unique Playwright text match")
+
+    async def test_handle_event_accepts_named_role_first_playwright_candidate(self):
+        page = _FakePage("https://example.com", "Example")
+        tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+
+        await self.manager._handle_event(
+            self.session.id,
+            {
+                "action": "fill",
+                "tab_id": tab_id,
+                "tag": "INPUT",
+                "timestamp": 1234567894,
+                "value": "JE",
+                "locator_candidates": [
+                    {
+                        "kind": "role",
+                        "score": 0,
+                        "strict_match_count": 1,
+                        "visible_match_count": 1,
+                        "selected": True,
+                        "playwright_locator": 'page.get_by_role("textbox", name="请输入").first',
+                        "reason": "selected Playwright candidate is strict unique",
+                    },
+                ],
+                "validation": {"status": "ok", "details": "selected Playwright candidate is strict unique"},
+            },
+        )
+
+        step = self.session.steps[-1]
+        self.assertEqual(
+            json.loads(step.target),
+            {
+                "method": "nth",
+                "locator": {"method": "role", "role": "textbox", "name": "请输入"},
+                "index": 0,
+            },
+        )
+        self.assertEqual(len(self.session.recording_diagnostics), 0)
+        self.assertEqual(len(self.session.traces), 1)
 
     async def test_popup_download_attaches_signals_to_original_click_step(self):
         source_page = _FakePage("https://example.com", "Example")
@@ -1778,6 +2250,18 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([step.sequence for step in self.session.steps], [10, 20])
         self.assertIn("First", self.session.steps[0].description)
         self.assertIn("Second", self.session.steps[1].description)
+        traces_by_action_name = {
+            trace.locator_candidates[0]["locator"]["name"]: trace
+            for trace in self.session.traces
+        }
+        self.assertEqual(
+            traces_by_action_name["First"].signals["recording"],
+            {"sequence": 10, "event_timestamp_ms": 1234567890},
+        )
+        self.assertEqual(
+            traces_by_action_name["Second"].signals["recording"],
+            {"sequence": 20, "event_timestamp_ms": 1234567891},
+        )
 
     async def test_handle_event_prefers_event_timestamp_over_cross_tab_sequence_reset(self):
         first_page = _FakePage("https://example.com", "Example")
@@ -2162,6 +2646,35 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.session.steps[-1].source_tab_id, source_tab_id)
         self.assertEqual(self.session.steps[-1].target_tab_id, target_tab_id)
         self.assertEqual(self.session.steps[-1].signals["popup"]["target_tab_id"], target_tab_id)
+
+    async def test_register_context_page_syncs_popup_signal_to_trace(self):
+        source_page = _FakePage("https://example.com", "Example")
+        target_page = _FakePage("https://example.com/new", "Popup", context=source_page.context)
+        source_tab_id = await self.manager.register_page(self.session.id, source_page, make_active=True)
+        await self.manager.add_step(
+            self.session.id,
+            {
+                "action": "click",
+                "target": json.dumps({"method": "text", "value": "操作"}),
+                "value": "",
+                "label": "",
+                "tag": "A",
+                "url": "https://example.com",
+                "description": '点击 text("操作")',
+                "sensitive": False,
+                "tab_id": source_tab_id,
+            },
+        )
+
+        trace_id = f"trace-{self.session.steps[-1].id}"
+        self.assertEqual(len(self.session.traces), 1)
+        self.assertNotIn("popup", self.session.traces[0].signals)
+
+        target_tab_id = await self.manager.register_context_page(self.session.id, target_page, make_active=True)
+
+        trace = next(item for item in self.session.traces if item.trace_id == trace_id)
+        self.assertEqual(trace.signals["popup"]["source_tab_id"], source_tab_id)
+        self.assertEqual(trace.signals["popup"]["target_tab_id"], target_tab_id)
 
     async def test_register_context_page_bootstraps_current_page_recorder_runtime(self):
         source_page = _FakePage("https://example.com", "Example")

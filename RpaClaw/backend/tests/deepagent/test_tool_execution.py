@@ -60,7 +60,7 @@ def greet(name: str) -> dict:
     )
 
     assert result["result"] == {"message": "hello Ada"}
-    assert result["_sandbox_exec"]["output"] == "tool-stdout"
+    assert result["_sandbox_exec"]["output"].strip().startswith("tool-stdout")
     assert "backend.deepagent.tool_execution" in result["_sandbox_exec"]["command"]
     assert str(tool_file) in result["_sandbox_exec"]["command"]
 

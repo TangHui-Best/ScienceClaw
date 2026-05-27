@@ -181,8 +181,8 @@ def test_idaas_build_caller_auth_requirements():
     assert requirements == {
         "required": True,
         "credential_type": "idaas",
-        "accepted_fields": ["_auth.headers.X-RE-AppId", "_auth.cookie.X-Auth-Token"],
-        "notes": ["Provide IDaaS X-RE-AppId header and X-Auth-Token cookie via _auth."],
+        "accepted_fields": ["_auth.headers.X-forwarded-for", "_auth.cookie.X-Auth-Token"],
+        "notes": ["Provide IDaaS X-forwarded-for (real IP) header and X-Auth-Token cookie via _auth."],
     }
 
 
@@ -198,8 +198,8 @@ def test_idaas_external_tool_schema_contains_auth_fields():
 
     assert external_schema["required"] == ["keyword", "_auth"]
     auth_props = external_schema["properties"]["_auth"]["properties"]
-    assert auth_props["headers"]["required"] == ["X-RE-AppId"]
-    assert auth_props["headers"]["properties"]["X-RE-AppId"]["type"] == "string"
+    assert auth_props["headers"]["required"] == ["X-forwarded-for"]
+    assert auth_props["headers"]["properties"]["X-forwarded-for"]["type"] == "string"
     assert auth_props["cookie"]["required"] == ["X-Auth-Token"]
     assert auth_props["cookie"]["properties"]["X-Auth-Token"]["type"] == "string"
     assert external_schema["properties"]["_auth"]["required"] == ["headers", "cookie"]
@@ -210,7 +210,7 @@ def test_idaas_extract_caller_auth_profile_from_arguments():
     arguments = {
         "keyword": "invoice",
         "_auth": {
-            "headers": {"X-RE-AppId": "my-app-123"},
+            "headers": {"X-forwarded-for": "127.0.0.1"},
             "cookie": {"X-Auth-Token": "token-abc"},
         },
     }
@@ -222,13 +222,13 @@ def test_idaas_extract_caller_auth_profile_from_arguments():
     )
 
     assert cleaned == {"keyword": "invoice"}
-    assert profile.headers["X-RE-AppId"] == "my-app-123"
+    assert profile.headers["X-forwarded-for"] == "127.0.0.1"
     assert profile.headers["Cookie"] == "X-Auth-Token=token-abc"
     assert profile.variables["auth_token"] == "token-abc"
     assert preview == {
         "credential_type": "idaas",
         "source": "_auth",
-        "headers": ["X-RE-AppId", "Cookie"],
+        "headers": ["X-forwarded-for", "Cookie"],
         "injected": True,
     }
 
@@ -261,10 +261,10 @@ def test_idaas_description_contains_idaas_hint():
     description, extension = with_caller_auth_description("Search orders", requirements)
 
     assert "credential_type=idaas" in description
-    assert "X-RE-AppId" in description
+    assert "X-forwarded-for" in description
     assert "X-Auth-Token" in description
     assert extension[CALLER_AUTH_EXTENSION_KEY] == {
         "required": True,
         "credential_type": "idaas",
-        "accepted_fields": ["_auth.headers.X-RE-AppId", "_auth.cookie.X-Auth-Token"],
+        "accepted_fields": ["_auth.headers.X-forwarded-for", "_auth.cookie.X-Auth-Token"],
     }

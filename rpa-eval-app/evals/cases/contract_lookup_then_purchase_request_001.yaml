@@ -3,7 +3,6 @@ name: 先核对合同再创建采购申请
 tags: [e2e, contracts, purchase_requests, data_flow]
 user:
   username: buyer
-  password: buyer123
 start_path: /contracts
 timeout_s: 240
 instruction: >

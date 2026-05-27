@@ -3,7 +3,6 @@ name: 创建固定采购申请
 tags: [purchase_requests]
 user:
   username: buyer
-  password: buyer123
 start_path: /purchase-requests/new
 timeout_s: 150
 instruction: >
