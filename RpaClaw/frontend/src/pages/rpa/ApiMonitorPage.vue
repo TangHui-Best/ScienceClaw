@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowLeft, Globe, BarChart2, Disc, Square, Save, Wrench, ChevronDown, MonitorPlay, X, AlertTriangle, Terminal, Loader2 } from 'lucide-vue-next';
+import { ArrowLeft, Globe, BarChart2, Disc, Square, Save, Wrench, ChevronDown, MonitorPlay, X, AlertTriangle, Terminal, Loader2, Check } from 'lucide-vue-next';
 import { ref, reactive, onMounted, onBeforeUnmount, nextTick, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
@@ -12,10 +12,13 @@ import {
   listTools,
   listGenerationCandidates,
   retryGenerationCandidate,
+  forceGenerateCandidate,
+  deleteGenerationCandidate,
   updateTool as apiUpdateTool,
   deleteTool as apiDeleteTool,
   publishMcpToolBundle,
   updateToolSelection as apiUpdateToolSelection,
+  regenerateTool,
   getAuthProfile,
   getTokenFlowProfile,
   type ApiMonitorSession,
@@ -28,14 +31,15 @@ import {
   type TokenFlowSelection,
 } from '@/api/apiMonitor';
 import { listCredentials, type Credential } from '@/api/credential';
+import { listModels, type ModelConfig } from '@/api/models';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import ProviderIcon from '@/components/icons/ProviderIcon.vue';
 import { API_MONITOR_CREDENTIAL_TYPE_OPTIONS, normalizeApiMonitorAuth } from '@/utils/apiMonitorAuth';
 import { getBackendWsUrl } from '@/utils/sandbox';
 import { showErrorToast, showSuccessToast } from '@/utils/toast';
 import {
   ANALYSIS_MODES,
   canStartAnalysis,
-  getAnalysisMode,
-  modeRequiresInstruction,
   type AnalysisModeKey,
 } from '@/utils/apiMonitorAnalysisModes';
 import {
@@ -69,7 +73,9 @@ const generationCandidates = ref<ApiToolGenerationCandidate[]>([]);
 let generationRefreshTimer: number | null = null;
 let analysisCleanup: (() => void) | null = null;
 const visibleGenerationCandidates = computed(() =>
-  generationCandidates.value.filter((candidate) => candidate.status !== 'generated' || !candidate.tool_id),
+  generationCandidates.value.filter((candidate) =>
+    candidate.status !== 'generated' && candidate.status !== 'confidence_rejected' && candidate.status !== 'intent_filtered',
+  ),
 );
 const hasActiveGenerationCandidates = computed(() =>
   generationCandidates.value.some((candidate) => ['pending', 'running', 'stale'].includes(candidate.status)),
@@ -77,27 +83,53 @@ const hasActiveGenerationCandidates = computed(() =>
 const detectedItemCount = computed(() => tools.value.length + visibleGenerationCandidates.value.length);
 const adoptedTools = computed(() => tools.value.filter((tool) => tool.selected));
 const notAdoptedTools = computed(() => tools.value.filter((tool) => !tool.selected));
+const reserveCandidates = computed(() =>
+  generationCandidates.value.filter((c) => c.status === 'confidence_rejected' || c.status === 'intent_filtered'),
+);
 const adoptedToolCount = computed(() => adoptedTools.value.length);
 const toolGroups = computed(() => [
   { key: 'adopted', title: '采用', items: adoptedTools.value },
+  { key: 'reserve', title: '候补', items: reserveCandidates.value },
   { key: 'not-adopted', title: '不采用', items: notAdoptedTools.value },
 ]);
 const terminalLines = ref<{ html: string }[]>([]);
+type ActionModeKey = 'record' | AnalysisModeKey;
+
 const isRecording = ref(false);
 const isAnalyzing = ref(false);
-const analysisModes = ANALYSIS_MODES;
-const analysisMode = ref<AnalysisModeKey>('free');
+
+const actionModes = computed(() => [
+  { key: 'record' as ActionModeKey, label: '录制', description: '手动操作页面并录制 API 调用。', requiresInstruction: false },
+  ...ANALYSIS_MODES.map(m => ({ ...m, key: m.key as ActionModeKey }))
+]);
+const actionMode = ref<ActionModeKey>('record');
 const analysisInstruction = ref('');
+const analysisIntent = ref('');
+
 const analysisMenuOpen = ref(false);
 const analysisMenuAnchor = ref<HTMLElement | null>(null);
-const selectedAnalysisMode = computed(() => getAnalysisMode(analysisMode.value));
-const showAnalysisInstruction = computed(() => modeRequiresInstruction(analysisMode.value));
+
+const selectedActionMode = computed(() => actionModes.value.find(m => m.key === actionMode.value) || actionModes.value[0]);
+const showAnalysisInstruction = computed(() => selectedActionMode.value.requiresInstruction);
+
 const canRunAnalysis = computed(() => canStartAnalysis({
   hasSession: Boolean(sessionId.value),
   isAnalyzing: isAnalyzing.value,
-  mode: analysisMode.value,
+  mode: actionMode.value === 'record' ? 'free' : actionMode.value,
   instruction: analysisInstruction.value,
 }));
+
+const currentModel = computed(() => {
+  if (!models.value.length) return null;
+  if (!selectedModelId.value) return models.value.find(m => m.is_system) || models.value[0];
+  return models.value.find(m => m.id === selectedModelId.value) || null;
+});
+
+const currentModelName = computed(() => {
+  const model = currentModel.value;
+  if (!model) return '选择模型';
+  return model.name.toLowerCase() === 'system' ? model.model_name : model.name;
+});
 
 const analysisMenuStyle = computed(() => {
   const anchor = analysisMenuAnchor.value;
@@ -111,8 +143,8 @@ const analysisMenuStyle = computed(() => {
   };
 });
 
-const selectAnalysisMode = (mode: AnalysisModeKey) => {
-  analysisMode.value = mode;
+const selectActionMode = (mode: ActionModeKey) => {
+  actionMode.value = mode;
   analysisMenuOpen.value = false;
 };
 
@@ -127,6 +159,9 @@ const expandedToolId = ref<string | null>(null);
 const toolEdits = reactive<Record<string, string>>({});
 const loading = ref(false);
 const error = ref<string | null>(null);
+const models = ref<ModelConfig[]>([]);
+const selectedModelId = ref<string | null>(null);
+const isModelsOpen = ref(false);
 const publishDialogOpen = ref(false);
 const overwriteDialogOpen = ref(false);
 const isPublishing = ref(false);
@@ -499,10 +534,11 @@ const handleStartSession = async () => {
 // ---------------------------------------------------------------------------
 
 const startAnalysis = async () => {
+  if (actionMode.value === 'record') return;
   if (!canRunAnalysis.value) return;
   isAnalyzing.value = true;
   startGenerationRefresh();
-  const mode = selectedAnalysisMode.value;
+  const mode = selectedActionMode.value;
   const instruction = showAnalysisInstruction.value ? analysisInstruction.value.trim() : '';
   addLog('INFO', `开始${mode.label}...`);
 
@@ -586,6 +622,8 @@ const startAnalysis = async () => {
       case 'api_candidate_created':
       case 'api_candidate_updated':
       case 'api_candidate_rate_limited':
+      case 'api_candidate_confidence_rejected':
+      case 'api_candidate_intent_filtered':
       case 'api_tool_generation_failed':
         upsertGenerationCandidate({
           id: data.candidate_id,
@@ -604,6 +642,8 @@ const startAnalysis = async () => {
           capture_page_url: '',
           capture_title: '',
           capture_dom_digest: '',
+          rejection_reason: data.rejection_reason,
+          intent_filter_reason: data.intent_filter_reason,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         });
@@ -634,8 +674,10 @@ const startAnalysis = async () => {
         break;
     }
   }, {
-    mode: analysisMode.value,
+    mode: actionMode.value as AnalysisModeKey,
     instruction,
+    intent: analysisIntent.value,
+    model_id: selectedModelId.value || undefined,
   });
 };
 
@@ -649,6 +691,27 @@ const handleRetryCandidate = async (candidate: ApiToolGenerationCandidate) => {
     addLog('ERROR', `重试生成失败: ${err.message}`);
   }
 };
+
+const handleForceGenerate = async (candidate: ApiToolGenerationCandidate) => {
+  try {
+    const updated = await forceGenerateCandidate(sessionId.value, candidate.id)
+    Object.assign(candidate, updated)
+    startGenerationRefresh()
+  } catch (err) {
+    console.error('Force generate failed:', err)
+  }
+}
+
+const handleDeleteCandidate = async (candidate: ApiToolGenerationCandidate) => {
+  if (!sessionId.value) return;
+  try {
+    await deleteGenerationCandidate(sessionId.value, candidate.id);
+    generationCandidates.value = generationCandidates.value.filter(c => c.id !== candidate.id);
+    addLog('INFO', `已删除队列工具: ${candidate.method} ${candidate.url_pattern}`);
+  } catch (err: any) {
+    addLog('ERROR', `删除队列工具失败: ${err.message}`);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Recording
@@ -665,7 +728,7 @@ const toggleRecording = async () => {
       await refreshGenerationState();
       addLog(
         'INFO',
-        `录制已停止。当前 ${tools.value.length} 个工具，${visibleGenerationCandidates.value.length} 个仍在生成。`,
+        `录制已停止。${adoptedTools.value.length} 个正式工具，${reserveCandidates.value.length} 个候补工具${visibleGenerationCandidates.value.length ? `，${visibleGenerationCandidates.value.length} 个仍在生成` : ''}。`,
       );
     } catch (err: any) {
       addLog('ERROR', `停止录制失败: ${err.message}`);
@@ -673,7 +736,7 @@ const toggleRecording = async () => {
   } else {
     try {
       addLog('INFO', '正在开始录制...');
-      await apiStartRecording(sessionId.value);
+      await apiStartRecording(sessionId.value, analysisIntent.value);
       isRecording.value = true;
       startGenerationRefresh();
       addLog('INFO', '录制已开始。请与浏览器交互以捕获 API 调用。');
@@ -734,6 +797,24 @@ const handleDeleteTool = async (toolId: string) => {
     addLog('INFO', `工具已删除`);
   } catch (err: any) {
     addLog('ERROR', `删除工具失败: ${err.message}`);
+  }
+};
+
+const handleRegenerateTool = async (toolId: string) => {
+  if (!sessionId.value) return;
+  try {
+    addLog('INFO', `正在重新生成工具: ${toolId}`);
+    const updated = await regenerateTool(sessionId.value, toolId);
+    const idx = tools.value.findIndex((t) => t.id === toolId);
+    if (idx >= 0) {
+      tools.value[idx] = updated;
+    }
+    if (toolEdits[toolId] !== undefined) {
+      toolEdits[toolId] = updated.yaml_definition;
+    }
+    addLog('INFO', `工具重新生成完成: ${updated.name}`);
+  } catch (e: any) {
+    addLog('ERROR', `重新生成失败: ${e.message}`);
   }
 };
 
@@ -981,6 +1062,8 @@ const getCandidateStatusLabel = (status: ApiToolGenerationCandidate['status']) =
   if (status === 'rate_limited') return '限流重试中';
   if (status === 'failed') return '生成失败';
   if (status === 'stale') return '等待更新';
+  if (status === 'confidence_rejected') return '置信度不足';
+  if (status === 'intent_filtered') return 'AI 过滤';
   return '已生成';
 };
 
@@ -988,6 +1071,8 @@ const getCandidateStatusClass = (status: ApiToolGenerationCandidate['status']) =
   if (status === 'running' || status === 'pending') return 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-300';
   if (status === 'rate_limited') return 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300';
   if (status === 'failed') return 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300';
+  if (status === 'confidence_rejected') return 'border-orange-200 bg-orange-50 text-orange-700 dark:border-orange-500/30 dark:bg-orange-500/10 dark:text-orange-300';
+  if (status === 'intent_filtered') return 'border-purple-200 bg-purple-50 text-purple-700 dark:border-purple-500/30 dark:bg-purple-500/10 dark:text-purple-300';
   return 'border-slate-200 bg-slate-50 text-slate-600 dark:border-white/10 dark:bg-white/5 dark:text-slate-300';
 };
 
@@ -995,9 +1080,16 @@ const getCandidateStatusClass = (status: ApiToolGenerationCandidate['status']) =
 // Lifecycle
 // ---------------------------------------------------------------------------
 
-onMounted(() => {
+onMounted(async () => {
   addLog('INFO', 'API 监控已准备就绪。输入 URL 并点击 Go 开始。');
   document.addEventListener('click', handleClickOutsideMenu, true);
+  try {
+    const modelsData = await listModels();
+    models.value = modelsData;
+    const sys = modelsData.find(m => m.is_system);
+    if (sys) selectedModelId.value = sys.id;
+    else if (modelsData.length > 0) selectedModelId.value = modelsData[0].id;
+  } catch { /* non-critical */ }
 });
 
 onBeforeUnmount(() => {
@@ -1015,11 +1107,11 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="api-monitor-page flex h-full w-full flex-col overflow-hidden bg-[#f5f7fb] text-[var(--text-primary)] dark:bg-[#101115] api-monitor-teal">
-    <header class="relative flex-shrink-0 overflow-hidden">
+    <header class="relative flex-shrink-0">
       <!-- Background gradient matching ToolsPage -->
       <div class="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.22),transparent_32%),linear-gradient(115deg,#0ea5e9_0%,#0284c7_52%,#0369a1_100%)]"></div>
       <div class="absolute -right-16 -top-20 h-52 w-52 rounded-full bg-white/10 blur-3xl"></div>
-      
+
       <div class="relative px-5 py-5 sm:px-7">
         <div class="flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
           <div class="flex items-center gap-3">
@@ -1060,6 +1152,42 @@ onBeforeUnmount(() => {
             </div>
 
             <div class="flex items-center gap-2">
+              <!-- Model Selector -->
+              <Popover v-model:open="isModelsOpen">
+                <PopoverTrigger as-child>
+                  <div class="flex items-center gap-2 rounded-full bg-white/15 border border-white/20 px-3 py-2 text-sm font-medium text-white cursor-pointer hover:bg-white/25 transition backdrop-blur">
+                    <ProviderIcon v-if="currentModel" :provider="currentModel.provider" class="size-4" />
+                    <span class="truncate max-w-[140px]">{{ currentModelName }}</span>
+                    <ChevronDown :size="14" class="opacity-60" />
+                  </div>
+                </PopoverTrigger>
+                <PopoverContent class="w-[280px] p-0 overflow-hidden" align="end" :side-offset="8">
+                  <div class="bg-slate-50 dark:bg-white/[0.03] px-3 py-2 border-b border-slate-100 dark:border-white/10">
+                    <span class="text-xs font-medium text-slate-500 dark:text-slate-400">选择模型</span>
+                  </div>
+                  <div class="flex flex-col max-h-[300px] overflow-y-auto p-1">
+                    <button
+                      v-for="model in models"
+                      :key="model.id"
+                      @click="selectedModelId = model.id; isModelsOpen = false"
+                      class="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-slate-50 dark:hover:bg-white/5 transition-all text-left"
+                      :class="{ 'bg-slate-50 dark:bg-white/5': selectedModelId === model.id }"
+                    >
+                      <div class="flex items-center justify-center w-8 h-8 rounded-full bg-slate-100 dark:bg-white/10 border border-slate-200 dark:border-white/10 flex-shrink-0">
+                        <ProviderIcon :provider="model.provider" class="size-4" />
+                      </div>
+                      <div class="flex flex-col overflow-hidden flex-1">
+                        <span class="text-sm font-medium text-slate-900 dark:text-white truncate">
+                          {{ model.name.toLowerCase() === 'system' ? model.model_name : model.name }}
+                        </span>
+                        <span class="text-[10px] text-slate-400 truncate">{{ model.provider }}</span>
+                      </div>
+                      <Check v-if="selectedModelId === model.id" :size="16" class="text-sky-500 flex-shrink-0" />
+                    </button>
+                  </div>
+                </PopoverContent>
+              </Popover>
+
               <button
                 @click="openPublishDialog"
                 :disabled="!sessionId || !adoptedToolCount || isPublishing"
@@ -1078,70 +1206,76 @@ onBeforeUnmount(() => {
     <div class="flex-1 flex overflow-hidden p-5 sm:px-7 pb-6 gap-5">
       <!-- Left: Browser viewport -->
       <section class="flex-1 flex flex-col relative rounded-3xl border border-slate-200/80 bg-white shadow-sm overflow-hidden dark:border-white/10 dark:bg-[#17181d]">
-        
-        <!-- Action Toolbar -->
-        <div v-if="sessionId" class="flex flex-col border-b border-slate-100 dark:border-white/10 bg-white dark:bg-[#1a1a1a] shrink-0 p-4 gap-4 z-10 relative">
-          <div class="flex items-center justify-between">
-            <div class="flex items-center gap-3">
-              <!-- Analysis Menu -->
-              <div ref="analysisMenuAnchor" class="inline-flex overflow-hidden rounded-xl border border-slate-200 bg-slate-50 dark:border-white/10 dark:bg-white/5">
-                <button
-                  @click="startAnalysis"
-                  :disabled="!canRunAnalysis"
-                  class="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-[var(--text-primary)] transition hover:bg-slate-100 dark:hover:bg-white/10 disabled:opacity-50"
-                >
-                  <BarChart2 :size="16" class="text-indigo-500" />
-                  分析
-                </button>
-                <button
-                  type="button"
-                  class="inline-flex items-center gap-1 border-l border-slate-200 dark:border-white/10 px-3 py-2 text-sm font-semibold text-[var(--text-primary)] transition hover:bg-slate-100 dark:hover:bg-white/10 disabled:opacity-50"
-                  :disabled="!sessionId || isAnalyzing"
-                  @click="analysisMenuOpen = !analysisMenuOpen"
-                >
-                  {{ selectedAnalysisMode.label }}
-                  <ChevronDown :size="14" />
-                </button>
-              </div>
-              <Teleport to="body">
-                <div
-                  v-if="analysisMenuOpen"
-                  :style="analysisMenuStyle"
-                  class="w-64 overflow-hidden rounded-2xl border border-slate-200 bg-white py-2 text-left shadow-xl dark:border-white/10 dark:bg-[#17181d]"
-                >
-                  <button
-                    v-for="mode in analysisModes"
-                    :key="mode.key"
-                    type="button"
-                    class="block w-full px-4 py-3 text-left transition hover:bg-slate-50 dark:hover:bg-white/[0.06]"
-                    @click="selectAnalysisMode(mode.key)"
-                  >
-                    <span class="block text-sm font-bold text-slate-900 dark:text-white">{{ mode.label }}</span>
-                    <span class="mt-1 block text-xs leading-5 text-slate-500 dark:text-slate-400">{{ mode.description }}</span>
-                  </button>
-                </div>
-              </Teleport>
 
-              <!-- Recording Toggle -->
+        <!-- Action Toolbar -->
+        <div v-if="sessionId" class="flex items-center border-b border-slate-100 dark:border-white/10 bg-white dark:bg-[#1a1a1a] shrink-0 p-4 gap-3 z-10 relative">
+          <!-- Unified Action Menu -->
+          <div ref="analysisMenuAnchor" class="inline-flex overflow-hidden rounded-xl border border-slate-200 bg-slate-50 dark:border-white/10 dark:bg-white/5 relative shrink-0">
+            <button
+              v-if="actionMode === 'record'"
+              @click="toggleRecording"
+              :disabled="!sessionId"
+              class="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-[var(--text-primary)] transition disabled:opacity-50"
+              :class="isRecording ? 'bg-red-500 text-white shadow-md hover:bg-red-600' : 'hover:bg-slate-100 dark:hover:bg-white/10'"
+            >
+              <component :is="isRecording ? Square : Disc" :size="16" />
+              {{ isRecording ? '停止录制' : '开始录制' }}
+            </button>
+            <button
+              v-else
+              @click="startAnalysis"
+              :disabled="!canRunAnalysis"
+              class="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-[var(--text-primary)] transition hover:bg-slate-100 dark:hover:bg-white/10 disabled:opacity-50"
+            >
+              <BarChart2 :size="16" class="text-indigo-500" />
+              分析
+            </button>
+
+            <button
+              type="button"
+              class="inline-flex items-center gap-1 border-l border-slate-200 dark:border-white/10 px-3 py-2 text-sm font-semibold text-[var(--text-primary)] transition hover:bg-slate-100 dark:hover:bg-white/10 disabled:opacity-50"
+              :disabled="!sessionId || isAnalyzing || isRecording"
+              @click="analysisMenuOpen = !analysisMenuOpen"
+            >
+              {{ selectedActionMode.label }}
+              <ChevronDown :size="14" />
+            </button>
+          </div>
+          <Teleport to="body">
+            <div
+              v-if="analysisMenuOpen"
+              :style="analysisMenuStyle"
+              class="w-64 overflow-hidden rounded-2xl border border-slate-200 bg-white py-2 text-left shadow-xl dark:border-white/10 dark:bg-[#17181d] z-[9999]"
+            >
               <button
-                @click="toggleRecording"
-                :disabled="!sessionId"
-                class="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition disabled:opacity-50"
-                :class="isRecording ? 'bg-red-500 text-white shadow-md hover:bg-red-600' : 'border border-slate-200 bg-slate-50 text-[var(--text-primary)] hover:bg-slate-100 dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10'"
+                v-for="mode in actionModes"
+                :key="mode.key"
+                type="button"
+                class="block w-full px-4 py-3 text-left transition hover:bg-slate-50 dark:hover:bg-white/[0.06]"
+                @click="selectActionMode(mode.key)"
               >
-                <component :is="isRecording ? Square : Disc" :size="16" />
-                {{ isRecording ? '停止' : '录制' }}
+                <span class="block text-sm font-bold text-slate-900 dark:text-white">{{ mode.label }}</span>
+                <span class="mt-1 block text-xs leading-5 text-slate-500 dark:text-slate-400">{{ mode.description }}</span>
               </button>
             </div>
-          </div>
+          </Teleport>
 
-          <!-- Large Instruction Input -->
-          <div v-if="showAnalysisInstruction" class="relative">
+          <!-- Unified Dynamic Input -->
+          <div class="relative flex-1 min-w-0">
             <input
+              v-if="showAnalysisInstruction"
               v-model="analysisInstruction"
               type="text"
               placeholder="请输入操作说明（例如：点击登录按钮，输入账号密码等）..."
-              class="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-[var(--text-primary)] shadow-inner outline-none transition focus:border-sky-400 focus:bg-white focus:ring-4 focus:ring-sky-400/10 dark:border-white/10 dark:bg-black/20 dark:focus:bg-[#1a1a1a]"
+              class="w-full h-[38px] rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm text-[var(--text-primary)] shadow-inner outline-none transition focus:border-sky-400 focus:bg-white focus:ring-4 focus:ring-sky-400/10 dark:border-white/10 dark:bg-black/20 dark:focus:bg-[#1a1a1a]"
+              @keyup.enter="startAnalysis"
+            />
+            <input
+              v-else
+              v-model="analysisIntent"
+              type="text"
+              placeholder="阐述目的：描述你希望获取的 API 类型或操作目标（可选）..."
+              class="w-full h-[38px] rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm text-[var(--text-primary)] shadow-inner outline-none transition focus:border-sky-400 focus:bg-white focus:ring-4 focus:ring-sky-400/10 dark:border-white/10 dark:bg-black/20 dark:focus:bg-[#1a1a1a]"
               @keyup.enter="startAnalysis"
             />
           </div>
@@ -1182,7 +1316,7 @@ onBeforeUnmount(() => {
             <span class="text-[var(--text-primary)] text-xs font-bold tracking-wider">实时视图</span>
           </div>
         </div>
-        
+
         <!-- Status Bar -->
         <div class="h-10 border-t border-slate-100 dark:border-white/10 bg-white dark:bg-[#1a1a1a] flex items-center px-4 gap-4 text-xs text-[var(--text-secondary)] flex-shrink-0">
           <div class="flex items-center gap-1.5 font-medium">
@@ -1260,30 +1394,58 @@ onBeforeUnmount(() => {
               <div
                 v-for="candidate in visibleGenerationCandidates"
                 :key="candidate.id"
-                class="rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3 shadow-sm dark:border-white/10 dark:bg-white/[0.04]"
+                class="rounded-2xl border border-slate-200 bg-slate-50/80 shadow-sm overflow-hidden dark:border-white/10 dark:bg-white/[0.04]"
               >
-                <div class="flex items-center gap-3">
-                  <span class="text-[10px] font-bold px-2 py-0.5 rounded-md" :class="getMethodClass(candidate.method)">
-                    {{ candidate.method }}
-                  </span>
-                  <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--text-primary)]">
-                    {{ candidate.url_pattern }}
-                  </span>
-                  <span class="shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-bold" :class="getCandidateStatusClass(candidate.status)">
-                    {{ getCandidateStatusLabel(candidate.status) }}
-                  </span>
-                </div>
-                <div class="mt-2 flex items-center justify-between gap-3 text-[10px] text-[var(--text-tertiary)]">
-                  <span>样本 {{ candidate.source_call_ids?.length || 0 }}</span>
-                  <span v-if="candidate.retry_after">下次重试 {{ new Date(candidate.retry_after).toLocaleTimeString() }}</span>
-                  <span v-else-if="candidate.error" class="truncate text-red-500">{{ candidate.error }}</span>
-                  <button
-                    v-if="candidate.status === 'failed' || candidate.status === 'rate_limited'"
-                    class="rounded-lg border border-slate-200 px-2 py-1 font-bold text-[var(--text-secondary)] transition hover:bg-slate-100 dark:border-white/10 dark:hover:bg-white/10"
-                    @click="handleRetryCandidate(candidate)"
-                  >
-                    重试
-                  </button>
+                <div class="flex flex-col px-4 py-3">
+                  <div class="flex items-center gap-3">
+                    <span class="text-[10px] font-bold px-2 py-0.5 rounded-md shrink-0" :class="getMethodClass(candidate.method)">
+                      {{ candidate.method }}
+                    </span>
+                    <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--text-primary)]">
+                      {{ candidate.url_pattern }}
+                    </span>
+                    <span class="shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-bold" :class="getCandidateStatusClass(candidate.status)">
+                      {{ getCandidateStatusLabel(candidate.status) }}
+                    </span>
+                  </div>
+
+                  <!-- Extra details: Reason, Error, Buttons -->
+                  <div v-if="candidate.rejection_reason || candidate.intent_filter_reason || candidate.error || candidate.status === 'failed' || candidate.status === 'rate_limited' || candidate.status === 'confidence_rejected' || candidate.status === 'intent_filtered'" class="mt-2 flex flex-col gap-2 border-t border-slate-100 dark:border-white/10 pt-2">
+                    <div v-if="candidate.rejection_reason || candidate.intent_filter_reason" class="text-[10px] text-orange-600 dark:text-orange-400 break-words line-clamp-2" :title="candidate.rejection_reason || candidate.intent_filter_reason || undefined">
+                      {{ candidate.rejection_reason || candidate.intent_filter_reason }}
+                    </div>
+                    <div v-else-if="candidate.error" class="text-[10px] text-red-500 break-words line-clamp-2" :title="candidate.error">
+                      {{ candidate.error }}
+                    </div>
+
+                    <div class="flex items-center justify-between gap-3 text-[10px] text-[var(--text-tertiary)] mt-0.5">
+                      <span>样本 {{ candidate.source_call_ids?.length || 0 }}</span>
+                      <span v-if="candidate.retry_after">下次重试 {{ new Date(candidate.retry_after).toLocaleTimeString() }}</span>
+
+                      <div class="flex gap-2 shrink-0 ml-auto">
+                        <button
+                          class="rounded-lg border border-red-200 px-2 py-1 font-bold text-red-600 transition hover:bg-red-50 dark:border-red-500/20 dark:text-red-400 dark:hover:bg-red-500/10"
+                          @click="handleDeleteCandidate(candidate)"
+                        >
+                          删除
+                        </button>
+                        <button
+                          v-if="candidate.status === 'failed' || candidate.status === 'rate_limited'"
+                          class="rounded-lg border border-slate-200 px-2 py-1 font-bold text-[var(--text-secondary)] transition hover:bg-slate-100 dark:border-white/10 dark:hover:bg-white/10"
+                          @click="handleRetryCandidate(candidate)"
+                        >
+                          重试
+                        </button>
+                        <button
+                          v-if="candidate.status === 'confidence_rejected' || candidate.status === 'intent_filtered'"
+                          class="rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 font-bold text-blue-600 transition hover:bg-blue-100 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-300"
+                          @click="handleForceGenerate(candidate)"
+                        >
+                          强制生成
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1295,11 +1457,53 @@ onBeforeUnmount(() => {
                   <span>{{ group.title }}</span>
                   <span>{{ group.items.length }}</span>
                 </div>
-                <div
-                  v-for="tool in group.items"
-                  :key="tool.id"
-                  class="rounded-2xl border border-slate-200 bg-slate-50/80 shadow-sm overflow-hidden dark:border-white/10 dark:bg-white/[0.04]"
-                >
+                <!-- Reserve candidates (confidence_rejected / intent_filtered) -->
+                <template v-if="group.key === 'reserve'">
+                  <div
+                    v-for="candidate in group.items"
+                    :key="candidate.id"
+                    class="rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3 shadow-sm dark:border-white/10 dark:bg-white/[0.04]"
+                  >
+                    <div class="flex items-center gap-3">
+                      <span class="text-[10px] font-bold px-2 py-0.5 rounded-md" :class="getMethodClass(candidate.method)">
+                        {{ candidate.method }}
+                      </span>
+                      <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--text-primary)]">
+                        {{ candidate.url_pattern }}
+                      </span>
+                      <span class="shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-bold" :class="getCandidateStatusClass(candidate.status)">
+                        {{ getCandidateStatusLabel(candidate.status) }}
+                      </span>
+                    </div>
+                    <div v-if="candidate.rejection_reason || candidate.intent_filter_reason" class="mt-1.5 text-[10px] text-orange-600 dark:text-orange-400">
+                      {{ candidate.rejection_reason || candidate.intent_filter_reason }}
+                    </div>
+                    <div class="mt-2 flex items-center justify-between gap-3 text-[10px] text-[var(--text-tertiary)]">
+                      <span>样本 {{ candidate.source_call_ids?.length || 0 }}</span>
+                      <div class="flex gap-2">
+                        <button
+                          class="rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 font-bold text-blue-600 transition hover:bg-blue-100 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-300"
+                          @click="handleForceGenerate(candidate)"
+                        >
+                          强制生成
+                        </button>
+                        <button
+                          class="rounded-lg border border-red-200 px-2 py-1 font-bold text-red-600 transition hover:bg-red-50 dark:border-red-500/20 dark:text-red-400 dark:hover:bg-red-500/10"
+                          @click="handleDeleteCandidate(candidate)"
+                        >
+                          删除
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+                <!-- Regular tool cards -->
+                <template v-else>
+                  <div
+                    v-for="tool in group.items"
+                    :key="tool.id"
+                    class="rounded-2xl border border-slate-200 bg-slate-50/80 shadow-sm overflow-hidden dark:border-white/10 dark:bg-white/[0.04]"
+                  >
                   <div
                     class="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors"
                     @click="toggleToolExpand(tool.id)"
@@ -1318,6 +1522,12 @@ onBeforeUnmount(() => {
                     <span class="shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-bold" :class="getConfidenceClass(tool.confidence)">
                       {{ getConfidenceLabelWithScore(tool.confidence, tool.score) }}
                     </span>
+                    <span
+                      v-if="tool.validation_status === 'invalid'"
+                      class="shrink-0 rounded-md border border-red-300 bg-red-50 px-2 py-0.5 text-[10px] font-bold text-red-600 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-400"
+                    >
+                      YAML 无效
+                    </span>
                     <ChevronDown :size="16" class="text-[var(--text-tertiary)] transition-transform" :class="expandedToolId === tool.id ? 'rotate-180' : ''" />
                   </div>
 
@@ -1332,12 +1542,25 @@ onBeforeUnmount(() => {
                         {{ reason }}
                       </span>
                     </div>
+                    <div v-if="tool.validation_status === 'invalid' && tool.validation_errors?.length" class="mb-3 rounded-xl bg-red-50 border border-red-200 px-3 py-2 dark:bg-red-500/10 dark:border-red-500/20">
+                      <p class="text-[10px] font-bold text-red-600 dark:text-red-400 mb-1">YAML 校验错误：</p>
+                      <ul class="text-[10px] text-red-500 dark:text-red-300 space-y-0.5">
+                        <li v-for="err in tool.validation_errors" :key="err">{{ err }}</li>
+                      </ul>
+                    </div>
                     <textarea
                       v-model="toolEdits[tool.id]"
                       class="w-full h-40 bg-[#f8fafc] dark:bg-black/20 border border-slate-200 dark:border-white/10 rounded-xl text-[11px] font-mono text-[var(--text-primary)] p-3 outline-none focus:border-sky-400 focus:ring-1 focus:ring-sky-400/30 resize-y transition-shadow"
                       spellcheck="false"
                     ></textarea>
                     <div class="flex justify-end gap-2 mt-3">
+                      <button
+                        v-if="tool.validation_status === 'invalid' && tool.source_calls?.length"
+                        @click="handleRegenerateTool(tool.id)"
+                        class="rounded-xl border border-sky-200 px-3 py-1.5 text-xs font-bold text-sky-600 transition hover:bg-sky-50 dark:border-sky-500/20 dark:text-sky-400 dark:hover:bg-sky-500/10"
+                      >
+                        重新生成
+                      </button>
                       <button
                         @click="handleDeleteTool(tool.id)"
                         class="rounded-xl border border-red-200 px-3 py-1.5 text-xs font-bold text-red-600 transition hover:bg-red-50 dark:border-red-500/20 dark:text-red-400 dark:hover:bg-red-500/10"
@@ -1346,7 +1569,8 @@ onBeforeUnmount(() => {
                       </button>
                     </div>
                   </div>
-                </div>
+                  </div>
+                </template>
               </div>
             </template>
           </div>

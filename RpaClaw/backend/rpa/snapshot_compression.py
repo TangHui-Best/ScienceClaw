@@ -224,6 +224,8 @@ def _scoped_candidate_region(
     kind = _normalize_kind(region.get("kind"))
     if kind == "action_group":
         return _scoped_action_group_region(region, scope_rect)
+    if kind == "text_section":
+        return _scoped_text_section_region(region, scope_rect)
     if kind != "label_value_group":
         return region
     pairs = list(region.get("pairs") or [])
@@ -261,11 +263,137 @@ def _scoped_action_group_region(
     scoped_region = dict(region)
     scoped_region["actions"] = scoped_actions
     scoped_region["selected_texts"] = scoped_texts
+    _attach_section_text_evidence(scoped_region, scoped_texts, texts, scope_rect)
     summary_parts = [_clean_text(scoped_region.get("title") or "")]
     summary_parts.extend(_clean_text(entry.get("text") or "") for entry in scoped_texts[:4])
     summary_parts.extend(_clean_text(entry.get("label") or "") for entry in scoped_actions[:4])
     scoped_region["summary"] = " | ".join(part for part in summary_parts if part)
     return scoped_region
+
+
+def _scoped_text_section_region(
+    region: Dict[str, Any],
+    scope_rect: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    texts = list(region.get("texts") or [])
+    scoped_texts = [entry for entry in texts if entry.get("scope_relation") == "inside_region"]
+    if scope_rect and not scoped_texts:
+        scoped_texts = [entry for entry in texts if _rects_intersect(entry.get("bbox") or {}, scope_rect)]
+    if not scoped_texts:
+        if any(entry.get("scope_relation") for entry in texts):
+            return None
+        scoped_texts = texts
+
+    scoped_region = dict(region)
+    scoped_region["selected_texts"] = scoped_texts
+    _attach_section_text_evidence(scoped_region, scoped_texts, texts, scope_rect)
+    summary_parts = [_clean_text(scoped_region.get("title") or "")]
+    summary_parts.extend(_clean_text(entry.get("text") or "") for entry in scoped_texts[:4])
+    scoped_region["summary"] = " | ".join(part for part in summary_parts if part)
+    return scoped_region
+
+
+def _attach_section_text_evidence(
+    region: Dict[str, Any],
+    selected_texts: Sequence[Dict[str, Any]],
+    all_texts: Sequence[Dict[str, Any]],
+    scope_rect: Optional[Dict[str, Any]] = None,
+) -> None:
+    inside_headings = [_heading_entry(entry, "inside_heading") for entry in selected_texts if _is_heading_entry(entry)]
+    selected_body_texts = [entry for entry in selected_texts if not _is_heading_entry(entry)]
+    before_headings, after_headings = _partition_context_headings(all_texts, scope_rect)
+
+    region["inside_headings"] = [item for item in inside_headings if item]
+    region["selected_body_texts"] = selected_body_texts
+    region["before_context_headings"] = before_headings
+    region["after_context_headings"] = after_headings
+    region["context_headings"] = before_headings
+
+    if selected_body_texts:
+        anchor = (region["inside_headings"] or before_headings or [{}])[0]
+        if anchor:
+            region["section_anchor"] = {
+                "text": anchor.get("text", ""),
+                "locator": anchor.get("locator") or {},
+                "relation": anchor.get("relation", ""),
+                "text_strategy": "bounded_section_text",
+            }
+
+
+def _partition_context_headings(
+    texts: Sequence[Dict[str, Any]],
+    scope_rect: Optional[Dict[str, Any]] = None,
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    before: List[Dict[str, Any]] = []
+    after: List[Dict[str, Any]] = []
+    for entry in texts:
+        if entry.get("scope_relation") != "ancestor_context" or not _is_heading_entry(entry):
+            continue
+        relation = _heading_relation(entry, scope_rect)
+        record = _heading_entry(entry, relation)
+        if not record:
+            continue
+        if relation == "after_context":
+            after.append(record)
+        else:
+            before.append(record)
+    return before[:3], after[:3]
+
+
+def _heading_relation(entry: Dict[str, Any], scope_rect: Optional[Dict[str, Any]]) -> str:
+    if not scope_rect:
+        return "preceding_heading"
+    bbox = entry.get("bbox") if isinstance(entry.get("bbox"), dict) else {}
+    heading_y = _rect_center_y(bbox)
+    scope_y = _rect_center_y(scope_rect)
+    if heading_y is not None and scope_y is not None and heading_y > scope_y:
+        return "after_context"
+    return "preceding_heading"
+
+
+def _rect_center_y(rect: Dict[str, Any]) -> Optional[float]:
+    try:
+        return float(rect.get("y", 0)) + (float(rect.get("height", 0)) / 2)
+    except Exception:
+        return None
+
+
+def _is_heading_entry(entry: Dict[str, Any]) -> bool:
+    return _normalize_kind(entry.get("semantic_kind")) == "heading"
+
+
+def _heading_entry(entry: Dict[str, Any], relation: str) -> Dict[str, Any]:
+    text = _clean_text(entry.get("text") or "")
+    if not text:
+        return {}
+    record = {
+        "text": text,
+        "locator": entry.get("locator") or {},
+        "relation": relation,
+    }
+    bbox = entry.get("bbox")
+    if isinstance(bbox, dict):
+        record["bbox"] = dict(bbox)
+    return record
+
+
+def _context_heading_entries(texts: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    headings: List[Dict[str, Any]] = []
+    for entry in texts:
+        if entry.get("scope_relation") != "ancestor_context":
+            continue
+        if _normalize_kind(entry.get("semantic_kind")) != "heading":
+            continue
+        text = _clean_text(entry.get("text") or "")
+        if not text:
+            continue
+        headings.append(
+            {
+                "text": text,
+                "locator": entry.get("locator") or {},
+            }
+        )
+    return headings[:3]
 
 
 def _compact_region_scope(region_scope: Dict[str, Any]) -> Dict[str, Any]:
@@ -788,6 +916,7 @@ def _build_region(
         "kind": "text_section",
         "title": title or container.get("name") or "text_section",
         "summary": summary,
+        "texts": _extract_text_entries(nodes),
         "frame_path": frame_path,
         "container_kind": container.get("container_kind", ""),
     }
@@ -1251,9 +1380,11 @@ def _region_evidence(region: Dict[str, Any], *, limit: Optional[int]) -> Dict[st
             "sample_rows": [list(row)[:6] for row in row_items],
         }
 
-    if kind == "action_group":
+    if kind in {"action_group", "text_section"}:
         texts = []
         text_items = list(region.get("selected_texts") or [])
+        if kind == "text_section" and not text_items:
+            text_items = list(region.get("texts") or [])
         if limit is not None:
             text_items = text_items[:limit]
         for item in text_items:
@@ -1263,6 +1394,40 @@ def _region_evidence(region: Dict[str, Any], *, limit: Optional[int]) -> Dict[st
                     "locator": item.get("locator") or {},
                 }
             )
+        inside_headings = _evidence_heading_items(region.get("inside_headings"), limit)
+        selected_body_texts = _evidence_text_items(region.get("selected_body_texts"), limit)
+        context_headings = []
+        heading_items = list(region.get("context_headings") or [])
+        if limit is not None:
+            heading_items = heading_items[:limit]
+        for item in heading_items:
+            context_headings.append(
+                {
+                    "text": item.get("text", ""),
+                    "locator": item.get("locator") or {},
+                }
+            )
+        before_context_headings = _evidence_heading_items(region.get("before_context_headings"), limit)
+        after_context_headings = _evidence_heading_items(region.get("after_context_headings"), limit)
+        section_anchor = _section_anchor_evidence(region.get("section_anchor"))
+        if kind == "text_section":
+            evidence = {}
+            if section_anchor:
+                evidence["section_anchor"] = section_anchor
+            if inside_headings:
+                evidence["inside_headings"] = inside_headings
+            if selected_body_texts:
+                evidence["selected_body_texts"] = selected_body_texts
+            if context_headings:
+                evidence["context_headings"] = context_headings
+            if before_context_headings:
+                evidence["before_context_headings"] = before_context_headings
+            if after_context_headings:
+                evidence["after_context_headings"] = after_context_headings
+            if texts:
+                evidence["texts"] = texts
+            return evidence or {"excerpt": _clean_text(region.get("summary") or "")[:160]}
+
         actions = []
         action_items = list(region.get("actions") or [])
         if limit is not None:
@@ -1275,6 +1440,18 @@ def _region_evidence(region: Dict[str, Any], *, limit: Optional[int]) -> Dict[st
                 }
             )
         evidence = {"actions": actions}
+        if section_anchor:
+            evidence["section_anchor"] = section_anchor
+        if inside_headings:
+            evidence["inside_headings"] = inside_headings
+        if selected_body_texts:
+            evidence["selected_body_texts"] = selected_body_texts
+        if context_headings:
+            evidence["context_headings"] = context_headings
+        if before_context_headings:
+            evidence["before_context_headings"] = before_context_headings
+        if after_context_headings:
+            evidence["after_context_headings"] = after_context_headings
         if texts:
             evidence["texts"] = texts
         return evidence
@@ -1283,6 +1460,42 @@ def _region_evidence(region: Dict[str, Any], *, limit: Optional[int]) -> Dict[st
     if excerpt:
         return {"excerpt": excerpt[:160]}
     return {}
+
+
+def _evidence_text_items(value: Any, limit: Optional[int]) -> List[Dict[str, Any]]:
+    items = [item for item in list(value or []) if isinstance(item, dict)]
+    if limit is not None:
+        items = items[:limit]
+    return [{"text": item.get("text", ""), "locator": item.get("locator") or {}} for item in items]
+
+
+def _evidence_heading_items(value: Any, limit: Optional[int]) -> List[Dict[str, Any]]:
+    headings = []
+    for item in _evidence_text_items(value, limit):
+        original = next((candidate for candidate in list(value or []) if isinstance(candidate, dict) and candidate.get("text") == item["text"]), {})
+        record = dict(item)
+        if isinstance(original.get("bbox"), dict):
+            record["bbox"] = dict(original.get("bbox") or {})
+        if original.get("relation"):
+            record["relation"] = original.get("relation")
+        headings.append(record)
+    return headings
+
+
+def _section_anchor_evidence(value: Any) -> Dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    text = _clean_text(value.get("text") or "")
+    locator = value.get("locator") if isinstance(value.get("locator"), dict) else {}
+    relation = str(value.get("relation") or "").strip()
+    if not text or not locator or relation not in {"inside_heading", "preceding_heading"}:
+        return {}
+    return {
+        "text": text,
+        "locator": locator,
+        "relation": relation,
+        "text_strategy": str(value.get("text_strategy") or "bounded_section_text"),
+    }
 
 
 def _locator_hints(region: Dict[str, Any]) -> List[Dict[str, Any]]:

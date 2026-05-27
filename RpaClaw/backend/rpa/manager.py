@@ -17,6 +17,7 @@ from .manual_recording_models import ManualRecordedAction, ManualRecordingDiagno
 from .manual_recording_normalizer import build_manual_recording_outcome
 from .playwright_security import get_context_kwargs
 from .region_context import RPARegionContext
+from .trace_locator_utils import locator_has_unstable_identity, locator_instability_penalty
 from .trace_models import RPAAcceptedTrace, RPAPageState, RPATraceDiagnostic, RPATraceType, RPARuntimeResults
 from .trace_recorder import infer_dataflow_for_ai_fill, infer_dataflow_for_fill, manual_step_to_trace
 from .harness.capture import HarnessCapturedPageState, HarnessCaptureSessionState
@@ -556,6 +557,9 @@ class RPASessionManager:
         step = self._find_recent_action_step(session_id, tab_id=source_tab_id)
         if not step:
             return
+        session = self.sessions.get(session_id)
+        if not session:
+            return
 
         step.source_tab_id = source_tab_id
         step.target_tab_id = target_tab_id
@@ -568,6 +572,8 @@ class RPASessionManager:
             },
         )
         self._append_step_description(step, " 并在新标签页打开")
+        self._rebuild_manual_recording_state(session)
+        await self._record_manual_trace_for_step(session_id, step)
         await self._broadcast_step(session_id, step)
         logger.debug(f"[RPA] Attached popup signal: source={source_tab_id} target={target_tab_id}")
 
@@ -1106,48 +1112,57 @@ class RPASessionManager:
                             step = {"method": method, "value": cls._playwright_literal_value(match, 1)}
                             break
             else:
-                nth_match = re.match(r'\.nth\((\d+)\)', remaining)
-                if nth_match:
-                    matched_text = nth_match.group(0)
+                filter_match = re.match(rf'\.filter\(has_text={literal}\)', remaining)
+                if filter_match:
+                    matched_text = filter_match.group(0)
                     current = {
-                        "method": "nth",
+                        "method": "filter_has_text",
                         "locator": current,
-                        "index": int(nth_match.group(1)),
+                        "has_text": cls._playwright_literal_value(filter_match, 1),
                     }
                 else:
-                    first_match = re.match(r'\.first(?:\(\))?', remaining)
-                    if first_match:
-                        matched_text = first_match.group(0)
+                    nth_match = re.match(r'\.nth\((\d+)\)', remaining)
+                    if nth_match:
+                        matched_text = nth_match.group(0)
                         current = {
                             "method": "nth",
                             "locator": current,
-                            "index": 0,
+                            "index": int(nth_match.group(1)),
                         }
                     else:
-                        locator_match = re.match(rf'\.locator\({literal}\)', remaining)
-                        if locator_match:
-                            matched_text = locator_match.group(0)
-                            step = {"method": "css", "value": cls._playwright_literal_value(locator_match, 1)}
+                        first_match = re.match(r'\.first(?:\(\))?', remaining)
+                        if first_match:
+                            matched_text = first_match.group(0)
+                            current = {
+                                "method": "nth",
+                                "locator": current,
+                                "index": 0,
+                            }
                         else:
-                            role_match = re.match(
-                                rf'\.get_by_role\({literal}(?:,\s*name={literal}(?:,\s*exact=True)?)?\)',
-                                remaining,
-                            )
-                            if role_match:
-                                matched_text = role_match.group(0)
-                                step = {
-                                    "method": "role",
-                                    "role": cls._playwright_literal_value(role_match, 1),
-                                    "name": cls._playwright_literal_value(role_match, 3),
-                                }
+                            locator_match = re.match(rf'\.locator\({literal}\)', remaining)
+                            if locator_match:
+                                matched_text = locator_match.group(0)
+                                step = {"method": "css", "value": cls._playwright_literal_value(locator_match, 1)}
                             else:
-                                for method, pattern in value_patterns:
-                                    match = re.match(r"\." + pattern, remaining)
-                                    if not match:
-                                        continue
-                                    matched_text = match.group(0)
-                                    step = {"method": method, "value": cls._playwright_literal_value(match, 1)}
-                                    break
+                                role_match = re.match(
+                                    rf'\.get_by_role\({literal}(?:,\s*name={literal}(?:,\s*exact=True)?)?\)',
+                                    remaining,
+                                )
+                                if role_match:
+                                    matched_text = role_match.group(0)
+                                    step = {
+                                        "method": "role",
+                                        "role": cls._playwright_literal_value(role_match, 1),
+                                        "name": cls._playwright_literal_value(role_match, 3),
+                                    }
+                                else:
+                                    for method, pattern in value_patterns:
+                                        match = re.match(r"\." + pattern, remaining)
+                                        if not match:
+                                            continue
+                                        matched_text = match.group(0)
+                                        step = {"method": method, "value": cls._playwright_literal_value(match, 1)}
+                                        break
 
             if not matched_text:
                 return None
@@ -1223,33 +1238,13 @@ class RPASessionManager:
         if not isinstance(resolved_locator, dict):
             return 0.0
 
-        method = str(resolved_locator.get("method") or candidate.get("kind") or "").lower()
-        if method == "nth":
-            return 10000.0
-        if method != "css":
-            return 0.0
-
-        selector = str(
-            resolved_locator.get("value")
-            or candidate.get("selector")
-            or candidate.get("playwright_locator")
-            or ""
+        return locator_instability_penalty(
+            resolved_locator,
+            extra_values=[
+                candidate.get("selector"),
+                candidate.get("playwright_locator"),
+            ],
         )
-        if not selector:
-            return 0.0
-
-        penalty = 0.0
-        if re.search(r"\bdata-v-[0-9a-f]{6,}\b", selector, re.IGNORECASE):
-            penalty += 10000.0
-        if re.search(r"#[A-Za-z_][\w-]*-\d{2,}\b", selector):
-            penalty += 10000.0
-        if selector.count(">") >= 4:
-            penalty += 5000.0
-        if ">> nth=" in selector or ".nth(" in selector:
-            penalty += 5000.0
-        if len(selector) >= 160:
-            penalty += 1000.0
-        return penalty
 
     @classmethod
     def _candidate_is_nth(cls, candidate: Dict[str, Any], locator: Optional[Dict[str, Any]] = None) -> bool:
@@ -1419,6 +1414,8 @@ class RPASessionManager:
 
         selected_candidate = step.locator_candidates[candidate_index]
         locator = self._resolve_candidate_locator(selected_candidate)
+        if locator_has_unstable_identity(locator):
+            raise ValueError("Locator candidate is unstable and cannot be selected")
 
         for index, candidate in enumerate(step.locator_candidates):
             candidate["selected"] = index == candidate_index
@@ -1457,6 +1454,8 @@ class RPASessionManager:
 
         selected_candidate = trace.locator_candidates[candidate_index]
         locator = self._resolve_candidate_locator(selected_candidate)
+        if locator_has_unstable_identity(locator):
+            raise ValueError("Locator candidate is unstable and cannot be selected")
 
         for index, candidate in enumerate(trace.locator_candidates):
             candidate["selected"] = index == candidate_index
@@ -1907,6 +1906,7 @@ class RPASessionManager:
                 break
 
         if step.action == "fill" and step.source == "record":
+            insert_at = self._drop_redundant_pre_fill_focus_click(session, insert_at, step)
             previous_step = session.steps[insert_at - 1] if insert_at > 0 else None
             if self._is_same_fill_target(previous_step, step):
                 self._merge_fill_step(previous_step, step)
@@ -1938,11 +1938,15 @@ class RPASessionManager:
     ) -> RPATraceDiagnostic:
         related_step_id = diagnostic.related_step_id or ""
         page_state = dict(diagnostic.page_state or {})
+        repairable_candidates, rejected_candidates = RPASessionManager._split_repairable_locator_candidates(
+            diagnostic.raw_candidates or []
+        )
         raw = {
             "related_step_id": related_step_id,
             "failure_reason": diagnostic.failure_reason,
             "action": diagnostic.related_action_kind.value,
-            "locator_candidates": list(diagnostic.raw_candidates or []),
+            "locator_candidates": repairable_candidates,
+            "rejected_locator_candidates": rejected_candidates,
             "element_snapshot": dict(diagnostic.element_snapshot or {}),
             "page_state": page_state,
             "url": str(page_state.get("url", "") or ""),
@@ -1954,6 +1958,30 @@ class RPASessionManager:
             message=diagnostic.failure_reason,
             raw=raw,
         )
+
+    @classmethod
+    def _split_repairable_locator_candidates(
+        cls,
+        candidates: List[Dict[str, Any]],
+    ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        repairable: List[Dict[str, Any]] = []
+        rejected: List[Dict[str, Any]] = []
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            copied = dict(candidate)
+            try:
+                locator = cls._resolve_candidate_locator(copied)
+            except ValueError:
+                repairable.append(copied)
+                continue
+            copied["locator"] = locator
+            if locator_has_unstable_identity(locator):
+                copied["rejected_reason"] = "unstable_target_locator"
+                rejected.append(copied)
+            else:
+                repairable.append(copied)
+        return repairable, rejected
 
     @classmethod
     def _sync_manual_trace_diagnostics(cls, session: RPASession) -> None:
@@ -2066,6 +2094,72 @@ class RPASessionManager:
         existing_step.sequence = incoming_step.sequence
         existing_step.event_timestamp_ms = incoming_step.event_timestamp_ms
         existing_step.timestamp = incoming_step.timestamp
+
+    @classmethod
+    def _is_redundant_pre_fill_focus_click(
+        cls,
+        session: RPASession,
+        click_step: Optional[RPAStep],
+        fill_step: RPAStep,
+    ) -> bool:
+        if click_step is None:
+            return False
+        if click_step.action != "click" or fill_step.action != "fill":
+            return False
+        if click_step.source != "record" or fill_step.source != "record":
+            return False
+        if click_step.tab_id != fill_step.tab_id or click_step.frame_path != fill_step.frame_path:
+            return False
+        if not cls._has_manual_trace_diagnostic_for_step(session, click_step.id):
+            return False
+
+        click_sequence = click_step.sequence
+        fill_sequence = fill_step.sequence
+        if click_sequence is not None and fill_sequence is not None:
+            if fill_sequence - click_sequence != 1:
+                return False
+        else:
+            click_ts = cls._step_event_ts_ms(click_step)
+            fill_ts = cls._step_event_ts_ms(fill_step)
+            if fill_ts < click_ts or fill_ts - click_ts > 3000:
+                return False
+
+        snapshot = click_step.element_snapshot if isinstance(click_step.element_snapshot, dict) else {}
+        tag = str(click_step.tag or snapshot.get("tag") or "").strip().lower()
+        role = str(snapshot.get("role") or "").strip().lower()
+        interactive_tags = {"a", "button", "input", "select", "textarea"}
+        interactive_roles = {
+            "button",
+            "link",
+            "checkbox",
+            "radio",
+            "tab",
+            "menuitem",
+            "option",
+            "switch",
+            "combobox",
+        }
+        return tag not in interactive_tags and role not in interactive_roles
+
+    @classmethod
+    def _drop_redundant_pre_fill_focus_click(
+        cls,
+        session: RPASession,
+        insert_at: int,
+        fill_step: RPAStep,
+    ) -> int:
+        previous_index = insert_at - 1
+        if previous_index < 0:
+            return insert_at
+        previous_step = session.steps[previous_index]
+        if not cls._is_redundant_pre_fill_focus_click(session, previous_step, fill_step):
+            return insert_at
+
+        removed_step = session.steps.pop(previous_index)
+        removed_trace_id = f"trace-{removed_step.id}"
+        session.traces = [trace for trace in session.traces if trace.trace_id != removed_trace_id]
+        cls._rebuild_manual_recording_state(session)
+        return previous_index
 
     async def _broadcast_step(self, session_id: str, step: RPAStep):
         if session_id in self.ws_connections:

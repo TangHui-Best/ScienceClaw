@@ -66,11 +66,10 @@ info:
   description: <clear description of what this API endpoint does>
   version: "1.0"
 host: <api_host>
-basePath: <base_path>
 schemes:
   - https
 paths:
-  <url_path>:
+  <captured_endpoint_path>:
     <method>:
       operationId: <snake_case_operation_id>
       summary: <clear description>
@@ -109,7 +108,9 @@ Guidelines:
 - For POST/PUT/PATCH: use a single "body" parameter with a schema object containing all fields
 - Mark parameters as required only if they appear in every sample or seem essential
 - Infer response schema from the captured response bodies
-- host and basePath should be extracted from the URL: "https://api.example.com/v1/users" -> host: api.example.com, basePath: /v1
+- Do NOT output basePath.
+- The paths key MUST be the full captured endpoint path, without scheme, host, or query string.
+- Example: captured URL "https://api.example.com/v1/users?active=true" -> host: api.example.com, paths key: /v1/users.
 - Only return valid YAML, no markdown fences, no extra commentary
 
 DOM Context Guidelines:
@@ -125,6 +126,7 @@ DOM Context Guidelines:
 TOOL_GEN_USER = """\
 Endpoint: {method} {url_pattern}
 Host: {host_info}
+Endpoint path: {endpoint_path}
 Page context: {page_context}
 
 {dom_context_section}
@@ -201,6 +203,18 @@ async def analyze_elements(
         return {"safe": list(range(len(elements))), "skip": []}
 
 
+def _host_and_endpoint_path_for_prompt(url: str) -> tuple[str, str]:
+    """Return host and path-only endpoint context for the tool generation prompt."""
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url or "")
+    host = parsed.hostname or ""
+    if parsed.port and parsed.port not in (80, 443):
+        host = f"{host}:{parsed.port}"
+    endpoint_path = parsed.path or "/"
+    return host, endpoint_path
+
+
 async def generate_tool_definition(
     method: str,
     url_pattern: str,
@@ -211,7 +225,6 @@ async def generate_tool_definition(
     model_config: Optional[Dict] = None,
 ) -> str:
     """Generate an OpenAPI 2.0 tool definition YAML from captured API samples."""
-    from urllib.parse import urlparse
 
     sample_data = []
     for call in samples[:5]:
@@ -232,14 +245,11 @@ async def generate_tool_definition(
 
     # Extract host info from first sample URL
     host_info = ""
+    endpoint_path = url_pattern.split("?", 1)[0] or "/"
     if samples and samples[0].request.url:
-        parsed = urlparse(samples[0].request.url)
-        host = parsed.hostname or ""
-        if parsed.port and parsed.port not in (80, 443):
-            host = f"{host}:{parsed.port}"
-        path_parts = parsed.path.split("/")
-        base_path = "/" + "/".join(path_parts[1:3]) if len(path_parts) > 2 else "/"
-        host_info = f"{host} (basePath: {base_path})"
+        host, sample_endpoint_path = _host_and_endpoint_path_for_prompt(samples[0].request.url)
+        endpoint_path = sample_endpoint_path or endpoint_path
+        host_info = host
 
     dom_context_section = f"DOM context (form structure):\n{dom_context}" if dom_context else ""
     step_context_section = f"Observed context:{step_context}" if step_context else ""
@@ -248,6 +258,7 @@ async def generate_tool_definition(
         method=method,
         url_pattern=url_pattern,
         host_info=host_info,
+        endpoint_path=endpoint_path,
         page_context=page_context or "Unknown page",
         dom_context_section=dom_context_section,
         step_context_section=step_context_section,

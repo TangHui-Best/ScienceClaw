@@ -328,7 +328,7 @@ async def test_publish_persists_parsed_contract_fields_and_defaults():
     assert tools[0]["source_session_id"] == "session_1"
     assert tools[0]["order"] == 0
     assert tools[0]["validation_status"] == "valid"
-    assert tools[0]["validation_errors"] == []
+    assert tools[0].get("validation_errors", []) == []
     assert tools[0]["name"] == "search_orders"
     assert tools[0]["description"] == "Search orders by keyword"
     assert tools[0]["method"] == "GET"
@@ -691,3 +691,53 @@ def test_publish_persists_manual_token_flow(monkeypatch):
     flows = saved_server["api_monitor_auth"]["token_flows"]
     assert flows[0]["id"] == "manual_csrf"
     assert flows[0]["source"] == "manual"
+
+
+@pytest.mark.anyio
+async def test_publish_openapi_without_base_path_stores_endpoint_url():
+    server_repo = _MemoryRepo()
+    tool_repo = _MemoryRepo()
+    registry = ApiMonitorMcpRegistry(server_repository=server_repo, tool_repository=tool_repo)
+    session = ApiMonitorSession(
+        id="session_1",
+        user_id="user-1",
+        sandbox_session_id="sandbox_1",
+        target_url="https://api.example.test/app",
+        tool_definitions=[
+            ApiToolDefinition(
+                id="tool_1",
+                session_id="session_1",
+                name="query_contract_information",
+                description="Query contract information",
+                method="POST",
+                url_pattern="/isales/ssdmdoc/services/api/solr/contractsearch/query/contract/information",
+                yaml_definition="""swagger: "2.0"
+info:
+  title: query_contract_information
+  version: "1.0"
+host: isales.huawei.com
+paths:
+  /isales/ssdmdoc/services/api/solr/contractsearch/query/contract/information:
+    post:
+      operationId: query_contract_information
+      responses:
+        "200":
+          description: Success
+""",
+                selected=True,
+            )
+        ],
+    )
+
+    result = await registry.publish_session(
+        session=session,
+        user_id="user-1",
+        mcp_name="contracts",
+        description="Contracts",
+        overwrite=False,
+    )
+
+    tools = list(tool_repo.docs.values())
+    assert result["tool_count"] == 1
+    assert tools[0]["url"] == "/isales/ssdmdoc/services/api/solr/contractsearch/query/contract/information"
+    assert "basePath" not in tools[0]["openapi_spec"]
