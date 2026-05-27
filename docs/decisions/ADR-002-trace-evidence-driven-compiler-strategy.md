@@ -1,51 +1,53 @@
 ---
-doc_kind: adr
 id: ADR-002
-title: Trace Evidence Drives Compiler Strategy
+doc_kind: adr
 status: accepted
-feature_ids: [F001]
-date: 2026-05-15
+scope: feature
+feature_refs:
+  - docs/features/F001-rpa-trace-source-convergence.md
+decision_area: rpa-compiler
+created: 2026-05-15
+updated: 2026-05-27
 ---
 
-# ADR-002 Trace Evidence Drives Compiler Strategy
+# ADR-002: Trace Evidence Drives Compiler Strategy
 
 ## Context
 
-F001 and ADR-001 make `RPAAcceptedTrace` the single accepted RPA timeline. During trace-source convergence, a GitHub Trending recording exposed a second boundary: unifying the timeline into trace does not mean every trace can be compiled through the same deterministic replay strategy.
-
-The problematic shape is an AI extraction trace with an observed output such as `{"Star count": "48.2k"}` but without structured snapshot field evidence. If the compiler treats that output label as a replay locator, it can generate internal-detail XPath code such as an `aui-form-item` ancestor lookup on a GitHub page. That is a false abstraction: the recorded output is evidence that a value existed, not proof that the replay page has an AUI detail field with that label.
+F001 和 ADR-001 解决的是“accepted timeline 由谁承载”，但这还不够。即使所有事实都进了 trace，compiler 仍然可能因为证据类型判断错误而生成假确定性逻辑。典型例子是 AI 提取 trace 只有 observed output，却没有可靠 snapshot field/anchor evidence；如果此时根据输出字段名去发明 DOM locator，trace-first 只是在更漂亮地复制错误。
 
 ## Decision
 
-`RPAAcceptedTrace` remains the only accepted timeline carrier, but compiler strategy must be selected from evidence profile, not from output shape alone.
+compiler strategy 由 trace 上的证据画像决定，而不是由输出长相、页面样本或站点经验决定。
 
-The compiler may deterministically render snapshot extraction only when `signals.extract_snapshot.fields` contains usable structured field evidence from the recording snapshot. Observed `trace.output` keys are not sufficient to invent field locators.
+优先级如下：
 
-Compiler strategy should follow this priority:
+1. navigation / popup / download 等副作用证据；
+2. 可靠的 structured snapshot evidence；
+3. 运行时语义证据，必要时保留 runtime AI；
+4. 有边界的 embedded AI code evidence；
+5. dataflow evidence；
+6. output-only evidence 永远不能单独发明确定性 DOM 提取逻辑。
 
-1. Navigation side-effect evidence: render `expect_navigation`, `wait_for_url`, or tab handling from trace signals/actions.
-2. Structured snapshot evidence: render deterministic field extraction only from explicit `extract_snapshot.fields`.
-3. Runtime semantic evidence: preserve runtime AI when replay requires semantic judgment or when deterministic evidence is missing.
-4. Embedded AI code evidence: preserve bounded recording-time AI code when it is the best available replay body and can be safely generalized.
-5. Dataflow evidence: prefer `_results` / `output_key` references over observed literals.
-6. Output-only evidence: never invent DOM extraction from output keys alone.
+换句话说，trace 是唯一载体，但不是“只要进了 trace，什么都能确定性编译”。
 
-## Rejected Options
+## Alternatives
 
-- Add a GitHub-specific `star_count` compiler rule. Rejected because GitHub is a validation sample, not an architecture source.
-- Compile all AI extraction traces through runtime AI. Rejected because it discards valid structured snapshot evidence and weakens trace-first replay.
-- Treat `trace.output` labels as fallback field locators. Rejected because it turns observed values into replay logic and can generate false DOM assumptions.
-- Remove source/signals/AI execution metadata now that trace is the only timeline. Rejected because trace is the carrier, while these fields are the evidence needed to choose a safe compiler strategy.
+- 为 GitHub、Jalor 等样本加站点规则：放弃。验证案例不能反向塑造架构。
+- 所有 AI 提取都回退 runtime AI：放弃。会丢掉真实存在的结构化 snapshot 证据。
+- 把 `trace.output` label 当作 field locator fallback：放弃。observed value 是 evidence，不是 replay logic。
 
 ## Consequences
 
-- Existing tests that expected output-label fallback snapshot extraction must be updated; that behavior is no longer valid for the generic compiler.
-- Structured AUI/detail extraction remains supported when the trace contains explicit structured field evidence.
-- Weak extraction traces may replay through runtime AI instead of deterministic code until the recorder captures stronger snapshot facts.
-- Final F001 readiness must include golden tests for both positive structured snapshot extraction and negative output-only extraction.
+- compiler、repair 和 selected-region follow-up 都必须持续区分“结构化字段”“自由文本”“section anchor”“action side effect”“弱输出证据”。
+- 后续 patch 不应通过扩大关键词、模板或经验 selector 库来掩盖证据缺口，而应回到证据分类边界本身。
+- 验证要覆盖正反两类案例：有强证据时能稳定确定性编译，无强证据时能诚实回退 runtime AI。
 
-## Links
+## Evidence
 
 - Feature: `docs/features/F001-rpa-trace-source-convergence.md`
+- Feature: `docs/features/F011-rpa-region-scoped-snapshot.md`
 - Evidence: `docs/evidence/EV-001-rpa-trace-source-convergence.md`
+- Evidence: `docs/evidence/EV-011-rpa-region-scoped-snapshot.md`
 - Generalization notes: `docs/rpa/trace-skill-compiler-generalization.md`
+- Legacy design: `docs/superpowers/specs/2026-05-26-rpa-selected-region-text-extract-design.md`

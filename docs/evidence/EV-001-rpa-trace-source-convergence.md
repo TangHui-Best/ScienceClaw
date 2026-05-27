@@ -3,9 +3,11 @@ doc_kind: evidence
 id: EV-001
 title: RPA Trace Source Convergence Evidence
 status: active
-feature_ids: [F001]
+scope: feature
+feature_refs:
+  - docs/features/F001-rpa-trace-source-convergence.md
 created: 2026-05-13
-updated: 2026-05-26
+updated: 2026-05-27
 evidence_level: exhaustive
 ---
 
@@ -14,6 +16,49 @@ evidence_level: exhaustive
 ## Scope
 
 Evidence for F001: remove `step` / `recorded_actions` / `recording_diagnostics` / `legacy_steps` as RPA business facts and make trace the sole accepted timeline across backend, frontend, generate/test/save, and MCP/export.
+
+## Commands
+
+```text
+python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root . --docs-path docs --strict
+$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_manual_recording_normalizer.py -q
+$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_manager.py -q
+$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q
+```
+
+更早阶段的 focused commands、RED/GREEN 过程和 reviewer evidence 继续保留在下方详细记录中。
+
+## Results
+
+Partial。F001 的历史 task bundles 与 7M/7N follow-up patches 都已有本地验证和 commit 归因，但该 Feature 作为整体仍处于 active：
+
+- `6b473f0`, `cf53c19`, `18d529d`, `33b494e`：random-like testid / semantic locator hardening，本地结果见下文 Task 7M。
+- `2c8ec5f`, `77d7f59`, `909b11f`, `c1628c9`, `8373def`：iframe frame-context、popup trace sync、`filter_has_text` repair hardening，本地结果见下文 Task 7N。
+- 本次文档迁移前，strict validator 为 `29 errors, 4 warnings`；迁移后的最终结果记录在下方 `## Harness Validation`。
+- 最新远端 CI / PR 结果未在本次 closeout 中重新观察，因此不能把 F001 写成 completed/Done。
+
+## Harness Validation
+
+```text
+python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root . --docs-path docs --strict
+```
+
+Result: `Scanned 151 markdown file(s). Checked 6 knowledge artifact(s). Errors: 0. Warnings: 0.`
+
+## Artifacts
+
+- Feature: `docs/features/F001-rpa-trace-source-convergence.md`
+- ADR: `docs/decisions/ADR-001-rpa-trace-is-single-accepted-timeline.md`
+- ADR: `docs/decisions/ADR-002-trace-evidence-driven-compiler-strategy.md`
+- Legacy spec: `docs/superpowers/specs/2026-04-28-rpa-trace-first-full-migration-design.md`
+- Legacy plan: `docs/superpowers/plans/2026-04-28-rpa-trace-first-full-migration.md`
+- Legacy plan: `docs/superpowers/plans/2026-05-16-rpa-trace-source-final-convergence.md`
+- Legacy spec: `docs/superpowers/specs/2026-05-12-rpa-sso-redirect-chain-compile-design.md`
+- Patch chain commits: `6b473f0`, `cf53c19`, `18d529d`, `33b494e`, `2c8ec5f`, `77d7f59`, `909b11f`, `c1628c9`, `8373def`
+
+## Notes
+
+下方详细记录保留原始 task/stage 粒度，用于回溯谁在什么证据前提下做了哪一类收敛。阅读时应以本页顶部的 current status 和 `F001` patch table 为索引，而不是把早期局部 closeout 误读成整个 Feature 已完成。
 
 ## Entry Gate
 
@@ -892,16 +937,17 @@ Manual smoke:
     - `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_manager.py -q` -> `95 passed`.
     - `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q` -> `99 passed`.
 
-## Current Evidence
+## Current Evidence Snapshot
 
-2026-05-17:
+2026-05-27:
 
-- PR #53 review fixes are implemented on `codex/rpa-trace-source-to-master`.
-- Latest backend trace convergence evidence: `286 passed, 183 warnings`.
-- `scripts/knowledge_check.py` and `scripts/harness_closeout_check.py` are not present in this repository, so Harness artifact validation is currently manual.
+- F001 当前有效的 patch chain 是 Task 7M 与 Task 7N，相关提交为 `6b473f0`, `cf53c19`, `18d529d`, `33b494e`, `2c8ec5f`, `77d7f59`, `909b11f`, `c1628c9`, `8373def`。
+- 本地 focused/file-level verification 已在下方详细记录；这些结果仍可支撑“补丁已落地”的结论。
+- 本次迁移已恢复 Harness validator 可执行性，并会在 `## Harness Validation` 记录 strict 结果。
+- 最新远端 CI / review evidence 仍待人工观察并回写，因此 Feature 层面保持 active。
 
 ## Closeout
 
-Closeout verdict: conditional for the PR #53 review-fix patch; broader F001 remains active until any remaining trace-source follow-ups are explicitly accepted or split out.
+Closeout verdict: conditional.
 
-Completion claim allowed: yes for the 2026-05-17 review-fix patch only.
+Completion claim allowed: no for whole-feature closeout in this migration pass. Historical task bundles below may individually be closed, but `F001` as a whole remains active until the latest remote CI / PR evidence and full-chain smoke are observed.
