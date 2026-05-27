@@ -412,6 +412,50 @@ REGION_COLLECTOR_JS = """
 }
 """
 
+ELEMENT_BOUNDS_COLLECTOR_JS = """
+(point) => {
+  const normalizeText = (value, max = 120) => {
+    if (!value) return "";
+    return String(value).replace(/\\s+/g, " ").trim().slice(0, max);
+  };
+
+  const element = document.elementFromPoint(point.x, point.y);
+  if (!element) {
+    return { rect: null, warnings: ["No element at point"] };
+  }
+
+  const rect = element.getBoundingClientRect();
+  if (!rect || rect.width <= 0 || rect.height <= 0) {
+    return { rect: null, warnings: ["Element has no visible bounds"] };
+  }
+
+  const tag = String(element.tagName || "").toLowerCase();
+  const role = element.getAttribute("role") || "";
+  const name = normalizeText(
+    element.getAttribute("aria-label")
+      || element.getAttribute("title")
+      || element.getAttribute("placeholder")
+      || element.getAttribute("alt")
+      || element.textContent
+      || ""
+  );
+
+  return {
+    rect: {
+      x: rect.x,
+      y: rect.y,
+      width: rect.width,
+      height: rect.height
+    },
+    tag,
+    role,
+    name,
+    text: normalizeText(element.textContent || ""),
+    warnings: []
+  };
+}
+"""
+
 
 class RPARegionRect(BaseModel):
     x: float
@@ -439,10 +483,30 @@ class RPARegionViewport(BaseModel):
         return value
 
 
+class RPARegionPoint(BaseModel):
+    x: float
+    y: float
+
+
 class RPARegionAnalyzeRequest(BaseModel):
     tab_id: str
     rect: RPARegionRect
     viewport: RPARegionViewport
+
+
+class RPARegionElementBoundsRequest(BaseModel):
+    tab_id: str
+    point: RPARegionPoint
+    viewport: RPARegionViewport
+
+
+class RPARegionElementBoundsResponse(BaseModel):
+    rect: Optional[Dict[str, float]] = None
+    tag: str = ""
+    role: str = ""
+    name: str = ""
+    text: str = ""
+    warnings: List[str] = Field(default_factory=list)
 
 
 class RPARegionEvidence(BaseModel):
@@ -836,6 +900,28 @@ async def _safe_title(page: Any) -> str:
         return ""
 
 
+def _normalize_element_bounds(raw: Dict[str, Any]) -> RPARegionElementBoundsResponse:
+    warnings = raw.get("warnings") if isinstance(raw.get("warnings"), list) else []
+    rect = raw.get("rect")
+    normalized_rect: Optional[Dict[str, float]] = None
+    if isinstance(rect, dict):
+        candidate = _rect_dict(rect)
+        if candidate["width"] > 0 and candidate["height"] > 0:
+            normalized_rect = candidate
+
+    if normalized_rect is None and not warnings:
+        warnings = ["No element bounds resolved"]
+
+    return RPARegionElementBoundsResponse(
+        rect=normalized_rect,
+        tag=str(raw.get("tag") or ""),
+        role=str(raw.get("role") or ""),
+        name=str(raw.get("name") or ""),
+        text=str(raw.get("text") or ""),
+        warnings=[str(item) for item in warnings],
+    )
+
+
 def _normalize_evidence(raw: Dict[str, Any], *, page: Any, rect: Dict[str, float], frame_path: List[str], warnings: List[str]) -> Dict[str, Any]:
     evidence = dict(raw or {})
     collector_warnings = evidence.get("warnings")
@@ -857,6 +943,20 @@ def _normalize_evidence(raw: Dict[str, Any], *, page: Any, rect: Dict[str, float
     evidence["warnings"] = warnings
     evidence["inferred_kind"] = classify_region_evidence(evidence)
     return evidence
+
+
+async def resolve_element_bounds_on_page(
+    page: Any,
+    request: RPARegionElementBoundsRequest,
+) -> RPARegionElementBoundsResponse:
+    point = {
+        "x": float(request.point.x),
+        "y": float(request.point.y),
+    }
+    raw = await page.evaluate(ELEMENT_BOUNDS_COLLECTOR_JS, point)
+    if not isinstance(raw, dict):
+        raw = {"warnings": ["Element bounds collector returned no data"]}
+    return _normalize_element_bounds(raw)
 
 
 async def analyze_region_on_page(page: Any, request: RPARegionAnalyzeRequest) -> Dict[str, Any]:
