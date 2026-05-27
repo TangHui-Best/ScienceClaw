@@ -57,6 +57,7 @@ import {
   shouldShowScreencastReconnectNotice,
 } from '@/utils/screencastReconnect';
 import { shouldForwardScreencastKeyboardEvent } from '@/utils/screencastInput';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
 const router = useRouter();
 const { t } = useI18n();
@@ -1123,6 +1124,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <TooltipProvider :delay-duration="200">
   <div class="api-monitor-page flex h-full w-full flex-col overflow-hidden bg-[#f5f7fb] text-[var(--text-primary)] dark:bg-[#101115] api-monitor-teal">
     <header class="relative flex-shrink-0">
       <!-- Background gradient matching ToolsPage -->
@@ -1418,9 +1420,14 @@ onBeforeUnmount(() => {
                     <span class="text-[10px] font-bold px-2 py-0.5 rounded-md shrink-0" :class="getMethodClass(candidate.method)">
                       {{ candidate.method }}
                     </span>
-                    <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--text-primary)]">
-                      {{ candidate.url_pattern }}
-                    </span>
+                    <Tooltip>
+                      <TooltipTrigger as-child>
+                        <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--text-primary)] cursor-default">
+                          {{ candidate.url_pattern }}
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" :side-offset="4">{{ candidate.url_pattern }}</TooltipContent>
+                    </Tooltip>
                     <span class="shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-bold" :class="getCandidateStatusClass(candidate.status)">
                       {{ getCandidateStatusLabel(candidate.status) }}
                     </span>
@@ -1489,9 +1496,14 @@ onBeforeUnmount(() => {
                       <span class="text-[10px] font-bold px-2 py-0.5 rounded-md" :class="getMethodClass(candidate.method)">
                         {{ candidate.method }}
                       </span>
-                      <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--text-primary)]">
-                        {{ candidate.url_pattern }}
-                      </span>
+                      <Tooltip>
+                        <TooltipTrigger as-child>
+                          <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--text-primary)] cursor-default">
+                            {{ candidate.url_pattern }}
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" :side-offset="4">{{ candidate.url_pattern }}</TooltipContent>
+                      </Tooltip>
                       <span class="shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-bold" :class="getCandidateStatusClass(candidate.status)">
                         {{ getCandidateStatusLabel(candidate.status) }}
                       </span>
@@ -1539,7 +1551,12 @@ onBeforeUnmount(() => {
                     <span class="text-[10px] font-bold px-2 py-0.5 rounded-md" :class="getMethodClass(tool.method)">
                       {{ tool.method }}
                     </span>
-                    <span class="text-[11px] font-mono text-[var(--text-primary)] flex-1 truncate">{{ tool.url_pattern }}</span>
+                    <Tooltip>
+                      <TooltipTrigger as-child>
+                        <span class="text-[11px] font-mono text-[var(--text-primary)] flex-1 truncate cursor-default">{{ tool.url_pattern }}</span>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" :side-offset="4">{{ tool.url_pattern }}</TooltipContent>
+                    </Tooltip>
                     <span class="shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-bold" :class="getConfidenceClass(tool.confidence)">
                       {{ getConfidenceLabelWithScore(tool.confidence, tool.score) }}
                     </span>
@@ -1816,4 +1833,5 @@ onBeforeUnmount(() => {
       </div>
     </div>
   </div>
+  </TooltipProvider>
 </template>
