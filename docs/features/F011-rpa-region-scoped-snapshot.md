@@ -1,93 +1,83 @@
 ---
-doc_kind: feature
 id: F011
-title: RPA Region-Scoped Snapshot
-status: ready_for_review
-feature_ids: [F011]
+doc_kind: feature
+status: active
 created: 2026-05-19
-updated: 2026-05-25
-specs:
-  - docs/superpowers/specs/2026-05-19-rpa-region-scoped-snapshot-design.md
-plans:
-  - docs/superpowers/plans/2026-05-19-rpa-region-scoped-snapshot.md
-decisions: []
-evidence:
-  - docs/evidence/EV-011-rpa-region-scoped-snapshot.md
+updated: 2026-05-27
 ---
 
-# F011 RPA Region-Scoped Snapshot
+# F011: RPA Region-Scoped Snapshot
 
 ## Goal
 
-让页面区域选择进入 RPA 录制的 snapshot 采集与压缩链路。用户框选区域后，下一条自然语言指令使用 `region_scoped_snapshot`，使选区内 DOM evidence 优先成为任务候选，选区外 DOM 只保留最小页面身份与恢复上下文。
+让页面区域选择真正进入 RPA 录制的 snapshot 采集、压缩、accepted trace 和编译链路。用户框选区域后，后续自然语言指令应优先消费 `region_scoped_snapshot` 的选区证据，而不是退回整页候选竞争、录制期现场文本硬编码，或站点特例规则。
 
 ## Vision Anchor
 
-当页面元素过多导致自然语言录制指令执行不准确时，用户可以框选一个页面区域，让下一条指令使用 region-scoped snapshot：选区内 DOM evidence 优先采集和压缩，选区外 DOM 不参与任务候选竞争，只保留页面身份、父级定位、frame/dialog/heading 等最小恢复上下文。
-
-## User Problem
-
-当前 RPA 录制执行失败的主要原因之一不是 planner 完全不理解指令，而是目标 DOM 在 raw snapshot 采集上限、compact snapshot 过滤、region tiering 或上下文预算分配中被挤掉。旧的选区方案如果只把 `region_context` 作为 planner 旁路提示，无法从根上解决 DOM 压缩和候选竞争问题。
-
-## Desired Outcome
-
-- 选区默认只作用于下一条自然语言指令。
-- 选区进入 snapshot 采集与压缩链路，而不是成为并行执行策略。
-- planner 接收统一的 `region_scoped_snapshot`，选区内 evidence 是任务候选，选区外只作为上下文。
-- accepted trace 保留 scope evidence，但 replay 不依赖坐标。
-- 失败诊断可以区分采集失败、压缩失败、planner 误判和执行/locator 问题。
+- 原始目标：解决“目标信息明明在页面上，但在 raw/compact snapshot 与编译链路中被挤掉或误分类”的问题。
+- 用户/工程痛点：如果 `region_context` 只是 planner 的旁路提示，而不是主链路证据，那么压缩、accepted trace 和 compiler 仍会在后续环节重新走偏。
+- 期望结果：capture、compression、runtime planner、accepted trace 和 compiler 都理解 `region_scoped_snapshot`，并且能稳定区分结构化字段、单值文本、锚点区域内容、action/download side effect。
+- 非目标：不引入站点模板，不让 compiler 靠 selector 经验猜语义，不把录制期 observed value 当 replay 逻辑。
+- Exit Gate 对照来源：`docs/evidence/EV-011-rpa-region-scoped-snapshot.md`、`docs/decisions/ADR-001-rpa-trace-is-single-accepted-timeline.md`、`docs/decisions/ADR-002-trace-evidence-driven-compiler-strategy.md`。
 
 ## Current Status
 
-Ready for review after PR #55 follow-up. RegionScope conversion, region-prioritized raw snapshot capture, scoped compression, RecordingRuntimeAgent planner wiring, and trace scope evidence are implemented. The review blockers are resolved: compiled replay no longer injects recorded `region_context`, geometry fallback is frame-safe, `region_scoped_snapshot` enforces budget trimming above the minimum identity payload, and empty extract values are valid by default unless explicitly required/non-empty. Backend F011 verification passes in the shared Python 3.12 environment.
+Active。PR #55 已把核心 `region_scoped_snapshot` 能力合入主线，但该 Feature 后续持续暴露出一条 hardening 链：
+
+1. 选区自由文本提取会把 observed text 或不稳定 anchor 编进 replay。
+2. `heading_scoped_text`、`selected_region_text_extract`、`extract_snapshot` 等路径没有共享统一的 replay-safe 边界。
+3. “读取框选文本本身”和“以框选标题为锚点读取该区域内容”两类提取语义仍会互相抢占，导致修标题影响批量/区域提取，修区域提取又把标题路径拖回 `get_by_text(observed_text)`。
+
+当前结论是：这不是新 Feature，而是 F011 的后续 hardening。应继续在 F011 下收敛证据与边界，而不是把同一条区域选择能力链切成多份平行记忆。
 
 ## Links
 
-- Spec: `docs/superpowers/specs/2026-05-19-rpa-region-scoped-snapshot-design.md`
-- Related architecture: `docs/decisions/ADR-001-rpa-trace-is-single-accepted-timeline.md`
-- Related compiler boundary: `docs/decisions/ADR-002-trace-evidence-driven-compiler-strategy.md`
-
-## Non-goals
-
-- 不做持续作用域。
-- 不以截图/VLM 或坐标点击作为主路径。
-- 不新增站点规则、经验 selector 库或 contract-first 录制层。
-- 不把 `region_context.py` 扩张成第二套 snapshot/compression/compiler 系统。
+- Evidence: [EV-011 RPA Region-Scoped Snapshot Evidence](../evidence/EV-011-rpa-region-scoped-snapshot.md)
+- Related ADR: [ADR-001 RPA Trace Is The Single Accepted Timeline](../decisions/ADR-001-rpa-trace-is-single-accepted-timeline.md)
+- Related ADR: [ADR-002 Trace Evidence Drives Compiler Strategy](../decisions/ADR-002-trace-evidence-driven-compiler-strategy.md)
+- Legacy spec: `docs/superpowers/specs/2026-05-19-rpa-region-scoped-snapshot-design.md`
+- Legacy plan: `docs/superpowers/plans/2026-05-19-rpa-region-scoped-snapshot.md`
+- Legacy design: `docs/superpowers/specs/2026-05-26-rpa-selected-region-text-extract-design.md`
+- Legacy design scratch: `docs/superpowers/specs/2026-05-27-rpa-selected-region-extract-splitting-design.md`
 
 ## Acceptance Criteria
 
-- `docs/superpowers/specs/2026-05-19-rpa-region-scoped-snapshot-design.md` 被实现计划引用。
-- 实现前创建或更新实施计划，并明确 capture、compression、runtime、frontend、trace/evidence 的切片。
-- 实现后 Evidence 记录 targeted backend tests、frontend tests/type-check、以及至少一个 region-scoped debug artifact 示例。
+- [x] 选区进入 raw snapshot、compact compression 和 accepted trace 主链路，而不是仅作为 planner 提示。
+- [x] 结构化字段、表格、列表、单值区域、action/download side effect 已有各自明确证据路径。
+- [x] replay 不再依赖坐标点选，而是依赖 accepted trace 中保留下来的结构证据。
+- [x] PR #55 review blockers 已通过 compiler/compression/runtime 边界修复并记录在 `EV-011`。
+- [x] selected-region extract 需要显式分层为两类稳定语义：`single_value_extract` 与 `anchored_region_extract`。
+- [x] `selected_region_text_extract`、`heading_scoped_text`、`extract_snapshot` 相关路径需要共享“observed value 不得进入 replay 逻辑”的统一 guard。
+- [ ] `/section-texts` 手动 fixture 还需要转成可复现 eval 或录制/编译 artifact，作为 selected-region extract splitting 的正式收口证据。
+- [ ] 当前分支最近一次 GitHub Actions / review 结果尚未写回 `EV-011`。
 
 ## Patch History
 
-- 2026-05-19: Implemented RegionScope conversion, scoped raw snapshot capture, `region_scoped_snapshot` compression, RecordingRuntimeAgent wiring, trace scope evidence, and focused backend regression coverage. Full readiness remains blocked by local verification dependencies documented in EV-011.
-- 2026-05-19: Added generic planner failure debug dumps for initial/repair planner contract failures so invalid JSON/code responses persist with compact snapshot summary, raw-vs-compact presence comparison, and LLM call summary. Independent review requested repair-path coverage; direct initial and repair tests now cover the artifact path. This is diagnostic-only and does not change planner, prompt, selector, UI, or replay behavior.
-- 2026-05-19: Fixed region-scoped action-group compression after manual validation showed selected standalone text (`1,027 stars today`) was present in raw snapshot but missing from compact expanded evidence, while an outside same-card action (`star 37,451`) remained available as a candidate. Scoped action groups now preserve selected text evidence and filter outside actions from expanded candidates.
-- 2026-05-19: Fixed planner contract handling after manual validation showed raw and compact region-scoped snapshots both contained the selected repository star text (`3,184 stars today`), but the planner returned a valid JSON plan whose `code` field was top-level Playwright Python lacking `async def run(page, results)`. The runtime now narrowly wraps top-level `run_python` code only when it references recording runtime context (`page`, `await`, or `results`), leaving non-runtime or invalid code as planner contract failures.
-- 2026-05-20: PR #55 blocking review follow-up opened. Accepted review findings: compiled replay must not inject recorded `region_context`; geometry fallback must respect `frame_path`; `region_scoped_snapshot` must enforce `char_budget` while keeping identity and selected evidence; extract-snapshot empty values must be diagnostics by default, failing only for explicit required/non-empty contracts.
-- 2026-05-20: PR #55 follow-up fixed and re-verified. Compiler/replay now treats selected-region local text as snapshot field evidence when fields exist and as plain runtime semantic replay without recorded region context otherwise; scoped geometry fallback rejects same-coordinate regions in other iframes; scoped compression trims low-priority context under budget; extract_snapshot no longer treats empty outputs as failure unless a field is required or non-empty output is explicit.
-- 2026-05-22: Manual validation follow-up fixed for selected GitHub repository About text. Raw and compact `region_scoped_snapshot` already contained the selected free text, but the planner produced successful `run_python` code that located by the exact observed text, so the compiler embedded recording-time content into replay. Compiler replay now treats region-backed free-text extraction without structured snapshot fields as runtime semantic replay, while preserving structured table/list/single-value region compilation and action evidence paths. Runtime planner guidance now names `region_scoped_snapshot` and forbids exact observed selected text as replay selector logic.
-- 2026-05-22: Added a narrower deterministic compile path for heading-scoped selected text. `region_scoped_snapshot` now preserves ancestor heading evidence for selected text regions; `RecordingRuntimeAgent` records a `region_text_extract` signal only when the compact snapshot has both context heading evidence and selected text evidence; `TraceSkillCompiler` compiles that signal to a same-sibling text-block extraction (`following_sibling_block`) instead of replaying runtime AI. This remains a generic section-text contract, not a GitHub About template, and still falls back to runtime AI when the accepted trace lacks the heading-scoped evidence.
-- 2026-05-23: Fixed the section-text contract after manual validation generated a deterministic script anchored on `Topics` and returned an empty About result. The root cause was that selected in-region headings were emitted as generic text while nearby/downstream headings were emitted as `context_headings`, and the accepted trace promoted `context_headings[0]` into replay anchor evidence. Scoped compression now separates `inside_headings`, `selected_body_texts`, `before_context_headings`, `after_context_headings`, and an explicit `section_anchor`. Accepted traces only create `region_text_extract` from `section_anchor` with `inside_heading` or `preceding_heading` relation, and the compiler only scripts `bounded_section_text`; after-context headings fall back to runtime AI.
-- 2026-05-24: Added backend evidence hardening for region-scoped free-text extraction. The current `runtime_ai_missing_anchor` fallback direction is accepted because replay must not hard-code recording-time selected text when no reusable section/container anchor exists. Do not narrow `_looks_like_extract_instruction()` markers such as `获取` / `读取` / `get` / `read` yet; the stronger preconditions already limit this path to region-scoped, non-action, non-table/list/single-value traces without snapshot fields and with extract intent. Backend compiler tests now prove the compile classification boundary; runner-backed eval or manual recording/compile artifacts remain pending.
-- 2026-05-25: Fixed a region-action compile regression where an AI click on the first export-table file name carried `table_region` evidence and `output_key`, then replay compiled it as deterministic table extraction instead of preserving the click/download side effect. Compiler strategy now treats runtime AI semantic-preserve signals first, then action/download/navigation side-effect evidence before deterministic region table/list extraction. Selected row/list JavaScript generation was also rewritten to block arrow functions to avoid the invalid `;}})()` template.
+| Patch | Date | Commit | Symptom | Root Cause | Protection | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| F011.1 | 2026-05-20 | `6cb4b29` | planner contract 失败时证据不足，难以判断是 snapshot miss 还是 planner 输出异常。 | debug artifact 只保留快照，不保留无效 planner 输出和调用摘要。 | `EV-011` 中 planner failure artifact focused tests。 | landed |
+| F011.2 | 2026-05-20 | `4a1adf2` | 选区内 standalone text 在 compact evidence 中丢失，而同卡片外部 action 仍参与候选竞争。 | scoped compression 对 action-group 文本和 outside action 的边界过宽。 | `EV-011` 中 scoped compression focused regressions。 | landed |
+| F011.3 | 2026-05-20 | `5ea9aa7` | planner 返回顶层 Playwright Python 时，runtime 把可执行代码误判成 contract failure。 | planner contract 过早要求固定 wrapper，而不是先识别 runtime-context code。 | `EV-011` 中 planner wrapper RED/GREEN tests。 | landed |
+| F011.4 | 2026-05-20 | `699b088` | PR #55 review blockers 暴露 recorded `region_context` 泄漏到 replay、geometry fallback 跨 iframe、budget trimming 过宽、空提取被误判失败。 | capture/compression/compiler/runtime 的证据边界过松，没有把“局部上下文”与“主路径 replay 逻辑”拆开。 | `EV-011` 中 PR #55 impacted backend subset 与 review follow-up tests。 | merged |
+| F011.5 | 2026-05-24 至 2026-05-27 | `a27bb41`, `4a2fe58`, `7c1e273`, `04b8fac`, `8e1d1ad`, `f3a6c59` | selected-region 自由文本提取会把 observed text 或不稳定 section anchor 编进 replay，或缺少可复现分类证据。 | text-region extraction 缺少稳定单值边界、显式 anchor 合同和对应 evidence 沉淀。 | `EV-011` 中 bounded section / classification / stable single-value focused tests 与 fixture evidence。 | active |
+| F011.6 | 2026-05-25 | `0a2abc3` | 带 `table_region` 的 action/download trace 被错误编译成确定性表格提取。 | compiler 让区域结构证据抢占了 action/download side-effect 证据。 | `EV-011` 中 export-table action/download compiler regressions。 | active |
+| F011.7 | 2026-05-27 | pending commit | 修标题单值提取会伤区域/批量内容提取，修区域内容提取又会把标题路径拖回 `get_by_text(observed_text)`。 | “读取框选值本身”与“以框选标题为锚点读取该区域内容”共享 producer / compiler 分支，且 `heading_scoped_text`、`selected_region_text_extract`、`extract_snapshot` 没有统一 replay-safe gate。 | `EV-011` 中 selected-region extract splitting harness、shared anti-hardcode guard、single-value vs anchored-region regression matrix；本地 RED/GREEN 覆盖 `heading_scoped_text` observed value、dynamic id、structural header 三类绕行。 | locally verified |
 
 ## Patch Churn Review
 
-2026-05-19: F011 已出现多次手动验证后补丁，按 Harness 归零审视要求重新检查失败轨迹。前两类失败分别暴露了诊断证据不足、选区内 standalone text 未进入 compact candidate；这些修复都移动到诊断/压缩边界，而不是新增站点规则。最新失败的诊断显示 raw snapshot 与 compact `region_scoped_snapshot` 都已经包含目标 star 文本，因此不应继续修改 snapshot compression、prompt 或 selector。当前修复上移到 planner JSON contract 边界：对缺少 runner wrapper 但引用 `page`/`await`/`results` 的 top-level runtime code 做窄包装，使其进入真实执行/repair；非 runtime Python-like 片段仍保持 contract failure。独立 Vision Gate / Patch Churn reviewer 结论为 pass，建议已落实为窄判定测试。无需 ADR；复发保护由 RED/GREEN regression tests 与 EV-011 证据承担。
+F011 的 patch churn 说明真正脆弱的不是“有没有 region selection”，而是“选区证据在 capture -> compression -> accepted trace -> compiler 之间有没有被正确分类”。当前更进一步的结论是：**还必须把 selected-region extract 明确拆成两种语义能力**：
 
-2026-05-22: The GitHub About follow-up was split into two layers after comparing raw/compact evidence. First, region-backed free-text extraction without structured evidence must not embed selected observed text in replay, so it stays runtime semantic. Second, if compact snapshot already carries a reusable ancestor heading and selected text evidence, the accepted trace can record a narrow `heading_scoped_text` contract and the compiler can emit deterministic section-text extraction. Independent review flagged global `following::*` as too broad; the final compile strategy is explicitly `following_sibling_block`, which avoids crossing unrelated document regions while keeping the MVP independent from GitHub-specific selectors. Stronger container-bounded section extraction remains a possible follow-up when capture can provide stable container locators.
+- `single_value_extract`：读取框选文本本身
+- `anchored_region_extract`：以框选标题为锚点读取该区域内容
 
-2026-05-23: The next manual validation exposed that `following_sibling_block` was still too optimistic because the accepted trace had no proof that the chosen heading was the selected text's section anchor. The fix moved the invariant upstream: deterministic compile is now gated by an explicit `section_anchor` relation, not by arbitrary `context_headings`. This reduces patch churn by making downstream compiler behavior depend on a durable evidence contract. GitHub-specific selectors remain rejected; if the capture/compression layer cannot prove a valid section anchor, replay uses runtime AI instead of compiling a fragile empty-result script.
-
-2026-05-25: The export-table replay failure is another instance of the same boundary class, but the fix stays at the compiler evidence gate instead of adding a Jalor/exportQuery rule. `region_context` remains supporting page evidence; it cannot override trace side-effect evidence. Deterministic table/list region compilation is still allowed for extraction-shaped traces, while action/download traces preserve embedded AI replay and existing export-task download polling. Recurrence protection is the RED/GREEN compiler tests for both with-download and no-download table-region actions plus selected-index JavaScript shape checks; no ADR is needed because this reinforces ADR-002 rather than changing it.
+如果这两类能力继续共享脆弱分支，就会反复出现双向回归。后续 hardening 应围绕“语义分层 + 共享 anti-hardcode guard”推进，而不是继续给单条分支补站点经验规则。
 
 ## Evidence
 
-- [EV-011 RPA Region-Scoped Snapshot Evidence](../evidence/EV-011-rpa-region-scoped-snapshot.md)
+- 主证据文档：[EV-011 RPA Region-Scoped Snapshot Evidence](../evidence/EV-011-rpa-region-scoped-snapshot.md)
+- 当前 patch chain 关联提交：`6cb4b29`, `4a1adf2`, `5ea9aa7`, `699b088`, `a27bb41`, `4a2fe58`, `7c1e273`, `04b8fac`, `8e1d1ad`, `f3a6c59`, `0a2abc3`
+- 当前状态说明：主线能力已交付，selected-region extract splitting 本地后端验证已通过；远端 CI / review evidence pending。
 
 ## Next Step
 
-Turn the `/section-texts` manual fixture into reproducible eval/recording evidence: either add golden eval cases or save manual region-selection recording/compile artifacts that show heading + body compiles deterministically, after-context-only heading preserves runtime AI or avoids heading-scoped signal generation, and complex nested container text remains `runtime_ai_missing_anchor` until capture/compression can prove a durable container anchor. The long-term direction is to reduce `runtime_ai_missing_anchor` by moving more free-text cases into deterministic section/container extraction only after anchor evidence exists. Keep the strict-mode locator repair issue as a separate follow-up because it belongs to runtime repair/locator disambiguation, not region-scoped snapshot capture or compression.
+继续把 `/section-texts` fixture 转成可复现的 eval 或录制/编译 artifact，并把当前分支最近一次 GitHub Actions / review 结果写回 `EV-011`。在这些证据收齐之前，不新拆 Feature，避免把同一条区域选择 hardening 链切成多份平行记忆。
