@@ -2698,6 +2698,16 @@ class ApiMonitorSessionManager:
                 )
             step_context = "\n此 API 在以下操作中被观察到:\n" + "\n".join(lines)
 
+        # 将之前的 YAML 校验错误纳入重新生成上下文，避免 LLM 重复同样的错误
+        _prev_tool = next(
+            (t for t in session.tool_definitions if t.generation_candidate_id == candidate.id),
+            None,
+        )
+        if _prev_tool and _prev_tool.validation_errors:
+            step_context += "\n\n之前的 YAML 定义校验失败，请修正以下错误：\n" + "\n".join(
+                f"- {e}" for e in _prev_tool.validation_errors
+            )
+
         try:
             yaml_def = await generate_tool_definition(
                 method=candidate.method,
