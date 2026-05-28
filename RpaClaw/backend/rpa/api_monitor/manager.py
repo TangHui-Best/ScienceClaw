@@ -2508,9 +2508,10 @@ class ApiMonitorSessionManager:
     ) -> None:
         existing = self._intent_prune_tasks.get(session_id)
         if existing and not existing.done():
-            if not immediate:
-                return
-            existing.cancel()
+            # Don't cancel in-flight tasks — their popped candidate IDs would be lost.
+            # The _delayed_intent_prune_flush finally block will re-schedule if the buffer
+            # still has items after the current flush completes.
+            return
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
