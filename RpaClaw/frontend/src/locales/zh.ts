@@ -996,6 +996,7 @@ export default {
   'Invalid JSON': '无效的 JSON',
   'Select page region': '选择页面区域',
   'Drag to select page region · Esc to cancel': '拖拽框选页面区域 · Esc 取消',
+  'Click an element or drag to select a region · Esc to cancel': '点击元素或拖拽框选区域 · Esc 取消',
   'Selected page region': '已选择页面区域',
   'Remove selected region': '移除所选区域',
   'Region analysis failed, please select again': '区域分析失败，请重新框选',

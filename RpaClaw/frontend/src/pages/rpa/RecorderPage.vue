@@ -12,6 +12,7 @@ import { getBackendWsUrl } from '@/utils/sandbox';
 import {
   getFrameSizeFromMetadata,
   getInputSizeFromMetadata,
+  computeContainRect,
   mapClientPointToViewportPoint,
   type ScreencastFrameMetadata,
   type ScreencastSize,
@@ -49,9 +50,14 @@ import {
 } from '@/utils/rpaAssistantModel';
 import { buildRpaAssistantRequestHeaders } from '@/utils/rpaAssistantRequest';
 import {
+  buildElementBoundsPayload,
+  buildElementRegionAnalyzePayload,
   buildRegionAnalyzePayload,
+  formatElementBoundsSummary,
   formatRegionAttachmentSummary as formatAnalyzedRegionAttachmentSummary,
+  isClickLikeRegionSelection,
   isUsableRegionRect,
+  type ElementBoundsResponse,
   type RegionAnalyzePayload,
   type RegionAnalyzeResponse,
   type ViewportPoint,
@@ -233,6 +239,8 @@ interface PendingRegionAttachment {
     width: number;
     height: number;
   };
+  acquisition?: 'drag_region' | 'picked_element';
+  targetPreview?: ElementBoundsResponse;
 }
 
 interface ChatMessage {
@@ -272,9 +280,14 @@ interface RegionDragPoint {
 
 const regionDragStart = ref<RegionDragPoint | null>(null);
 const regionDragCurrent = ref<RegionDragPoint | null>(null);
+const hoveredElementBounds = ref<ElementBoundsResponse | null>(null);
+const regionDragStartElementBounds = ref<ElementBoundsResponse | null>(null);
 let regionSelectionToken = 0;
 let finalizedRegionSelectionToken: number | null = null;
 let regionDocumentListenersAttached = false;
+let elementBoundsPreviewToken = 0;
+let lastElementBoundsPreviewAt = Number.NEGATIVE_INFINITY;
+const ELEMENT_BOUNDS_PREVIEW_THROTTLE_MS = 120;
 
 const regionSelectionOverlayRect = computed(() => {
   if (!regionDragStart.value || !regionDragCurrent.value) return null;
@@ -287,6 +300,44 @@ const regionSelectionOverlayRect = computed(() => {
     height: Math.abs(current.y - start.y),
   };
 });
+
+const mapViewportRectToCanvasRect = (rect: { x: number; y: number; width: number; height: number }) => {
+  const canvas = canvasRef.value;
+  if (!canvas) return null;
+  const canvasRect = canvas.getBoundingClientRect();
+  const contentRect = computeContainRect(
+    { width: canvasRect.width, height: canvasRect.height },
+    screencastFrameSize.value,
+  );
+  if (contentRect.width <= 0 || contentRect.height <= 0) return null;
+  if (screencastInputSize.value.width <= 0 || screencastInputSize.value.height <= 0) return null;
+
+  const scaleX = contentRect.width / screencastInputSize.value.width;
+  const scaleY = contentRect.height / screencastInputSize.value.height;
+  return {
+    left: contentRect.left + rect.x * scaleX,
+    top: contentRect.top + rect.y * scaleY,
+    width: rect.width * scaleX,
+    height: rect.height * scaleY,
+  };
+};
+
+const elementBoundsOverlayRect = computed(() => {
+  if (!selectingRegion.value || regionDragStart.value || !hoveredElementBounds.value?.rect) {
+    return null;
+  }
+  return mapViewportRectToCanvasRect(hoveredElementBounds.value.rect);
+});
+
+const isPointInViewportRect = (
+  point: ViewportPoint,
+  rect: { x: number; y: number; width: number; height: number },
+) => (
+  point.x >= rect.x &&
+  point.y >= rect.y &&
+  point.x <= rect.x + rect.width &&
+  point.y <= rect.y + rect.height
+);
 
 const regionKindLabel = (kind?: string) => {
   if (kind === 'page_region' || kind === 'region') return t('Page region evidence');
@@ -318,17 +369,29 @@ const applyPendingRegionAttachment = (attachment: PendingRegionAttachment) => {
 const applyAnalyzedRegionAttachment = (
   payload: RegionAnalyzePayload,
   response: RegionAnalyzeResponse,
+  options: {
+    acquisition?: PendingRegionAttachment['acquisition'];
+    targetPreview?: ElementBoundsResponse;
+  } = {},
 ) => {
+  const elementSummary = options.targetPreview
+    ? formatElementBoundsSummary(options.targetPreview)
+    : '';
+  const summary = options.acquisition === 'picked_element' && elementSummary
+    ? elementSummary
+    : formatAnalyzedRegionAttachmentSummary(response);
   applyPendingRegionAttachment({
     regionId: response.region_id,
     tabId: payload.tab_id,
     kind: response.inferred_kind || 'page_region',
-    summary: formatAnalyzedRegionAttachmentSummary(response),
+    summary,
     inferredKind: response.inferred_kind,
     evidence: response.evidence,
     rect: payload.rect,
     viewport: payload.viewport,
     bounds: payload.rect,
+    acquisition: options.acquisition,
+    targetPreview: options.targetPreview,
   });
 };
 
@@ -833,6 +896,12 @@ const focusCanvas = () => {
 const clearRegionDragState = () => {
   regionDragStart.value = null;
   regionDragCurrent.value = null;
+  regionDragStartElementBounds.value = null;
+};
+
+const clearElementBoundsPreview = () => {
+  hoveredElementBounds.value = null;
+  elementBoundsPreviewToken += 1;
 };
 
 const addRegionDocumentListeners = () => {
@@ -856,13 +925,17 @@ const startRegionSelection = () => {
   selectingRegion.value = true;
   regionError.value = '';
   clearRegionDragState();
+  clearElementBoundsPreview();
   addRegionDocumentListeners();
   void nextTick(() => focusCanvas());
 };
 
 const cancelRegionSelection = () => {
+  regionSelectionToken += 1;
+  finalizedRegionSelectionToken = null;
   selectingRegion.value = false;
   clearRegionDragState();
+  clearElementBoundsPreview();
   removeRegionDocumentListeners();
 };
 
@@ -894,6 +967,108 @@ const getRegionDragPoint = (e: MouseEvent): RegionDragPoint | null => {
   };
 };
 
+const resolveElementBounds = async (
+  point: ViewportPoint,
+  token: number,
+): Promise<ElementBoundsResponse | null> => {
+  const sid = sessionId.value;
+  const tabId = activeTabId.value;
+  if (!sid || !tabId) return null;
+
+  const payload = buildElementBoundsPayload({
+    tabId,
+    point,
+    inputSize: screencastInputSize.value,
+  });
+  const resp = await apiClient.post(`/rpa/session/${sid}/region/element-bounds`, payload);
+  if (regionSelectionToken !== token) return null;
+
+  const data = resp.data as ElementBoundsResponse;
+  return data?.rect ? data : null;
+};
+
+const previewElementBounds = (point: ViewportPoint) => {
+  const now = Date.now();
+  if (now - lastElementBoundsPreviewAt < ELEMENT_BOUNDS_PREVIEW_THROTTLE_MS) return;
+  lastElementBoundsPreviewAt = now;
+  const token = regionSelectionToken;
+  const previewToken = ++elementBoundsPreviewToken;
+  void resolveElementBounds(point, token)
+    .then((bounds) => {
+      if (
+        regionSelectionToken !== token
+        || elementBoundsPreviewToken !== previewToken
+        || !selectingRegion.value
+        || regionDragStart.value
+      ) {
+        return;
+      }
+      hoveredElementBounds.value = bounds;
+    })
+    .catch(() => {
+      if (
+        regionSelectionToken === token
+        && elementBoundsPreviewToken === previewToken
+        && selectingRegion.value
+        && !regionDragStart.value
+      ) {
+        hoveredElementBounds.value = null;
+      }
+    });
+};
+
+const finalizeElementSelection = async (endPoint: RegionDragPoint) => {
+  const token = regionSelectionToken;
+  if (finalizedRegionSelectionToken === token) return;
+
+  const sid = sessionId.value;
+  const tabId = activeTabId.value;
+  if (!sid || !tabId) {
+    cancelRegionSelection();
+    return;
+  }
+
+  finalizedRegionSelectionToken = token;
+
+  try {
+    const resolvedBounds = regionDragStartElementBounds.value?.rect
+      ? regionDragStartElementBounds.value
+      : await resolveElementBounds(endPoint.viewport, token);
+    if (regionSelectionToken !== token) return;
+    if (!resolvedBounds?.rect) {
+      cancelRegionSelection();
+      return;
+    }
+
+    const payload = buildElementRegionAnalyzePayload({
+      tabId,
+      rect: resolvedBounds.rect,
+      inputSize: screencastInputSize.value,
+    });
+
+    selectingRegion.value = false;
+    clearRegionDragState();
+    clearElementBoundsPreview();
+    removeRegionDocumentListeners();
+    const resp = await apiClient.post(`/rpa/session/${sid}/region/analyze`, payload);
+    if (regionSelectionToken !== token) return;
+    applyAnalyzedRegionAttachment(payload, resp.data as RegionAnalyzeResponse, {
+      acquisition: 'picked_element',
+      targetPreview: resolvedBounds,
+    });
+  } catch (err: any) {
+    if (regionSelectionToken !== token) return;
+    regionError.value = err.response?.data?.detail || t('Region analysis failed, please select again');
+  } finally {
+    if (regionSelectionToken === token) {
+      selectingRegion.value = false;
+      clearRegionDragState();
+      clearElementBoundsPreview();
+      removeRegionDocumentListeners();
+    }
+  }
+};
+
 const finalizeRegionSelection = async (endPoint: RegionDragPoint) => {
   const token = regionSelectionToken;
   if (finalizedRegionSelectionToken === token) return;
@@ -921,6 +1096,7 @@ const finalizeRegionSelection = async (endPoint: RegionDragPoint) => {
   finalizedRegionSelectionToken = token;
   selectingRegion.value = false;
   clearRegionDragState();
+  clearElementBoundsPreview();
   removeRegionDocumentListeners();
 
   try {
@@ -934,6 +1110,7 @@ const finalizeRegionSelection = async (endPoint: RegionDragPoint) => {
     if (regionSelectionToken === token) {
       selectingRegion.value = false;
       clearRegionDragState();
+      clearElementBoundsPreview();
       removeRegionDocumentListeners();
     }
   }
@@ -946,10 +1123,20 @@ const handleRegionSelectionMouse = (e: MouseEvent) => {
     if (!point) return;
     regionDragStart.value = point;
     regionDragCurrent.value = point;
+    regionDragStartElementBounds.value = hoveredElementBounds.value?.rect &&
+      isPointInViewportRect(point.viewport, hoveredElementBounds.value.rect)
+      ? hoveredElementBounds.value
+      : null;
     return;
   }
 
-  if (!regionDragStart.value) return;
+  if (!regionDragStart.value) {
+    const point = getRegionDragPoint(e);
+    if (point && e.type === 'mousemove') {
+      previewElementBounds(point.viewport);
+    }
+    return;
+  }
 
   const point = getRegionDragPoint(e) || (e.type === 'mouseup' ? regionDragCurrent.value : null);
   if (!point) return;
@@ -960,7 +1147,11 @@ const handleRegionSelectionMouse = (e: MouseEvent) => {
   }
 
   if (e.type === 'mouseup') {
-    void finalizeRegionSelection(point);
+    if (isClickLikeRegionSelection(regionDragStart.value.local, point.local)) {
+      void finalizeElementSelection(point);
+    } else {
+      void finalizeRegionSelection(point);
+    }
   }
 };
 
@@ -1421,6 +1612,17 @@ const sendMessage = async () => {
             </div>
 
             <div
+              v-if="selectingRegion && elementBoundsOverlayRect"
+              class="pointer-events-none absolute border border-white/75 bg-[#831bd7]/15 shadow-[0_0_0_1px_rgba(131,27,215,0.55)]"
+              :style="{
+                left: `${elementBoundsOverlayRect.left}px`,
+                top: `${elementBoundsOverlayRect.top}px`,
+                width: `${elementBoundsOverlayRect.width}px`,
+                height: `${elementBoundsOverlayRect.height}px`,
+              }"
+            ></div>
+
+            <div
               v-if="selectingRegion && regionSelectionOverlayRect"
               class="pointer-events-none absolute border border-white/90 bg-[#831bd7]/20 shadow-[0_0_0_1px_rgba(131,27,215,0.75)]"
               :style="{
@@ -1438,7 +1640,7 @@ const sendMessage = async () => {
               v-if="selectingRegion"
               class="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-white/20 bg-black/55 px-3 py-1.5 text-[10px] font-bold text-white shadow-lg backdrop-blur-md"
             >
-              {{ t('Drag to select page region · Esc to cancel') }}
+              {{ t('Click an element or drag to select a region · Esc to cancel') }}
             </div>
             <div v-else-if="sessionId" class="absolute bottom-3 left-1/2 -translate-x-1/2 bg-white/10 backdrop-blur-md border border-white/20 px-3 py-1.5 rounded-full flex items-center gap-2">
               <Radio class="text-red-400 animate-pulse" :size="14" />
@@ -1719,7 +1921,7 @@ const sendMessage = async () => {
                   type="button"
                   class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#f2f4f6] text-gray-500 transition-colors disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white/10 dark:text-gray-300"
                   :aria-label="t('Select page region')"
-                  :title="t('Drag to select page region · Esc to cancel')"
+                  :title="t('Click an element or drag to select a region · Esc to cancel')"
                   :disabled="sending || agentRunning || !sessionId"
                   @click="startRegionSelection"
                 >

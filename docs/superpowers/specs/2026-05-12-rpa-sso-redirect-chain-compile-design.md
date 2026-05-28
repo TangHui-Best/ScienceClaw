@@ -1,10 +1,4 @@
----
-status: active
-created: 2026-05-12
-updated: 2026-05-12
-feature_ids:
-  - rpa-trace-compiler
----
+> Legacy spec。此文档保留在 `docs/superpowers/specs/` 作为历史设计材料，当前归属 `F001` 链接引用，不是 Harness artifact。
 
 # RPA SSO Redirect Chain Compile Design
 

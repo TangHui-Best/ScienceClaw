@@ -1,8 +1,4 @@
----
-title: RPA Selected Region Text Extract Design
-status: draft
-date: 2026-05-26
----
+> Legacy design。此文档保留在 `docs/superpowers/specs/` 作为 `F011` 的历史设计材料，不是 Harness artifact。
 
 # RPA 选区文本提取确定性编译设计
 

@@ -2,43 +2,41 @@
 id: ADR-001
 doc_kind: adr
 status: accepted
-scope: project
-feature_ids: [F001]
+scope: feature
 feature_refs:
   - docs/features/F001-rpa-trace-source-convergence.md
-decision_area: rpa-trace-timeline
+decision_area: rpa-architecture
 created: 2026-05-13
-updated: 2026-05-18
+updated: 2026-05-27
 ---
 
 # ADR-001: RPA Trace Is The Single Accepted Timeline
 
 ## Context
 
-RPA recording had multiple competing fact sources: `session.steps`, `session.recorded_actions`, `session.traces`, `recording_diagnostics`, generated `legacy_steps`, and step-index APIs. That mixed state was useful during migration from the old step/generator path, but it conflicts with the accepted trace-first architecture and makes generate/test/save/MCP/export hard to verify.
+RPA 录制一度同时维护 `session.steps`、`recorded_actions`、`session.traces`、`recording_diagnostics`、`legacy_steps` 和 step-index API。它们在迁移早期有兼容价值，但在 trace-first 已经成为主方向之后，这种并行事实源会直接破坏验收边界：不同模块会从不同对象读取“真相”，最终谁也说不清 Skill、repair、导出和回放到底依赖什么。
 
 ## Decision
 
-`RPAAcceptedTrace` is the only accepted RPA timeline model. New RPA recording, configure, generate, test, save, and MCP/export paths must consume `session.traces`, `trace_diagnostics`, and `runtime_results`, not `session.steps`, `recorded_actions`, `recording_diagnostics`, or `legacy_steps`.
-
-Step-like objects may exist only as private browser-event DTOs, test fixtures, or reference code during migration. They must not appear in new public API contracts, accepted timeline semantics, saved skill metadata, or main-path compiler/export inputs.
+`RPAAcceptedTrace` 是唯一 accepted timeline。新路径上的录制、配置、生成、测试、保存和 MCP/export 只允许消费 `session.traces`、`trace_diagnostics` 和 `runtime_results`；`steps`、`recorded_actions`、`recording_diagnostics`、`legacy_steps` 只能作为迁移期私有 DTO、测试夹具或历史材料存在，不能再作为新路径的公共契约或编译事实源。
 
 ## Alternatives
 
-- Keep dual-source compatibility indefinitely. Rejected because it preserves the ambiguity this migration is meant to remove.
-- Add Harness observability on top of the mixed state first. Rejected because it would observe and normalize a false architecture instead of fixing the source of truth.
-- Remove every legacy class in one edit. Rejected because manual recording, test failure mapping, MCP/export, and compiler parity still need controlled, test-driven migration.
+- 永久维持 dual-source compatibility：放弃。它会把“迁移未收敛”固化成架构本身。
+- 先叠一层 observability 再慢慢收口：放弃。那只是在观察错误架构，而不是修正事实源。
+- 一次性硬删所有 step 相关对象：放弃。录制、repair、失败重试和导出仍需要分阶段迁移，直接硬删会让失败不可归因。
 
 ## Consequences
 
-- Old development-stage sessions and old skill metadata may break or require one-time discard.
-- Tests that currently assert `recorded_actions`, `legacy_steps`, `/step/{index}`, or `failed_step_index` must be rewritten to assert trace-only behavior.
-- Final readiness requires exhaustive Evidence, including negative grep checks and manual smoke.
-- Future RPA features must extend trace models or trace diagnostics instead of adding another accepted timeline source.
+- 旧开发期 session、旧 skill metadata 和部分历史 fixture 可能需要丢弃或隔离。
+- 测试和 UI 需要把“还支持 step fallback”改成“证明不再依赖 step fallback”。
+- 后续任何新增能力都应扩展 trace 模型或 trace diagnostic，而不是重新引入第二事实源。
+- 一旦后续补丁出现，也应该先检查 trace 证据传播是否缺失，而不是反向复活 legacy step 通路。
 
 ## Evidence
 
-- Feature: [F001 RPA Trace Source Convergence](../features/F001-rpa-trace-source-convergence.md)
-- Evidence: [EV-001 RPA Trace Source Convergence Evidence](../evidence/EV-001-rpa-trace-source-convergence.md)
-- Spec: [2026-04-28 RPA Trace-first Full Migration Design](../superpowers/specs/2026-04-28-rpa-trace-first-full-migration-design.md)
-- Plan: [2026-04-28 RPA Trace-first Full Migration](../superpowers/plans/2026-04-28-rpa-trace-first-full-migration.md)
+- Feature: `docs/features/F001-rpa-trace-source-convergence.md`
+- Evidence: `docs/evidence/EV-001-rpa-trace-source-convergence.md`
+- Legacy spec: `docs/superpowers/specs/2026-04-28-rpa-trace-first-full-migration-design.md`
+- Legacy plan: `docs/superpowers/plans/2026-04-28-rpa-trace-first-full-migration.md`
+- Legacy plan: `docs/superpowers/plans/2026-05-16-rpa-trace-source-final-convergence.md`

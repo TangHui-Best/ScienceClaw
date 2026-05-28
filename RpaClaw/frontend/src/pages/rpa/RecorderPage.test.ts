@@ -198,6 +198,10 @@ const regionAnalyzeCalls = () => post.mock.calls.filter(([url]) => (
   url === '/rpa/session/session-1/region/analyze'
 ));
 
+const elementBoundsCalls = () => post.mock.calls.filter(([url]) => (
+  url === '/rpa/session/session-1/region/element-bounds'
+));
+
 const mockStartSession = () => {
   post.mockImplementation((url: string) => {
     if (url === '/rpa/session/start') {
@@ -759,7 +763,7 @@ describe('RecorderPage trace timeline convergence', () => {
 
     selectRegionButton(root).click();
     await flushAsyncUpdates();
-    expect(root.textContent).toContain('Drag to select page region · Esc to cancel');
+    expect(root.textContent).toContain('Click an element or drag to select a region · Esc to cancel');
 
     dispatchCanvasMouse(canvas, 'mousedown', 20, 30);
     dispatchCanvasMouse(canvas, 'mousemove', 120, 150);
@@ -845,6 +849,265 @@ describe('RecorderPage trace timeline convergence', () => {
     expect(body).not.toHaveProperty('evidence');
     expect(body).not.toHaveProperty('rect');
     expect(body).not.toHaveProperty('viewport');
+
+    app.unmount();
+  });
+
+  it('resolves clicked element bounds and analyzes the element through the existing region path', async () => {
+    get.mockResolvedValue({ data: { session: { timeline: [] } } });
+    post.mockImplementation((url: string) => {
+      if (url === '/rpa/session/start') {
+        return Promise.resolve({
+          data: {
+            status: 'success',
+            session: { id: 'session-1' },
+          },
+        });
+      }
+      if (url === '/rpa/session/session-1/region/element-bounds') {
+        return Promise.resolve({
+          data: {
+            rect: { x: 64, y: 72, width: 156, height: 36 },
+            tag: 'button',
+            role: 'button',
+            name: 'Export',
+            text: 'Export',
+          },
+        });
+      }
+      if (url === '/rpa/session/session-1/region/analyze') {
+        return Promise.resolve({
+          data: {
+            region_id: 'region-button',
+            summary: 'Region 156x36, contains 1 element',
+            inferred_kind: 'button_region',
+            evidence: { nodeCount: 1 },
+          },
+        });
+      }
+      return Promise.resolve({ data: {} });
+    });
+
+    const { app, root } = await mountRecorderPage();
+    await syncActiveScreencastTab();
+    const canvas = getCanvas(root);
+
+    selectRegionButton(root).click();
+    await flushAsyncUpdates();
+    dispatchCanvasMouse(canvas, 'mousemove', 80, 90);
+    await flushAsyncUpdates();
+    dispatchCanvasMouse(canvas, 'mousedown', 80, 90);
+    dispatchCanvasMouse(canvas, 'mouseup', 80, 90);
+    await flushAsyncUpdates();
+
+    expect(elementBoundsCalls()).toHaveLength(1);
+    expect(post).toHaveBeenCalledWith('/rpa/session/session-1/region/element-bounds', {
+      tab_id: 'tab-1',
+      point: { x: 80, y: 90 },
+      viewport: {
+        width: 1280,
+        height: 720,
+      },
+    });
+    expect(post).toHaveBeenCalledWith('/rpa/session/session-1/region/analyze', {
+      tab_id: 'tab-1',
+      rect: { x: 64, y: 72, width: 156, height: 36 },
+      viewport: {
+        width: 1280,
+        height: 720,
+      },
+    });
+    expect(root.textContent).toContain('Export');
+
+    app.unmount();
+  });
+
+  it('does not complete a clicked element selection after Escape cancels a pending bounds request', async () => {
+    get.mockResolvedValue({ data: { session: { timeline: [] } } });
+    const boundsDeferred = createDeferred<unknown>();
+    post.mockImplementation((url: string) => {
+      if (url === '/rpa/session/start') {
+        return Promise.resolve({
+          data: {
+            status: 'success',
+            session: { id: 'session-1' },
+          },
+        });
+      }
+      if (url === '/rpa/session/session-1/region/element-bounds') {
+        return boundsDeferred.promise;
+      }
+      if (url === '/rpa/session/session-1/region/analyze') {
+        return Promise.resolve({
+          data: {
+            region_id: 'region-canceled',
+            summary: 'Canceled element',
+            inferred_kind: 'button_region',
+          },
+        });
+      }
+      return Promise.resolve({ data: {} });
+    });
+
+    const { app, root } = await mountRecorderPage();
+    await syncActiveScreencastTab();
+    const canvas = getCanvas(root);
+
+    selectRegionButton(root).click();
+    await flushAsyncUpdates();
+    dispatchCanvasMouse(canvas, 'mousedown', 80, 90);
+    dispatchCanvasMouse(canvas, 'mouseup', 80, 90);
+    await flushAsyncUpdates();
+
+    canvas.dispatchEvent(new KeyboardEvent('keydown', {
+      bubbles: true,
+      key: 'Escape',
+      code: 'Escape',
+    }));
+    await flushAsyncUpdates();
+
+    boundsDeferred.resolve({
+      data: {
+        rect: { x: 64, y: 72, width: 156, height: 36 },
+        tag: 'button',
+        role: 'button',
+        name: 'Export',
+        text: 'Export',
+      },
+    });
+    await flushAsyncUpdates();
+
+    expect(elementBoundsCalls()).toHaveLength(1);
+    expect(regionAnalyzeCalls()).toHaveLength(0);
+    expect(root.textContent).not.toContain('Canceled element');
+    expect(root.textContent).not.toContain('Export');
+
+    app.unmount();
+  });
+
+  it('re-resolves bounds when clicking outside the cached hover element', async () => {
+    get.mockResolvedValue({ data: { session: { timeline: [] } } });
+    let boundsCount = 0;
+    post.mockImplementation((url: string) => {
+      if (url === '/rpa/session/start') {
+        return Promise.resolve({
+          data: {
+            status: 'success',
+            session: { id: 'session-1' },
+          },
+        });
+      }
+      if (url === '/rpa/session/session-1/region/element-bounds') {
+        boundsCount += 1;
+        return Promise.resolve({
+          data: boundsCount === 1
+            ? {
+                rect: { x: 64, y: 72, width: 156, height: 36 },
+                tag: 'button',
+                role: 'button',
+                name: 'Export',
+                text: 'Export',
+              }
+            : {
+                rect: { x: 360, y: 72, width: 180, height: 36 },
+                tag: 'input',
+                role: 'textbox',
+                name: 'Search',
+                text: '',
+              },
+        });
+      }
+      if (url === '/rpa/session/session-1/region/analyze') {
+        return Promise.resolve({
+          data: {
+            region_id: 'region-search',
+            summary: 'Region 180x36, contains 1 element',
+            inferred_kind: 'input_region',
+          },
+        });
+      }
+      return Promise.resolve({ data: {} });
+    });
+
+    const { app, root } = await mountRecorderPage();
+    await syncActiveScreencastTab();
+    const canvas = getCanvas(root);
+
+    selectRegionButton(root).click();
+    await flushAsyncUpdates();
+    dispatchCanvasMouse(canvas, 'mousemove', 80, 90);
+    await flushAsyncUpdates();
+    dispatchCanvasMouse(canvas, 'mousedown', 400, 90);
+    dispatchCanvasMouse(canvas, 'mouseup', 400, 90);
+    await flushAsyncUpdates();
+
+    expect(elementBoundsCalls()).toHaveLength(2);
+    expect(post).toHaveBeenCalledWith('/rpa/session/session-1/region/analyze', {
+      tab_id: 'tab-1',
+      rect: { x: 360, y: 72, width: 180, height: 36 },
+      viewport: {
+        width: 1280,
+        height: 720,
+      },
+    });
+    expect(root.textContent).toContain('Search (input)');
+
+    app.unmount();
+  });
+
+  it('only resolves a clicked element once when repeated mouseup arrives before bounds resolve', async () => {
+    get.mockResolvedValue({ data: { session: { timeline: [] } } });
+    const boundsDeferred = createDeferred<unknown>();
+    post.mockImplementation((url: string) => {
+      if (url === '/rpa/session/start') {
+        return Promise.resolve({
+          data: {
+            status: 'success',
+            session: { id: 'session-1' },
+          },
+        });
+      }
+      if (url === '/rpa/session/session-1/region/element-bounds') {
+        return boundsDeferred.promise;
+      }
+      if (url === '/rpa/session/session-1/region/analyze') {
+        return Promise.resolve({
+          data: {
+            region_id: 'region-click-once',
+            summary: 'Export button',
+            inferred_kind: 'button_region',
+          },
+        });
+      }
+      return Promise.resolve({ data: {} });
+    });
+
+    const { app, root } = await mountRecorderPage();
+    await syncActiveScreencastTab();
+    const canvas = getCanvas(root);
+
+    selectRegionButton(root).click();
+    await flushAsyncUpdates();
+    dispatchCanvasMouse(canvas, 'mousedown', 80, 90);
+    dispatchCanvasMouse(canvas, 'mouseup', 80, 90);
+    dispatchCanvasMouse(canvas, 'mouseup', 80, 90);
+    await flushAsyncUpdates();
+
+    expect(elementBoundsCalls()).toHaveLength(1);
+
+    boundsDeferred.resolve({
+      data: {
+        rect: { x: 64, y: 72, width: 156, height: 36 },
+        tag: 'button',
+        role: 'button',
+        name: 'Export',
+        text: 'Export',
+      },
+    });
+    await flushAsyncUpdates();
+
+    expect(regionAnalyzeCalls()).toHaveLength(1);
+    expect(root.textContent).toContain('Export (button)');
 
     app.unmount();
   });
@@ -1016,7 +1279,7 @@ describe('RecorderPage trace timeline convergence', () => {
       },
     });
     expect(root.textContent).toContain('Released outside area');
-    expect(root.textContent).not.toContain('Drag to select page region · Esc to cancel');
+    expect(root.textContent).not.toContain('Click an element or drag to select a region · Esc to cancel');
 
     app.unmount();
   });
@@ -1030,7 +1293,7 @@ describe('RecorderPage trace timeline convergence', () => {
 
     selectRegionButton(root).click();
     await flushAsyncUpdates();
-    expect(root.textContent).toContain('Drag to select page region · Esc to cancel');
+    expect(root.textContent).toContain('Click an element or drag to select a region · Esc to cancel');
 
     canvas.dispatchEvent(new KeyboardEvent('keydown', {
       bubbles: true,
@@ -1039,7 +1302,7 @@ describe('RecorderPage trace timeline convergence', () => {
     }));
     await flushAsyncUpdates();
 
-    expect(root.textContent).not.toContain('Drag to select page region · Esc to cancel');
+    expect(root.textContent).not.toContain('Click an element or drag to select a region · Esc to cancel');
     expect(post).not.toHaveBeenCalledWith(
       '/rpa/session/session-1/region/analyze',
       expect.anything(),
@@ -1048,8 +1311,27 @@ describe('RecorderPage trace timeline convergence', () => {
     app.unmount();
   });
 
-  it('silently cancels tiny region selections without analyzing', async () => {
+  it('cancels tiny click-like selections when no element bounds can be resolved', async () => {
     get.mockResolvedValue({ data: { session: { timeline: [] } } });
+    post.mockImplementation((url: string) => {
+      if (url === '/rpa/session/start') {
+        return Promise.resolve({
+          data: {
+            status: 'success',
+            session: { id: 'session-1' },
+          },
+        });
+      }
+      if (url === '/rpa/session/session-1/region/element-bounds') {
+        return Promise.resolve({
+          data: {
+            rect: null,
+            warnings: ['No element at point'],
+          },
+        });
+      }
+      return Promise.resolve({ data: {} });
+    });
 
     const { app, root } = await mountRecorderPage();
     await syncActiveScreencastTab();
@@ -1057,14 +1339,15 @@ describe('RecorderPage trace timeline convergence', () => {
 
     selectRegionButton(root).click();
     await flushAsyncUpdates();
-    expect(root.textContent).toContain('Drag to select page region · Esc to cancel');
+    expect(root.textContent).toContain('Click an element or drag to select a region · Esc to cancel');
 
     dispatchCanvasMouse(canvas, 'mousedown', 20, 30);
     dispatchCanvasMouse(canvas, 'mousemove', 24, 35);
     dispatchCanvasMouse(canvas, 'mouseup', 24, 35);
     await flushAsyncUpdates();
 
-    expect(root.textContent).not.toContain('Drag to select page region · Esc to cancel');
+    expect(elementBoundsCalls()).toHaveLength(1);
+    expect(root.textContent).not.toContain('Click an element or drag to select a region · Esc to cancel');
     expect(post).not.toHaveBeenCalledWith(
       '/rpa/session/session-1/region/analyze',
       expect.anything(),

@@ -29,9 +29,7 @@ from .trace_models import (
     RPATraceType,
 )
 from .trace_locator_utils import (
-    has_valid_locator,
-    locator_has_unstable_identity,
-    locator_is_structural_region_header,
+    locator_is_replay_safe_for_region_extract,
     normalize_locator,
 )
 
@@ -2528,8 +2526,16 @@ def _region_text_extract_signal(
         heading_locator = anchor.get("locator") if isinstance(anchor.get("locator"), dict) else {}
         if not heading_text or not heading_locator:
             continue
+        observed_body_values = [
+            str(item.get("text") or "").strip()
+            for item in body_texts
+            if str(item.get("text") or "").strip()
+        ]
+        if not locator_is_replay_safe_for_region_extract(heading_locator, observed_values=observed_body_values):
+            continue
         return {
             "source": "region_scoped_snapshot",
+            "intent": "anchored_region_extract",
             "kind": "heading_scoped_text",
             "section_title": heading_text,
             "heading_locator": dict(heading_locator),
@@ -2566,6 +2572,7 @@ def _selected_region_text_extract_signal(
 
     signal: Dict[str, Any] = {
         "source": "region_context",
+        "intent": "single_value_extract",
         "output_key": output_key,
         "locator": locator,
         "frame_path": list(region_context.get("frame_path") or []),
@@ -2641,40 +2648,10 @@ def _selected_region_safe_locator(candidates: Any, observed_values: set[str]) ->
     ordered.extend(candidate for candidate in candidates if isinstance(candidate, dict) and not candidate.get("selected"))
     for candidate in ordered:
         locator = normalize_locator(candidate.get("locator") if isinstance(candidate.get("locator"), dict) else candidate)
-        if not has_valid_locator(locator):
-            continue
-        if locator_has_unstable_identity(locator):
-            continue
-        if locator_is_structural_region_header(locator):
-            continue
-        if _selected_region_locator_is_observed_text_driven(locator, observed_values):
+        if not locator_is_replay_safe_for_region_extract(locator, observed_values=list(observed_values)):
             continue
         return locator
     return {}
-
-
-def _selected_region_locator_is_observed_text_driven(locator: Dict[str, Any], observed_values: set[str]) -> bool:
-    method = str(locator.get("method") or "").strip()
-    value = str(locator.get("value") or "").strip()
-    if method in {"text", "title"} and value and value in observed_values:
-        return True
-    if method == "role":
-        name = str(locator.get("name") or "").strip()
-        return bool(name and name in observed_values)
-    if method == "nested":
-        parent = normalize_locator(locator.get("parent"))
-        child = normalize_locator(locator.get("child"))
-        return _selected_region_locator_is_observed_text_driven(
-            parent,
-            observed_values,
-        ) or _selected_region_locator_is_observed_text_driven(child, observed_values)
-    if method in {"nth", "filter_has_text"}:
-        base = normalize_locator(locator.get("locator") or locator.get("base"))
-        if base and _selected_region_locator_is_observed_text_driven(base, observed_values):
-            return True
-        has_text = str(locator.get("has_text") or "").strip()
-        return bool(has_text and has_text in observed_values)
-    return False
 
 
 def _selected_region_observed_text_values(

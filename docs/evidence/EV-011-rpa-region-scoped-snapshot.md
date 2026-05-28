@@ -2,33 +2,40 @@
 doc_kind: evidence
 id: EV-011
 title: RPA Region-Scoped Snapshot Evidence
-status: ready_for_review
-feature_ids: [F011]
+status: active
 feature_refs:
   - docs/features/F011-rpa-region-scoped-snapshot.md
 created: 2026-05-19
-updated: 2026-05-25
-scope: RPA region-scoped snapshot capture, compression, bounded section text compilation, and action replay compile boundaries
+updated: 2026-05-27
+scope: RPA region-scoped snapshot capture, compression, selected-region extract splitting, bounded section text compilation, and action replay compile boundaries
 ---
 
 # EV-011 RPA Region-Scoped Snapshot Evidence
 
 ## Current Review State
 
-PR #55 review comments are accepted and the follow-up implementation is verified. Fresh evidence covers: compiler/replay no longer carries recorded `region_context`, scoped geometry fallback is frame-safe, `region_scoped_snapshot` honors `char_budget` above the minimum identity payload, and empty extract outputs are allowed by default unless explicitly required/non-empty.
-
-2026-05-25 update: A post-review compiler regression for region-backed export-table actions is fixed and verified. AI traces with action/download side-effect evidence are no longer compiled as deterministic table extraction solely because they carry `table_region` context.
+Active。PR #55 的 review blockers 已经被修掉，主线 region-scoped snapshot 能力也已合入；但 post-merge hardening 还在继续，尤其是 selected-region extract 的语义分层、shared anti-hardcode guard、section anchor 证据，以及 region-backed action/download replay 边界。本地验证已经覆盖这些补丁，但本次 closeout 没有重新观察最新远端 CI / review 结果，因此本 Evidence 和 `F011` 都不应写成 completed/Done。
 
 ## Evidence Targets And Follow-ups
 
 - Completed: region-scoped text compile classification backend coverage proves that `region_text_extract.kind=heading_scoped_text` plus a reliable `section_anchor` uses deterministic `_extract_bounded_section_text`, while region-scoped free-text extraction without a reliable anchor preserves `_execute_runtime_ai_instruction` and does not embed recording-time selected text locators.
 - Completed: guardrail coverage proves table, list, single-value, and action traces are not reclassified into runtime AI solely because `_looks_like_extract_instruction()` recognizes broad verbs such as `获取`, `读取`, `get`, or `read`.
 - Added: generic manual fixture `/section-texts` in rpa-eval-app with non-GitHub section text DOM shapes: heading plus same-section body, after-context-only heading, and nested/complex container text.
+- Added: harness decision that the current regression chain remains under `F011 / EV-011`, not a new Feature, because the bug is still the same selected-region evidence classification problem rather than a separate product capability.
+- Completed locally: selected-region extract now carries explicit semantic lanes, `single_value_extract` and `anchored_region_extract`, with compiler compatibility for legacy signals.
+- Completed locally: `heading_scoped_text` now shares the replay-safe anti-hardcode locator guard used by `selected_region_text_extract`, so observed extracted values, dynamic framework ids, and structural region headers do not enter deterministic replay.
+- Completed locally: regression coverage proves fixing title single-value extraction does not break anchored region extraction, and fixing anchored region extraction does not reintroduce `get_by_text(observed_text)`.
 - Pending: convert `/section-texts` into reproducible eval/recording evidence by adding a golden eval case or saving a manual region-selection recording/compile artifact with expected classification for each selected region.
 - Follow-up: consider recording region compile classification in accepted trace or generated skill metadata, for example `compiled_structured`, `compiled_heading_scoped_text`, `runtime_ai_missing_anchor`, and `runtime_ai_semantic_selection`. This should be treated as verifiable trace/skill evidence, not ordinary debug logging.
 
 ## Commands
 
+- `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_recording_runtime_agent_does_not_record_heading_scoped_signal_from_observed_value_anchor RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_heading_scoped_region_text_extract_rejects_observed_text_driven_heading_locator RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_heading_scoped_region_text_extract_rejects_dynamic_framework_heading_locator RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_heading_scoped_region_text_extract_rejects_structural_header_heading_locator -q`
+- `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_recording_runtime_agent_records_heading_scoped_text_extract_signal RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_recording_runtime_agent_uses_inside_heading_not_after_context_heading_for_region_text_extract_signal RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_recording_runtime_agent_records_selected_region_text_extract_signal RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_recording_runtime_agent_does_not_record_selected_region_text_extract_from_observed_text_locator RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_selected_region_text_extract_with_explicit_locator_compiles_to_inner_text RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_selected_region_text_extract_rejects_observed_text_driven_locator RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_heading_scoped_region_text_extract_compiles_to_deterministic_script RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_heading_scoped_region_text_extract_classification_requires_durable_anchor -q`
+- `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py -q`
+- `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_region_context.py RpaClaw/backend/tests/test_rpa_assistant_snapshot_runtime.py RpaClaw/backend/tests/test_rpa_snapshot_compression.py RpaClaw/backend/tests/test_rpa_snapshot_compression_structured.py RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py RpaClaw/backend/tests/test_rpa_trace_models.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q`
+- `git diff --check -- RpaClaw/backend/rpa/trace_locator_utils.py RpaClaw/backend/rpa/recording_runtime_agent.py RpaClaw/backend/rpa/trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py docs/features/F011-rpa-region-scoped-snapshot.md docs/evidence/EV-011-rpa-region-scoped-snapshot.md`
+- `python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root . --docs-path docs --strict`
 - `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_region_context.py::test_region_context_builds_scope_from_evidence RpaClaw/backend/tests/test_rpa_region_context.py::test_region_scope_omits_standalone_evidence_payload RpaClaw/backend/tests/test_rpa_trace_models.py::test_accepted_trace_carries_region_scope_evidence -q`
 - `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_assistant_snapshot_runtime.py -q`
 - `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_snapshot_compression.py RpaClaw/backend/tests/test_rpa_snapshot_compression_structured.py -q`
@@ -150,11 +157,32 @@ PR #55 review comments are accepted and the follow-up implementation is verified
 - User manual validation: user reported local service verification passed for the region-scoped snapshot feature after selecting GitHub Trending row fields and extracting scoped values.
 - Whitespace check: `git diff --check` passed.
 
+Current summary:
+
+- `699b088` closed the PR #55 review blockers on the merged mainline feature.
+- `a27bb41`, `4a2fe58`, `7c1e273`, `04b8fac`, `8e1d1ad`, `f3a6c59` form the current selected-region text extract hardening chain.
+- `0a2abc3` closes the region-backed action/download misclassification regression.
+- Latest local implementation update: the `f3a6c59` stable-single-value guard is now shared with the older `heading_scoped_text` path. The old gap was that `heading_scoped_text` only checked locator validity and skipped the observed-value/dynamic-id/structural-header replay-safe guard added for `selected_region_text_extract`.
+- Latest root-cause conclusion: selected-region extract must stay split between `single_value_extract` and `anchored_region_extract`; both lanes need the same replay-safe locator boundary so title fixes and region-content fixes do not regress each other.
+- Latest harness conclusion: keep this hardening chain under `F011 / EV-011`; do not split a new Feature unless a future capability goes beyond the same selected-region evidence classification problem.
+- Evidence remains `Partial` at feature-closeout level because local verification is present, but latest remote CI / review evidence for the current branch is still pending.
+
+## Harness Validation
+
+```text
+python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root . --docs-path docs --strict
+```
+
+Result: `Scanned 152 markdown file(s). Checked 6 knowledge artifact(s). Errors: 0. Warnings: 0.`
+
 ## Artifacts
 
 - Feature: `docs/features/F011-rpa-region-scoped-snapshot.md`
 - Spec: `docs/superpowers/specs/2026-05-19-rpa-region-scoped-snapshot-design.md`
 - Plan: `docs/superpowers/plans/2026-05-19-rpa-region-scoped-snapshot.md`
+- Legacy design: `docs/superpowers/specs/2026-05-26-rpa-selected-region-text-extract-design.md`
+- Legacy design scratch: `docs/superpowers/specs/2026-05-27-rpa-selected-region-extract-splitting-design.md`
+- Patch chain commits: `6cb4b29`, `4a1adf2`, `5ea9aa7`, `699b088`, `a27bb41`, `4a2fe58`, `7c1e273`, `04b8fac`, `8e1d1ad`, `f3a6c59`, `0a2abc3`
 - Independent Vision Gate reviewer: Entry Gate pass; exit review must verify capture-before-cap, scoped compression candidate filtering, planner payload unification, trace scope evidence, and no coordinate replay.
 - Independent code reviewer found three blocking/important issues: same-container outside pairs leaked into candidates, structured table rows were capped before scoped ordering, and parent/heading context lacked `ancestor_context`. All three were addressed with targeted tests before this Evidence update.
 - Independent Vision Gate / Patch Churn reviewer for the planner contract follow-up: pass with non-blocking tightening. The reviewer agreed this fix belongs at the planner JSON contract boundary because raw and compact snapshots already contained the selected evidence, and recommended keeping the wrapper narrow so non-runtime Python-like snippets remain planner contract failures.

@@ -10,6 +10,9 @@ from pydantic import ValidationError
 
 from backend.rpa.manager import RPASession, RPASessionManager
 from backend.rpa.region_context import (
+    RPARegionElementBoundsRequest,
+    RPARegionElementBoundsResponse,
+    RPARegionPoint,
     RPARegionAnalyzeRequest,
     RPARegionContext,
     RPARegionEvidence,
@@ -19,6 +22,7 @@ from backend.rpa.region_context import (
     analyze_region_on_page,
     classify_region_evidence,
     prune_region_evidence,
+    resolve_element_bounds_on_page,
 )
 
 
@@ -765,6 +769,40 @@ async def test_analyze_region_on_page_keeps_main_frame_when_iframe_overlap_is_mi
 
 
 @pytest.mark.anyio
+async def test_resolve_element_bounds_on_page_returns_viewport_rect():
+    class FakePage:
+        url = "https://example.test/results"
+
+        async def title(self):
+            return "Results"
+
+        async def evaluate(self, script, point):
+            assert "elementFromPoint" in script
+            assert point == {"x": 80.0, "y": 90.0}
+            return {
+                "rect": {"x": 64, "y": 72, "width": 156, "height": 36},
+                "tag": "button",
+                "role": "button",
+                "name": "Export",
+                "text": "Export",
+                "warnings": [],
+            }
+
+    response = await resolve_element_bounds_on_page(
+        FakePage(),
+        RPARegionElementBoundsRequest(
+            tab_id="tab-1",
+            point=RPARegionPoint(x=80, y=90),
+            viewport=RPARegionViewport(width=1280, height=720),
+        ),
+    )
+
+    assert response.rect == {"x": 64.0, "y": 72.0, "width": 156.0, "height": 36.0}
+    assert response.tag == "button"
+    assert response.name == "Export"
+
+
+@pytest.mark.anyio
 async def test_analyze_region_on_page_prefers_deeper_frame_when_overlap_ties(monkeypatch):
     page = _FakeNestedPage(
         outer_result={"local_text": ["Outer frame"]},
@@ -880,6 +918,60 @@ async def test_analyze_region_route_stores_context(monkeypatch):
     assert stored["context"].tab_id == "tab-1"
     assert response.region_id == stored["context"].region_id
     assert response.inferred_kind == "table_region"
+
+
+@pytest.mark.anyio
+async def test_element_bounds_route_resolves_without_storing_context(monkeypatch):
+    route_module = importlib.import_module("backend.route.rpa")
+    manager = route_module.rpa_manager
+    session = RPASession(
+        id="session-route",
+        user_id="user-1",
+        sandbox_session_id="sandbox-1",
+        active_tab_id="tab-1",
+    )
+    page = object()
+
+    async def fake_get_session(session_id):
+        assert session_id == "session-route"
+        return session
+
+    async def fake_resolve_element_bounds_on_page(page_arg, request_arg):
+        assert page_arg is page
+        assert request_arg.tab_id == "tab-1"
+        return RPARegionElementBoundsResponse(
+            rect={"x": 64, "y": 72, "width": 156, "height": 36},
+            tag="button",
+            role="button",
+            name="Export",
+            text="Export",
+        )
+
+    def fake_get_page_for_tab(session_id, tab_id):
+        assert session_id == "session-route"
+        assert tab_id == "tab-1"
+        return page
+
+    def fail_store_region_context(*_args, **_kwargs):
+        raise AssertionError("element bounds preview must not store a region context")
+
+    monkeypatch.setattr(manager, "get_session", fake_get_session)
+    monkeypatch.setattr(manager, "get_page_for_tab", fake_get_page_for_tab)
+    monkeypatch.setattr(manager, "store_region_context", fail_store_region_context)
+    monkeypatch.setattr(route_module, "resolve_element_bounds_on_page", fake_resolve_element_bounds_on_page)
+
+    response = await route_module.resolve_rpa_region_element_bounds(
+        "session-route",
+        RPARegionElementBoundsRequest(
+            tab_id="tab-1",
+            point=RPARegionPoint(x=80, y=90),
+            viewport=RPARegionViewport(width=1280, height=720),
+        ),
+        type("User", (), {"id": "user-1"})(),
+    )
+
+    assert response.rect == {"x": 64.0, "y": 72.0, "width": 156.0, "height": 36.0}
+    assert response.name == "Export"
 
 
 @pytest.mark.anyio

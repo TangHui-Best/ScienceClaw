@@ -155,6 +155,34 @@ def locator_is_structural_region_header(locator: Any) -> bool:
     return _locator_is_structural_region_header(normalize_locator(locator))
 
 
+def locator_is_observed_text_driven(locator: Any, observed_values: Any) -> bool:
+    normalized = normalize_locator(locator)
+    values = {
+        str(value or "").strip()
+        for value in list(observed_values or [])
+        if str(value or "").strip()
+    }
+    if not normalized or not values:
+        return False
+    return _locator_is_observed_text_driven(normalized, values)
+
+
+def locator_is_replay_safe_for_region_extract(
+    locator: Any,
+    *,
+    observed_values: Optional[List[Any]] = None,
+    reject_structural_region_header: bool = True,
+) -> bool:
+    normalized = normalize_locator(locator)
+    if not has_valid_locator(normalized):
+        return False
+    if locator_has_unstable_identity(normalized):
+        return False
+    if reject_structural_region_header and locator_is_structural_region_header(normalized):
+        return False
+    return not locator_is_observed_text_driven(normalized, observed_values or [])
+
+
 def _locator_instability_penalty(locator: Dict[str, Any]) -> float:
     method = str(locator.get("method") or "").lower()
     if method == "nth":
@@ -243,6 +271,30 @@ def _locator_is_structural_region_header(locator: Dict[str, Any]) -> bool:
         )
     if method in {"nth", "filter_has_text"}:
         return _locator_is_structural_region_header(normalize_locator(locator.get("locator") or locator.get("base")))
+    return False
+
+
+def _locator_is_observed_text_driven(locator: Dict[str, Any], observed_values: set[str]) -> bool:
+    method = str(locator.get("method") or "").strip()
+    value = str(locator.get("value") or "").strip()
+    if method in {"text", "title"} and value and value in observed_values:
+        return True
+    if method == "role":
+        name = str(locator.get("name") or "").strip()
+        return bool(name and name in observed_values)
+    if method == "nested":
+        parent = locator.get("parent") if isinstance(locator.get("parent"), dict) else {}
+        child = locator.get("child") if isinstance(locator.get("child"), dict) else {}
+        return _locator_is_observed_text_driven(parent, observed_values) or _locator_is_observed_text_driven(
+            child,
+            observed_values,
+        )
+    if method in {"nth", "filter_has_text"}:
+        base = locator.get("locator") or locator.get("base")
+        if isinstance(base, dict) and _locator_is_observed_text_driven(base, observed_values):
+            return True
+        has_text = str(locator.get("has_text") or "").strip()
+        return bool(has_text and has_text in observed_values)
     return False
 
 
