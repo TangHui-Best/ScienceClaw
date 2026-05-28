@@ -678,3 +678,104 @@ asset_pool.trust_limits
 - 当前任务是诊断、修 RPA core、重新录制资产，还是 promoted 资产。
 
 如果这些输入缺失，Agent 应先追问，不要靠猜测定位。
+
+## F016 asset-driven user input replay
+
+Phase 4 第一切片让 Harness 从已捕获资产中提取“用户输入事件链”，并用脚本把
+这些事件送入确定性的输入边界 adapter，记录 `boundary_injections`。它不是
+full/live profile，不访问 live URL 作为 oracle，不让外层 Agent 点击产品 UI，
+也不做自动 promotion。
+
+核心边界仍然是：
+
+```text
+Scripts execute.
+Agents explain.
+Humans govern.
+```
+
+运行机器 JSON：
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m backend.rpa.harness.run_user_input_replay --assets data\rpa_harness_assets_bootstrap --output docs\rpa\harness\reports\YYYY-MM-DD-user-input-replay.json
+```
+
+生成中文 summary：
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m backend.rpa.harness.run_user_input_replay --assets data\rpa_harness_assets_bootstrap --format summary --lang zh --output docs\rpa\harness\reports\YYYY-MM-DD-user-input-replay.md --machine-report docs\rpa\harness\reports\YYYY-MM-DD-user-input-replay.json
+```
+
+Agent 优先读取 JSON 字段：
+
+```text
+schema_version
+kind
+profile
+summary
+asset_pool
+selection
+warning_only_observation
+replayed_input_events
+boundary_injections
+failures
+trace_session_result_ids
+trust_limits
+governance_boundary
+```
+
+生命周期规则：
+
+- `candidate` / `golden` 是 blocking replay baseline。
+- `candidate-lite` 是 warning-only observation；失败不应污染 blocking baseline。
+- `draft` / `captured` / inactive / rejected assets 默认 excluded，并记录原因。
+
+事件字段重点看：
+
+```text
+event_kind
+injected_boundary
+source_metadata.checkpoint_path
+source_metadata.trace_events_path
+payload.user_instruction
+payload.locator_candidates
+payload.region_context
+result_refs.trace_id
+result_refs.session_id
+result_refs.result_id
+diagnostics
+runtime_result
+injection
+```
+
+`injected_boundary` 不是只读标签；F016 会为每个 replay event 执行
+`scripted_user_input_replay_adapter`，并在 `boundary_injections[*]` 记录 adapter、
+boundary、status、trace/session/result id 和 input signal。第一切片的 adapter
+是 record-only：它证明脚本边界被执行和记录，不证明 live UI side effect。
+
+当前 bootstrap assets 真实覆盖：
+
+```text
+navigation
+click
+natural_language_instruction
+```
+
+`type`、`select`、`submit` 和 region selection 使用同一个通用 event model，但是否
+具备真实覆盖取决于资产中是否已经捕获对应 trace/checkpoint 事实。不要因为测试
+fixture 支持这些事件就声称 bootstrap baseline 已经覆盖真实表单输入或区域选择。
+
+失败分析顺序：
+
+1. 先看 `summary.blocking_failure_count` 和 `failures[*].failure_category`。
+2. 再看失败事件的 `source_metadata`，打开对应 checkpoint 和 trace events。
+3. 看 `payload`、`diagnostics` 和 `runtime_result` 判断输入事实是否缺失或损坏。
+4. 如果失败来自 captured fact 缺失，先处理资产或 capture/export；不要在 Harness
+   里加站点规则掩盖问题。
+5. 如果失败暴露 RPA core 行为漂移，由 Agent 解释事实并回到 owning module 修复。
+
+报告中的 `governance_boundary.agents_may_promote_automatically=false` 是硬边界。
+Agent 可以解释 replay 报告和建议下一步，但不能自动把资产升为 `candidate` 或
+`golden`。
