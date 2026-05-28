@@ -5,6 +5,8 @@ title: Assisted Asset Review And Promotion Pipeline Evidence
 status: active
 scope: project
 feature_ids: [F010]
+feature_refs:
+  - docs/features/F010-assisted-asset-review-and-promotion-pipeline.md
 created: 2026-05-19
 updated: 2026-05-19
 evidence_level: exhaustive

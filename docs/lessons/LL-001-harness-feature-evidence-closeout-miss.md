@@ -4,6 +4,8 @@ doc_kind: lesson
 status: active
 scope: project
 source_feature_ids: [F002]
+feature_refs:
+  - docs/features/F002-rpa-harness-v0.md
 applies_to: [harness-closeout, multi-slice-feature, evidence-gate]
 created: 2026-05-18
 updated: 2026-05-22

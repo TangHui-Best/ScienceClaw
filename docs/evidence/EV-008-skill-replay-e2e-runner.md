@@ -5,6 +5,8 @@ title: Skill Replay E2E Runner Evidence
 status: active
 scope: project
 feature_ids: [F008]
+feature_refs:
+  - docs/features/F008-skill-replay-e2e-runner.md
 created: 2026-05-18
 updated: 2026-05-19
 evidence_level: exhaustive

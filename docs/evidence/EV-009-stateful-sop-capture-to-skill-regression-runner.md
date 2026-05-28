@@ -5,6 +5,8 @@ title: Stateful SOP Capture-to-Skill Regression Runner Evidence
 status: active
 scope: project
 feature_ids: [F009]
+feature_refs:
+  - docs/features/F009-stateful-sop-capture-to-skill-regression-runner.md
 created: 2026-05-19
 updated: 2026-05-19
 evidence_level: exhaustive

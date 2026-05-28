@@ -4,6 +4,8 @@ doc_kind: adr
 status: accepted
 scope: project
 feature_ids: [F001]
+feature_refs:
+  - docs/features/F001-rpa-trace-source-convergence.md
 decision_area: rpa-trace-compiler-strategy
 created: 2026-05-15
 updated: 2026-05-18

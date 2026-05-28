@@ -5,6 +5,8 @@ title: Production Snapshot Core-chain Regression Evidence
 status: active
 scope: project
 feature_ids: [F007]
+feature_refs:
+  - docs/features/F007-production-snapshot-core-chain-regression.md
 created: 2026-05-18
 updated: 2026-05-18
 evidence_level: exhaustive

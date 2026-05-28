@@ -5,6 +5,8 @@ title: Golden Scenario Asset Model Evidence
 status: active
 scope: project
 feature_ids: [F003]
+feature_refs:
+  - docs/features/F003-golden-scenario-asset-model.md
 created: 2026-05-18
 updated: 2026-05-18
 evidence_level: exhaustive

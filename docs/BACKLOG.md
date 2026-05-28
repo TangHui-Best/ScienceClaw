@@ -1,5 +1,4 @@
 ---
-doc_kind: backlog
 status: active
 updated: 2026-05-24
 ---

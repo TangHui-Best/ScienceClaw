@@ -4,7 +4,8 @@ id: EV-011
 title: RPA Region-Scoped Snapshot Evidence
 status: ready_for_review
 feature_ids: [F011]
-feature_refs: [F011]
+feature_refs:
+  - docs/features/F011-rpa-region-scoped-snapshot.md
 created: 2026-05-19
 updated: 2026-05-25
 scope: RPA region-scoped snapshot capture, compression, bounded section text compilation, and action replay compile boundaries

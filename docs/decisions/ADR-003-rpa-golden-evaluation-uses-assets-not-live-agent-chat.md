@@ -4,6 +4,8 @@ doc_kind: adr
 status: accepted
 scope: project
 feature_ids: [F002]
+feature_refs:
+  - docs/features/F002-rpa-harness-v0.md
 decision_area: rpa-golden-evaluation
 created: 2026-05-18
 updated: 2026-05-19

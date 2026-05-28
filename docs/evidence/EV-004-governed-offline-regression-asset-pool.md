@@ -5,6 +5,8 @@ title: Governed Offline Regression Asset Pool Evidence
 status: active
 scope: project
 feature_ids: [F004]
+feature_refs:
+  - docs/features/F004-governed-offline-regression-asset-pool.md
 created: 2026-05-18
 updated: 2026-05-18
 evidence_level: exhaustive

@@ -5,6 +5,8 @@ title: RPA Harness v0 Evidence
 status: active
 scope: project
 feature_ids: [F002]
+feature_refs:
+  - docs/features/F002-rpa-harness-v0.md
 created: 2026-05-18
 updated: 2026-05-18
 evidence_level: exhaustive

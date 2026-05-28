@@ -1,5 +1,4 @@
 ---
-doc_kind: design
 title: RPA Selected Region Text Extract Design
 status: draft
 date: 2026-05-26

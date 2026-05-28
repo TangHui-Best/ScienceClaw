@@ -5,6 +5,8 @@ title: Observable Governed Regression Report Evidence
 status: active
 scope: project
 feature_ids: [F006]
+feature_refs:
+  - docs/features/F006-observable-governed-regression-report.md
 created: 2026-05-18
 updated: 2026-05-18
 evidence_level: exhaustive

@@ -4,6 +4,8 @@ doc_kind: adr
 status: accepted
 scope: project
 feature_ids: [F001]
+feature_refs:
+  - docs/features/F001-rpa-trace-source-convergence.md
 decision_area: rpa-trace-timeline
 created: 2026-05-13
 updated: 2026-05-18

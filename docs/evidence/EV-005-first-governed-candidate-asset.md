@@ -5,6 +5,8 @@ title: First Governed Candidate Asset Evidence
 status: active
 scope: project
 feature_ids: [F005]
+feature_refs:
+  - docs/features/F005-first-governed-candidate-asset.md
 created: 2026-05-18
 updated: 2026-05-18
 evidence_level: exhaustive

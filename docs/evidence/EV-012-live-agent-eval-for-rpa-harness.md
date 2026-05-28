@@ -4,6 +4,8 @@ id: EV-012
 title: Live Agent Eval For RPA Harness Evidence
 status: completed
 feature_ids: [F012]
+feature_refs:
+  - docs/features/F012-live-agent-eval-for-rpa-harness.md
 created: 2026-05-22
 updated: 2026-05-22
 scope: RPA Harness live-agent natural-language capture validation
