@@ -1,7 +1,11 @@
 import json
 from pathlib import Path
 
-from backend.rpa.harness.catalog import build_harness_catalog
+from backend.rpa.harness.catalog import (
+    build_asset_lifecycle_summary,
+    build_golden_eligibility_report,
+    build_harness_catalog,
+)
 from backend.rpa.harness.run_catalog import main as run_catalog_main
 
 
@@ -61,6 +65,60 @@ def _write_checkpoint(
         encoding="utf-8",
     )
     return step_dir
+
+
+def _write_scenario_asset(
+    root: Path,
+    *,
+    asset_id: str,
+    asset_status: str = "draft",
+    promotion_status: str = "captured",
+    runner_modes: list[str] | None = None,
+    core_chain_coverage: list[str] | None = None,
+    expected_signals_reviewed: bool = False,
+    sensitivity_reviewed: bool = False,
+    page_patterns: list[str] | None = None,
+    before_url: str = "https://example.test/search",
+) -> Path:
+    asset_dir = root / asset_id
+    asset_dir.mkdir(parents=True, exist_ok=True)
+    (asset_dir / "scenario.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "rpa-harness-scenario-v0",
+                "asset_id": asset_id,
+                "capture_scope": "full_sop",
+                "sop_intent": f"Review lifecycle asset {asset_id}",
+                "source": {
+                    "recording_id": f"rec-{asset_id}",
+                    "captured_at": "2026-05-28T10:00:00",
+                    "capture_mode": "harness",
+                    "capture_trigger": "full_sop",
+                },
+                "asset_status": asset_status,
+                "sensitivity": "repo-safe" if sensitivity_reviewed else "local-only",
+                "page_patterns": page_patterns or ["detail-page"],
+                "governance": {
+                    "promotion_status": promotion_status,
+                    "runner_modes": runner_modes or ["offline_core_chain"],
+                    "core_chain_coverage": core_chain_coverage or [],
+                    "expected_signals_reviewed": expected_signals_reviewed,
+                    "sensitivity_reviewed": sensitivity_reviewed,
+                    "review_notes": "lifecycle test fixture",
+                },
+                "step_checkpoints": [{"step_index": 1, "checkpoint_path": "steps/001/checkpoint.json"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_checkpoint(
+        root,
+        asset_id=asset_id,
+        before_url=before_url,
+        after_url=before_url.rstrip("/") + "/done",
+        page_patterns=page_patterns or ["detail-page"],
+    )
+    return asset_dir
 
 
 def test_catalog_summarizes_capture_assets_and_step_coverage(tmp_path: Path):
@@ -177,3 +235,142 @@ def test_catalog_cli_writes_report_file(tmp_path: Path):
     report = json.loads(output_path.read_text(encoding="utf-8"))
     assert report["summary"]["step_count"] == 1
     assert report["captures"][0]["asset_id"] == "asset-cli"
+
+
+def test_asset_lifecycle_summary_reports_distribution_and_review_state(tmp_path: Path):
+    _write_scenario_asset(tmp_path, asset_id="draft-capture")
+    _write_scenario_asset(
+        tmp_path,
+        asset_id="candidate-lite-observed",
+        promotion_status="candidate-lite",
+        runner_modes=["offline_core_chain", "skill_replay_e2e"],
+        core_chain_coverage=["html_to_raw_snapshot", "trace_to_skill"],
+        page_patterns=["card-list"],
+    )
+    _write_scenario_asset(
+        tmp_path,
+        asset_id="candidate-ready",
+        asset_status="active",
+        promotion_status="candidate",
+        core_chain_coverage=["html_to_raw_snapshot", "raw_to_compact_snapshot", "trace_to_skill"],
+        expected_signals_reviewed=True,
+        sensitivity_reviewed=True,
+        page_patterns=["detail-page"],
+    )
+    _write_scenario_asset(
+        tmp_path,
+        asset_id="golden-ready",
+        asset_status="active",
+        promotion_status="golden",
+        core_chain_coverage=["html_to_raw_snapshot", "raw_to_compact_snapshot", "trace_to_skill"],
+        expected_signals_reviewed=True,
+        sensitivity_reviewed=True,
+        page_patterns=["form"],
+        before_url="https://internal.example.test/form",
+    )
+    _write_scenario_asset(
+        tmp_path,
+        asset_id="candidate-unreviewed",
+        asset_status="active",
+        promotion_status="candidate",
+        core_chain_coverage=["trace_to_skill"],
+        expected_signals_reviewed=False,
+        sensitivity_reviewed=True,
+    )
+
+    summary = build_asset_lifecycle_summary(tmp_path)
+
+    assert summary["schema_version"] == "rpa-harness-asset-lifecycle-summary-v1"
+    assert summary["summary"]["asset_count"] == 5
+    assert summary["summary"]["promotion_statuses"] == {
+        "candidate": 2,
+        "candidate-lite": 1,
+        "captured": 1,
+        "golden": 1,
+    }
+    assert summary["summary"]["lifecycle_distribution"] == {
+        "draft": 1,
+        "candidate-lite": 1,
+        "candidate": 2,
+        "golden": 1,
+    }
+    assert summary["review_state"] == {
+        "expected_signals_reviewed": 2,
+        "expected_signals_unreviewed": 3,
+        "sensitivity_reviewed": 3,
+        "sensitivity_unreviewed": 2,
+    }
+    assert summary["blocking_baseline_asset_ids"] == ["candidate-ready", "golden-ready"]
+    assert summary["warning_only_asset_ids"] == ["candidate-lite-observed"]
+    assert summary["golden_asset_ids"] == ["golden-ready"]
+    assert summary["coverage_boundary"]["runner_modes"]["offline_core_chain"] == 5
+    assert summary["coverage_boundary"]["core_chain_coverage"]["trace_to_skill"] == 4
+    assert summary["coverage_boundary"]["page_patterns"] == ["card-list", "detail-page", "form"]
+    assert "bootstrap coverage" in " ".join(summary["trust_limits"])
+    assert {
+        "asset_id": "candidate-unreviewed",
+        "reasons": ["expected-signals-not-reviewed"],
+    } in summary["lifecycle_warnings"]
+    assert "catalog" not in summary
+
+
+def test_asset_lifecycle_summary_requires_explicit_catalog_details(tmp_path: Path):
+    _write_scenario_asset(
+        tmp_path,
+        asset_id="candidate-ready",
+        asset_status="active",
+        promotion_status="candidate",
+        core_chain_coverage=["trace_to_skill"],
+        expected_signals_reviewed=True,
+        sensitivity_reviewed=True,
+    )
+
+    summary = build_asset_lifecycle_summary(tmp_path, include_catalog=True)
+
+    assert "catalog" in summary
+    assert summary["catalog"]["captures"][0]["asset_id"] == "candidate-ready"
+
+
+def test_golden_eligibility_report_requires_candidate_review_and_human_approval(tmp_path: Path):
+    _write_scenario_asset(
+        tmp_path,
+        asset_id="candidate-ready",
+        asset_status="active",
+        promotion_status="candidate",
+        core_chain_coverage=["html_to_raw_snapshot", "trace_to_skill"],
+        expected_signals_reviewed=True,
+        sensitivity_reviewed=True,
+    )
+    _write_scenario_asset(
+        tmp_path,
+        asset_id="candidate-lite-observed",
+        promotion_status="candidate-lite",
+        core_chain_coverage=["trace_to_skill"],
+    )
+    _write_scenario_asset(
+        tmp_path,
+        asset_id="candidate-unreviewed",
+        asset_status="active",
+        promotion_status="candidate",
+        core_chain_coverage=["trace_to_skill"],
+        expected_signals_reviewed=False,
+        sensitivity_reviewed=False,
+    )
+
+    before = (tmp_path / "candidate-ready" / "scenario.json").read_text(encoding="utf-8")
+    report = build_golden_eligibility_report(tmp_path)
+    after = (tmp_path / "candidate-ready" / "scenario.json").read_text(encoding="utf-8")
+
+    assert report["schema_version"] == "rpa-harness-golden-eligibility-v1"
+    assert before == after
+    by_id = {item["asset_id"]: item for item in report["assets"]}
+    assert by_id["candidate-ready"]["eligible"] is True
+    assert by_id["candidate-ready"]["requires_human_approval"] is True
+    assert by_id["candidate-ready"]["blocking_reasons"] == []
+    assert by_id["candidate-lite-observed"]["eligible"] is False
+    assert "promotion-status-candidate-lite" in by_id["candidate-lite-observed"]["blocking_reasons"]
+    assert by_id["candidate-unreviewed"]["eligible"] is False
+    assert by_id["candidate-unreviewed"]["blocking_reasons"] == [
+        "expected-signals-not-reviewed",
+        "sensitivity-not-reviewed",
+    ]

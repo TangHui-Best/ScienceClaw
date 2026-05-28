@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .catalog import build_asset_lifecycle_summary
 from .governed_regression import run_governed_offline_regression
 
 
@@ -121,10 +122,12 @@ def run_harness_profile(
 
     governed_report = run_governed_offline_regression(assets_root)
     summary = _profile_summary(governed_report)
+    asset_pool = build_asset_lifecycle_summary(assets_root)
     return {
         "schema_version": "rpa-harness-profile-run-v1",
         "profile": _profile_metadata(),
         "summary": summary,
+        "asset_pool": asset_pool,
         "interpretation": _profile_interpretation(governed_report, summary),
         "deterministic": governed_report,
     }
@@ -138,6 +141,11 @@ def _format_basis(values: list[str]) -> str:
     return "; ".join(values) if values else "none"
 
 
+def _format_counts(values: dict[str, Any]) -> str:
+    parts = [f"{key}={values[key]}" for key in sorted(values)]
+    return ", ".join(parts) if parts else "none"
+
+
 def render_profile_summary(
     report: dict[str, Any],
     *,
@@ -149,6 +157,9 @@ def render_profile_summary(
     interpretation = report.get("interpretation", {})
     governed = report.get("deterministic", {})
     governed_summary = governed.get("summary", {})
+    asset_pool = report.get("asset_pool") or {}
+    lifecycle_distribution = (asset_pool.get("summary") or {}).get("lifecycle_distribution") or {}
+    coverage_boundary = asset_pool.get("coverage_boundary") or {}
     machine_path = str(machine_report_path) if machine_report_path else "not written"
     agent_flow = ", ".join(list(interpretation.get("recommended_agent_flow") or [])[:4])
     basis = _format_basis(list(interpretation.get("basis") or [])[:4])
@@ -162,6 +173,14 @@ def render_profile_summary(
             f"Bounded interpretation: {str(interpretation.get('bounded', False)).lower()}",
             f"Basis: {basis}",
             f"选中资产: {_format_values(list(summary.get('selected_asset_ids') or []))}",
+            f"Lifecycle distribution: {_format_counts(lifecycle_distribution)}",
+            f"Blocking baseline assets: {_format_values(list(asset_pool.get('blocking_baseline_asset_ids') or []))}",
+            f"Warning-only assets: {_format_values(list(asset_pool.get('warning_only_asset_ids') or []))}",
+            (
+                "Coverage boundary: "
+                f"runner_modes={_format_counts(coverage_boundary.get('runner_modes') or {})}; "
+                f"core_chain={_format_counts(coverage_boundary.get('core_chain_coverage') or {})}"
+            ),
             f"排除资产数: {summary.get('excluded_asset_count', 0)}",
             f"首个失败类别: {summary.get('first_failure_category') or 'none'}",
             (
@@ -181,6 +200,14 @@ def render_profile_summary(
             f"Bounded interpretation: {str(interpretation.get('bounded', False)).lower()}",
             f"Basis: {basis}",
             f"Selected assets: {_format_values(list(summary.get('selected_asset_ids') or []))}",
+            f"Lifecycle distribution: {_format_counts(lifecycle_distribution)}",
+            f"Blocking baseline assets: {_format_values(list(asset_pool.get('blocking_baseline_asset_ids') or []))}",
+            f"Warning-only assets: {_format_values(list(asset_pool.get('warning_only_asset_ids') or []))}",
+            (
+                "Coverage boundary: "
+                f"runner_modes={_format_counts(coverage_boundary.get('runner_modes') or {})}; "
+                f"core_chain={_format_counts(coverage_boundary.get('core_chain_coverage') or {})}"
+            ),
             f"Excluded asset count: {summary.get('excluded_asset_count', 0)}",
             f"First failure category: {summary.get('first_failure_category') or 'none'}",
             (

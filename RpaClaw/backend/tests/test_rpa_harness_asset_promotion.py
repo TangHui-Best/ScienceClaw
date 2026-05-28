@@ -111,17 +111,35 @@ def test_candidate_and_golden_promotion_require_explicit_review_confirmations(tm
 
     golden_dir = _write_asset(tmp_path, asset_id="golden-capture")
 
-    with pytest.raises(PromotionError, match="sensitivity"):
+    with pytest.raises(PromotionError, match="human approval"):
         promote_harness_asset(tmp_path, "golden-capture", "golden", confirm_expected=True)
 
     assert _read_scenario(golden_dir)["governance"]["promotion_status"] == "captured"
 
+    with pytest.raises(PromotionError, match="promotion-status-captured"):
+        promote_harness_asset(
+            tmp_path,
+            "golden-capture",
+            "golden",
+            confirm_expected=True,
+            confirm_sensitivity=True,
+            human_approved_golden=True,
+        )
+
+    promote_harness_asset(
+        tmp_path,
+        "golden-capture",
+        "candidate",
+        confirm_expected=True,
+        confirm_sensitivity=True,
+    )
     golden_result = promote_harness_asset(
         tmp_path,
         "golden-capture",
         "golden",
         confirm_expected=True,
         confirm_sensitivity=True,
+        human_approved_golden=True,
     )
 
     golden_scenario = _read_scenario(golden_dir)
@@ -130,6 +148,94 @@ def test_candidate_and_golden_promotion_require_explicit_review_confirmations(tm
     assert golden_scenario["governance"]["promotion_status"] == "golden"
     assert golden_scenario["governance"]["expected_signals_reviewed"] is True
     assert golden_scenario["governance"]["sensitivity_reviewed"] is True
+
+
+def test_golden_promotion_requires_human_approval_and_candidate_eligibility(tmp_path: Path):
+    asset_dir = _write_asset(tmp_path, asset_id="candidate-ready")
+    promote_harness_asset(
+        tmp_path,
+        "candidate-ready",
+        "candidate",
+        confirm_expected=True,
+        confirm_sensitivity=True,
+    )
+
+    with pytest.raises(PromotionError, match="human approval"):
+        promote_harness_asset(
+            tmp_path,
+            "candidate-ready",
+            "golden",
+            confirm_expected=True,
+            confirm_sensitivity=True,
+        )
+
+    scenario = _read_scenario(asset_dir)
+    assert scenario["governance"]["promotion_status"] == "candidate"
+
+    result = promote_harness_asset(
+        tmp_path,
+        "candidate-ready",
+        "golden",
+        confirm_expected=True,
+        confirm_sensitivity=True,
+        human_approved_golden=True,
+    )
+
+    scenario = _read_scenario(asset_dir)
+    assert result["promotion_status"] == "golden"
+    assert result["human_approved"] is True
+    assert result["eligibility_status"] == "eligible"
+    assert result["eligibility_reasons"] == []
+    assert scenario["governance"]["promotion_status"] == "golden"
+
+    draft_dir = _write_asset(tmp_path, asset_id="draft-to-golden")
+    with pytest.raises(PromotionError, match="promotion-status-captured"):
+        promote_harness_asset(
+            tmp_path,
+            "draft-to-golden",
+            "golden",
+            confirm_expected=True,
+            confirm_sensitivity=True,
+            human_approved_golden=True,
+        )
+    assert _read_scenario(draft_dir)["governance"]["promotion_status"] == "captured"
+
+    override_result = promote_harness_asset(
+        tmp_path,
+        "draft-to-golden",
+        "golden",
+        confirm_expected=True,
+        confirm_sensitivity=True,
+        human_approved_golden=True,
+        override_golden_eligibility=True,
+    )
+
+    assert override_result["promotion_status"] == "golden"
+    assert override_result["eligibility_status"] == "override"
+    assert "promotion-status-captured" in override_result["eligibility_reasons"]
+
+
+def test_golden_promotion_blocks_when_directory_id_and_scenario_id_diverge(tmp_path: Path):
+    asset_dir = _write_asset(tmp_path, asset_id="directory-id")
+    scenario = _read_scenario(asset_dir)
+    scenario["asset_id"] = "scenario-id"
+    scenario["asset_status"] = "active"
+    scenario["governance"]["promotion_status"] = "candidate"
+    scenario["governance"]["expected_signals_reviewed"] = True
+    scenario["governance"]["sensitivity_reviewed"] = True
+    (asset_dir / "scenario.json").write_text(json.dumps(scenario), encoding="utf-8")
+
+    with pytest.raises(PromotionError, match="eligibility-not-found"):
+        promote_harness_asset(
+            tmp_path,
+            "directory-id",
+            "golden",
+            confirm_expected=True,
+            confirm_sensitivity=True,
+            human_approved_golden=True,
+        )
+
+    assert _read_scenario(asset_dir)["governance"]["promotion_status"] == "candidate"
 
 
 def test_asset_promote_cli_supports_candidate_lite(tmp_path: Path):
@@ -144,3 +250,47 @@ def test_asset_promote_cli_supports_candidate_lite(tmp_path: Path):
     assert scenario["governance"]["promotion_status"] == "candidate-lite"
     assert scenario["governance"]["expected_signals_reviewed"] is False
     assert scenario["governance"]["sensitivity_reviewed"] is False
+
+
+def test_asset_promote_cli_requires_golden_human_approval(tmp_path: Path):
+    _write_asset(tmp_path, asset_id="cli-golden")
+    promote_harness_asset(
+        tmp_path,
+        "cli-golden",
+        "candidate",
+        confirm_expected=True,
+        confirm_sensitivity=True,
+    )
+
+    denied = run_asset_promote_main(
+        [
+            "--assets",
+            str(tmp_path),
+            "--asset-id",
+            "cli-golden",
+            "--level",
+            "golden",
+            "--confirm-expected",
+            "--confirm-sensitivity",
+        ]
+    )
+
+    assert denied == 1
+
+    approved = run_asset_promote_main(
+        [
+            "--assets",
+            str(tmp_path),
+            "--asset-id",
+            "cli-golden",
+            "--level",
+            "golden",
+            "--confirm-expected",
+            "--confirm-sensitivity",
+            "--human-approved-golden",
+        ]
+    )
+
+    assert approved == 0
+    scenario = _read_scenario(tmp_path / "cli-golden")
+    assert scenario["governance"]["promotion_status"] == "golden"

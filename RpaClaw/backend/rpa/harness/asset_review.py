@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .asset_validation import validate_harness_assets
+from .catalog import build_golden_eligibility_report
 from .compiler_regression import run_compiler_regression
 from .models import HarnessScenarioAsset, HarnessStepCheckpoint
 from .snapshot_regression import run_snapshot_regression
@@ -436,6 +437,40 @@ def _suggested_promotion(scenario: HarnessScenarioAsset) -> str:
     )
 
 
+def _lifecycle_lines(assets_root: Path, scenario: HarnessScenarioAsset) -> list[str]:
+    governance = scenario.governance
+    eligibility = build_golden_eligibility_report(
+        assets_root,
+        asset_ids={scenario.asset_id},
+    )
+    assets = {
+        str(item.get("asset_id")): item
+        for item in eligibility.get("assets", [])
+        if isinstance(item, dict)
+    }
+    asset_eligibility = assets.get(scenario.asset_id) or {}
+    eligibility_label = "eligible" if asset_eligibility.get("eligible") else "not-eligible"
+    blocking_reasons = list(asset_eligibility.get("blocking_reasons") or [])
+    runner_modes = list(governance.runner_modes or [])
+    core_chain_coverage = list(governance.core_chain_coverage or [])
+    return [
+        "## 生命周期状态（Lifecycle State）",
+        "",
+        f"- Asset status: `{_sanitize_text(scenario.asset_status)}`",
+        f"- Promotion: `{_sanitize_text(governance.promotion_status)}`",
+        f"- Expected signals reviewed: `{str(governance.expected_signals_reviewed).lower()}`",
+        f"- Sensitivity reviewed: `{str(governance.sensitivity_reviewed).lower()}`",
+        f"- Runner coverage: {', '.join(f'`{mode}`' for mode in runner_modes) if runner_modes else '`none`'}",
+        (
+            "- Core-chain coverage: "
+            f"{', '.join(f'`{segment}`' for segment in core_chain_coverage) if core_chain_coverage else '`none`'}"
+        ),
+        f"- Golden eligibility: `{eligibility_label}`",
+        f"- Human approval required: `{str(asset_eligibility.get('requires_human_approval', True)).lower()}`",
+        f"- Eligibility blockers: {', '.join(f'`{reason}`' for reason in blocking_reasons) if blocking_reasons else '`none`'}",
+    ]
+
+
 def build_asset_review_packet(assets_root: str | Path, asset_id: str) -> str:
     root = Path(assets_root)
     asset_dir = root / asset_id
@@ -476,6 +511,8 @@ def build_asset_review_packet(assets_root: str | Path, asset_id: str) -> str:
         "## 自动检查（Auto Checks）",
         "",
         *[f"- {line}" for line in _auto_checks(assets_root=root, asset_id=scenario.asset_id, scenario=scenario, steps=steps)],
+        "",
+        *_lifecycle_lines(root, scenario),
         "",
         "## 人工确认问题（Review Questions）",
         "",

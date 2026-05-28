@@ -28,6 +28,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Confirm sensitivity was reviewed for candidate/golden promotion",
     )
+    parser.add_argument(
+        "--human-approved-golden",
+        action="store_true",
+        help="Confirm a human approved golden contract promotion",
+    )
+    parser.add_argument(
+        "--override-golden-eligibility",
+        action="store_true",
+        help="Override golden eligibility blockers after explicit human approval",
+    )
     parser.add_argument("--output", help="Optional path to write the promotion JSON report")
     args = parser.parse_args(argv)
 
@@ -38,6 +48,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.level,
             confirm_expected=args.confirm_expected,
             confirm_sensitivity=args.confirm_sensitivity,
+            human_approved_golden=args.human_approved_golden,
+            override_golden_eligibility=args.override_golden_eligibility,
         )
     except PromotionError as exc:
         sys.stderr.write(f"{exc}\n")

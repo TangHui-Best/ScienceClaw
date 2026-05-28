@@ -544,6 +544,126 @@ deterministic.observability.runner_signals
 Phase 1 不接 CI blocking，不扩张 full/live profile，不做自动诊断平台。失败分析由
 Agent 基于报告事实解释，真正修复应回到 owning RPA core component。
 
+## F015 asset lifecycle operationalization
+
+Phase 3 的目标是让资产生命周期成为日常可操作流程，而不是新增 runner。核心边界仍然是：
+
+```text
+Scripts execute.
+Agents explain.
+Humans govern.
+```
+
+资产生命周期语义固定为：
+
+| Lifecycle | 用途 | 是否 blocking |
+| --- | --- | --- |
+| `draft` / `captured` | 新捕获事实资产，默认本地，先生成 Review Packet。 | 否 |
+| `candidate-lite` | 人工初筛后的 warning-only observation。 | 否 |
+| `candidate` | 人工确认 expected signals 和 sensitivity 后的 blocking regression asset。 | 是 |
+| `golden` | 从 candidate 人工批准提升的长期 contract asset。 | 是 |
+
+### 生命周期摘要
+
+查看资产池状态、review 状态、runner coverage 和可信边界：
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m backend.rpa.harness.run_catalog --assets data\rpa_harness_assets_bootstrap --format lifecycle --output docs\rpa\harness\reports\YYYY-MM-DD-lifecycle-summary.json
+```
+
+Agent 优先读取：
+
+```text
+summary.lifecycle_distribution
+review_state
+blocking_baseline_asset_ids
+warning_only_asset_ids
+golden_asset_ids
+coverage_boundary
+trust_limits
+lifecycle_warnings
+```
+
+`candidate-lite` 只允许进入 `warning_only_asset_ids`，不允许进入 `blocking_baseline_asset_ids`。
+
+### Golden eligibility report
+
+查看哪些 candidate 满足 golden 资格，但不要把 eligibility 当成 promotion：
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m backend.rpa.harness.run_catalog --assets data\rpa_harness_assets_bootstrap --format golden-eligibility --output docs\rpa\harness\reports\YYYY-MM-DD-golden-eligibility.json
+```
+
+资格规则：
+
+- 当前必须是 `promotion_status=candidate`。
+- 必须是 `asset_status=active`。
+- `expected_signals_reviewed=true`。
+- `sensitivity_reviewed=true`。
+- 必须启用 `offline_core_chain`。
+- `core_chain_coverage` 不能为空。
+- 即使 `eligible=true`，仍然必须有人工 golden contract approval。
+
+### Promotion guardrails
+
+`candidate-lite` 不设置 expected/sensitivity review，也不污染 blocking baseline：
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m backend.rpa.harness.run_asset_promote --assets <asset_root> --asset-id <asset_id> --level candidate-lite
+```
+
+`candidate` 必须显式确认 expected signals 和 sensitivity：
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m backend.rpa.harness.run_asset_promote --assets <asset_root> --asset-id <asset_id> --level candidate --confirm-expected --confirm-sensitivity
+```
+
+`golden` 只能从合格 candidate 提升，并且需要人工批准：
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m backend.rpa.harness.run_asset_promote --assets <asset_root> --asset-id <asset_id> --level golden --confirm-expected --confirm-sensitivity --human-approved-golden
+```
+
+只有在人明确承担治理责任时才可使用 override，并且仍然必须传入 `--human-approved-golden`：
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m backend.rpa.harness.run_asset_promote --assets <asset_root> --asset-id <asset_id> --level golden --confirm-expected --confirm-sensitivity --human-approved-golden --override-golden-eligibility
+```
+
+Agent 可以解释 eligibility report 和提出建议，但不得自动决定 `candidate` 或 `golden` promotion。
+
+### Deterministic profile asset pool boundary
+
+F015 后 deterministic profile JSON 会包含 `asset_pool`：
+
+```text
+asset_pool.summary.lifecycle_distribution
+asset_pool.blocking_baseline_asset_ids
+asset_pool.warning_only_asset_ids
+asset_pool.coverage_boundary
+asset_pool.trust_limits
+```
+
+这些字段用于说明当前 profile 证明了哪些资产池边界。即使 `interpretation.verdict=no meaningful change`，也只表示当前 covered asset pool 未暴露有意义变化，不代表全局 RPA Agent 健康。
+
+### 内网真实资产最小流程
+
+1. 新资产放在内网本地 asset root，保持 `draft/captured`。
+2. 生成 Review Packet，不直接要求人读 raw HTML / trace / checkpoint。
+3. 若场景有观察价值，先升为 `candidate-lite`。
+4. 跑 deterministic profile 或 governed regression，确认它只产生 warning-only observation。
+5. 做 sensitivity review，确认敏感 HTML、截图、token、个人信息不会进入不该进入的位置。
+6. 做 expected signals review，确认 expected 表达业务意图，不冻结偶然文案或绝对 selector。
+7. 人工确认后升为 `candidate`。
+8. 只有长期稳定、代表核心能力、低维护的 candidate 才进入 golden eligibility review。
+9. human approval 后才允许 `golden` promotion。
+
 ## 内网交接最小清单
 
 把 Harness 交给其它 Agent 使用前，至少提供：

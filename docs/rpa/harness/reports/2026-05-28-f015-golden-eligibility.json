@@ -1,0 +1,81 @@
+{
+  "schema_version": "rpa-harness-golden-eligibility-v1",
+  "summary": {
+    "asset_count": 2,
+    "eligible_count": 2,
+    "ineligible_count": 0,
+    "eligible_asset_ids": [
+      "hcap-4be6265f43eb42dfa259182207aa64cc",
+      "hcap-de463b7bb608482e9b5bcdd5b78a224e"
+    ]
+  },
+  "assets": [
+    {
+      "asset_id": "hcap-4be6265f43eb42dfa259182207aa64cc",
+      "eligible": true,
+      "requires_human_approval": true,
+      "blocking_reasons": [],
+      "asset_status": "active",
+      "promotion_status": "candidate",
+      "expected_signals_reviewed": true,
+      "sensitivity_reviewed": true,
+      "runner_modes": [
+        "offline_core_chain",
+        "skill_replay_e2e",
+        "stateful_sop_capture_to_skill"
+      ],
+      "core_chain_coverage": [
+        "html_to_raw_snapshot",
+        "raw_to_compact_snapshot",
+        "planner_action_selection",
+        "trace_to_skill",
+        "skill_replay",
+        "stateful_capture_to_skill"
+      ]
+    },
+    {
+      "asset_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e",
+      "eligible": true,
+      "requires_human_approval": true,
+      "blocking_reasons": [],
+      "asset_status": "active",
+      "promotion_status": "candidate",
+      "expected_signals_reviewed": true,
+      "sensitivity_reviewed": true,
+      "runner_modes": [
+        "offline_core_chain",
+        "skill_replay_e2e",
+        "stateful_sop_capture_to_skill"
+      ],
+      "core_chain_coverage": [
+        "html_to_raw_snapshot",
+        "raw_to_compact_snapshot",
+        "planner_action_selection",
+        "trace_to_skill",
+        "skill_replay",
+        "stateful_capture_to_skill"
+      ]
+    }
+  ],
+  "lifecycle_summary": {
+    "lifecycle_distribution": {
+      "candidate": 2
+    },
+    "blocking_baseline_asset_ids": [
+      "hcap-4be6265f43eb42dfa259182207aa64cc",
+      "hcap-de463b7bb608482e9b5bcdd5b78a224e"
+    ],
+    "warning_only_asset_ids": [],
+    "trust_limits": [
+      "Current asset pool coverage is narrow",
+      "bootstrap coverage does not prove global RPA health",
+      "candidate-lite assets are warning-only and not blocking baseline",
+      "golden eligibility is advisory until human approval"
+    ]
+  },
+  "human_governance": {
+    "required_for_promotion": true,
+    "agents_may_recommend": true,
+    "agents_may_promote_automatically": false
+  }
+}

@@ -34,6 +34,62 @@ def _counter_dict(counter: Counter[str]) -> dict[str, int]:
     return {key: counter[key] for key in sorted(counter)}
 
 
+def _counter_from_values(values: list[str]) -> dict[str, int]:
+    return _counter_dict(Counter(value for value in values if value))
+
+
+def _asset_lifecycle(capture: dict[str, Any]) -> str:
+    governance = capture.get("governance") or {}
+    promotion_status = str(governance.get("promotion_status") or "")
+    if promotion_status == "captured":
+        return "draft"
+    return promotion_status or "unknown"
+
+
+def _blocking_baseline_reasons(capture: dict[str, Any]) -> list[str]:
+    governance = capture.get("governance") or {}
+    reasons: list[str] = []
+    asset_status = str(capture.get("asset_status") or "")
+    promotion_status = str(governance.get("promotion_status") or "")
+    runner_modes = set(governance.get("runner_modes") or [])
+    core_chain_coverage = list(governance.get("core_chain_coverage") or [])
+    if asset_status != "active":
+        reasons.append(f"asset-status-{asset_status or 'unknown'}")
+    if promotion_status not in {"candidate", "golden"}:
+        reasons.append(f"promotion-status-{promotion_status or 'unknown'}")
+    if "offline_core_chain" not in runner_modes:
+        reasons.append("offline-core-chain-not-enabled")
+    if not core_chain_coverage:
+        reasons.append("missing-core-chain-coverage")
+    if governance.get("expected_signals_reviewed") is not True:
+        reasons.append("expected-signals-not-reviewed")
+    if governance.get("sensitivity_reviewed") is not True:
+        reasons.append("sensitivity-not-reviewed")
+    return reasons
+
+
+def _golden_eligibility_reasons(capture: dict[str, Any]) -> list[str]:
+    governance = capture.get("governance") or {}
+    reasons: list[str] = []
+    asset_status = str(capture.get("asset_status") or "")
+    promotion_status = str(governance.get("promotion_status") or "")
+    runner_modes = set(governance.get("runner_modes") or [])
+    core_chain_coverage = list(governance.get("core_chain_coverage") or [])
+    if promotion_status != "candidate":
+        reasons.append(f"promotion-status-{promotion_status or 'unknown'}")
+    if asset_status != "active":
+        reasons.append(f"asset-status-{asset_status or 'unknown'}")
+    if governance.get("expected_signals_reviewed") is not True:
+        reasons.append("expected-signals-not-reviewed")
+    if governance.get("sensitivity_reviewed") is not True:
+        reasons.append("sensitivity-not-reviewed")
+    if "offline_core_chain" not in runner_modes:
+        reasons.append("offline-core-chain-not-enabled")
+    if not core_chain_coverage:
+        reasons.append("missing-core-chain-coverage")
+    return reasons
+
+
 def _scenario_entry(asset_dir: Path, root: Path, warnings: list[dict[str, str]]) -> dict[str, Any]:
     scenario_path = asset_dir / "scenario.json"
     fallback = {
@@ -203,4 +259,144 @@ def build_harness_catalog(
         "captures": captures,
         "steps": sorted(steps, key=lambda item: (item["asset_id"], item["step_index"])),
         "warnings": warnings,
+    }
+
+
+def build_asset_lifecycle_summary(
+    assets_root: str | Path,
+    *,
+    asset_ids: set[str] | None = None,
+    include_catalog: bool = False,
+) -> dict[str, Any]:
+    catalog = build_harness_catalog(assets_root, asset_ids=asset_ids)
+    captures = [capture for capture in catalog.get("captures", []) if isinstance(capture, dict)]
+    lifecycle_values = [_asset_lifecycle(capture) for capture in captures]
+    blocking_baseline: list[str] = []
+    warning_only: list[str] = []
+    golden: list[str] = []
+    lifecycle_warnings: list[dict[str, Any]] = []
+
+    for capture in captures:
+        asset_id = str(capture.get("asset_id") or "")
+        governance = capture.get("governance") or {}
+        promotion_status = str(governance.get("promotion_status") or "")
+        if promotion_status == "candidate-lite" and asset_id:
+            warning_only.append(asset_id)
+        if promotion_status == "golden" and asset_id:
+            golden.append(asset_id)
+
+        reasons = _blocking_baseline_reasons(capture)
+        if not reasons and asset_id:
+            blocking_baseline.append(asset_id)
+        elif promotion_status in {"candidate", "golden"} and asset_id:
+            lifecycle_warnings.append({"asset_id": asset_id, "reasons": reasons})
+
+    expected_reviewed = len(
+        [
+            capture
+            for capture in captures
+            if (capture.get("governance") or {}).get("expected_signals_reviewed") is True
+        ]
+    )
+    sensitivity_reviewed = len(
+        [
+            capture
+            for capture in captures
+            if (capture.get("governance") or {}).get("sensitivity_reviewed") is True
+        ]
+    )
+    summary = catalog.get("summary") or {}
+    report = {
+        "schema_version": "rpa-harness-asset-lifecycle-summary-v1",
+        "summary": {
+            "asset_count": len(captures),
+            "lifecycle_distribution": _counter_from_values(lifecycle_values),
+            "promotion_statuses": dict(summary.get("promotion_statuses") or {}),
+            "asset_statuses": dict(summary.get("asset_statuses") or {}),
+            "sensitivity": dict(summary.get("sensitivity") or {}),
+        },
+        "review_state": {
+            "expected_signals_reviewed": expected_reviewed,
+            "expected_signals_unreviewed": len(captures) - expected_reviewed,
+            "sensitivity_reviewed": sensitivity_reviewed,
+            "sensitivity_unreviewed": len(captures) - sensitivity_reviewed,
+        },
+        "blocking_baseline_asset_ids": sorted(blocking_baseline),
+        "warning_only_asset_ids": sorted(warning_only),
+        "golden_asset_ids": sorted(golden),
+        "coverage_boundary": {
+            "runner_modes": dict(summary.get("runner_modes") or {}),
+            "core_chain_coverage": dict(summary.get("core_chain_coverage") or {}),
+            "page_patterns": list(summary.get("page_patterns") or []),
+            "hosts": list(summary.get("hosts") or []),
+        },
+        "lifecycle_warnings": sorted(lifecycle_warnings, key=lambda item: str(item["asset_id"])),
+        "trust_limits": [
+            "Current asset pool coverage is narrow",
+            "bootstrap coverage does not prove global RPA health",
+            "candidate-lite assets are warning-only and not blocking baseline",
+            "golden eligibility is advisory until human approval",
+        ],
+    }
+    if include_catalog:
+        report["catalog"] = catalog
+    return report
+
+
+def build_golden_eligibility_report(
+    assets_root: str | Path,
+    *,
+    asset_ids: set[str] | None = None,
+) -> dict[str, Any]:
+    lifecycle = build_asset_lifecycle_summary(
+        assets_root,
+        asset_ids=asset_ids,
+        include_catalog=True,
+    )
+    captures = [
+        capture
+        for capture in lifecycle["catalog"].get("captures", [])
+        if isinstance(capture, dict)
+    ]
+    assets: list[dict[str, Any]] = []
+    for capture in captures:
+        reasons = _golden_eligibility_reasons(capture)
+        governance = capture.get("governance") or {}
+        assets.append(
+            {
+                "asset_id": str(capture.get("asset_id") or ""),
+                "eligible": not reasons,
+                "requires_human_approval": True,
+                "blocking_reasons": reasons,
+                "asset_status": str(capture.get("asset_status") or "unknown"),
+                "promotion_status": str(governance.get("promotion_status") or "unknown"),
+                "expected_signals_reviewed": governance.get("expected_signals_reviewed") is True,
+                "sensitivity_reviewed": governance.get("sensitivity_reviewed") is True,
+                "runner_modes": list(governance.get("runner_modes") or []),
+                "core_chain_coverage": list(governance.get("core_chain_coverage") or []),
+            }
+        )
+
+    return {
+        "schema_version": "rpa-harness-golden-eligibility-v1",
+        "summary": {
+            "asset_count": len(assets),
+            "eligible_count": len([asset for asset in assets if asset["eligible"]]),
+            "ineligible_count": len([asset for asset in assets if not asset["eligible"]]),
+            "eligible_asset_ids": sorted(
+                asset["asset_id"] for asset in assets if asset["eligible"] and asset["asset_id"]
+            ),
+        },
+        "assets": sorted(assets, key=lambda item: str(item["asset_id"])),
+        "lifecycle_summary": {
+            "lifecycle_distribution": lifecycle["summary"]["lifecycle_distribution"],
+            "blocking_baseline_asset_ids": lifecycle["blocking_baseline_asset_ids"],
+            "warning_only_asset_ids": lifecycle["warning_only_asset_ids"],
+            "trust_limits": lifecycle["trust_limits"],
+        },
+        "human_governance": {
+            "required_for_promotion": True,
+            "agents_may_recommend": True,
+            "agents_may_promote_automatically": False,
+        },
     }

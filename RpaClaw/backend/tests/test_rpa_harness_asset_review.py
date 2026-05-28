@@ -253,3 +253,30 @@ def test_asset_review_cli_writes_selected_asset_review_packet(tmp_path: Path):
     content = (capture_dir / "review.md").read_text(encoding="utf-8")
     assert "资产 ID: `asset-1`" in content
     assert "Extract repository star count" in content
+
+
+def test_review_packet_includes_lifecycle_and_eligibility_snapshot(tmp_path: Path):
+    capture_dir = _write_asset(tmp_path, asset_id="candidate-review")
+    scenario_path = capture_dir / "scenario.json"
+    scenario = json.loads(scenario_path.read_text(encoding="utf-8"))
+    scenario["asset_status"] = "active"
+    scenario["sensitivity"] = "repo-safe"
+    scenario["governance"]["promotion_status"] = "candidate"
+    scenario["governance"]["runner_modes"] = ["offline_core_chain", "skill_replay_e2e"]
+    scenario["governance"]["core_chain_coverage"] = ["html_to_raw_snapshot", "trace_to_skill"]
+    scenario["governance"]["expected_signals_reviewed"] = True
+    scenario["governance"]["sensitivity_reviewed"] = True
+    scenario_path.write_text(json.dumps(scenario), encoding="utf-8")
+
+    review_path = write_asset_review_packet(tmp_path, "candidate-review")
+
+    content = review_path.read_text(encoding="utf-8")
+    assert "## 生命周期状态（Lifecycle State）" in content
+    assert "Promotion: `candidate`" in content
+    assert "Asset status: `active`" in content
+    assert "Expected signals reviewed: `true`" in content
+    assert "Sensitivity reviewed: `true`" in content
+    assert "Runner coverage: `offline_core_chain`, `skill_replay_e2e`" in content
+    assert "Core-chain coverage: `html_to_raw_snapshot`, `trace_to_skill`" in content
+    assert "Golden eligibility: `eligible`" in content
+    assert "Human approval required: `true`" in content

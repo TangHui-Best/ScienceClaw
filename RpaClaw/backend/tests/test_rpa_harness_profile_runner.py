@@ -122,6 +122,36 @@ def test_deterministic_profile_wraps_governed_regression_report(tmp_path: Path):
     assert report["deterministic"]["summary"]["selected_asset_ids"] == ["candidate-ready"]
 
 
+def test_profile_report_includes_asset_pool_lifecycle_boundary(tmp_path: Path):
+    _write_asset(tmp_path, asset_id="candidate-ready")
+    _write_asset(
+        tmp_path,
+        asset_id="candidate-lite-watch",
+        promotion_status="candidate-lite",
+        runner_modes=["offline_core_chain", "skill_replay_e2e"],
+    )
+
+    report = run_harness_profile(tmp_path, profile="deterministic")
+
+    asset_pool = report["asset_pool"]
+    assert asset_pool["schema_version"] == "rpa-harness-asset-lifecycle-summary-v1"
+    assert "catalog" not in asset_pool
+    assert asset_pool["summary"]["lifecycle_distribution"] == {
+        "candidate": 1,
+        "candidate-lite": 1,
+    }
+    assert asset_pool["blocking_baseline_asset_ids"] == ["candidate-ready"]
+    assert asset_pool["warning_only_asset_ids"] == ["candidate-lite-watch"]
+    assert "offline_core_chain" in asset_pool["coverage_boundary"]["runner_modes"]
+    assert "Current asset pool coverage is narrow" in asset_pool["trust_limits"]
+
+    summary = render_profile_summary(report, machine_report_path="tmp-profile.json")
+    assert "Lifecycle distribution: candidate=1, candidate-lite=1" in summary
+    assert "Blocking baseline assets: candidate-ready" in summary
+    assert "Warning-only assets: candidate-lite-watch" in summary
+    assert "Coverage boundary:" in summary
+
+
 def test_deterministic_profile_preserves_first_failure_category(tmp_path: Path):
     _write_asset(tmp_path, asset_id="candidate-broken", step_text="Expected text")
     expected_path = tmp_path / "candidate-broken" / "steps" / "001" / "expected.json"

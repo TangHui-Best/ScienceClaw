@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 
+from .catalog import build_golden_eligibility_report
 from .models import HarnessScenarioAsset
 
 
@@ -55,6 +56,8 @@ def promote_harness_asset(
     *,
     confirm_expected: bool = False,
     confirm_sensitivity: bool = False,
+    human_approved_golden: bool = False,
+    override_golden_eligibility: bool = False,
 ) -> dict[str, Any]:
     scenario_path = _scenario_path(assets_root, asset_id)
     if not scenario_path.exists():
@@ -62,6 +65,9 @@ def promote_harness_asset(
 
     scenario_payload = _load_json(scenario_path)
     governance = dict(scenario_payload.get("governance") or {})
+    human_approved = False
+    eligibility_status = "not-required"
+    eligibility_reasons: list[str] = []
 
     if level in {"candidate-lite", "candidate", "golden"}:
         governance["runner_modes"] = _merge_ordered(
@@ -72,6 +78,32 @@ def promote_harness_asset(
             governance.get("core_chain_coverage"),
             _CANDIDATE_LITE_CORE_COVERAGE,
         )
+
+    if level == "golden":
+        if not human_approved_golden:
+            raise PromotionError("golden promotion requires explicit human approval")
+        human_approved = True
+        eligibility_report = build_golden_eligibility_report(assets_root, asset_ids={asset_id})
+        eligibility_items = {
+            item.get("asset_id"): item
+            for item in eligibility_report.get("assets", [])
+            if isinstance(item, dict)
+        }
+        eligibility_item = eligibility_items.get(asset_id)
+        if eligibility_item is None:
+            eligibility_reasons = ["eligibility-not-found"]
+        else:
+            eligibility_reasons = list(eligibility_item.get("blocking_reasons") or [])
+        if confirm_expected and "expected-signals-not-reviewed" in eligibility_reasons:
+            eligibility_reasons.remove("expected-signals-not-reviewed")
+        if confirm_sensitivity and "sensitivity-not-reviewed" in eligibility_reasons:
+            eligibility_reasons.remove("sensitivity-not-reviewed")
+        if eligibility_reasons and not override_golden_eligibility:
+            raise PromotionError(
+                "golden promotion requires eligible active candidate: "
+                + ", ".join(eligibility_reasons)
+            )
+        eligibility_status = "override" if eligibility_reasons else "eligible"
 
     if level in {"candidate", "golden"}:
         if not confirm_expected:
@@ -98,4 +130,7 @@ def promote_harness_asset(
         "scenario_path": scenario_path.as_posix(),
         "expected_signals_reviewed": bool(governance.get("expected_signals_reviewed")),
         "sensitivity_reviewed": bool(governance.get("sensitivity_reviewed")),
+        "human_approved": human_approved,
+        "eligibility_status": eligibility_status,
+        "eligibility_reasons": eligibility_reasons,
     }
