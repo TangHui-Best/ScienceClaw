@@ -1,77 +1,77 @@
-# API Monitor Tool Card Improvements
+# API Monitor 工具卡片改进
 
-## Background
+## 背景
 
-During tool recording in the API Monitor page, three issues were identified that affect usability and reliability.
+在 API Monitor 页面进行工具录制时，发现了三个影响可用性和可靠性的问题。
 
-## Issue 1: Intent Reason Not Displayed on Tool Cards
+## 问题 1：工具卡片未显示意图裁剪原因
 
-### Problem
-When a tool is adopted or moved to the "not adopted" queue, the system-generated reason (from intent pruning or confidence scoring) is not visible on the tool card. The data already exists in `ApiToolDefinition.intent_reason` (copied from generation candidates during tool creation), but the frontend doesn't display it.
+### 问题描述
+当工具被采用或进入不采用队列时，系统生成的原因（来自意图裁剪或置信度评分）在工具卡片上不可见。数据已存在于 `ApiToolDefinition.intent_reason`（工具创建时从生成候选项复制），但前端没有展示。
 
-### Solution
-**Frontend-only change.** In the expanded tool card detail section (adopted/not adopted areas), display `intent_reason` when present.
+### 解决方案
+**仅前端改动。** 在工具卡片展开详情区域（采用/不采用分区），当 `intent_reason` 非空时显示。
 
-- Location: `ApiMonitorPage.vue`, in the tool card expanded detail area
-- Display: Small text below confidence reasons, showing the intent pruning reason
-- Only shown when `intent_reason` is non-empty
+- 位置：`ApiMonitorPage.vue`，工具卡片展开详情区域
+- 展示：在 confidence_reasons 下方显示意图裁剪原因，小字文本
+- 仅在 `intent_reason` 非空时显示
 
-### Files
-- `frontend/src/pages/ApiMonitorPage.vue` — add `intent_reason` display in expanded tool card section
+### 涉及文件
+- `frontend/src/pages/ApiMonitorPage.vue` — 在工具卡片展开区域添加 `intent_reason` 显示
 
-## Issue 2: Intent Pruning Not Triggering During Recording
+## 问题 2：录制流程中意图裁剪不触发
 
-### Problem
-During the recording flow, when the user fills in an intent before starting recording, generation candidates sometimes skip the intent pruning step and go directly to tool generation. This results in tools being generated that should have been filtered by intent relevance.
+### 问题描述
+在录制流程中，用户在开始录制前填写了意图，但生成候选项有时会跳过意图裁剪步骤，直接进入工具生成。这导致本应被意图相关性过滤掉的工具被生成了。
 
-### Root Cause Analysis
-The code path in `_process_captured_calls_for_generation` (manager.py ~L2883-2892) checks `candidate.status in ("pending", "stale", "failed")` before adding to the intent prune buffer. If `_upsert_generation_candidate` returns a candidate with a different status, the intent prune check is bypassed.
+### 根因分析
+`_process_captured_calls_for_generation`（manager.py ~L2883-2892）中的代码路径在将候选项加入意图裁剪缓冲区之前，会检查 `candidate.status in ("pending", "stale", "failed")`。如果 `_upsert_generation_candidate` 返回的候选项状态不是这三个之一，意图裁剪检查就会被跳过。
 
-Additionally:
-- The 3-second debounce on `_schedule_intent_prune_flush` can delay processing
-- `_flush_intent_prune_buffer` discards the entire buffer if `session is None`
-- Candidates updated from a previous recording session may retain non-pending status
+其他可能原因：
+- `_schedule_intent_prune_flush` 的 3 秒防抖可能延迟处理
+- `_flush_intent_prune_buffer` 在 `session is None` 时会丢弃整个缓冲区
+- 上一次录制会话中更新的候选项可能保留非 pending 状态
 
-### Solution
-**Backend changes:**
+### 解决方案
+**后端改动：**
 
-1. **Ensure intent prune always runs when intent is set**: After `_upsert_generation_candidate`, if the candidate is new or has new data, force status to "pending" before the intent prune check, or move the intent prune check to a point where the candidate's status is guaranteed to be eligible.
+1. **确保有意图时裁剪始终运行**：在 `_upsert_generation_candidate` 之后，如果候选项是新的或有新数据，在意图裁剪检查前确保其状态为 "pending"，或将意图裁剪检查移到状态保证可用的位置。
 
-2. **Add defensive flush in stop_recording**: In `_stop_recording_once`, after `_process_captured_calls_for_generation`, ensure `_flush_intent_prune_buffer` processes all buffered candidates even if some edge cases were missed.
+2. **在 stop_recording 中增加防御性 flush**：在 `_stop_recording_once` 中，确保 `_flush_intent_prune_buffer` 处理所有缓冲的候选项。
 
-3. **Add logging**: Log when candidates enter the intent prune buffer vs direct generation enqueue, to make debugging easier.
+3. **增加日志**：记录候选项进入意图裁剪缓冲区 vs 直接进入生成队列的情况，便于排查。
 
-### Files
-- `backend/rpa/api_monitor/manager.py` — fix intent prune trigger logic in `_process_captured_calls_for_generation`, add logging
+### 涉及文件
+- `backend/rpa/api_monitor/manager.py` — 修复 `_process_captured_calls_for_generation` 中的意图裁剪触发逻辑，增加日志
 
-## Issue 3: No Elapsed Time Display for Active Operations
+## 问题 3：活跃操作无耗时显示
 
-### Problem
-When a generation candidate is in an active state (generating, intent pruning, retrying) for an extended period, the user sees no feedback about how long the operation has been running. This makes the UI feel unresponsive.
+### 问题描述
+当生成候选项处于活跃状态（生成中、意图裁剪中、重试中）较长时间时，用户看不到任何关于操作运行时长的反馈，页面显得无响应。
 
-### Solution
-**Frontend-only change.** Add a live elapsed timer next to the status badge on generation candidate cards.
+### 解决方案
+**仅前端改动。** 在生成候选项卡片的状态标签旁添加实时计时器。
 
-- Track when each candidate enters an active state using `updated_at` timestamp
-- Display elapsed time in the status badge: "生成中 (12s)", "意图裁剪中 (5s)"
-- Update every second via `setInterval`
-- Stop timer when candidate reaches a non-active state
-- Active states: `running`, `pending`, `intent_pruning`, `intent_prune_retrying`, `rate_limited`
-- Format: show seconds when < 60s, "Xm Ys" when >= 60s
+- 使用 `updated_at` 时间戳记录候选项进入活跃状态的时间
+- 在状态标签中显示耗时：如 "生成中 (12s)"、"意图裁剪中 (5s)"
+- 每秒通过 `setInterval` 更新显示
+- 候选项变为非活跃状态时停止计时
+- 活跃状态：`running`、`pending`、`intent_pruning`、`intent_prune_retrying`、`rate_limited`
+- 格式：< 60s 显示秒数，>= 60s 显示 "Xm Ys"
 
-### Implementation
-- Add a reactive map `candidateTimers: Map<string, number>` to track start timestamps
-- Watch candidate status changes to update timer start points
-- Use `setInterval` (1s) to refresh displayed elapsed times
-- Clean up intervals on component unmount
+### 实现方式
+- 添加响应式 Map `candidateTimers: Map<string, number>` 跟踪起始时间戳
+- 监听候选项状态变化，更新计时起点
+- 使用 `setInterval`（1 秒）刷新显示的已耗时
+- 组件卸载时清理定时器
 
-### Files
-- `frontend/src/pages/ApiMonitorPage.vue` — add timer display logic next to status badges on candidate cards
+### 涉及文件
+- `frontend/src/pages/ApiMonitorPage.vue` — 在候选项卡片状态标签旁添加计时显示逻辑
 
-## Scope
+## 范围
 
-- Frontend changes: `ApiMonitorPage.vue` only
-- Backend changes: `manager.py` only
-- No new API endpoints
-- No database schema changes
-- No i18n additions needed (Chinese-only labels already present)
+- 前端改动：仅 `ApiMonitorPage.vue`
+- 后端改动：仅 `manager.py`
+- 不新增 API 端点
+- 不修改数据库 Schema
+- 不需要 i18n 新增（已有中文标签）
