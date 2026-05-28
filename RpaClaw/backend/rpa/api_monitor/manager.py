@@ -1853,15 +1853,27 @@ class ApiMonitorSessionManager:
                     source=source,
                     confidence=confidence_result.confidence,
                     score=confidence_result.score,
-                    selected=True,
+                    selected=False,
                     confidence_reasons=confidence_result.reasons,
                     source_evidence=confidence_result.evidence_summary,
                     validation_status=validation_status,
                     validation_errors=validation_errors,
                 )
 
+                # Apply reserve/intent logic consistent with realtime path
+                reserve = candidate.intent_group == "supporting"
+                tool.is_reserve = reserve
+                tool.intent_group = candidate.intent_group
+                tool.intent_reason = candidate.intent_reason or candidate.intent_filter_reason
+                tool.intent_score = candidate.intent_score
+                tool.selected = not reserve
+
                 session.tool_definitions.append(tool)
                 tools.append(tool)
+
+                candidate.status = "generated"
+                candidate.tool_id = tool.id
+                candidate.updated_at = datetime.now()
 
                 logger.info(
                     "[ApiMonitor] Generated tool '%s' for %s %s (score: %d)",
@@ -2482,7 +2494,7 @@ class ApiMonitorSessionManager:
             candidate.status = "intent_filtered"
             candidate.intent_filter_reason = item.intent_reason
         elif item.intent_group == "uncertain":
-            candidate.status = "pending"
+            candidate.status = "intent_review"
             candidate.intent_filter_reason = item.intent_reason
         candidate.updated_at = datetime.now()
         session.updated_at = datetime.now()
@@ -2624,7 +2636,7 @@ class ApiMonitorSessionManager:
                 continue
             self._apply_prune_item_to_candidate(session, candidate, item, batch_id=last_batch_id)
             self._emit_analysis_event(session_id, "api_candidate_intent_pruned", self._candidate_event_payload(candidate))
-            if candidate.status not in ("intent_filtered",):
+            if candidate.status not in ("intent_filtered", "intent_review"):
                 self._enqueue_generation_candidate(session_id, candidate.id, model_config=model_config, skip_filter=True)
 
     def _is_rate_limit_error(self, exc: Exception) -> bool:
