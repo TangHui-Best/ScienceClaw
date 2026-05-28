@@ -479,6 +479,49 @@ record real asset -> review/promote asset -> run Harness -> expose failure
   -> fix owning RPA core component -> rerun same asset -> capture Evidence
 ```
 
+## F013 deterministic profile
+
+RPA Harness v1 Phase 1 的默认 pre-submit evidence path 是
+`deterministic` profile。它是脚本/CLI 执行入口，复用已有 governed assets、
+asset validation、snapshot、compiler、Skill Replay、Stateful SOP 和
+candidate-lite observation，不调用真实 Planner/LLM，不访问 live URL，不让外层
+Agent 点击 RPA 产品 UI。
+
+推荐在 RPA core-chain 变更后先运行机器 JSON：
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m backend.rpa.harness.run_harness_profile --assets data\rpa_harness_assets_bootstrap --profile deterministic --output tmp-harness-profile-deterministic.json
+```
+
+需要人工 closeout 或 PR/Evidence 摘要时，再生成可读 summary：
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m backend.rpa.harness.run_harness_profile --assets data\rpa_harness_assets_bootstrap --profile deterministic --format summary --lang zh --output docs\rpa\harness\reports\YYYY-MM-DD-deterministic-profile.md
+```
+
+Agent 解读时应优先读取 JSON，不要只看 summary。重点字段：
+
+```text
+profile
+summary.status
+summary.first_failure_category
+summary.selected_asset_ids
+summary.excluded_asset_ids
+summary.warning_only_observation_count
+deterministic.observability
+deterministic.validation
+deterministic.snapshot
+deterministic.compiler
+deterministic.skill_replay
+deterministic.stateful_sop
+deterministic.candidate_lite_observation
+```
+
+Phase 1 不接 CI blocking，不扩张 full/live profile，不做自动诊断平台。失败分析由
+Agent 基于报告事实解释，真正修复应回到 owning RPA core component。
+
 ## 内网交接最小清单
 
 把 Harness 交给其它 Agent 使用前，至少提供：
