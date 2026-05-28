@@ -10,14 +10,15 @@
 当工具被采用或进入不采用队列时，系统生成的原因（来自意图裁剪或置信度评分）在工具卡片上不可见。数据已存在于 `ApiToolDefinition.intent_reason`（工具创建时从生成候选项复制），但前端没有展示。
 
 ### 解决方案
-**仅前端改动。** 在工具卡片展开详情区域（采用/不采用分区），当 `intent_reason` 非空时显示。
+**仅前端改动。** 在工具卡片（采用/不采用分区）**非展开状态**下，当 `intent_reason` 非空时直接在卡片上显示。
 
-- 位置：`ApiMonitorPage.vue`，工具卡片展开详情区域
-- 展示：在 confidence_reasons 下方显示意图裁剪原因，小字文本
+- 位置：`ApiMonitorPage.vue`，工具卡片的摘要区域（URL 下方）
+- 展示：小字文本，显示意图裁剪原因（类似生成候选项卡片上的 reason 展示方式）
 - 仅在 `intent_reason` 非空时显示
+- 同时在展开详情区域也显示（保持信息一致性）
 
 ### 涉及文件
-- `frontend/src/pages/ApiMonitorPage.vue` — 在工具卡片展开区域添加 `intent_reason` 显示
+- `frontend/src/pages/ApiMonitorPage.vue` — 在工具卡片摘要区域和展开区域添加 `intent_reason` 显示
 
 ## 问题 2：录制流程中意图裁剪不触发
 
@@ -68,10 +69,21 @@
 ### 涉及文件
 - `frontend/src/pages/ApiMonitorPage.vue` — 在候选项卡片状态标签旁添加计时显示逻辑
 
+## 问题 4：i18n 重复 Key 警告
+
+### 问题描述
+Vite 构建时报告 `en.ts` 和 `zh.ts` 中存在重复 key 的警告。
+
+### 分析
+经检查，当前文件中未发现实际重复的 key。Vite 报的行号与当前文件内容不匹配，可能是 dev server 缓存了旧版本。需要用户重启 dev server 确认。如果重启后警告仍然存在，再行排查修复。
+
+### 涉及文件
+- `frontend/src/locales/en.ts`
+- `frontend/src/locales/zh.ts`
+
 ## 范围
 
-- 前端改动：仅 `ApiMonitorPage.vue`
+- 前端改动：`ApiMonitorPage.vue`、`en.ts`、`zh.ts`（如确认有重复）
 - 后端改动：仅 `manager.py`
 - 不新增 API 端点
 - 不修改数据库 Schema
-- 不需要 i18n 新增（已有中文标签）
