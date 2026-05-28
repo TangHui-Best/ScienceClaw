@@ -1617,13 +1617,6 @@ onBeforeUnmount(() => {
                     >
                       候补
                     </span>
-                    <span
-                      v-if="tool.intent_reason"
-                      class="shrink-0 text-[10px] text-orange-600 dark:text-orange-400 truncate max-w-[200px]"
-                      :title="tool.intent_reason"
-                    >
-                      {{ tool.intent_reason }}
-                    </span>
                     <ChevronDown :size="16" class="text-[var(--text-tertiary)] transition-transform" :class="expandedToolId === tool.id ? 'rotate-180' : ''" />
                   </div>
 
