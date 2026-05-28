@@ -1572,6 +1572,13 @@ onBeforeUnmount(() => {
                     >
                       候补
                     </span>
+                    <span
+                      v-if="tool.intent_reason"
+                      class="shrink-0 text-[10px] text-orange-600 dark:text-orange-400 truncate max-w-[200px]"
+                      :title="tool.intent_reason"
+                    >
+                      {{ tool.intent_reason }}
+                    </span>
                     <ChevronDown :size="16" class="text-[var(--text-tertiary)] transition-transform" :class="expandedToolId === tool.id ? 'rotate-180' : ''" />
                   </div>
 
@@ -1585,6 +1592,9 @@ onBeforeUnmount(() => {
                       >
                         {{ reason }}
                       </span>
+                    </div>
+                    <div v-if="tool.intent_reason" class="mb-3">
+                      <span class="text-[10px] text-orange-600 dark:text-orange-400 break-words">{{ tool.intent_reason }}</span>
                     </div>
                     <div v-if="tool.validation_status === 'invalid' && tool.validation_errors?.length" class="mb-3 rounded-xl bg-red-50 border border-red-200 px-3 py-2 dark:bg-red-500/10 dark:border-red-500/20">
                       <p class="text-[10px] font-bold text-red-600 dark:text-red-400 mb-1">YAML 校验错误：</p>
