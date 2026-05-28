@@ -30,7 +30,7 @@ Phase 1 的目标不是再造 runner，而是把 F003-F010 已有能力包装成
 
 ## Current Status
 
-Ready for review. The deterministic profile wrapper, CLI entrypoint, focused tests, real bootstrap run, and Evidence update are complete. Strict Harness knowledge validation remains blocked by pre-existing repo-wide metadata issues outside F013 scope, not by F013-local artifacts.
+Ready for review. The deterministic profile wrapper, CLI entrypoint, focused tests, real bootstrap run, and Evidence update are complete. The earlier repo-wide strict Harness metadata blocker has been rechecked during Phase 2 and no longer reproduces; the remaining readiness risk is the Phase 2 report/closeout interpretation contract and independent review.
 
 The v1 design document is the source design for this Feature:
 
@@ -84,15 +84,16 @@ Vision Gate:
 - [x] Existing `run_governed_regression` behavior remains backward compatible or is clearly preserved as an alias to the deterministic path.
 - [x] Focused tests cover the deterministic profile wrapper/report contract and compatibility with existing governed regression behavior.
 - [x] A real bootstrap asset run is executed with `data/rpa_harness_assets_bootstrap`, and output paths/results are recorded in EV-013.
-- [x] Harness knowledge validation is attempted; it fails because of pre-existing legacy document structure, and EV-013 records the attribution without broad frontmatter cleanup.
+- [x] Harness knowledge validation is attempted and recorded in EV-013. The original Phase 1 run saw pre-existing legacy metadata failures; Phase 2 recheck no longer reproduces them, without broad frontmatter cleanup in this slice.
 - [x] EV-013 records verification, residual risk, reviewer status, and closeout before F013 is marked completed.
 
 ## Patch History
 
-None yet. F013 is ready for review rather than marked completed because independent review is still pending and strict knowledge validation remains blocked by pre-existing repo-wide metadata issues.
+F013 is ready for review rather than marked completed because independent review is still pending and Phase 2 report/closeout interpretation hardening is tracked separately by F014.
 
 | Patch | Date | Commit | Symptom | Root Cause | Protection | Status |
 | --- | --- | --- | --- | --- | --- | --- |
+| F013.1 | 2026-05-28 | pending | Usage docs and Phase 1 plan summary examples omitted `--machine-report`, so users following docs could generate `Machine report: not written`. | The CLI gained `--machine-report` after the initial examples were written, but the examples were not updated. | Updated both summary examples to pass the machine JSON path explicitly; F014 adds report interpretation tests. | completed |
 
 ## Evidence
 
@@ -100,4 +101,4 @@ See [EV-013 RPA Harness v1 Asset-Driven User Input Replay Evidence](../evidence/
 
 ## Next Step
 
-Review the deterministic profile slice. If accepted, Phase 2 should first decide whether to harden Agent-readable Markdown closeout generation or clean up legacy Harness metadata so strict `knowledge_check.py` can become a reliable gate. Do not expand full/live profile before the deterministic evidence path is stable.
+Review the deterministic profile slice. Phase 2 is tracked by F014 and should harden Agent-readable JSON/Markdown interpretation and closeout evidence before Phase 3 asset lifecycle operationalization starts. Do not expand full/live profile before the deterministic evidence path is stable.

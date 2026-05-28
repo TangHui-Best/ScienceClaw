@@ -498,7 +498,7 @@ python -m backend.rpa.harness.run_harness_profile --assets data\rpa_harness_asse
 
 ```powershell
 $env:PYTHONPATH='RpaClaw'
-python -m backend.rpa.harness.run_harness_profile --assets data\rpa_harness_assets_bootstrap --profile deterministic --format summary --lang zh --output docs\rpa\harness\reports\YYYY-MM-DD-deterministic-profile.md
+python -m backend.rpa.harness.run_harness_profile --assets data\rpa_harness_assets_bootstrap --profile deterministic --format summary --lang zh --output docs\rpa\harness\reports\YYYY-MM-DD-deterministic-profile.md --machine-report tmp-harness-profile-deterministic.json
 ```
 
 Agent 解读时应优先读取 JSON，不要只看 summary。重点字段：
@@ -518,6 +518,28 @@ deterministic.skill_replay
 deterministic.stateful_sop
 deterministic.candidate_lite_observation
 ```
+
+`interpretation` 是 Phase 2 的有界解释入口。它只基于当前 runner facts，不调用 LLM，不替代人的治理判断，也不做自动 root-cause 诊断。Agent 应按下面顺序读取：
+
+```text
+interpretation.verdict
+interpretation.comparison_basis
+interpretation.bounded
+interpretation.basis
+interpretation.evidence_limits
+interpretation.recommended_agent_flow
+summary
+deterministic.observability.runner_signals
+```
+
+`interpretation.verdict` 的语义固定为：
+
+| Verdict | 含义 | 边界 |
+| --- | --- | --- |
+| `regression` | 当前 deterministic profile 有 blocking runner failure。 | 只说明已有受管资产暴露了回归信号，不自动判断根因。 |
+| `improvement` | 预留给未来显式 baseline comparison。 | 单次通过不能推断 improvement。 |
+| `no meaningful change` | 当前单次 deterministic profile 通过，且有受管资产覆盖。 | 没有 baseline comparison 时只能说明覆盖范围内未见有意义变化。 |
+| `insufficient evidence` | 没有选中受管资产、runner facts 不完整，或覆盖不足以支撑判断。 | 需要补资产、补 evidence 或 rerun，而不是把空跑视为通过。 |
 
 Phase 1 不接 CI blocking，不扩张 full/live profile，不做自动诊断平台。失败分析由
 Agent 基于报告事实解释，真正修复应回到 owning RPA core component。

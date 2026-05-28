@@ -39,6 +39,78 @@ def _profile_summary(governed_report: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _profile_interpretation(
+    governed_report: dict[str, Any],
+    summary: dict[str, Any],
+) -> dict[str, Any]:
+    status = str(summary.get("status") or "unknown")
+    selected_asset_count = int(summary.get("selected_asset_count") or 0)
+    first_failure_category = str(summary.get("first_failure_category") or "")
+    observability = governed_report.get("observability") or {}
+    runner_signals = observability.get("runner_signals")
+    runner_signals_missing = not isinstance(runner_signals, dict) or not runner_signals
+
+    evidence_limits = ["No baseline comparison report was supplied"]
+    if selected_asset_count <= 0:
+        verdict = "insufficient evidence"
+        evidence_limits.append("No selected governed assets ran")
+    elif runner_signals_missing:
+        verdict = "insufficient evidence"
+        evidence_limits.append("Missing deterministic.observability.runner_signals")
+    elif status == "failed":
+        verdict = "regression"
+    elif status == "passed":
+        verdict = "no meaningful change"
+        evidence_limits.append("Passing covered assets does not prove global RPA health")
+    else:
+        verdict = "insufficient evidence"
+        evidence_limits.append(f"Profile status is not interpretable: {status}")
+
+    return {
+        "verdict": verdict,
+        "bounded": True,
+        "comparison_basis": "single-run",
+        "first_failure_category": first_failure_category,
+        "basis": [
+            f"summary.status={status}",
+            f"summary.selected_asset_count={selected_asset_count}",
+            f"summary.first_failure_category={first_failure_category or 'none'}",
+            (
+                "deterministic.observability.runner_signals=missing"
+                if runner_signals_missing
+                else "deterministic.observability.runner_signals"
+            ),
+            f"snapshot_failed={(runner_signals or {}).get('snapshot_failed', 0)}",
+            f"compiler_failed={(runner_signals or {}).get('compiler_failed', 0)}",
+            f"skill_replay_failed={(runner_signals or {}).get('skill_replay_failed', 0)}",
+            f"stateful_sop_failed={(runner_signals or {}).get('stateful_sop_failed', 0)}",
+        ],
+        "evidence_limits": evidence_limits,
+        "allowed_verdicts": [
+            "regression",
+            "improvement",
+            "no meaningful change",
+            "insufficient evidence",
+        ],
+        "recommended_agent_flow": [
+            "interpretation",
+            "summary",
+            "profile",
+            "deterministic.observability",
+            "deterministic.validation",
+            "deterministic.snapshot",
+            "deterministic.compiler",
+            "deterministic.skill_replay",
+            "deterministic.stateful_sop",
+        ],
+        "non_goals": [
+            "no automatic root-cause diagnosis",
+            "no automatic asset promotion",
+            "no live/full profile inference",
+        ],
+    }
+
+
 def run_harness_profile(
     assets_root: str | Path,
     *,
@@ -48,16 +120,22 @@ def run_harness_profile(
         raise ValueError(f"Unsupported RPA Harness profile: {profile}")
 
     governed_report = run_governed_offline_regression(assets_root)
+    summary = _profile_summary(governed_report)
     return {
         "schema_version": "rpa-harness-profile-run-v1",
         "profile": _profile_metadata(),
-        "summary": _profile_summary(governed_report),
+        "summary": summary,
+        "interpretation": _profile_interpretation(governed_report, summary),
         "deterministic": governed_report,
     }
 
 
 def _format_values(values: list[str]) -> str:
     return ", ".join(values) if values else "none"
+
+
+def _format_basis(values: list[str]) -> str:
+    return "; ".join(values) if values else "none"
 
 
 def render_profile_summary(
@@ -68,15 +146,21 @@ def render_profile_summary(
 ) -> str:
     summary = report.get("summary", {})
     profile = report.get("profile", {})
+    interpretation = report.get("interpretation", {})
     governed = report.get("deterministic", {})
     governed_summary = governed.get("summary", {})
     machine_path = str(machine_report_path) if machine_report_path else "not written"
+    agent_flow = ", ".join(list(interpretation.get("recommended_agent_flow") or [])[:4])
+    basis = _format_basis(list(interpretation.get("basis") or [])[:4])
 
     if lang == "zh":
-        status = str(summary.get("status") or "unknown")
         lines = [
             f"RPA Harness Profile: {profile.get('name', 'unknown')}",
-            f"状态: {status}",
+            f"状态: {summary.get('status', 'unknown')}",
+            f"Interpretation: {interpretation.get('verdict', 'unknown')}",
+            f"Comparison basis: {interpretation.get('comparison_basis', 'unknown')}",
+            f"Bounded interpretation: {str(interpretation.get('bounded', False)).lower()}",
+            f"Basis: {basis}",
             f"选中资产: {_format_values(list(summary.get('selected_asset_ids') or []))}",
             f"排除资产数: {summary.get('excluded_asset_count', 0)}",
             f"首个失败类别: {summary.get('first_failure_category') or 'none'}",
@@ -86,11 +170,16 @@ def render_profile_summary(
                 f"warnings={summary.get('warning_only_issue_count', 0)}"
             ),
             f"机器报告: {machine_path}",
+            f"Agent JSON-first fields: {agent_flow}",
         ]
     else:
         lines = [
             f"RPA Harness Profile: {profile.get('name', 'unknown')}",
             f"Status: {summary.get('status', 'unknown')}",
+            f"Interpretation: {interpretation.get('verdict', 'unknown')}",
+            f"Comparison basis: {interpretation.get('comparison_basis', 'unknown')}",
+            f"Bounded interpretation: {str(interpretation.get('bounded', False)).lower()}",
+            f"Basis: {basis}",
             f"Selected assets: {_format_values(list(summary.get('selected_asset_ids') or []))}",
             f"Excluded asset count: {summary.get('excluded_asset_count', 0)}",
             f"First failure category: {summary.get('first_failure_category') or 'none'}",
@@ -100,6 +189,7 @@ def render_profile_summary(
                 f"warnings={summary.get('warning_only_issue_count', 0)}"
             ),
             f"Machine report: {machine_path}",
+            f"Agent JSON-first fields: {agent_flow}",
         ]
 
     if governed_summary:

@@ -216,6 +216,25 @@ Attribution:
 - F013-local validator issues were fixed by adding `feature_refs` and the required `## Commands`, `## Artifacts`, and `## Notes` sections. The rerun reports no F013-local errors.
 - Per the user constraint, this feature does not broad-fix legacy Harness frontmatter.
 
+Phase 2 recheck:
+
+```powershell
+python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
+```
+
+Result:
+
+```text
+exit code 0
+Scanned 199 markdown file(s). Checked 30 knowledge artifact(s). Errors: 0. Warnings: 0.
+```
+
+Updated attribution:
+
+- The Phase 1 strict failure is preserved above as historical execution evidence.
+- The failure no longer reproduces in the current workspace, and no Phase 2 broad frontmatter cleanup is needed.
+- F013 readiness remains conditional on independent review and the F014 report/closeout trust loop, not on a current strict metadata blocker.
+
 ## Artifacts
 
 - Feature: `docs/features/F013-rpa-harness-v1-asset-driven-user-input-replay.md`
@@ -257,7 +276,7 @@ Review follow-up:
 - deterministic profile is process-required for readiness claims but not CI-enforced in Phase 1.
 - full/live validation remains separate and should be used for Planner/LLM or intranet validation only when needed.
 - Independent review/readiness gate remains pending; this closeout is single-agent verified.
-- `knowledge_check.py --strict` remains blocked by pre-existing repo-wide Harness metadata issues outside F013 scope.
+- Phase 2 report interpretation and Markdown closeout hardening remain necessary before treating deterministic profile output as a fully trusted handoff package.
 
 ## Notes
 
@@ -268,6 +287,6 @@ Review follow-up:
 
 ## Closeout
 
-Implementation done. Harness closeout is conditional because strict knowledge validation still fails on pre-existing repository metadata, but F013-local Evidence shape has been corrected and focused tests plus real bootstrap deterministic profile pass.
+Implementation done. Harness closeout is conditional because independent review is still pending and Phase 2 report/closeout interpretation hardening is tracked by F014. The earlier strict metadata blocker no longer reproduces in the current workspace.
 
-Recommendation for Phase 2: proceed only after deciding whether to (1) harden report interpretation and Markdown closeout generation for Agents, or (2) first clean up legacy Harness metadata so `knowledge_check.py --strict` becomes usable as a reliable closeout gate. Do not expand full/live profile before the deterministic evidence path is considered stable.
+Recommendation for Phase 2: proceed with F014 report interpretation and Markdown closeout generation for Agents. Do not expand full/live profile before the deterministic evidence path is considered stable.

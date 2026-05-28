@@ -200,7 +200,7 @@ Run summary:
 
 ```powershell
 $env:PYTHONPATH='RpaClaw'
-python -m backend.rpa.harness.run_harness_profile --assets data\rpa_harness_assets_bootstrap --profile deterministic --format summary --lang zh --output docs\rpa\harness\reports\2026-05-28-f013-deterministic-profile.md
+python -m backend.rpa.harness.run_harness_profile --assets data\rpa_harness_assets_bootstrap --profile deterministic --format summary --lang zh --output docs\rpa\harness\reports\2026-05-28-f013-deterministic-profile.md --machine-report docs\rpa\harness\reports\2026-05-28-f013-deterministic-profile.json
 ```
 
 Attempt Harness knowledge check:

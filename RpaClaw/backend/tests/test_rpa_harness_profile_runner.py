@@ -137,6 +137,86 @@ def test_deterministic_profile_preserves_first_failure_category(tmp_path: Path):
     assert report["summary"]["first_failure_category"] == "snapshot-regression-failed"
 
 
+def test_profile_interpretation_passed_single_run_is_no_meaningful_change(tmp_path: Path):
+    _write_asset(tmp_path, asset_id="candidate-ready")
+
+    report = run_harness_profile(tmp_path, profile="deterministic")
+
+    interpretation = report["interpretation"]
+    assert interpretation["verdict"] == "no meaningful change"
+    assert interpretation["bounded"] is True
+    assert interpretation["comparison_basis"] == "single-run"
+    assert interpretation["first_failure_category"] == ""
+    assert "No baseline comparison report was supplied" in interpretation["evidence_limits"]
+    assert interpretation["recommended_agent_flow"][:4] == [
+        "interpretation",
+        "summary",
+        "profile",
+        "deterministic.observability",
+    ]
+
+
+def test_profile_interpretation_failed_run_is_regression(tmp_path: Path):
+    _write_asset(tmp_path, asset_id="candidate-broken", step_text="Expected text")
+    expected_path = tmp_path / "candidate-broken" / "steps" / "001" / "expected.json"
+    expected_path.write_text(
+        json.dumps({"snapshot_signals": {"must_contain_text": ["Missing text"]}}),
+        encoding="utf-8",
+    )
+
+    report = run_harness_profile(tmp_path, profile="deterministic")
+
+    interpretation = report["interpretation"]
+    assert interpretation["verdict"] == "regression"
+    assert interpretation["bounded"] is True
+    assert interpretation["comparison_basis"] == "single-run"
+    assert interpretation["first_failure_category"] == "snapshot-regression-failed"
+    assert "deterministic.observability.runner_signals" in interpretation["basis"]
+
+
+def test_profile_interpretation_without_selected_assets_is_insufficient_evidence(tmp_path: Path):
+    report = run_harness_profile(tmp_path, profile="deterministic")
+
+    interpretation = report["interpretation"]
+    assert interpretation["verdict"] == "insufficient evidence"
+    assert interpretation["bounded"] is True
+    assert interpretation["comparison_basis"] == "single-run"
+    assert "No selected governed assets ran" in interpretation["evidence_limits"]
+
+
+def test_profile_interpretation_without_runner_signals_is_insufficient_evidence(tmp_path: Path, monkeypatch):
+    from backend.rpa.harness import profile_runner
+
+    def fake_governed_regression(_assets_root: Path):
+        return {
+            "schema_version": "rpa-harness-governed-offline-regression-v0",
+            "summary": {
+                "status": "passed",
+                "failure_category": "",
+                "selected_capture_count": 1,
+                "excluded_capture_count": 0,
+                "selected_asset_ids": ["candidate-ready"],
+                "excluded_asset_ids": [],
+                "candidate_lite_observed_count": 0,
+                "candidate_lite_warning_count": 0,
+            },
+            "observability": {},
+        }
+
+    monkeypatch.setattr(
+        profile_runner,
+        "run_governed_offline_regression",
+        fake_governed_regression,
+    )
+
+    report = run_harness_profile(tmp_path, profile="deterministic")
+
+    interpretation = report["interpretation"]
+    assert interpretation["verdict"] == "insufficient evidence"
+    assert "Missing deterministic.observability.runner_signals" in interpretation["evidence_limits"]
+    assert "deterministic.observability.runner_signals=missing" in interpretation["basis"]
+
+
 def test_full_profile_is_explicitly_out_of_phase_one(tmp_path: Path):
     with pytest.raises(ValueError, match="Unsupported RPA Harness profile: full"):
         run_harness_profile(tmp_path, profile="full")
@@ -152,6 +232,14 @@ def test_profile_summary_names_profile_and_machine_report_path(tmp_path: Path):
     assert "Status: passed" in summary
     assert "Selected assets: candidate-ready" in summary
     assert "Machine report: tmp-profile.json" in summary
+    assert "Interpretation: no meaningful change" in summary
+    assert "Comparison basis: single-run" in summary
+    assert "Bounded interpretation: true" in summary
+    assert (
+        "Basis: summary.status=passed; summary.selected_asset_count=1; "
+        "summary.first_failure_category=none; deterministic.observability.runner_signals"
+    ) in summary
+    assert "Agent JSON-first fields: interpretation, summary, profile, deterministic.observability" in summary
 
 
 def test_profile_cli_writes_json_report(tmp_path: Path):
