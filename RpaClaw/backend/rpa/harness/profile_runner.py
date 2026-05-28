@@ -8,6 +8,7 @@ from .governed_regression import run_governed_offline_regression
 
 
 _DETERMINISTIC_PROFILE = "deterministic"
+_FULL_LIVE_PROFILE = "full-live"
 
 
 def _profile_metadata() -> dict[str, Any]:
@@ -116,7 +117,20 @@ def run_harness_profile(
     assets_root: str | Path,
     *,
     profile: str = _DETERMINISTIC_PROFILE,
+    generated_assets_root: str | Path | None = None,
+    planner: Any | None = None,
+    model_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if profile == _FULL_LIVE_PROFILE:
+        from .full_live_profile import run_full_live_profile_sync
+
+        return run_full_live_profile_sync(
+            assets_root,
+            generated_assets_root=generated_assets_root,
+            planner=planner,
+            model_config=model_config,
+        )
+
     if profile != _DETERMINISTIC_PROFILE:
         raise ValueError(f"Unsupported RPA Harness profile: {profile}")
 
@@ -152,8 +166,17 @@ def render_profile_summary(
     machine_report_path: str | Path | None = None,
     lang: str = "en",
 ) -> str:
-    summary = report.get("summary", {})
     profile = report.get("profile", {})
+    if profile.get("name") == _FULL_LIVE_PROFILE:
+        from .full_live_profile import render_full_live_profile_summary
+
+        return render_full_live_profile_summary(
+            report,
+            machine_report_path=machine_report_path,
+            lang=lang,
+        )
+
+    summary = report.get("summary", {})
     interpretation = report.get("interpretation", {})
     governed = report.get("deterministic", {})
     governed_summary = governed.get("summary", {})

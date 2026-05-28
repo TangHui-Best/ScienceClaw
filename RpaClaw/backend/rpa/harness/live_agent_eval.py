@@ -57,6 +57,7 @@ class LiveAgentScenario(BaseModel):
     expected: LiveAgentExpected = Field(default_factory=LiveAgentExpected)
     page_patterns: list[str] = Field(default_factory=list)
     asset_id: str = ""
+    region_context: dict[str, Any] = Field(default_factory=dict)
 
 
 def _load_json(path: Path) -> Any:
@@ -193,7 +194,12 @@ async def _run_one_scenario(
                 planner=counting_planner if planner is not None else None,
                 model_config=model_config,
             )
-            result = await agent.run(page=page, instruction=scenario.instruction, runtime_results={})
+            result = await agent.run(
+                page=page,
+                instruction=scenario.instruction,
+                runtime_results={},
+                region_context=scenario.region_context or None,
+            )
             if planner is None:
                 planner_invocation_count = len(getattr(agent, "_planner_llm_calls", []) or [])
             after_state = await capture_current_page_state(page)
@@ -249,6 +255,7 @@ async def _run_one_scenario(
         "status": status,
         "failure_category": failure_category,
         "planner_invocation_count": planner_invocation_count,
+        "region_context": scenario.region_context,
         "output_key": result.output_key or scenario.expected.output_key,
         "actual_output": result.output,
         "missing_text": missing_text,

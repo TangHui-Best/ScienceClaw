@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 from .cli import emit_json_report
 from .profile_runner import render_profile_summary, run_harness_profile
+
+
+def _load_model_config(args: argparse.Namespace) -> dict[str, Any] | None:
+    if args.model_config_json:
+        return json.loads(args.model_config_json)
+    if args.model_config_file:
+        return json.loads(Path(args.model_config_file).read_text(encoding="utf-8"))
+    return None
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -15,8 +24,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--profile",
         default="deterministic",
-        help="Profile to run. Phase 1 supports only deterministic.",
+        help="Profile to run: deterministic or full-live.",
     )
+    parser.add_argument(
+        "--generated-assets",
+        help=(
+            "Output directory for full-live generated candidate-lite/profile "
+            "artifacts. Deterministic profile ignores this option."
+        ),
+    )
+    parser.add_argument("--model-config-json", help="Optional JSON object passed to full-live RecordingRuntimeAgent")
+    parser.add_argument("--model-config-file", help="Optional JSON file passed to full-live RecordingRuntimeAgent")
     parser.add_argument("--output", help="Optional path to write the profile report")
     parser.add_argument(
         "--machine-report",
@@ -41,7 +59,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        report = run_harness_profile(args.assets, profile=args.profile)
+        if args.format == "summary" and args.machine_report and Path(args.machine_report).exists():
+            report = json.loads(Path(args.machine_report).read_text(encoding="utf-8"))
+        else:
+            model_config = _load_model_config(args) if args.profile == "full-live" else None
+            report = run_harness_profile(
+                args.assets,
+                profile=args.profile,
+                generated_assets_root=args.generated_assets,
+                model_config=model_config,
+            )
     except ValueError as exc:
         sys.stderr.write(f"{exc}\n")
         return 2
