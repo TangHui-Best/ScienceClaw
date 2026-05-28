@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ArrowLeft, Globe, BarChart2, Disc, Square, Save, Wrench, ChevronDown, MonitorPlay, X, AlertTriangle, Terminal, Loader2, Check } from 'lucide-vue-next';
-import { ref, reactive, onMounted, onBeforeUnmount, nextTick, computed } from 'vue';
+import { ref, reactive, onMounted, onBeforeUnmount, nextTick, computed, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import {
@@ -1094,6 +1094,47 @@ const getCandidateStatusClass = (status: ApiToolGenerationCandidate['status']) =
   return 'border-slate-200 bg-slate-50 text-slate-600 dark:border-white/10 dark:bg-white/5 dark:text-slate-300';
 };
 
+// --- 候选项计时器 ---
+const candidateTimerStarts = ref<Record<string, number>>({})
+const candidateTimerNow = ref(Date.now())
+let candidateTimerInterval: ReturnType<typeof setInterval> | null = null
+
+const ACTIVE_CANDIDATE_STATUSES = new Set([
+  'pending', 'running', 'intent_pruning', 'intent_prune_retrying', 'rate_limited',
+])
+
+function updateCandidateTimers() {
+  const starts: Record<string, number> = {}
+  for (const c of generationCandidates.value) {
+    if (ACTIVE_CANDIDATE_STATUSES.has(c.status)) {
+      const existing = candidateTimerStarts.value[c.id]
+      const fromUpdated = c.updated_at ? new Date(c.updated_at).getTime() : Date.now()
+      starts[c.id] = existing || fromUpdated
+    }
+  }
+  candidateTimerStarts.value = starts
+  if (Object.keys(starts).length > 0 && !candidateTimerInterval) {
+    candidateTimerInterval = setInterval(() => {
+      candidateTimerNow.value = Date.now()
+    }, 1000)
+  } else if (Object.keys(starts).length === 0 && candidateTimerInterval) {
+    clearInterval(candidateTimerInterval)
+    candidateTimerInterval = null
+  }
+}
+
+watch(generationCandidates, updateCandidateTimers, { deep: true, immediate: true })
+
+function getCandidateElapsedLabel(candidate: ApiToolGenerationCandidate): string {
+  const start = candidateTimerStarts.value[candidate.id]
+  if (!start || !ACTIVE_CANDIDATE_STATUSES.has(candidate.status)) return ''
+  const elapsed = Math.max(0, Math.floor((candidateTimerNow.value - start) / 1000))
+  if (elapsed < 60) return `${elapsed}s`
+  const m = Math.floor(elapsed / 60)
+  const s = elapsed % 60
+  return `${m}m ${s}s`
+}
+
 // ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
@@ -1119,6 +1160,10 @@ onBeforeUnmount(() => {
   disconnectScreencast();
   if (sessionId.value) {
     stopSession(sessionId.value).catch(() => {});
+  }
+  if (candidateTimerInterval) {
+    clearInterval(candidateTimerInterval);
+    candidateTimerInterval = null;
   }
 });
 </script>
@@ -1429,7 +1474,7 @@ onBeforeUnmount(() => {
                       <TooltipContent side="top" :side-offset="4">{{ candidate.url_pattern }}</TooltipContent>
                     </Tooltip>
                     <span class="shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-bold" :class="getCandidateStatusClass(candidate.status)">
-                      {{ getCandidateStatusLabel(candidate.status) }}
+                      {{ getCandidateStatusLabel(candidate.status) }}<template v-if="getCandidateElapsedLabel(candidate)"> ({{ getCandidateElapsedLabel(candidate) }})</template>
                     </span>
                   </div>
 
