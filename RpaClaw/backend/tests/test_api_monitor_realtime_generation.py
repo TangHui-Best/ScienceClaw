@@ -1212,10 +1212,11 @@ class TestBatchIntentPruning(unittest.IsolatedAsyncioTestCase):
             with patch("backend.rpa.api_monitor.manager.INTENT_PRUNE_RETRY_BASE_DELAY_S", 0):
                 tools = await manager._generate_tools_from_calls(session.id, [order_call], model_config=None)
 
-        assert len(tools) == 1
+        assert len(tools) == 0
         assert len(session.generation_candidates) == 1
         candidate = session.generation_candidates[0]
         assert candidate.intent_prune_attempts == 3
+        assert candidate.status == "intent_review"
         assert candidate.intent_prune_error == "llm unavailable"
         assert candidate.intent_filter_reason == "意图裁剪多次失败，需人工确认：llm unavailable"
 
@@ -1282,7 +1283,8 @@ class TestRealtimeBuffer(unittest.IsolatedAsyncioTestCase):
             with patch("backend.rpa.api_monitor.manager.INTENT_PRUNE_RETRY_BASE_DELAY_S", 0):
                 await manager._flush_intent_prune_buffer(session.id, model_config=None)
 
-        assert len(enqueued) == 1
+        assert len(enqueued) == 0
+        assert candidate.status == "intent_review"
         assert candidate.intent_prune_error == "llm unavailable"
         assert candidate.intent_filter_reason == "意图裁剪多次失败，需人工确认：llm unavailable"
 
@@ -1412,9 +1414,9 @@ class TestRealtimeBuffer(unittest.IsolatedAsyncioTestCase):
         for c in first_6:
             assert c.status not in ("intent_filtered",), f"first chunk candidate {c.dedup_key} should not be intent_filtered"
         for c in last_3:
-            assert c.status == "pending", f"last chunk candidate {c.dedup_key} should be pending (uncertain fallback)"
+            assert c.status == "intent_review", f"last chunk candidate {c.dedup_key} should be intent_review (uncertain fallback)"
             assert "llm unavailable for small chunk" in (c.intent_filter_reason or ""), f"last chunk candidate {c.dedup_key} should have failure reason"
-        assert len(enqueued) == 9  # all 9 get enqueued (first 6 as primary, last 3 as pending/uncertain)
+        assert len(enqueued) == 6  # only first chunk (primary) gets enqueued, last 3 (intent_review) are skipped
 
     async def test_flush_intent_prune_buffer_large_batch_splits_into_five_chunks(self):
         """30 candidates split into 5 chunks of 6 each."""
