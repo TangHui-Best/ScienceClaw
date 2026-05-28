@@ -10,7 +10,7 @@ from backend.rpa.playwright_security import get_chromium_launch_kwargs, get_cont
 from .trace_locator_utils import (
     has_valid_locator,
     locator_has_unstable_identity,
-    locator_is_structural_region_header,
+    locator_is_replay_safe_for_region_extract,
     locator_instability_penalty,
     normalize_locator,
 )
@@ -1608,14 +1608,14 @@ def _is_selected_region_local_text_extract(trace: RPAAcceptedTrace) -> bool:
 
 def _has_selected_region_text_extract(trace: RPAAcceptedTrace) -> bool:
     signal = _trace_signal(trace, "selected_region_text_extract")
+    intent = str(signal.get("intent") or "single_value_extract").strip()
+    if intent != "single_value_extract":
+        return False
     locator = normalize_locator(signal.get("locator") if isinstance(signal.get("locator"), dict) else {})
-    if not has_valid_locator(locator):
-        return False
-    if locator_has_unstable_identity(locator):
-        return False
-    if locator_is_structural_region_header(locator):
-        return False
-    return not _locator_is_observed_text_driven(locator, trace, signal)
+    return locator_is_replay_safe_for_region_extract(
+        locator,
+        observed_values=list(_observed_text_values(trace, signal)),
+    )
 
 
 def _snapshot_extract_is_selected_text_region_evidence(trace: RPAAcceptedTrace) -> bool:
@@ -1629,6 +1629,9 @@ def _snapshot_extract_is_selected_text_region_evidence(trace: RPAAcceptedTrace) 
 
 def _has_heading_scoped_text_extract(trace: RPAAcceptedTrace) -> bool:
     signal = _trace_signal(trace, "region_text_extract")
+    intent = str(signal.get("intent") or "anchored_region_extract").strip()
+    if intent != "anchored_region_extract":
+        return False
     if str(signal.get("kind") or "").strip() != "heading_scoped_text":
         return False
     strategy = str(signal.get("text_strategy") or "").strip()
@@ -1638,7 +1641,10 @@ def _has_heading_scoped_text_extract(trace: RPAAcceptedTrace) -> bool:
     if relation not in {"inside_heading", "preceding_heading"}:
         return False
     heading_locator = signal.get("heading_locator")
-    return has_valid_locator(normalize_locator(heading_locator if isinstance(heading_locator, dict) else {}))
+    return locator_is_replay_safe_for_region_extract(
+        heading_locator if isinstance(heading_locator, dict) else {},
+        observed_values=list(_observed_result_text_values(trace, signal)),
+    )
 
 
 def _is_region_scoped_free_text_extract(trace: RPAAcceptedTrace) -> bool:
@@ -1668,36 +1674,6 @@ def _is_region_scoped_free_text_extract(trace: RPAAcceptedTrace) -> bool:
     return bool(trace.output_key and _looks_like_extract_instruction(trace))
 
 
-def _locator_is_observed_text_driven(
-    locator: Dict[str, Any],
-    trace: RPAAcceptedTrace,
-    signal: Dict[str, Any],
-) -> bool:
-    observed_values = _observed_text_values(trace, signal)
-    method = str(locator.get("method") or "").strip()
-    value = str(locator.get("value") or "").strip()
-    if method in {"text", "title"} and value and value in observed_values:
-        return True
-    if method == "role":
-        name = str(locator.get("name") or "").strip()
-        return bool(name and name in observed_values)
-    if method == "nested":
-        parent = locator.get("parent") if isinstance(locator.get("parent"), dict) else {}
-        child = locator.get("child") if isinstance(locator.get("child"), dict) else {}
-        return _locator_is_observed_text_driven(parent, trace, signal) or _locator_is_observed_text_driven(
-            child,
-            trace,
-            signal,
-        )
-    if method in {"nth", "filter_has_text"}:
-        base = locator.get("locator") or locator.get("base")
-        if isinstance(base, dict) and _locator_is_observed_text_driven(base, trace, signal):
-            return True
-        has_text = str(locator.get("has_text") or "").strip()
-        return bool(has_text and has_text in observed_values)
-    return False
-
-
 def _observed_text_values(trace: RPAAcceptedTrace, signal: Dict[str, Any]) -> set[str]:
     values: set[str] = set()
 
@@ -1722,6 +1698,30 @@ def _observed_text_values(trace: RPAAcceptedTrace, signal: Dict[str, Any]) -> se
             for nested in value:
                 walk(nested)
 
+    walk(trace.output)
+    if trace.ai_execution:
+        walk(trace.ai_execution.output)
+    return values
+
+
+def _observed_result_text_values(trace: RPAAcceptedTrace, signal: Dict[str, Any]) -> set[str]:
+    values: set[str] = set()
+
+    def add(value: Any) -> None:
+        if isinstance(value, str) and value.strip():
+            values.add(value.strip())
+
+    def walk(value: Any) -> None:
+        if isinstance(value, str):
+            add(value)
+        elif isinstance(value, dict):
+            for nested in value.values():
+                walk(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                walk(nested)
+
+    add(signal.get("observed_text"))
     walk(trace.output)
     if trace.ai_execution:
         walk(trace.ai_execution.output)

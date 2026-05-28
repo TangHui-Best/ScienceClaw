@@ -18,6 +18,21 @@ export interface RegionAnalyzePayload {
   viewport: ScreencastSize;
 }
 
+export interface ElementBoundsPayload {
+  tab_id: string;
+  point: ViewportPoint;
+  viewport: ScreencastSize;
+}
+
+export interface ElementBoundsResponse {
+  rect: RegionSelectionRect | null;
+  tag?: string;
+  role?: string;
+  name?: string;
+  text?: string;
+  warnings?: string[];
+}
+
 export interface RegionAnalyzeResponse {
   region_id: string;
   summary: string;
@@ -33,6 +48,7 @@ export interface PendingRegionAttachment {
 }
 
 export const MIN_REGION_SIZE = 8;
+export const CLICK_REGION_SELECTION_THRESHOLD = 6;
 
 export const normalizeSelectionRect = (
   start: ViewportPoint,
@@ -52,6 +68,13 @@ export const normalizeSelectionRect = (
 export const isUsableRegionRect = (rect: RegionSelectionRect): boolean =>
   rect.width >= MIN_REGION_SIZE && rect.height >= MIN_REGION_SIZE;
 
+export const isClickLikeRegionSelection = (
+  start: ViewportPoint,
+  end: ViewportPoint,
+): boolean =>
+  Math.abs(end.x - start.x) <= CLICK_REGION_SELECTION_THRESHOLD &&
+  Math.abs(end.y - start.y) <= CLICK_REGION_SELECTION_THRESHOLD;
+
 export const buildRegionAnalyzePayload = ({
   tabId,
   start,
@@ -67,6 +90,41 @@ export const buildRegionAnalyzePayload = ({
   rect: normalizeSelectionRect(start, end),
   viewport: inputSize,
 });
+
+export const buildElementBoundsPayload = ({
+  tabId,
+  point,
+  inputSize,
+}: {
+  tabId: string;
+  point: ViewportPoint;
+  inputSize: ScreencastSize;
+}): ElementBoundsPayload => ({
+  tab_id: tabId,
+  point,
+  viewport: inputSize,
+});
+
+export const buildElementRegionAnalyzePayload = ({
+  tabId,
+  rect,
+  inputSize,
+}: {
+  tabId: string;
+  rect: RegionSelectionRect;
+  inputSize: ScreencastSize;
+}): RegionAnalyzePayload => ({
+  tab_id: tabId,
+  rect,
+  viewport: inputSize,
+});
+
+export const formatElementBoundsSummary = (response: ElementBoundsResponse): string => {
+  const name = response.name?.trim() || response.text?.trim() || '';
+  const tag = response.tag?.trim() || '';
+  if (name && tag) return `${name} (${tag})`;
+  return name || tag || '';
+};
 
 export const formatRegionAttachmentSummary = (response: RegionAnalyzeResponse): string => {
   const summary = response.summary.trim();

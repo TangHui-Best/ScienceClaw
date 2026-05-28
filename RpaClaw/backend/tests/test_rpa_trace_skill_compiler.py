@@ -2223,6 +2223,132 @@ def test_heading_scoped_region_text_extract_compiles_to_deterministic_script():
     assert trace_requires_runtime_ai_replay(trace) is False
 
 
+def test_heading_scoped_region_text_extract_rejects_observed_text_driven_heading_locator():
+    recorded_text = "采购一批电脑3333"
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        user_instruction="Get selected purchase title",
+        description="Extract selected purchase title",
+        output_key="purchase_title",
+        output=recorded_text,
+        signals={
+            "region_selection": {
+                "region_id": "region-1",
+                "inferred_kind": "text_region",
+                "local_text_preview": [recorded_text],
+            },
+            "region_context_decision": {
+                "used_as": "extraction",
+                "region_id": "region-1",
+                "action_type": "run_python",
+                "output_key": "purchase_title",
+            },
+            "region_text_extract": {
+                "source": "region_scoped_snapshot",
+                "kind": "heading_scoped_text",
+                "section_title": recorded_text,
+                "heading_locator": {"method": "text", "value": recorded_text, "exact": True},
+                "heading_relation": "inside_heading",
+                "text_strategy": "bounded_section_text",
+                "output_key": "purchase_title",
+                "frame_path": [],
+            },
+        },
+        region_scope={"region_id": "region-1", "mode": "region_scoped_snapshot"},
+        region_context={
+            "region_id": "region-1",
+            "inferred_kind": "text_region",
+            "local_text": [recorded_text],
+        },
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    _assert_script_loads(script)
+    body = _execute_body(script)
+
+    assert "_execute_runtime_ai_instruction(current_page, _results, kwargs, 'Get selected purchase title', 'purchase_title')" in body
+    assert recorded_text not in body
+    assert "get_by_text" not in body
+    assert "_extract_bounded_section_text" not in body
+    assert trace_requires_runtime_ai_replay(trace) is True
+
+
+def test_heading_scoped_region_text_extract_rejects_dynamic_framework_heading_locator():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        user_instruction="Get purchase info content",
+        description="Get purchase info content",
+        output_key="purchase_info",
+        output="采购内容",
+        signals={
+            "region_selection": {"region_id": "region-1", "inferred_kind": "text_region"},
+            "region_context_decision": {
+                "used_as": "extraction",
+                "region_id": "region-1",
+                "action_type": "run_python",
+                "output_key": "purchase_info",
+            },
+            "region_text_extract": {
+                "source": "region_scoped_snapshot",
+                "kind": "heading_scoped_text",
+                "section_title": "采购信息",
+                "heading_locator": {"method": "css", "value": "#aui-collapse-head-09521894"},
+                "heading_relation": "inside_heading",
+                "text_strategy": "bounded_section_text",
+                "output_key": "purchase_info",
+                "frame_path": [],
+            },
+        },
+        region_scope={"region_id": "region-1", "mode": "region_scoped_snapshot"},
+        region_context={"region_id": "region-1", "inferred_kind": "text_region"},
+    )
+
+    body = _execute_body(TraceSkillCompiler().generate_script([trace], is_local=True))
+
+    assert "_execute_runtime_ai_instruction" in body
+    assert "#aui-collapse-head-09521894" not in body
+    assert "_extract_bounded_section_text" not in body
+    assert trace_requires_runtime_ai_replay(trace) is True
+
+
+def test_heading_scoped_region_text_extract_rejects_structural_header_heading_locator():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        user_instruction="Get purchase info content",
+        description="Get purchase info content",
+        output_key="purchase_info",
+        output="采购内容",
+        signals={
+            "region_selection": {"region_id": "region-1", "inferred_kind": "text_region"},
+            "region_context_decision": {
+                "used_as": "extraction",
+                "region_id": "region-1",
+                "action_type": "run_python",
+                "output_key": "purchase_info",
+            },
+            "region_text_extract": {
+                "source": "region_scoped_snapshot",
+                "kind": "heading_scoped_text",
+                "section_title": "采购信息",
+                "heading_locator": {"method": "css", "value": ".aui-collapse-item__word-overflow"},
+                "heading_relation": "inside_heading",
+                "text_strategy": "bounded_section_text",
+                "output_key": "purchase_info",
+                "frame_path": [],
+            },
+        },
+        region_scope={"region_id": "region-1", "mode": "region_scoped_snapshot"},
+        region_context={"region_id": "region-1", "inferred_kind": "text_region"},
+    )
+
+    body = _execute_body(TraceSkillCompiler().generate_script([trace], is_local=True))
+
+    assert "_execute_runtime_ai_instruction" in body
+    assert ".aui-collapse-item__word-overflow" not in body
+    assert "_extract_bounded_section_text" not in body
+    assert trace_requires_runtime_ai_replay(trace) is True
+
+
 def test_heading_scoped_region_text_extract_classification_requires_durable_anchor():
     recorded_text = "Stable section text"
     deterministic_trace = RPAAcceptedTrace(

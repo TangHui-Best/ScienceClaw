@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   MIN_REGION_SIZE,
   buildRegionAnalyzePayload,
+  buildElementBoundsPayload,
+  buildElementRegionAnalyzePayload,
   formatRegionAttachmentSummary,
+  isClickLikeRegionSelection,
   isUsableRegionRect,
   normalizeSelectionRect,
   regionKindLabel,
@@ -42,6 +45,52 @@ describe('buildRegionAnalyzePayload', () => {
         height: 900,
       },
     });
+  });
+});
+
+describe('buildElementBoundsPayload', () => {
+  it('builds the backend payload for resolving an element under a viewport point', () => {
+    expect(
+      buildElementBoundsPayload({
+        tabId: 'tab-1',
+        point: { x: 120, y: 240 },
+        inputSize: { width: 1440, height: 900 },
+      }),
+    ).toEqual({
+      tab_id: 'tab-1',
+      point: { x: 120, y: 240 },
+      viewport: {
+        width: 1440,
+        height: 900,
+      },
+    });
+  });
+});
+
+describe('buildElementRegionAnalyzePayload', () => {
+  it('reuses the existing region analyze payload shape with the resolved element rect', () => {
+    expect(
+      buildElementRegionAnalyzePayload({
+        tabId: 'tab-1',
+        rect: { x: 24, y: 40, width: 112, height: 32 },
+        inputSize: { width: 1440, height: 900 },
+      }),
+    ).toEqual({
+      tab_id: 'tab-1',
+      rect: { x: 24, y: 40, width: 112, height: 32 },
+      viewport: {
+        width: 1440,
+        height: 900,
+      },
+    });
+  });
+});
+
+describe('isClickLikeRegionSelection', () => {
+  it('treats tiny movement as element click and larger movement as region drag', () => {
+    expect(isClickLikeRegionSelection({ x: 10, y: 20 }, { x: 12, y: 23 })).toBe(true);
+    expect(isClickLikeRegionSelection({ x: 10, y: 20 }, { x: 26, y: 23 })).toBe(false);
+    expect(isClickLikeRegionSelection({ x: 10, y: 20 }, { x: 12, y: 37 })).toBe(false);
   });
 });
 

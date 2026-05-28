@@ -35,11 +35,14 @@ from backend.storage import get_repository
 from backend.credential.vault import inject_credentials
 from backend.rpa.runtime_context import inject_runtime_context_kwargs, runtime_requirements_from_traces
 from backend.rpa.region_context import (
+    RPARegionElementBoundsRequest,
+    RPARegionElementBoundsResponse,
     RPARegionAnalyzeRequest,
     RPARegionAnalyzeResponse,
     RPARegionContext,
     RPARegionEvidence,
     analyze_region_on_page,
+    resolve_element_bounds_on_page,
 )
 
 logger = logging.getLogger(__name__)
@@ -550,6 +553,26 @@ async def analyze_rpa_region(
         inferred_kind=evidence.inferred_kind,
         evidence=evidence,
     )
+
+
+@router.post("/session/{session_id}/region/element-bounds", response_model=RPARegionElementBoundsResponse)
+async def resolve_rpa_region_element_bounds(
+    session_id: str,
+    request: RPARegionElementBoundsRequest,
+    current_user: User = Depends(get_current_user),
+):
+    session = await rpa_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    _ensure_session_owner(session, current_user)
+
+    page = rpa_manager.get_page_for_tab(session_id, request.tab_id)
+    if page is None:
+        raise HTTPException(status_code=404, detail="Tab page not found")
+
+    response = await resolve_element_bounds_on_page(page, request)
+    rpa_manager.touch_session(session_id)
+    return response
 
 
 @router.post("/session/{session_id}/tabs/{tab_id}/activate")

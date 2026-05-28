@@ -954,6 +954,7 @@ export default {
   'Invalid JSON': 'Invalid JSON',
   'Select page region': 'Select page region',
   'Drag to select page region · Esc to cancel': 'Drag to select page region · Esc to cancel',
+  'Click an element or drag to select a region · Esc to cancel': 'Click an element or drag to select a region · Esc to cancel',
   'Selected page region': 'Selected page region',
   'Remove selected region': 'Remove selected region',
   'Region analysis failed, please select again': 'Region analysis failed, please select again',
