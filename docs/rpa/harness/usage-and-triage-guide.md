@@ -779,3 +779,80 @@ fixture 支持这些事件就声称 bootstrap baseline 已经覆盖真实表单�
 报告中的 `governance_boundary.agents_may_promote_automatically=false` 是硬边界。
 Agent 可以解释 replay 报告和建议下一步，但不能自动把资产升为 `candidate` 或
 `golden`。
+
+## F017 full-live profile
+
+`full-live` profile 是 v1 的高保真受控验证路径。它基于受管资产中的
+`natural_language_instruction` 事件，在 controlled fixture 或 captured page state
+上触发 recording-time intelligent path，再生成 profile artifact 并进入
+post-capture checks。只有使用真实模型凭证和默认 Planner 运行时，它才证明真实
+`Planner / LLM` 行为；如果使用 injected deterministic planner，它只证明
+full-live wiring、fixture、Runtime 调用、trace/artifact 生成和 post-capture checks。
+
+运行机器 JSON：
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m backend.rpa.harness.run_harness_profile --assets data\rpa_harness_assets_bootstrap --profile full-live --generated-assets docs\rpa\harness\reports\f018-generated-assets --output docs\rpa\harness\reports\YYYY-MM-DD-full-live-profile.json
+```
+
+生成中文 summary：
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m backend.rpa.harness.run_harness_profile --assets data\rpa_harness_assets_bootstrap --profile full-live --generated-assets docs\rpa\harness\reports\f018-generated-assets --format summary --lang zh --output docs\rpa\harness\reports\YYYY-MM-DD-full-live-profile.md --machine-report docs\rpa\harness\reports\YYYY-MM-DD-full-live-profile.json
+```
+
+Agent 优先读取 JSON 字段：
+
+```text
+profile
+summary
+source_asset_ids
+selected_input_events
+controlled_fixtures
+planner_invocation_count
+generated_asset_ids
+post_capture
+failures
+trust_limits
+governance_boundary
+```
+
+边界：
+
+- 第一切片只覆盖 natural-language input event。
+- 真实 Planner/LLM 质量必须来自无 injected planner 的 real Planner run；fake planner
+  通过不能作为模型质量证据。
+- click/type/select/submit 仍由 F016 deterministic user-input replay 表达。
+- 不访问 live URL 作为 oracle。
+- 不让外层 Agent 点击 RPA 产品 UI。
+- 不自动 promotion。
+- generated artifacts 只是 profile evidence，不是 governed asset pool。
+
+## F018 v1 closeout / stabilization
+
+v1 总入口是：
+
+```text
+docs/rpa/harness/rpa-harness-v1-design.md
+```
+
+未来 Agent 或人类应先从这个入口理解 v1 的用户旅程、profile 选择、报告解释边界、
+generated artifact 身份和治理边界。
+
+F018 的判断口径是：v1 closeout 成功不是因为新增功能，而是因为任何人都能从入口
+知道怎么 capture、review、promote、执行、解释和治理。
+
+必须特别注意：
+
+- `docs/rpa/harness/reports/f017-generated-assets/...` 是 F017 full-live profile 的
+  Evidence/profile artifact，不是 governed asset pool。
+- F018 或后续 full-live 运行写入
+  `docs/rpa/harness/reports/f018-generated-assets/...` 时同理。
+- 如果 generated artifact 要进入长期资产池，必须经过 Assisted Review /
+  Promotion、sensitivity review、expected-signal review 和人工确认。
+- deterministic profile 仍是默认稳定回归路径。
+- full-live profile 是 controlled high-fidelity validation，不是默认 blocking CI。
+- 内部 controlled full-live scenario 可以进入 v1.1/backlog；除非人明确要求，不应阻塞
+  v1 closeout。

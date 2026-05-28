@@ -1,0 +1,73 @@
+{
+  "step_index": 1,
+  "step_id": "trace-6c692355d6794bb9a2b0d9e1dacc14c0",
+  "step_intent": "获取fork数",
+  "recording_mode": "natural_language",
+  "page_patterns": [],
+  "captured_at": "2026-05-28T21:10:24.194345",
+  "before": {
+    "url": "https://github.com/tinyhumansai/openhuman",
+    "title": "GitHub - tinyhumansai/openhuman: Your Personal AI super intelligence. Private, Simple and extremely powerful. · GitHub",
+    "html_path": "steps/001/before.html",
+    "html_sha256": "e701935ac26d2ada5c64d3d43a05be3e73e381e39094a581bd675a7272319dea",
+    "same_as_before": false,
+    "capture_quality": {
+      "status": "stable",
+      "reason": "",
+      "attempts": 2,
+      "settle_ms": 200,
+      "url": "https://github.com/tinyhumansai/openhuman",
+      "html_bytes": 569810,
+      "body_text_chars": 74427,
+      "title_present": true,
+      "ready_state": "complete",
+      "url_stable": true,
+      "title_stable": true,
+      "html_stable": true,
+      "shell_like": false
+    },
+    "screenshot_path": "",
+    "raw_snapshot_path": "",
+    "compact_snapshot_path": "",
+    "active_page_id": "",
+    "iframe_metadata": []
+  },
+  "action": {
+    "trace_events_path": "steps/001/trace_events.json",
+    "expected_action_type": "",
+    "target_evidence": {}
+  },
+  "after": {
+    "url": "https://github.com/tinyhumansai/openhuman",
+    "title": "GitHub - tinyhumansai/openhuman: Your Personal AI super intelligence. Private, Simple and extremely powerful. · GitHub",
+    "html_path": "steps/001/before.html",
+    "html_sha256": "e701935ac26d2ada5c64d3d43a05be3e73e381e39094a581bd675a7272319dea",
+    "same_as_before": true,
+    "capture_quality": {
+      "status": "stable",
+      "reason": "",
+      "attempts": 2,
+      "settle_ms": 200,
+      "url": "https://github.com/tinyhumansai/openhuman",
+      "html_bytes": 569810,
+      "body_text_chars": 74427,
+      "title_present": true,
+      "ready_state": "complete",
+      "url_stable": true,
+      "title_stable": true,
+      "html_stable": true,
+      "shell_like": false
+    },
+    "screenshot_path": "",
+    "raw_snapshot_path": "",
+    "compact_snapshot_path": "",
+    "active_page_id": "",
+    "iframe_metadata": []
+  },
+  "runtime_result": {
+    "status": "success",
+    "error": ""
+  },
+  "expected_path": "steps/001/expected.json",
+  "failure_path": ""
+}

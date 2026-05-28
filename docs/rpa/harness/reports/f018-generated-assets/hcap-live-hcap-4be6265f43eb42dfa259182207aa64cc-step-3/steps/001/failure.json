@@ -1,0 +1,5 @@
+{
+  "error": "Recording planner failed to return a valid plan.",
+  "captured_at": "2026-05-28T21:09:09.074111",
+  "step_intent": "获取fork数"
+}
