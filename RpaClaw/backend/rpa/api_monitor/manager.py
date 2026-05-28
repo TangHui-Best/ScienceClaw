@@ -493,6 +493,7 @@ class ApiMonitorSessionManager:
         self._analysis_event_sinks: Dict[str, Callable[[str, dict], None]] = {}
         self._intent_prune_buffers: Dict[str, set[str]] = defaultdict(set)
         self._intent_prune_tasks: Dict[str, asyncio.Task] = {}
+        self._intent_prune_flushing: Dict[str, bool] = {}
 
     def _emit_analysis_event(self, session_id: str, event: str, data: dict) -> None:
         sink = self._analysis_event_sinks.get(session_id)
@@ -642,6 +643,7 @@ class ApiMonitorSessionManager:
         self._stop_recording_tasks.pop(session_id, None)
         await self._stop_recording_drain_task(session_id)
         self._intent_prune_buffers.pop(session_id, None)
+        self._intent_prune_flushing.pop(session_id, None)
         prune_task = self._intent_prune_tasks.pop(session_id, None)
         if prune_task and not prune_task.done():
             prune_task.cancel()
@@ -1885,6 +1887,9 @@ class ApiMonitorSessionManager:
                     "[ApiMonitor] Failed to generate tool for %s: %s",
                     candidate.url_pattern, exc,
                 )
+                candidate.status = "failed"
+                candidate.error = str(exc)
+                candidate.updated_at = datetime.now()
 
         self._dedup_session_tools(session_id, tools)
 
@@ -2508,10 +2513,11 @@ class ApiMonitorSessionManager:
     ) -> None:
         existing = self._intent_prune_tasks.get(session_id)
         if existing and not existing.done():
-            # Don't cancel in-flight tasks — their popped candidate IDs would be lost.
-            # The _delayed_intent_prune_flush finally block will re-schedule if the buffer
-            # still has items after the current flush completes.
-            return
+            if self._intent_prune_flushing.get(session_id):
+                # Already in _flush_intent_prune_buffer — don't cancel, would lose popped candidates
+                return
+            # Still in debounce sleep — safe to cancel and replace
+            existing.cancel()
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -2535,10 +2541,12 @@ class ApiMonitorSessionManager:
         try:
             if delay > 0:
                 await asyncio.sleep(delay)
+            self._intent_prune_flushing[session_id] = True
             await self._flush_intent_prune_buffer(session_id, model_config=model_config)
         except asyncio.CancelledError:
             raise
         finally:
+            self._intent_prune_flushing.pop(session_id, None)
             current = asyncio.current_task()
             if self._intent_prune_tasks.get(session_id) is current:
                 self._intent_prune_tasks.pop(session_id, None)

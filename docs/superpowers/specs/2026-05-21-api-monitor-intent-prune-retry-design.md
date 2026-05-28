@@ -158,7 +158,7 @@ batch 路径中 helper 不能把异常抛回主流程。即使裁剪最终失败
 
 首版采用固定常量：
 
-- `INTENT_PRUNE_TIMEOUT_S = 20`
+- `INTENT_PRUNE_TIMEOUT_S = 60`
 - `INTENT_PRUNE_MAX_RETRIES = 2`
 - `INTENT_PRUNE_RETRY_BASE_DELAY_S = 2`
 - `INTENT_PRUNE_CONCURRENCY = 2`

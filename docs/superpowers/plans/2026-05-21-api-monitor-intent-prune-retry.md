@@ -279,7 +279,7 @@ Expected: fails because `_prune_candidates_with_retry` and retry constants do no
 In `RpaClaw/backend/rpa/api_monitor/manager.py`, add these constants near the existing intent prune constants:
 
 ```python
-INTENT_PRUNE_TIMEOUT_S = 20.0
+INTENT_PRUNE_TIMEOUT_S = 60.0
 INTENT_PRUNE_MAX_RETRIES = 2
 INTENT_PRUNE_RETRY_BASE_DELAY_S = 2.0
 INTENT_PRUNE_CONCURRENCY = 2
