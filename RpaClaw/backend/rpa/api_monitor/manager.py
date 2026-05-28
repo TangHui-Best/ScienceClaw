@@ -945,6 +945,21 @@ class ApiMonitorSessionManager:
             model_config=model_config,
         )
         await self._flush_intent_prune_buffer(session_id, model_config=model_config)
+        # 防御性检查：确保所有 pending/stale/failed 候选项在有意图时都经过了裁剪
+        session_after = self.sessions.get(session_id)
+        if session_after and (session_after.intent or "").strip():
+            missed = [
+                c for c in session_after.generation_candidates
+                if c.status in ("pending", "stale", "failed")
+            ]
+            if missed:
+                logger.warning(
+                    "[ApiMonitor] session=%s %d candidates missed intent prune after stop, re-flushing",
+                    session_id, len(missed),
+                )
+                for c in missed:
+                    self._intent_prune_buffers.setdefault(session_id, set()).add(c.id)
+                await self._flush_intent_prune_buffer(session_id, model_config=model_config)
         self._last_recording_calls[session_id] = list(new_calls)
         session.status = "idle"
         session.updated_at = datetime.now()
@@ -2533,6 +2548,10 @@ class ApiMonitorSessionManager:
             for candidate in session.generation_candidates
             if candidate.id in candidate_ids and candidate.status in ("pending", "stale", "failed", "intent_prune_retrying")
         ]
+        logger.info(
+            "[IntentPrune] session=%s flushing %d buffered candidates (of %d ids)",
+            session_id, len(candidates), len(candidate_ids),
+        )
         if not candidates:
             return
         intent = (session.intent or "").strip()
@@ -2880,8 +2899,13 @@ class ApiMonitorSessionManager:
             event_name = "api_candidate_created" if _created else "api_candidate_updated"
             self._emit_analysis_event(session_id, event_name, self._candidate_event_payload(candidate))
             changed.append(candidate)
+            intent_str = (session.intent or "").strip()
+            logger.debug(
+                "[ApiMonitor] session=%s candidate=%s status=%s has_intent=%s _created=%s",
+                session_id, candidate.id, candidate.status, bool(intent_str), _created,
+            )
             if candidate.status in ("pending", "stale", "failed"):
-                if (session.intent or "").strip():
+                if intent_str:
                     self._intent_prune_buffers[session_id].add(candidate.id)
                     self._schedule_intent_prune_flush(
                         session_id,
@@ -2890,6 +2914,11 @@ class ApiMonitorSessionManager:
                     )
                 else:
                     self._enqueue_generation_candidate(session_id, candidate.id, model_config=model_config)
+            elif intent_str:
+                logger.info(
+                    "[ApiMonitor] session=%s candidate=%s skipping intent prune (status=%s)",
+                    session_id, candidate.id, candidate.status,
+                )
         return changed
 
     def _store_evidence_calls(
