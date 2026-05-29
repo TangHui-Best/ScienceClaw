@@ -1,4 +1,4 @@
-# F018 RPA Harness v1 Closeout / Stabilization Plan
+﻿# F018 RPA Harness v1 Closeout / Stabilization Plan
 
 ## Goal
 
@@ -13,7 +13,7 @@ checklist, and record residual risk.
 
 Do:
 
-- Upgrade `docs/rpa/harness/rpa-harness-v1-design.md` into the v1 total entrypoint.
+- Upgrade `docs/rpa/harness/RPA-Harness-v1-设计.md` into the v1 total entrypoint.
 - Clarify the v1 journey:
 
 ```text
@@ -47,7 +47,7 @@ Do not:
 
 ### Task 1: Entrypoint rewrite
 
-Rewrite `docs/rpa/harness/rpa-harness-v1-design.md` from compatibility index into
+Rewrite `docs/rpa/harness/RPA-Harness-v1-设计.md` from compatibility index into
 the v1 total entrypoint.
 
 Required sections:

@@ -1,4 +1,4 @@
----
+﻿---
 id: EV-018
 doc_kind: evidence
 title: RPA Harness v1 Closeout / Stabilization Evidence
@@ -58,7 +58,7 @@ Allowed next action:
 
 Knowledge Retrieval:
 
-- Read `docs/rpa/harness/rpa-harness-v1-design.md`.
+- Read `docs/rpa/harness/RPA-Harness-v1-设计.md`.
 - Read `docs/rpa/harness/rpa-harness-v1-asset-driven-user-input-replay.md`.
 - Read F013 through F017 Feature pages and EV-013 through EV-017 Evidence records.
 - Read `docs/decisions/ADR-003-rpa-golden-evaluation-uses-assets-not-live-agent-chat.md`.
@@ -104,7 +104,7 @@ Doc Lifecycle:
 ```text
 Doc Lifecycle: lightweight entrypoint convergence
 Decision:
-- Upgrade docs/rpa/harness/rpa-harness-v1-design.md from compatibility index to the
+- Upgrade docs/rpa/harness/RPA-Harness-v1-设计.md from compatibility index to the
   v1 total entrypoint.
 - Keep docs/rpa/harness/rpa-harness-v1-asset-driven-user-input-replay.md as the detailed
   design source linked from the entrypoint.
@@ -468,7 +468,7 @@ Scanned 222 markdown file(s). Checked 40 knowledge artifact(s). Errors: 0. Warni
 - Feature: `docs/features/F018-rpa-harness-v1-closeout-stabilization.md`
 - Evidence: `docs/evidence/EV-018-rpa-harness-v1-closeout-stabilization.md`
 - Plan: `docs/rpa/harness/f018-rpa-harness-v1-closeout-stabilization-plan.md`
-- v1 entrypoint: `docs/rpa/harness/rpa-harness-v1-design.md`
+- v1 entrypoint: `docs/rpa/harness/RPA-Harness-v1-设计.md`
 - Usage guide: `docs/rpa/harness/usage-and-triage-guide.md`
 - Deterministic report: `docs/rpa/harness/reports/2026-05-28-f018-deterministic-profile.json`
 - Deterministic summary: `docs/rpa/harness/reports/2026-05-28-f018-deterministic-profile.md`
@@ -581,7 +581,7 @@ Read-only sidecar 2:
 Review follow-up from an additional agent:
 
 - Finding:
-  - P1: Source Map links in `docs/rpa/harness/rpa-harness-v1-design.md` used `../`
+  - P1: Source Map links in `docs/rpa/harness/RPA-Harness-v1-设计.md` used `../`
     and resolved to nonexistent `docs/rpa/features`, `docs/rpa/evidence`, and
     `docs/rpa/decisions`.
   - P2: Sidecar audit was cited as closeout evidence without enough durable recovery

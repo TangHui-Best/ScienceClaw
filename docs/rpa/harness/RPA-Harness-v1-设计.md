@@ -1,4 +1,4 @@
-# RPA Harness v1 Design
+﻿# RPA Harness v1 Design
 
 ## Vision
 
@@ -20,6 +20,8 @@ Humans govern.
 [RPA Harness v1: Asset-Driven User Input Replay](rpa-harness-v1-asset-driven-user-input-replay.md)
 
 本文件是 v1 的总入口。未来 Agent 或人类如果只读一份 v1 文档，应先读这里。
+录制后审查、人工正确性判断、Skill 泛化预期和资产升级的最短操作说明见：
+[RPA Harness 资产录制与审查最小流程](资产录制与审查最小流程.md)。
 
 ## User Journey
 
@@ -191,12 +193,12 @@ full-live profile 可以证明：
 - 当 run 使用 injected deterministic planner 时，报告只能证明 full-live profile
   的 fixture、Runtime 调用、trace/artifact 生成和 post-capture 检查集成闭环。
 - 生成的 accepted trace / generated artifact 可以进入 post-capture checks。
-- 这是一条高保真受控验证路径，不是 live URL oracle。
+- 这是一条高保真受控验证路径，不是 live URL 正确性来源。
 
 任何 profile 都不能证明：
 
 - 全局 RPA Agent 完全健康。
-- live 网站当前状态就是正确性 oracle。
+- live 网站当前状态就是正确性判据。
 - Agent 可以自动 promotion。
 - generated profile artifacts 可以默认进入 governed asset pool。
 - injected deterministic planner 的通过结果可以证明真实模型质量或内网 Planner
@@ -311,7 +313,7 @@ v1 不自动 promotion。
 - expected signals 和 sensitivity 必须由人确认；
 - golden 是长期 contract asset，需要人工批准。
 
-v1 不把 live URL 当 oracle。
+v1 不把 live URL 当正确性来源。
 
 原因：
 

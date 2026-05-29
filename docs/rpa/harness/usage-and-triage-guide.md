@@ -1,4 +1,4 @@
-# RPA Harness 使用与问题定位指南
+﻿# RPA Harness 使用与问题定位指南
 
 ## 目的
 
@@ -835,7 +835,7 @@ governance_boundary
 v1 总入口是：
 
 ```text
-docs/rpa/harness/rpa-harness-v1-design.md
+docs/rpa/harness/RPA-Harness-v1-设计.md
 ```
 
 未来 Agent 或人类应先从这个入口理解 v1 的用户旅程、profile 选择、报告解释边界、

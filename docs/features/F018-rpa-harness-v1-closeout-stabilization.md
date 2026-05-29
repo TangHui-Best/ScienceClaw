@@ -1,4 +1,4 @@
----
+﻿---
 id: F018
 doc_kind: feature
 status: ready_for_review
@@ -22,7 +22,7 @@ F018 不是 Phase 6，不新增 runner，不扩 full-live 到所有手动 UI 事
   RPA Harness v1 closeout / stabilization slice。
 - User pain point: F013-F017 已经分别完成 deterministic profile、Evidence /
   Report trust loop、asset lifecycle、user-input replay、full-live profile，但
-  `docs/rpa/harness/rpa-harness-v1-design.md` 仍只是 compatibility index，未来
+  `docs/rpa/harness/RPA-Harness-v1-设计.md` 仍只是 compatibility index，未来
   Agent 可能从错误入口误解 v1、过度解释报告、误把 generated full-live artifacts
   当成 governed assets，或把 v1 closeout 继续膨胀成 Phase 6。
 - Desired outcome: v1 有一个清晰总入口，说明用户旅程、三类 profile、何时运行
@@ -72,7 +72,7 @@ Start Gate:
 
 Knowledge Retrieval:
 
-- Read `docs/rpa/harness/rpa-harness-v1-design.md`.
+- Read `docs/rpa/harness/RPA-Harness-v1-设计.md`.
 - Read `docs/rpa/harness/rpa-harness-v1-asset-driven-user-input-replay.md`.
 - Read F013 through F017 Feature pages and EV-013 through EV-017 Evidence records.
 - Read `docs/decisions/ADR-003-rpa-golden-evaluation-uses-assets-not-live-agent-chat.md`.
@@ -106,7 +106,7 @@ Vision Gate:
 
 Doc Lifecycle:
 
-- `docs/rpa/harness/rpa-harness-v1-design.md` should be upgraded from compatibility
+- `docs/rpa/harness/RPA-Harness-v1-设计.md` should be upgraded from compatibility
   index to v1 total entrypoint.
 - `docs/rpa/harness/rpa-harness-v1-asset-driven-user-input-replay.md` remains a
   detailed design source and should be linked from the new entrypoint, not archived.
@@ -117,7 +117,7 @@ Doc Lifecycle:
 
 - Evidence: [EV-018 RPA Harness v1 Closeout / Stabilization Evidence](../evidence/EV-018-rpa-harness-v1-closeout-stabilization.md)
 - Plan: [F018 closeout / stabilization plan](../rpa/harness/f018-rpa-harness-v1-closeout-stabilization-plan.md)
-- Design entrypoint: [RPA Harness v1 Design](../rpa/harness/rpa-harness-v1-design.md)
+- Design entrypoint: [RPA Harness v1 Design](../rpa/harness/RPA-Harness-v1-设计.md)
 - Detailed design: [RPA Harness v1 Asset-Driven User Input Replay](../rpa/harness/rpa-harness-v1-asset-driven-user-input-replay.md)
 - Decision: [ADR-003 RPA Golden Evaluation Uses Scenario Assets, Not Direct Agent Chat](../decisions/ADR-003-rpa-golden-evaluation-uses-assets-not-live-agent-chat.md)
 - Previous Feature: [F017 RPA Harness v1 Full/Live Profile Integration](F017-rpa-harness-v1-full-live-profile-integration.md)
@@ -125,7 +125,7 @@ Doc Lifecycle:
 ## Acceptance Criteria
 
 - [x] F018 / EV-018 exist and state this is v1 closeout/stabilization, not Phase 6.
-- [x] `docs/rpa/harness/rpa-harness-v1-design.md` is a clear v1 total entrypoint.
+- [x] `docs/rpa/harness/RPA-Harness-v1-设计.md` is a clear v1 total entrypoint.
 - [x] The generated artifact evidence identity is documented.
 - [x] Full v1 acceptance checklist is run and recorded.
 - [x] EV-018 explicitly decides whether internal controlled full-live scenarios block

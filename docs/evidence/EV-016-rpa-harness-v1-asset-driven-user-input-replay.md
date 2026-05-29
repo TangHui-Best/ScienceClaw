@@ -1,4 +1,4 @@
----
+﻿---
 id: EV-016
 doc_kind: evidence
 title: RPA Harness v1 Asset-Driven User Input Replay Evidence
@@ -264,7 +264,7 @@ Scanned 212 markdown file(s). Checked 36 knowledge artifact(s). Errors: 0. Warni
 - Replay runner: `RpaClaw/backend/rpa/harness/user_input_replay.py`
 - Replay CLI: `RpaClaw/backend/rpa/harness/run_user_input_replay.py`
 - Focused tests: `RpaClaw/backend/tests/test_rpa_harness_user_input_replay.py`
-- Design compatibility index: `docs/rpa/harness/rpa-harness-v1-design.md`
+- Design compatibility index: `docs/rpa/harness/RPA-Harness-v1-设计.md`
 - Usage guide: `docs/rpa/harness/usage-and-triage-guide.md`
 - Machine report: `docs/rpa/harness/reports/2026-05-28-f016-user-input-replay.json`
 - Markdown summary: `docs/rpa/harness/reports/2026-05-28-f016-user-input-replay.md`
@@ -333,7 +333,7 @@ Independent review follow-up:
   Fixed by adding a deterministic `scripted_user_input_replay_adapter` that
   produces per-event `boundary_injections`; failed extraction events get skipped
   injection records rather than fake success.
-- Accepted P2: added `docs/rpa/harness/rpa-harness-v1-design.md` as a compatibility
+- Accepted P2: added `docs/rpa/harness/RPA-Harness-v1-设计.md` as a compatibility
   index pointing to the canonical v1 design source.
 
 ## Residual Risk
@@ -355,7 +355,7 @@ Independent review follow-up:
 
 ## Notes
 
-- `docs/rpa/harness/rpa-harness-v1-design.md` is a compatibility index. The current
+- `docs/rpa/harness/RPA-Harness-v1-设计.md` is a compatibility index. The current
   canonical source design remains
   `docs/rpa/harness/rpa-harness-v1-asset-driven-user-input-replay.md`.
 - Existing untracked workspace files predate this slice and are intentionally

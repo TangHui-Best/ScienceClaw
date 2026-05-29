@@ -19,6 +19,15 @@ RpaClaw is a privacy-first personal research assistant with a local RPA skill re
 - Source: `docs/lessons/LL-001-harness-feature-evidence-closeout-miss.md`.
 - Rationale: prevents code-only progress from replacing recoverable project memory.
 
+## RPA Harness Asset Review Entry
+
+- Scope: Full SOP 录制资产、Harness asset、expected signals、资产升级、promotion、candidate/candidate-lite/golden 相关任务。
+- Requirement: agents MUST first read `docs/rpa/harness/资产录制与审查最小流程.md` before judging asset correctness or recommending promotion.
+- Requirement: agents MUST NOT treat `runtime_status=success` as asset acceptance; distinguish recorded facts, human acceptance criteria, expected signals, sensitivity, and promotion status.
+- Requirement: before moving an asset from `captured` toward `candidate` or `golden`, agents MUST confirm expected signals and sensitivity have been human-reviewed.
+- Source: `docs/rpa/harness/资产录制与审查最小流程.md`.
+- Rationale: prevents captured-but-wrong steps or hardcoded generated Skills from entering the regression baseline.
+
 ## Project Stack
 
 - **Backend**: FastAPI, Python, Pydantic v2, LangGraph/DeepAgents, MongoDB.

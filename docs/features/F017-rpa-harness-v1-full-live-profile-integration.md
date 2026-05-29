@@ -1,4 +1,4 @@
----
+﻿---
 id: F017
 doc_kind: feature
 status: ready_for_review
@@ -105,7 +105,7 @@ Start Gate:
 Knowledge Retrieval:
 
 - Read `docs/rpa/harness/rpa-harness-v1-asset-driven-user-input-replay.md`.
-- Read `docs/rpa/harness/rpa-harness-v1-design.md`.
+- Read `docs/rpa/harness/RPA-Harness-v1-设计.md`.
 - Read `docs/features/F016-rpa-harness-v1-asset-driven-user-input-replay.md`.
 - Read `docs/evidence/EV-016-rpa-harness-v1-asset-driven-user-input-replay.md`.
 - Read `docs/features/F012-live-agent-eval-for-rpa-harness.md`.

@@ -1,4 +1,4 @@
----
+﻿---
 id: F016
 doc_kind: feature
 status: ready_for_review
@@ -67,7 +67,7 @@ and records both event facts and boundary injection records. It does not drive
 the product UI through an outer Agent, call live Planner/LLM during the run,
 access live URLs as oracle, or promote assets.
 
-The requested `docs/rpa/harness/rpa-harness-v1-design.md` path now exists as a
+The requested `docs/rpa/harness/RPA-Harness-v1-设计.md` path now exists as a
 compatibility index. The current v1 design source remains:
 
 ```text

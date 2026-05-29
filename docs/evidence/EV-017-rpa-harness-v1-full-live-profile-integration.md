@@ -1,4 +1,4 @@
----
+﻿---
 id: EV-017
 doc_kind: evidence
 title: RPA Harness v1 Full/Live Profile Integration Evidence
@@ -74,7 +74,7 @@ Allowed next action:
 Knowledge Retrieval:
 
 - Read `docs/rpa/harness/rpa-harness-v1-asset-driven-user-input-replay.md`.
-- Read `docs/rpa/harness/rpa-harness-v1-design.md`.
+- Read `docs/rpa/harness/RPA-Harness-v1-设计.md`.
 - Read `docs/features/F016-rpa-harness-v1-asset-driven-user-input-replay.md`.
 - Read `docs/evidence/EV-016-rpa-harness-v1-asset-driven-user-input-replay.md`.
 - Read `docs/features/F012-live-agent-eval-for-rpa-harness.md`.
@@ -449,7 +449,7 @@ high-risk Harness execution/report contract slice.
 
 ## Notes
 
-- `docs/rpa/harness/rpa-harness-v1-design.md` is a compatibility index; the canonical
+- `docs/rpa/harness/RPA-Harness-v1-设计.md` is a compatibility index; the canonical
   v1 design source remains
   `docs/rpa/harness/rpa-harness-v1-asset-driven-user-input-replay.md`.
 - Existing untracked workspace files predate this slice and are intentionally ignored
