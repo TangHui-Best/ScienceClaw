@@ -1,0 +1,18 @@
+{
+  "snapshot_signals": {
+    "must_contain_text": [
+      "Pull requests"
+    ]
+  },
+  "action_signals": {
+    "expected_action_type": "navigate_click",
+    "target_role": "link",
+    "target_text_contains": "Pull requests"
+  },
+  "compiler_signals": {},
+  "state_signals": {
+    "observed_output_shape": {
+      "type": "null"
+    }
+  }
+}
