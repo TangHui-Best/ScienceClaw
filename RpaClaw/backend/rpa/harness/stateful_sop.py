@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import tempfile
 from json import JSONDecodeError
 from collections import Counter
 from dataclasses import dataclass
@@ -20,7 +21,13 @@ from backend.rpa.trace_recorder import (
 from backend.rpa.trace_skill_compiler import TraceSkillCompiler
 
 from .models import HarnessExpectedSignals, HarnessScenarioAsset, HarnessStepCheckpoint
-from .skill_replay import _install_controlled_replay_routes, _load_execute_skill
+from .skill_replay import (
+    _controlled_download_spec,
+    _install_controlled_download_routes,
+    _install_controlled_replay_routes,
+    _load_execute_skill,
+    _validate_controlled_download,
+)
 
 
 _GOVERNED_PROMOTIONS = {"candidate", "golden"}
@@ -337,6 +344,18 @@ def _validate_expected_state_signals(
     return "passed", "", []
 
 
+def _validate_controlled_download_signals(
+    results: dict[str, Any],
+    expected_items: list[HarnessExpectedSignals],
+) -> tuple[str, str, str, Any, dict[str, Any]]:
+    for expected in expected_items:
+        signal = expected.state_signals.get("controlled_download")
+        if not isinstance(signal, dict) or not signal:
+            continue
+        return _validate_controlled_download(results, expected)
+    return "passed", "", "", None, {}
+
+
 async def _replay_skill_against_stateful_provider(
     *,
     asset_dir: Path,
@@ -351,7 +370,13 @@ async def _replay_skill_against_stateful_provider(
         page.set_default_timeout(10000)
         page.set_default_navigation_timeout(10000)
         try:
+            expected_items = _expected_state_signals(asset_dir, checkpoints)
             await _install_controlled_replay_routes(page, _url_html_map(asset_dir, checkpoints))
+            for expected in expected_items:
+                await _install_controlled_download_routes(
+                    page,
+                    _controlled_download_spec(asset_dir, expected),
+                )
             first = checkpoints[0]
             if _is_http_url(first.before.url):
                 await page.goto(first.before.url, wait_until="domcontentloaded")
@@ -361,19 +386,33 @@ async def _replay_skill_against_stateful_provider(
                     wait_until="domcontentloaded",
                 )
             execute_skill = _load_execute_skill(script)
-            results = await execute_skill(page)
-            if not isinstance(results, dict):
-                results = {"value": results}
-            status, failure_category, missing_text = _validate_expected_state_signals(
-                results,
-                _expected_state_signals(asset_dir, checkpoints),
-            )
+            with tempfile.TemporaryDirectory(prefix="rpa-harness-stateful-downloads-") as downloads_dir:
+                results = await execute_skill(page, _downloads_dir=downloads_dir)
+                if not isinstance(results, dict):
+                    results = {"value": results}
+                status, failure_category, missing_text = _validate_expected_state_signals(
+                    results,
+                    expected_items,
+                )
+                controlled_download: dict[str, Any] = {}
+                if status == "passed":
+                    (
+                        download_status,
+                        download_failure,
+                        _download_key,
+                        _download_output,
+                        controlled_download,
+                    ) = _validate_controlled_download_signals(results, expected_items)
+                    if download_status != "passed":
+                        status = download_status
+                        failure_category = download_failure
             return {
                 "status": status,
                 "failure_category": failure_category,
                 "actual_output": results,
                 "missing_text": missing_text,
                 "error": "",
+                "controlled_download": controlled_download,
             }
         except Exception as exc:
             return {

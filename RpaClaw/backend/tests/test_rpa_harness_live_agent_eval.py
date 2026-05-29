@@ -1,4 +1,5 @@
 import json
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -35,6 +36,62 @@ def _write_live_scenario(root: Path) -> Path:
                     "must_contain_text": ["$42.00"],
                 },
                 "page_patterns": ["detail-page", "data-extraction"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return scenarios
+
+
+def _write_live_download_scenario(root: Path) -> Path:
+    scenarios = root / "scenarios"
+    downloads = scenarios / "downloads"
+    scenarios.mkdir()
+    downloads.mkdir()
+    download_body = b"controlled live download bytes\n"
+    download_sha256 = hashlib.sha256(download_body).hexdigest()
+    (downloads / "report.xlsx").write_bytes(download_body)
+    (scenarios / "file-download.json").write_text(
+        json.dumps(
+            {
+                "scenario_id": "file-download",
+                "instruction": "点击列表第一行的文件名称",
+                "url": "https://fixture.local/files",
+                "html": """
+                    <html>
+                      <head><title>File Center</title></head>
+                      <body>
+                        <main>
+                        <h1>File Center</h1>
+                        <p>Downloadable project files are listed below for controlled replay validation.</p>
+                        <table>
+                          <caption>Project Files</caption>
+                          <tbody>
+                            <tr>
+                              <td>
+                                <a id="first-file" href="https://fixture.local/downloads/report.xlsx">
+                                  report.xlsx
+                                </a>
+                              </td>
+                            </tr>
+                          </tbody>
+                        </table>
+                        </main>
+                      </body>
+                    </html>
+                """,
+                "expected": {
+                    "controlled_download": {
+                        "url": "https://fixture.local/downloads/report.xlsx",
+                        "filename": "report.xlsx",
+                        "content_type": (
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        ),
+                        "body_path": "downloads/report.xlsx",
+                        "sha256": download_sha256,
+                    }
+                },
+                "page_patterns": ["list-page", "download"],
             }
         ),
         encoding="utf-8",
@@ -92,6 +149,42 @@ async def run(page, results):
     assert trace_events[0]["trace_type"] == "ai_operation"
     assert trace_events[0]["output_key"] == "invoice_total"
     assert "page.locator('#invoice-total')" in trace_events[0]["ai_execution"]["code"]
+
+
+@pytest.mark.asyncio
+async def test_live_agent_eval_controlled_download_is_captured_as_trace_signal(tmp_path: Path):
+    scenarios = _write_live_download_scenario(tmp_path)
+    assets = tmp_path / "assets"
+
+    async def planner(payload):
+        assert payload["instruction"] == "点击列表第一行的文件名称"
+        return {
+            "description": "Click first file name",
+            "output_key": "download_action",
+            "code": """
+async def run(page, results):
+    await page.locator('#first-file').click()
+    return {'action_performed': True, 'action_type': 'click'}
+""",
+        }
+
+    report = await run_live_agent_eval(
+        scenarios_root=scenarios,
+        assets_root=assets,
+        planner=planner,
+    )
+
+    assert report["summary"]["status"] == "passed", report
+    item = report["scenarios"][0]
+    assert item["status"] == "passed"
+    assert item["controlled_download"]["filename"] == "report.xlsx"
+    assert item["controlled_download"]["sha256_verified"] is True
+
+    trace_events = json.loads(
+        (assets / "hcap-live-file-download" / "steps" / "001" / "trace_events.json").read_text(encoding="utf-8")
+    )
+    assert trace_events[0]["signals"]["download"]["filename"] == "report.xlsx"
+    assert trace_events[0]["signals"]["download"]["count"] == 1
 
 
 def test_live_agent_eval_cli_writes_report_for_invalid_scenario_without_calling_llm(tmp_path: Path):

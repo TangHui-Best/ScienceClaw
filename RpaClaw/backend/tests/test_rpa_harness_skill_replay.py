@@ -1,4 +1,5 @@
 import json
+import hashlib
 from pathlib import Path
 
 from backend.rpa.harness.skill_replay import run_skill_replay_e2e
@@ -131,6 +132,149 @@ def _write_replay_asset(root: Path, *, expected_text: str = "Fork 1.3k") -> Path
     return root
 
 
+def _write_download_replay_asset(root: Path) -> Path:
+    asset_dir = root / "asset-download-replay"
+    step_dir = asset_dir / "steps" / "001"
+    download_dir = step_dir / "downloads"
+    download_body = b"controlled report bytes\n"
+    download_sha256 = hashlib.sha256(download_body).hexdigest()
+    step_dir.mkdir(parents=True)
+    download_dir.mkdir()
+    (download_dir / "report.xlsx").write_bytes(download_body)
+    (asset_dir / "scenario.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "rpa-harness-scenario-v0",
+                "asset_id": "asset-download-replay",
+                "capture_scope": "full_sop",
+                "sop_intent": "Click the first file name and download it from a controlled list page",
+                "source": {
+                    "recording_id": "rec-download-replay",
+                    "captured_at": "2026-05-29T10:00:00",
+                    "capture_mode": "harness",
+                    "capture_trigger": "full_sop",
+                },
+                "asset_status": "active",
+                "sensitivity": "local-only",
+                "page_patterns": ["list-page", "download"],
+                "governance": {
+                    "promotion_status": "candidate",
+                    "runner_modes": ["offline_core_chain", "skill_replay_e2e"],
+                    "core_chain_coverage": [
+                        "html_to_raw_snapshot",
+                        "raw_to_compact_snapshot",
+                        "trace_to_skill",
+                        "skill_replay",
+                    ],
+                    "expected_signals_reviewed": True,
+                    "sensitivity_reviewed": True,
+                    "review_notes": "Controlled fixture for download side-effect replay.",
+                },
+                "step_checkpoints": [
+                    {"step_index": 1, "checkpoint_path": "steps/001/checkpoint.json"}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    html = """
+        <html>
+          <body>
+            <table>
+              <tbody>
+                <tr>
+                  <td>
+                    <a id="first-file" href="https://example.test/files/report.xlsx">
+                      report.xlsx
+                    </a>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </body>
+        </html>
+    """
+    (step_dir / "before.html").write_text(html, encoding="utf-8")
+    (step_dir / "after.html").write_text(html, encoding="utf-8")
+    (step_dir / "trace_events.json").write_text(
+        json.dumps(
+            [
+                {
+                    "trace_id": "trace-download-replay",
+                    "trace_type": "manual_action",
+                    "source": "record",
+                    "action": "click",
+                    "description": "Click the first file name",
+                    "before_page": {"url": "https://example.test/files", "title": "Files"},
+                    "after_page": {"url": "https://example.test/files", "title": "Files"},
+                    "locator_candidates": [
+                        {"locator": {"method": "css", "value": "#first-file"}, "selected": True}
+                    ],
+                    "signals": {
+                        "download": {
+                            "filename": "report.xlsx",
+                            "url": "https://example.test/files/report.xlsx",
+                        }
+                    },
+                    "accepted": True,
+                    "started_at": "2026-05-29T10:00:00",
+                    "ended_at": "2026-05-29T10:00:00",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (step_dir / "expected.json").write_text(
+        json.dumps(
+            {
+                "state_signals": {
+                    "controlled_download": {
+                        "output_key": "download_report",
+                        "url": "https://example.test/files/report.xlsx",
+                        "filename": "report.xlsx",
+                        "content_type": (
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        ),
+                        "body_path": "steps/001/downloads/report.xlsx",
+                        "sha256": download_sha256,
+                        "min_size_bytes": len(download_body),
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (step_dir / "checkpoint.json").write_text(
+        json.dumps(
+            {
+                "step_index": 1,
+                "step_id": "step-download-replay",
+                "step_intent": "Click the first file name",
+                "recording_mode": "natural_language",
+                "page_patterns": ["list-page", "download"],
+                "before": {
+                    "url": "https://example.test/files",
+                    "title": "Files",
+                    "html_path": "steps/001/before.html",
+                    "html_sha256": "before",
+                },
+                "action": {"trace_events_path": "steps/001/trace_events.json"},
+                "after": {
+                    "url": "https://example.test/files",
+                    "title": "Files",
+                    "html_path": "steps/001/after.html",
+                    "html_sha256": "after",
+                },
+                "runtime_result": {"status": "success"},
+                "captured_at": "2026-05-29T10:00:00",
+                "expected_path": "steps/001/expected.json",
+            }
+        ),
+        encoding="utf-8",
+    )
+    return root
+
+
 def test_skill_replay_executes_compiled_skill_against_controlled_fixture(tmp_path: Path):
     assets = _write_replay_asset(tmp_path)
 
@@ -177,3 +321,19 @@ def test_skill_replay_replays_real_governed_candidate_asset_with_controlled_prov
     assert by_step[2]["status"] == "passed"
     assert by_step[3]["output_key"] == "fork_count"
     assert by_step[3]["actual_output"] == "Fork 1.3k"
+
+
+def test_skill_replay_serves_controlled_download_and_validates_saved_file(tmp_path: Path):
+    assets = _write_download_replay_asset(tmp_path)
+
+    report = run_skill_replay_e2e(assets)
+
+    assert report["summary"]["status"] == "passed", report
+    item = report["assets"][0]
+    assert item["status"] == "passed"
+    assert item["output_key"] == "download_report"
+    assert item["actual_output"]["filename"] == "report.xlsx"
+    assert item["controlled_download"]["filename"] == "report.xlsx"
+    assert item["controlled_download"]["url"] == "https://example.test/files/report.xlsx"
+    assert item["controlled_download"]["saved_file_exists"] is True
+    assert item["controlled_download"]["sha256_verified"] is True

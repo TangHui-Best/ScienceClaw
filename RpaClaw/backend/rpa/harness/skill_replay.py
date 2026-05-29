@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import tempfile
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -120,6 +122,56 @@ async def _install_controlled_replay_routes(page, url_to_html: dict[str, str]) -
     await page.route("**/*", route_handler)
 
 
+def _controlled_download_spec(capture_dir: Path, expected: HarnessExpectedSignals) -> dict[str, Any]:
+    signal = expected.state_signals.get("controlled_download")
+    if not isinstance(signal, dict):
+        return {}
+    url = _normalize_url(str(signal.get("url") or ""))
+    body_path = str(signal.get("body_path") or "").strip()
+    if not url or not body_path:
+        return {}
+    relative_body = Path(body_path)
+    if relative_body.is_absolute():
+        raise ValueError("controlled_download.body_path must be relative to the asset directory")
+    body_file = (capture_dir / relative_body).resolve()
+    asset_dir = capture_dir.resolve()
+    try:
+        body_file.relative_to(asset_dir)
+    except ValueError as exc:
+        raise ValueError("controlled_download.body_path must stay inside the asset directory") from exc
+    return {
+        **signal,
+        "url": url,
+        "body_file": body_file,
+        "filename": str(signal.get("filename") or body_file.name),
+        "content_type": str(signal.get("content_type") or "application/octet-stream"),
+    }
+
+
+async def _install_controlled_download_routes(page, download_spec: dict[str, Any]) -> None:
+    if not download_spec:
+        return
+    download_url = _normalize_url(str(download_spec.get("url") or ""))
+    body_file = download_spec.get("body_file")
+    if not download_url or not isinstance(body_file, Path):
+        return
+
+    async def route_handler(route):
+        request = route.request
+        if _normalize_url(request.url) != download_url:
+            await route.fallback()
+            return
+        filename = str(download_spec.get("filename") or body_file.name).replace('"', "")
+        await route.fulfill(
+            status=200,
+            content_type=str(download_spec.get("content_type") or "application/octet-stream"),
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            body=body_file.read_bytes(),
+        )
+
+    await page.route("**/*", route_handler)
+
+
 async def _load_controlled_before_page(
     page,
     capture_dir: Path,
@@ -156,6 +208,64 @@ def _validate_replay_output(
     return "passed", "", actual, []
 
 
+def _validate_controlled_download(
+    results: dict[str, Any],
+    expected: HarnessExpectedSignals,
+) -> tuple[str, str, str, Any, dict[str, Any]]:
+    signal = expected.state_signals.get("controlled_download")
+    if not isinstance(signal, dict) or not signal:
+        return "passed", "", "", None, {}
+
+    output_key = str(signal.get("output_key") or "").strip()
+    if not output_key:
+        filename = str(signal.get("filename") or "file")
+        safe_name = "".join(char if char.isalnum() else "_" for char in filename.split(".")[0]) or "file"
+        output_key = f"download_{safe_name}"
+
+    actual = results.get(output_key)
+    evidence = {
+        "output_key": output_key,
+        "url": str(signal.get("url") or ""),
+        "expected_filename": str(signal.get("filename") or ""),
+        "filename": "",
+        "path": "",
+        "saved_file_exists": False,
+        "size_bytes": 0,
+        "sha256": "",
+        "sha256_verified": False,
+    }
+    if not isinstance(actual, dict):
+        return "failed", "controlled-download-output-missing", output_key, actual, evidence
+
+    path = Path(str(actual.get("path") or ""))
+    evidence["filename"] = str(actual.get("filename") or "")
+    evidence["path"] = str(path)
+    evidence["saved_file_exists"] = path.exists()
+    if not path.exists():
+        return "failed", "controlled-download-file-missing", output_key, actual, evidence
+
+    body = path.read_bytes()
+    evidence["size_bytes"] = len(body)
+    evidence["sha256"] = hashlib.sha256(body).hexdigest()
+    expected_filename = str(signal.get("filename") or "").strip()
+    if expected_filename and evidence["filename"] != expected_filename:
+        return "failed", "controlled-download-filename-mismatch", output_key, actual, evidence
+
+    min_size = signal.get("min_size_bytes")
+    if min_size is not None and len(body) < int(min_size):
+        return "failed", "controlled-download-size-mismatch", output_key, actual, evidence
+
+    expected_sha = str(signal.get("sha256") or "").strip()
+    if expected_sha:
+        evidence["sha256_verified"] = evidence["sha256"] == expected_sha
+        if not evidence["sha256_verified"]:
+            return "failed", "controlled-download-sha256-mismatch", output_key, actual, evidence
+    else:
+        evidence["sha256_verified"] = True
+
+    return "passed", "", output_key, actual, evidence
+
+
 async def _run_skill_replay_async(
     checkpoint_items: list[tuple[str, Path, HarnessStepCheckpoint, HarnessExpectedSignals, str]],
 ) -> list[dict[str, Any]]:
@@ -173,24 +283,41 @@ async def _run_skill_replay_async(
                 actual_output: Any = None
                 missing_text: list[str] = []
                 error = ""
+                controlled_download: dict[str, Any] = {}
+                download_output_key = ""
                 try:
+                    download_spec = _controlled_download_spec(capture_dir, expected)
                     await _install_controlled_replay_routes(
                         page,
                         _url_html_map(capture_dir, checkpoint),
                     )
+                    await _install_controlled_download_routes(page, download_spec)
                     await _load_controlled_before_page(page, capture_dir, checkpoint)
                     execute_skill = _load_execute_skill(script)
-                    results = await execute_skill(page)
-                    if not isinstance(results, dict):
-                        results = {"value": results}
-                    status, failure_category, actual_output, missing_text = _validate_replay_output(
-                        results,
-                        expected,
-                    )
+                    with tempfile.TemporaryDirectory(prefix="rpa-harness-downloads-") as downloads_dir:
+                        results = await execute_skill(page, _downloads_dir=downloads_dir)
+                        if not isinstance(results, dict):
+                            results = {"value": results}
+                        status, failure_category, actual_output, missing_text = _validate_replay_output(
+                            results,
+                            expected,
+                        )
+                        if status == "passed":
+                            (
+                                status,
+                                failure_category,
+                                download_output_key,
+                                download_output,
+                                controlled_download,
+                            ) = _validate_controlled_download(results, expected)
+                            if controlled_download:
+                                actual_output = download_output
+                                missing_text = []
                 except Exception as exc:
                     status = "failed"
                     failure_category = "replay-execution-error"
                     error = f"{type(exc).__name__}: {exc}"
+                    controlled_download = {}
                 finally:
                     await page.close()
 
@@ -203,10 +330,15 @@ async def _run_skill_replay_async(
                         "page_patterns": checkpoint.page_patterns,
                         "status": status,
                         "failure_category": failure_category,
-                        "output_key": str(expected.state_signals.get("output_key") or ""),
+                        "output_key": str(
+                            download_output_key
+                            if download_output_key
+                            else expected.state_signals.get("output_key") or ""
+                        ),
                         "actual_output": actual_output,
                         "missing_text": missing_text,
                         "error": error,
+                        "controlled_download": controlled_download,
                         "generated_skill_size": len(script),
                     }
                 )

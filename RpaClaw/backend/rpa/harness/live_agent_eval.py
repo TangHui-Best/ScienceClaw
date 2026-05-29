@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -21,6 +23,7 @@ from .capture import (
 from .compiler_regression import run_compiler_regression
 from .models import HarnessScenarioAsset
 from .skill_replay import _install_controlled_replay_routes, run_skill_replay_e2e
+from .skill_replay import _install_controlled_download_routes
 from .snapshot_regression import run_snapshot_regression
 from .stateful_sop import run_stateful_sop_capture_to_skill
 from .store import HarnessAssetStore
@@ -44,6 +47,7 @@ _CORE_CHAIN_COVERAGE = [
 class LiveAgentExpected(BaseModel):
     output_key: str = ""
     must_contain_text: list[str] = Field(default_factory=list)
+    controlled_download: dict[str, Any] = Field(default_factory=dict)
 
 
 class LiveAgentScenario(BaseModel):
@@ -97,6 +101,115 @@ def _validate_expected_output(result_output: Any, expected: LiveAgentExpected) -
     if missing:
         return "failed", "live-agent-output-missing-signal", missing
     return "passed", "", []
+
+
+def _download_output_key(filename: str) -> str:
+    stem = str(filename or "file").split(".")[0]
+    safe = re.sub(r"[^a-zA-Z0-9_]", "_", stem) or "file"
+    return f"download_{safe}"
+
+
+def _controlled_download_spec(path: Path, scenario: LiveAgentScenario) -> dict[str, Any]:
+    signal = scenario.expected.controlled_download
+    if not isinstance(signal, dict) or not signal:
+        return {}
+    url = str(signal.get("url") or "").strip()
+    body_path = str(signal.get("body_path") or "").strip()
+    if not url or not body_path:
+        return {}
+    relative_body = Path(body_path)
+    if relative_body.is_absolute():
+        raise ValueError("controlled_download.body_path must be relative to scenario directory")
+    scenario_dir = path.parent.resolve()
+    body_file = (scenario_dir / relative_body).resolve()
+    try:
+        body_file.relative_to(scenario_dir)
+    except ValueError as exc:
+        raise ValueError("controlled_download.body_path must stay inside scenario directory") from exc
+    filename = str(signal.get("filename") or body_file.name)
+    return {
+        **signal,
+        "url": url,
+        "body_file": body_file,
+        "filename": filename,
+        "content_type": str(signal.get("content_type") or "application/octet-stream"),
+        "output_key": str(signal.get("output_key") or _download_output_key(filename)),
+    }
+
+
+def _validate_controlled_download_trace(
+    trace: Any,
+    download_spec: dict[str, Any],
+) -> tuple[str, str, dict[str, Any]]:
+    if not download_spec:
+        return "passed", "", {}
+    expected_sha = str(download_spec.get("sha256") or "").strip()
+    body_file = download_spec.get("body_file")
+    actual_sha = ""
+    sha_verified = False
+    size_bytes = 0
+    if isinstance(body_file, Path) and body_file.exists():
+        body = body_file.read_bytes()
+        size_bytes = len(body)
+        actual_sha = hashlib.sha256(body).hexdigest()
+        sha_verified = not expected_sha or actual_sha == expected_sha
+    signal = {}
+    if trace is not None:
+        signal = dict(getattr(trace, "signals", {}) or {}).get("download") or {}
+    evidence = {
+        "url": str(download_spec.get("url") or ""),
+        "filename": str(signal.get("filename") or ""),
+        "expected_filename": str(download_spec.get("filename") or ""),
+        "count": int(signal.get("count") or 0),
+        "fixture_sha256": actual_sha,
+        "sha256_verified": sha_verified,
+        "fixture_size_bytes": size_bytes,
+    }
+    if not isinstance(signal, dict) or not signal:
+        return "failed", "live-agent-download-missing-signal", evidence
+    expected_filename = str(download_spec.get("filename") or "").strip()
+    if expected_filename and str(signal.get("filename") or "") != expected_filename:
+        return "failed", "live-agent-download-filename-mismatch", evidence
+    if not sha_verified:
+        return "failed", "live-agent-download-fixture-sha256-mismatch", evidence
+    return "passed", "", evidence
+
+
+def _attach_controlled_download_to_generated_asset(
+    *,
+    assets_root: Path,
+    asset_id: str,
+    checkpoint: Any,
+    download_spec: dict[str, Any],
+) -> dict[str, Any]:
+    if not download_spec or checkpoint is None:
+        return {}
+    body_file = download_spec.get("body_file")
+    if not isinstance(body_file, Path) or not body_file.exists():
+        return {}
+    step_dir = assets_root / asset_id / f"steps/{int(checkpoint.step_index):03d}"
+    downloads_dir = step_dir / "downloads"
+    downloads_dir.mkdir(parents=True, exist_ok=True)
+    filename = str(download_spec.get("filename") or body_file.name)
+    dest = downloads_dir / filename
+    shutil.copyfile(body_file, dest)
+
+    expected_path = assets_root / asset_id / checkpoint.expected_path
+    expected_payload = _load_json(expected_path)
+    state_signals = dict(expected_payload.get("state_signals") or {})
+    body = dest.read_bytes()
+    state_signals["controlled_download"] = {
+        "output_key": str(download_spec.get("output_key") or _download_output_key(filename)),
+        "url": str(download_spec.get("url") or ""),
+        "filename": filename,
+        "content_type": str(download_spec.get("content_type") or "application/octet-stream"),
+        "body_path": f"steps/{int(checkpoint.step_index):03d}/downloads/{filename}",
+        "sha256": hashlib.sha256(body).hexdigest(),
+        "min_size_bytes": len(body),
+    }
+    expected_payload["state_signals"] = state_signals
+    expected_path.write_text(json.dumps(expected_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return dict(state_signals["controlled_download"])
 
 
 def _post_capture_checks(assets_root: Path, asset_id: str) -> dict[str, Any]:
@@ -173,6 +286,7 @@ async def _run_one_scenario(
     html = _load_scenario_html(path, scenario)
     asset_id = _asset_id_for_scenario(scenario)
     planner_invocation_count = 0
+    download_spec = _controlled_download_spec(path, scenario)
 
     async def counting_planner(payload: dict[str, Any]) -> dict[str, Any]:
         nonlocal planner_invocation_count
@@ -188,6 +302,7 @@ async def _run_one_scenario(
         page.set_default_navigation_timeout(10000)
         try:
             await _install_controlled_replay_routes(page, {scenario.url: html})
+            await _install_controlled_download_routes(page, download_spec)
             await page.goto(scenario.url, wait_until="domcontentloaded")
             before_state = await capture_current_page_state(page)
             agent = RecordingRuntimeAgent(
@@ -211,6 +326,13 @@ async def _run_one_scenario(
         result.output,
         scenario.expected,
     )
+    download_status, download_failure, controlled_download = _validate_controlled_download_trace(
+        result.trace,
+        download_spec,
+    )
+    if expected_status == "passed" and download_status != "passed":
+        expected_status = download_status
+        expected_failure = download_failure
     status = "passed" if result.success and expected_status == "passed" else "failed"
     failure_category = "" if status == "passed" else expected_failure or "live-agent-run-failed"
     error = "" if result.success else result.message
@@ -243,6 +365,14 @@ async def _run_one_scenario(
             asset_id=asset_id,
             scenario=scenario,
         )
+        generated_download = _attach_controlled_download_to_generated_asset(
+            assets_root=assets_root,
+            asset_id=asset_id,
+            checkpoint=checkpoint,
+            download_spec=download_spec,
+        )
+        if generated_download:
+            controlled_download["generated_expected_signal"] = generated_download
         post_capture = await asyncio.to_thread(_post_capture_checks, assets_root, asset_id)
         if post_capture["warning_count"]:
             status = "failed"
@@ -260,6 +390,7 @@ async def _run_one_scenario(
         "actual_output": result.output,
         "missing_text": missing_text,
         "error": error,
+        "controlled_download": controlled_download,
         "post_capture": post_capture,
     }
 
