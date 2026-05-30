@@ -394,3 +394,32 @@ def test_stateful_sop_replays_real_governed_candidate_asset():
     assert item["accepted_trace_count"] == 3
     assert item["runtime_result_keys"] == ["fork_count"]
     assert item["replay"]["actual_output"]["fork_count"] == "Fork 1.3k"
+
+
+def test_stateful_sop_injects_explicit_model_config_into_generated_skill(
+    tmp_path: Path,
+    monkeypatch,
+):
+    assets = _write_stateful_asset(tmp_path)
+    received: dict[str, object] = {}
+
+    async def fake_execute_skill(_page, **kwargs):
+        received.update(kwargs)
+        return {"fork_count": "Fork 1.3k"}
+
+    monkeypatch.setattr(
+        "backend.rpa.harness.stateful_sop._load_execute_skill",
+        lambda _script: fake_execute_skill,
+    )
+
+    report = run_stateful_sop_capture_to_skill(
+        assets,
+        model_config={"model_name": "test-model", "api_key": "sk-test"},
+    )
+
+    assert report["summary"]["status"] == "passed"
+    assert report["summary"]["runtime_ai_model_config_source"] == "harness_explicit_model_config"
+    assert received["_model_config"]["api_key"] == "sk-test"
+    runtime_context = received["_runtime_context"]
+    assert runtime_context["runtime_ai"]["model_config"]["model_name"] == "test-model"
+    assert runtime_context["runtime_ai"]["source"] == "harness_explicit_model_config"

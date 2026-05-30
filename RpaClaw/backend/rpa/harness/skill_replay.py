@@ -5,6 +5,7 @@ import hashlib
 import json
 import tempfile
 from collections import Counter
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 from urllib.parse import urldefrag
@@ -61,6 +62,25 @@ def _load_execute_skill(script: str):
     namespace: dict[str, Any] = {"__name__": "rpa_harness_skill_replay_generated"}
     exec(script[:end], namespace)
     return namespace["execute_skill"]
+
+
+def _runtime_ai_kwargs(model_config: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(model_config, dict) or not model_config:
+        return {}
+    copied = deepcopy(model_config)
+    return {
+        "_model_config": copied,
+        "_runtime_context": {
+            "runtime_ai": {
+                "model_config": deepcopy(model_config),
+                "source": "harness_explicit_model_config",
+            }
+        },
+    }
+
+
+def _runtime_ai_config_source(model_config: dict[str, Any] | None) -> str:
+    return "harness_explicit_model_config" if isinstance(model_config, dict) and model_config else "not_provided"
 
 
 def _output_shape(value: Any) -> dict[str, Any]:
@@ -268,6 +288,8 @@ def _validate_controlled_download(
 
 async def _run_skill_replay_async(
     checkpoint_items: list[tuple[str, Path, HarnessStepCheckpoint, HarnessExpectedSignals, str]],
+    *,
+    model_config: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     async with async_playwright() as playwright:
@@ -295,7 +317,11 @@ async def _run_skill_replay_async(
                     await _load_controlled_before_page(page, capture_dir, checkpoint)
                     execute_skill = _load_execute_skill(script)
                     with tempfile.TemporaryDirectory(prefix="rpa-harness-downloads-") as downloads_dir:
-                        results = await execute_skill(page, _downloads_dir=downloads_dir)
+                        results = await execute_skill(
+                            page,
+                            _downloads_dir=downloads_dir,
+                            **_runtime_ai_kwargs(model_config),
+                        )
                         if not isinstance(results, dict):
                             results = {"value": results}
                         status, failure_category, actual_output, missing_text = _validate_replay_output(
@@ -351,6 +377,7 @@ def run_skill_replay_e2e(
     assets_root: str | Path,
     *,
     asset_ids: set[str] | None = None,
+    model_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     root = Path(assets_root)
     checkpoint_items: list[
@@ -377,13 +404,18 @@ def run_skill_replay_e2e(
         script = _compile_skill(trace_events)
         checkpoint_items.append((asset_id, checkpoint_path, checkpoint, expected, script))
 
-    items = asyncio.run(_run_skill_replay_async(checkpoint_items)) if checkpoint_items else []
+    items = (
+        asyncio.run(_run_skill_replay_async(checkpoint_items, model_config=model_config))
+        if checkpoint_items
+        else []
+    )
     failed = len([item for item in items if item["status"] == "failed"])
     passed = len(items) - failed
     return {
         "schema_version": "rpa-harness-skill-replay-e2e-v0",
         "summary": {
             "status": "failed" if failed else "passed",
+            "runtime_ai_model_config_source": _runtime_ai_config_source(model_config),
             "eligible_capture_count": len(eligible_asset_ids),
             "total": len(items),
             "passed": passed,

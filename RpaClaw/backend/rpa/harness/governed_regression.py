@@ -124,7 +124,12 @@ def _empty_candidate_lite_observation() -> dict[str, Any]:
     }
 
 
-def _candidate_lite_observation(root: Path, catalog: dict[str, Any]) -> dict[str, Any]:
+def _candidate_lite_observation(
+    root: Path,
+    catalog: dict[str, Any],
+    *,
+    model_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     observed_captures = _candidate_lite_observed_captures(catalog)
     observed_asset_ids = [
         str(capture["asset_id"])
@@ -144,11 +149,16 @@ def _candidate_lite_observation(root: Path, catalog: dict[str, Any]) -> dict[str
     validation = validate_harness_assets(root, asset_ids=observed_id_set)
     snapshot = run_snapshot_regression(root, asset_ids=offline_id_set)
     compiler = run_compiler_regression(root, asset_ids=offline_id_set)
-    skill_replay = run_skill_replay_e2e(root, asset_ids=observed_id_set)
+    skill_replay = run_skill_replay_e2e(
+        root,
+        asset_ids=observed_id_set,
+        model_config=model_config,
+    )
     stateful_sop = run_stateful_sop_capture_to_skill(
         root,
         asset_ids=observed_id_set,
         include_candidate_lite=True,
+        model_config=model_config,
     )
     warning_count = (
         validation["summary"]["issue_count"]
@@ -205,11 +215,19 @@ def _report_status(
     return "passed"
 
 
-def run_governed_offline_regression(assets_root: str | Path) -> dict[str, Any]:
+def run_governed_offline_regression(
+    assets_root: str | Path,
+    *,
+    model_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     root = Path(assets_root)
     full_catalog = build_harness_catalog(root)
     selection = _selection(full_catalog)
-    candidate_lite_observation = _candidate_lite_observation(root, full_catalog)
+    candidate_lite_observation = _candidate_lite_observation(
+        root,
+        full_catalog,
+        model_config=model_config,
+    )
     selected_asset_ids = [
         str(capture["asset_id"])
         for capture in selection["selected_captures"]
@@ -221,8 +239,16 @@ def run_governed_offline_regression(assets_root: str | Path) -> dict[str, Any]:
     validation = validate_harness_assets(root, asset_ids=selected_id_set)
     snapshot = run_snapshot_regression(root, asset_ids=selected_id_set)
     compiler = run_compiler_regression(root, asset_ids=selected_id_set)
-    skill_replay = run_skill_replay_e2e(root, asset_ids=selected_id_set)
-    stateful_sop = run_stateful_sop_capture_to_skill(root, asset_ids=selected_id_set)
+    skill_replay = run_skill_replay_e2e(
+        root,
+        asset_ids=selected_id_set,
+        model_config=model_config,
+    )
+    stateful_sop = run_stateful_sop_capture_to_skill(
+        root,
+        asset_ids=selected_id_set,
+        model_config=model_config,
+    )
     blast_radius = build_blast_radius_report(
         snapshot_report=snapshot,
         compiler_report=compiler,

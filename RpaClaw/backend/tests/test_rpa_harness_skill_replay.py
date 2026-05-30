@@ -337,3 +337,32 @@ def test_skill_replay_serves_controlled_download_and_validates_saved_file(tmp_pa
     assert item["controlled_download"]["url"] == "https://example.test/files/report.xlsx"
     assert item["controlled_download"]["saved_file_exists"] is True
     assert item["controlled_download"]["sha256_verified"] is True
+
+
+def test_skill_replay_injects_explicit_model_config_into_generated_skill(
+    tmp_path: Path,
+    monkeypatch,
+):
+    assets = _write_replay_asset(tmp_path)
+    received: dict[str, object] = {}
+
+    async def fake_execute_skill(_page, **kwargs):
+        received.update(kwargs)
+        return {"fork_count": "Fork 1.3k"}
+
+    monkeypatch.setattr(
+        "backend.rpa.harness.skill_replay._load_execute_skill",
+        lambda _script: fake_execute_skill,
+    )
+
+    report = run_skill_replay_e2e(
+        assets,
+        model_config={"model_name": "test-model", "api_key": "sk-test"},
+    )
+
+    assert report["summary"]["status"] == "passed"
+    assert report["summary"]["runtime_ai_model_config_source"] == "harness_explicit_model_config"
+    assert received["_model_config"]["api_key"] == "sk-test"
+    runtime_context = received["_runtime_context"]
+    assert runtime_context["runtime_ai"]["model_config"]["model_name"] == "test-model"
+    assert runtime_context["runtime_ai"]["source"] == "harness_explicit_model_config"

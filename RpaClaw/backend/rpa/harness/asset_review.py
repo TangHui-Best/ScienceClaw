@@ -11,11 +11,14 @@ from .asset_validation import validate_harness_assets
 from .catalog import build_golden_eligibility_report
 from .compiler_regression import run_compiler_regression
 from .models import HarnessScenarioAsset, HarnessStepCheckpoint
+from .sensitivity_scan import scan_harness_asset
 from .snapshot_regression import run_snapshot_regression
 from .store import HarnessAssetStore
 
 
 _URL_RE = re.compile(r"https?://[^\s)>]+")
+_REVIEW_TEXT_LIMIT = 180
+_REVIEW_LINE_LIMIT = 360
 
 
 @dataclass(frozen=True)
@@ -46,8 +49,18 @@ def _sanitize_text(value: Any) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _truncate_text(text: str, limit: int = _REVIEW_TEXT_LIMIT) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
+
+def _display_text(value: Any, limit: int = _REVIEW_TEXT_LIMIT) -> str:
+    return _truncate_text(_sanitize_text(value), limit)
+
+
 def _markdown_cell(value: Any) -> str:
-    text = _sanitize_text(value)
+    text = _display_text(value)
     if not text:
         return "-"
     return text.replace("|", "\\|")
@@ -197,7 +210,7 @@ def _final_output(steps: list[StepReviewEvidence]) -> str:
             key, value = outputs[-1]
             if isinstance(value, dict) and key in value:
                 value = value[key]
-            return f"{key} = {_sanitize_text(value)}"
+            return f"{key} = {_display_text(value)}"
         keys = _expected_output_keys(step.expected)
         if keys:
             return keys[-1]
@@ -229,7 +242,7 @@ def _confidence_label(steps: list[StepReviewEvidence]) -> str:
 def _output_summary(evidence: StepReviewEvidence) -> str:
     outputs = _trace_outputs(evidence.trace_events)
     if outputs:
-        return "; ".join(f"{key}: {_sanitize_text(_short_json(value))}" for key, value in outputs)
+        return _truncate_text("; ".join(f"{key}: {_display_text(_short_json(value))}" for key, value in outputs))
     expected_keys = _expected_output_keys(evidence.expected)
     if expected_keys:
         return ", ".join(expected_keys)
@@ -366,9 +379,9 @@ def _region_selection_evidence_rows(steps: list[StepReviewEvidence]) -> list[str
             found = True
             local_text = region.get("local_text")
             if isinstance(local_text, list):
-                local_evidence = ", ".join(_sanitize_text(item) for item in local_text[:3] if _sanitize_text(item))
+                local_evidence = ", ".join(_display_text(item, 80) for item in local_text[:3] if _sanitize_text(item))
             else:
-                local_evidence = _sanitize_text(local_text)
+                local_evidence = _display_text(local_text)
             rows.append(
                 "| "
                 + " | ".join(
@@ -462,8 +475,31 @@ def _review_questions(scenario: HarnessScenarioAsset, steps: list[StepReviewEvid
     return questions
 
 
-def _suggested_promotion(scenario: HarnessScenarioAsset) -> str:
+def _suggested_promotion(scenario: HarnessScenarioAsset, sensitivity_report: dict[str, Any] | None = None) -> str:
     governance = scenario.governance
+    sensitivity_report = sensitivity_report or {}
+    scan_blockers: list[str] = []
+    contract = sensitivity_report.get("sanitized_replay_contract")
+    contract_status = ""
+    if isinstance(contract, dict):
+        contract_status = _sanitize_text(contract.get("status"))
+    if sensitivity_report.get("repo_safe_blocked") is True:
+        scan_blockers.append("Sensitivity Scan 显示 `repo-safe blocked=true`")
+    risk_level = _sanitize_text(sensitivity_report.get("risk_level"))
+    if risk_level in {"high", "critical"}:
+        scan_blockers.append(f"Sensitivity Scan 风险等级为 `{risk_level}`")
+    if contract_status == "needs-contract":
+        scan_blockers.append("sanitized replay contract=`needs-contract`")
+
+    if scan_blockers:
+        blocker_text = "；".join(scan_blockers)
+        return (
+            "- candidate-lite: 可以保留为非阻塞观察资产，用于诊断和后续脱敏处理。\n"
+            f"- blocking candidate: 暂不建议，{blocker_text}。需要先补脱敏 contract，或由人明确确认 local-only 保留策略和 sensitivity。\n"
+            "- repo-safe: 暂不建议，直到扫描阻断项被脱敏、移除或人工确认可接受。\n"
+            "- golden: 不建议，敏感扫描阻断未处理前不能成为长期 blocking contract。"
+        )
+
     if scenario.asset_status == "draft" and governance.promotion_status == "captured":
         return (
             "- candidate-lite: 建议，在人工语义确认后进入非阻塞观察。\n"
@@ -511,6 +547,66 @@ def _lifecycle_lines(assets_root: Path, scenario: HarnessScenarioAsset) -> list[
     ]
 
 
+def _sensitivity_scan_lines(
+    assets_root: Path,
+    asset_id: str,
+    *,
+    report: dict[str, Any] | None = None,
+) -> list[str]:
+    report = report or scan_harness_asset(assets_root, asset_id)
+    category_counts = report.get("category_counts") or {}
+    categories = ", ".join(
+        f"`{category}`={count}"
+        for category, count in sorted(category_counts.items())
+    )
+    findings = list(report.get("findings") or [])
+    top_findings = findings[:5]
+    contract = report.get("sanitized_replay_contract") or {}
+    runtime_secret_refs = list(contract.get("runtime_secret_refs") or [])
+    controlled_fixtures = list(contract.get("controlled_fixtures") or [])
+    lines = [
+        "## Sensitivity Scan",
+        "",
+        f"- Risk level: `{_sanitize_text(report.get('risk_level'))}`",
+        f"- Recommended sensitivity: `{_sanitize_text(report.get('recommended_sensitivity'))}`",
+        f"- Repo-safe blocked: `{str(bool(report.get('repo_safe_blocked'))).lower()}`",
+        f"- Finding count: `{int(report.get('finding_count') or 0)}`",
+        f"- Categories: {categories or '`none`'}",
+        f"- Sanitized replay contract: `{_sanitize_text(contract.get('status'))}`",
+        (
+            "- Runtime secret refs: "
+            f"{', '.join(f'`{_sanitize_text(ref)}`' for ref in runtime_secret_refs) if runtime_secret_refs else '`none`'}"
+        ),
+        (
+            "- Controlled fixtures: "
+            f"{', '.join(f'`{_sanitize_text(fixture)}`' for fixture in controlled_fixtures) if controlled_fixtures else '`none`'}"
+        ),
+    ]
+    if top_findings:
+        lines.extend(
+            [
+                "",
+                "| Category | Severity | File | Line | Reason |",
+                "| --- | --- | --- | --- | --- |",
+            ]
+        )
+        for finding in top_findings:
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        _markdown_cell(finding.get("category")),
+                        _markdown_cell(finding.get("severity")),
+                        _markdown_cell(finding.get("file")),
+                        _markdown_cell(finding.get("line")),
+                        _markdown_cell(finding.get("reason")),
+                    ]
+                )
+                + " |"
+            )
+    return lines
+
+
 def build_asset_review_packet(assets_root: str | Path, asset_id: str) -> str:
     root = Path(assets_root)
     asset_dir = root / asset_id
@@ -520,6 +616,7 @@ def build_asset_review_packet(assets_root: str | Path, asset_id: str) -> str:
     source = _source_dict(scenario)
     hosts = _source_hosts(steps)
     final_output = _final_output(steps)
+    sensitivity_report = scan_harness_asset(root, scenario.asset_id)
 
     lines = [
         "# 资产审查包（Asset Review Packet）",
@@ -554,6 +651,8 @@ def build_asset_review_packet(assets_root: str | Path, asset_id: str) -> str:
         "",
         *[f"- {line}" for line in _auto_checks(assets_root=root, asset_id=scenario.asset_id, scenario=scenario, steps=steps)],
         "",
+        *_sensitivity_scan_lines(root, scenario.asset_id, report=sensitivity_report),
+        "",
         *_lifecycle_lines(root, scenario),
         "",
         "## 人工确认问题（Review Questions）",
@@ -562,10 +661,10 @@ def build_asset_review_packet(assets_root: str | Path, asset_id: str) -> str:
         "",
         "## 建议升级（Suggested Promotion）",
         "",
-        _suggested_promotion(scenario),
+        _suggested_promotion(scenario, sensitivity_report),
         "",
     ]
-    return "\n".join(lines)
+    return "\n".join(_truncate_text(line, _REVIEW_LINE_LIMIT) for line in lines)
 
 
 def write_asset_review_packet(assets_root: str | Path, asset_id: str) -> Path:

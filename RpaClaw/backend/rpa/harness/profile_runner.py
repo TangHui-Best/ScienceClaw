@@ -134,7 +134,10 @@ def run_harness_profile(
     if profile != _DETERMINISTIC_PROFILE:
         raise ValueError(f"Unsupported RPA Harness profile: {profile}")
 
-    governed_report = run_governed_offline_regression(assets_root)
+    governed_report = run_governed_offline_regression(
+        assets_root,
+        model_config=model_config,
+    )
     summary = _profile_summary(governed_report)
     asset_pool = build_asset_lifecycle_summary(assets_root)
     return {

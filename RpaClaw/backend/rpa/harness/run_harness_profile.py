@@ -62,7 +62,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.format == "summary" and args.machine_report and Path(args.machine_report).exists():
             report = json.loads(Path(args.machine_report).read_text(encoding="utf-8"))
         else:
-            model_config = _load_model_config(args) if args.profile == "full-live" else None
+            model_config = _load_model_config(args)
             report = run_harness_profile(
                 args.assets,
                 profile=args.profile,

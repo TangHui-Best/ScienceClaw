@@ -217,7 +217,7 @@ def test_profile_interpretation_without_selected_assets_is_insufficient_evidence
 def test_profile_interpretation_without_runner_signals_is_insufficient_evidence(tmp_path: Path, monkeypatch):
     from backend.rpa.harness import profile_runner
 
-    def fake_governed_regression(_assets_root: Path):
+    def fake_governed_regression(_assets_root: Path, *, model_config=None):
         return {
             "schema_version": "rpa-harness-governed-offline-regression-v0",
             "summary": {
@@ -292,6 +292,49 @@ def test_profile_cli_writes_json_report(tmp_path: Path):
     assert report["schema_version"] == "rpa-harness-profile-run-v1"
     assert report["profile"]["name"] == "deterministic"
     assert report["summary"]["status"] == "passed"
+
+
+def test_profile_cli_passes_model_config_file_to_deterministic_profile(
+    tmp_path: Path,
+    monkeypatch,
+):
+    from backend.rpa.harness import run_harness_profile
+
+    output_path = tmp_path / "profile.json"
+    model_config_path = tmp_path / "model-config.json"
+    model_config_path.write_text(
+        json.dumps({"model_name": "test-model", "api_key": "sk-test"}),
+        encoding="utf-8",
+    )
+    received: dict[str, object] = {}
+
+    def fake_profile(_assets, *, profile, generated_assets_root=None, model_config=None):
+        received["profile"] = profile
+        received["model_config"] = model_config
+        return {
+            "schema_version": "rpa-harness-profile-run-v1",
+            "profile": {"name": profile},
+            "summary": {"status": "passed"},
+        }
+
+    monkeypatch.setattr(run_harness_profile, "run_harness_profile", fake_profile)
+
+    exit_code = run_harness_profile_main(
+        [
+            "--assets",
+            str(tmp_path),
+            "--profile",
+            "deterministic",
+            "--model-config-file",
+            str(model_config_path),
+            "--output",
+            str(output_path),
+        ]
+    )
+
+    assert exit_code == 0
+    assert received["profile"] == "deterministic"
+    assert received["model_config"]["api_key"] == "sk-test"
 
 
 def test_profile_cli_summary_includes_machine_report_path(tmp_path: Path):

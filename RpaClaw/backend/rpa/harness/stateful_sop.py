@@ -26,6 +26,8 @@ from .skill_replay import (
     _install_controlled_download_routes,
     _install_controlled_replay_routes,
     _load_execute_skill,
+    _runtime_ai_config_source,
+    _runtime_ai_kwargs,
     _validate_controlled_download,
 )
 
@@ -361,6 +363,7 @@ async def _replay_skill_against_stateful_provider(
     asset_dir: Path,
     checkpoints: list[HarnessStepCheckpoint],
     script: str,
+    model_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not checkpoints:
         return {"status": "skipped", "failure_category": "missing-checkpoints"}
@@ -387,7 +390,11 @@ async def _replay_skill_against_stateful_provider(
                 )
             execute_skill = _load_execute_skill(script)
             with tempfile.TemporaryDirectory(prefix="rpa-harness-stateful-downloads-") as downloads_dir:
-                results = await execute_skill(page, _downloads_dir=downloads_dir)
+                results = await execute_skill(
+                    page,
+                    _downloads_dir=downloads_dir,
+                    **_runtime_ai_kwargs(model_config),
+                )
                 if not isinstance(results, dict):
                     results = {"value": results}
                 status, failure_category, missing_text = _validate_expected_state_signals(
@@ -427,7 +434,12 @@ async def _replay_skill_against_stateful_provider(
             await browser.close()
 
 
-async def _run_asset(asset_dir: Path, scenario: HarnessScenarioAsset) -> dict[str, Any]:
+async def _run_asset(
+    asset_dir: Path,
+    scenario: HarnessScenarioAsset,
+    *,
+    model_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     checkpoint_items: list[tuple[Path, HarnessStepCheckpoint]] = []
     load_failure: dict[str, Any] | None = None
     for path in _checkpoint_paths(asset_dir, scenario):
@@ -496,6 +508,7 @@ async def _run_asset(asset_dir: Path, scenario: HarnessScenarioAsset) -> dict[st
                 asset_dir=asset_dir,
                 checkpoints=checkpoints,
                 script=script,
+                model_config=model_config,
             )
             if replay["status"] == "failed":
                 status = "failed"
@@ -530,6 +543,7 @@ def run_stateful_sop_capture_to_skill(
     *,
     asset_ids: set[str] | None = None,
     include_candidate_lite: bool = False,
+    model_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     root = Path(assets_root)
     eligible: list[tuple[Path, HarnessScenarioAsset]] = []
@@ -548,7 +562,10 @@ def run_stateful_sop_capture_to_skill(
             eligible.append((asset_dir, scenario))
 
     async def run_all() -> list[dict[str, Any]]:
-        return [await _run_asset(asset_dir, scenario) for asset_dir, scenario in eligible]
+        return [
+            await _run_asset(asset_dir, scenario, model_config=model_config)
+            for asset_dir, scenario in eligible
+        ]
 
     items = asyncio.run(run_all()) if eligible else []
     failed = len([item for item in items if item["status"] == "failed"])
@@ -556,6 +573,7 @@ def run_stateful_sop_capture_to_skill(
         "schema_version": "rpa-harness-stateful-sop-capture-to-skill-v0",
         "summary": {
             "status": "failed" if failed else "passed",
+            "runtime_ai_model_config_source": _runtime_ai_config_source(model_config),
             "eligible_capture_count": len(eligible),
             "total": len(items),
             "passed": len(items) - failed,

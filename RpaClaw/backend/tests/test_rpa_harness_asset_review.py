@@ -390,3 +390,86 @@ def test_review_packet_includes_lifecycle_and_eligibility_snapshot(tmp_path: Pat
     assert "Core-chain coverage: `html_to_raw_snapshot`, `trace_to_skill`" in content
     assert "Golden eligibility: `eligible`" in content
     assert "Human approval required: `true`" in content
+
+
+def test_review_packet_includes_sensitivity_scan_summary_and_sanitized_replay_status(tmp_path: Path):
+    capture_dir = _write_asset(tmp_path, asset_id="sensitivity-review")
+    step_dir = capture_dir / "steps" / "003"
+    (step_dir / "after.html").write_text(
+        "<html><body>Transaction amount: $12,345.67</body></html>",
+        encoding="utf-8",
+    )
+    trace_events_path = step_dir / "trace_events.json"
+    trace_events = json.loads(trace_events_path.read_text(encoding="utf-8"))
+    trace_events[0]["output"] = {
+        "amount": "$12,345.67",
+        "password": "hunter2",
+    }
+    trace_events[0]["ai_execution"]["code"] = "token = 'Bearer sk-test-1234567890abcdef'"
+    trace_events_path.write_text(json.dumps(trace_events), encoding="utf-8")
+    expected_path = step_dir / "expected.json"
+    expected = json.loads(expected_path.read_text(encoding="utf-8"))
+    expected["state_signals"]["sanitization_contract"] = {
+        "placeholders": [
+            {
+                "token": "<AMOUNT_1>",
+                "semantic_type": "currency_amount",
+                "shape": "money",
+            }
+        ],
+        "runtime_secret_refs": ["LOGIN_PASSWORD"],
+        "controlled_fixtures": ["transaction-page"],
+    }
+    expected_path.write_text(json.dumps(expected), encoding="utf-8")
+
+    review_path = write_asset_review_packet(tmp_path, "sensitivity-review")
+
+    content = review_path.read_text(encoding="utf-8")
+    assert "## Sensitivity Scan" in content
+    assert "Risk level: `critical`" in content
+    assert "Recommended sensitivity: `sensitive`" in content
+    assert "Repo-safe blocked: `true`" in content
+    assert "`credential/password`" in content
+    assert "`secret/token`" in content
+    assert "`financial`" in content
+    assert "Sanitized replay contract: `preserved`" in content
+
+
+def test_review_packet_keeps_generated_markdown_render_safe_for_long_evidence(tmp_path: Path):
+    capture_dir = _write_asset(tmp_path, asset_id="render-safe-review")
+    step_dir = capture_dir / "steps" / "003"
+    trace_events_path = step_dir / "trace_events.json"
+    trace_events = json.loads(trace_events_path.read_text(encoding="utf-8"))
+    trace_events[0]["output"] = {
+        "issue_titles": [f"[Bug]: very long issue title {index} " + ("x" * 80) for index in range(20)]
+    }
+    trace_events[0]["region_context"] = {
+        "region_id": "region-long",
+        "inferred_kind": "list_region",
+        "local_text": ["long local evidence " + ("y" * 500)],
+    }
+    trace_events_path.write_text(json.dumps(trace_events), encoding="utf-8")
+
+    review_path = write_asset_review_packet(tmp_path, "render-safe-review")
+
+    content = review_path.read_text(encoding="utf-8")
+    assert max(len(line) for line in content.splitlines()) <= 420
+    assert "..." in content
+
+
+def test_suggested_promotion_references_sensitivity_scan_blockers(tmp_path: Path):
+    capture_dir = _write_asset(tmp_path, asset_id="scan-blocked-review")
+    step_dir = capture_dir / "steps" / "003"
+    (step_dir / "after.html").write_text(
+        "<html><body>Transaction amount: $12,345.67</body></html>",
+        encoding="utf-8",
+    )
+
+    review_path = write_asset_review_packet(tmp_path, "scan-blocked-review")
+
+    content = review_path.read_text(encoding="utf-8")
+    assert "Sensitivity Scan" in content
+    assert "Repo-safe blocked: `true`" in content
+    assert "blocking candidate: 暂不建议" in content
+    assert "Sensitivity Scan 显示 `repo-safe blocked=true`" in content
+    assert "sanitized replay contract=`needs-contract`" in content

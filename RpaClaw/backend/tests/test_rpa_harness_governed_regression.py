@@ -244,6 +244,63 @@ def test_governed_offline_regression_exposes_stateful_sop_runner_signal(tmp_path
     assert report["observability"]["runner_signals"]["stateful_sop_failed"] == 0
 
 
+def test_governed_offline_regression_passes_model_config_to_replay_runners(
+    tmp_path: Path,
+    monkeypatch,
+):
+    from backend.rpa.harness import governed_regression
+
+    _write_asset(
+        tmp_path,
+        asset_id="candidate-ready",
+        runner_modes=[
+            "offline_core_chain",
+            "skill_replay_e2e",
+            "stateful_sop_capture_to_skill",
+        ],
+        core_chain_coverage=[
+            "html_to_raw_snapshot",
+            "raw_to_compact_snapshot",
+            "trace_to_skill",
+            "skill_replay",
+            "stateful_capture_to_skill",
+        ],
+    )
+    received: dict[str, dict] = {}
+
+    def fake_skill_replay(_root, *, asset_ids=None, model_config=None):
+        received["skill_replay"] = model_config
+        return {
+            "schema_version": "rpa-harness-skill-replay-e2e-v0",
+            "summary": {"failed": 0},
+            "assets": [],
+        }
+
+    def fake_stateful_sop(_root, *, asset_ids=None, include_candidate_lite=False, model_config=None):
+        received["stateful_sop"] = model_config
+        return {
+            "schema_version": "rpa-harness-stateful-sop-capture-to-skill-v0",
+            "summary": {"failed": 0},
+            "assets": [],
+        }
+
+    monkeypatch.setattr(governed_regression, "run_skill_replay_e2e", fake_skill_replay)
+    monkeypatch.setattr(
+        governed_regression,
+        "run_stateful_sop_capture_to_skill",
+        fake_stateful_sop,
+    )
+
+    report = run_governed_offline_regression(
+        tmp_path,
+        model_config={"model_name": "test-model", "api_key": "sk-test"},
+    )
+
+    assert report["summary"]["status"] == "passed"
+    assert received["skill_replay"]["api_key"] == "sk-test"
+    assert received["stateful_sop"]["model_name"] == "test-model"
+
+
 def test_governed_offline_regression_marks_selected_runner_failures_as_blocking(tmp_path: Path):
     _write_asset(tmp_path, asset_id="candidate-broken", step_text="Expected text")
     expected_path = tmp_path / "candidate-broken" / "steps" / "001" / "expected.json"
@@ -344,6 +401,41 @@ def test_governed_offline_regression_cli_writes_report(tmp_path: Path):
     report = json.loads(output_path.read_text(encoding="utf-8"))
     assert report["summary"]["selected_asset_ids"] == ["candidate-ready"]
     assert report["summary"]["status"] == "passed"
+
+
+def test_governed_offline_regression_cli_loads_model_config_file(tmp_path: Path, monkeypatch):
+    from backend.rpa.harness import run_governed_regression
+
+    output_path = tmp_path / "governed-report.json"
+    model_config_path = tmp_path / "model-config.json"
+    model_config_path.write_text(
+        json.dumps({"model_name": "test-model", "api_key": "sk-test"}),
+        encoding="utf-8",
+    )
+    received: dict[str, object] = {}
+
+    def fake_run(_assets, *, model_config=None):
+        received["model_config"] = model_config
+        return {
+            "schema_version": "rpa-harness-governed-offline-regression-v0",
+            "summary": {"status": "passed"},
+        }
+
+    monkeypatch.setattr(run_governed_regression, "run_governed_offline_regression", fake_run)
+
+    exit_code = run_governed_regression_main(
+        [
+            "--assets",
+            str(tmp_path),
+            "--model-config-file",
+            str(model_config_path),
+            "--output",
+            str(output_path),
+        ]
+    )
+
+    assert exit_code == 0
+    assert received["model_config"]["api_key"] == "sk-test"
 
 
 def test_governed_offline_regression_cli_can_emit_human_summary(tmp_path: Path, capsys):
