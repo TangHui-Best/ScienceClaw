@@ -458,6 +458,179 @@ def test_user_input_replay_preserves_region_context_as_generic_event_fact(tmp_pa
     assert "region selection is represented as generic user input context" in report["trust_limits"]
 
 
+def test_user_input_replay_preserves_top_level_region_context_scope_and_acquisition(tmp_path: Path):
+    region_context = {
+        "region_id": "region-action-button",
+        "inferred_kind": "action_region",
+        "acquisition": "picked_element",
+        "rect": {"x": 24, "y": 36, "width": 96, "height": 32},
+        "local_text": ["Download"],
+        "action_summary": {
+            "controls": [
+                {"tag": "button", "role": "button", "name": "Download"}
+            ]
+        },
+    }
+    region_scope = {
+        "region_id": "region-action-button",
+        "mode": "region_scoped_snapshot",
+        "frame_path": ["main"],
+        "frame_rect": {"x": 24, "y": 36, "width": 96, "height": 32},
+    }
+    _write_scenario_asset(tmp_path, asset_id="candidate-picked-element", step_count=1)
+    _write_checkpoint(
+        tmp_path,
+        asset_id="candidate-picked-element",
+        step_index=1,
+        step_intent="Click the selected download button",
+        recording_mode="natural_language",
+        trace_events=[
+            {
+                "trace_id": "trace-candidate-picked-element-1",
+                "trace_type": "ai_operation",
+                "source": "ai",
+                "user_instruction": "Click the selected download button",
+                "description": "Click selected element region",
+                "action": "click",
+                "region_context": region_context,
+                "region_scope": region_scope,
+                "signals": {
+                    "region_selection": {
+                        "region_id": "region-action-button",
+                        "inferred_kind": "action_region",
+                        "acquisition": "picked_element",
+                    }
+                },
+                "accepted": True,
+            }
+        ],
+    )
+
+    report = run_user_input_replay(tmp_path)
+
+    event = report["replayed_input_events"][0]
+    assert event["event_kind"] == "natural_language_instruction"
+    assert event["region_context"] == {
+        "event": region_context,
+        "region_scope": region_scope,
+        "signals": {
+            "region_id": "region-action-button",
+            "inferred_kind": "action_region",
+            "acquisition": "picked_element",
+        },
+    }
+    assert event["payload"]["region_context"]["event"]["acquisition"] == "picked_element"
+    assert event["payload"]["region_context"]["region_scope"]["mode"] == "region_scoped_snapshot"
+
+
+def test_user_input_replay_reports_controlled_region_and_picked_element_acquisitions(tmp_path: Path):
+    _write_scenario_asset(
+        tmp_path,
+        asset_id="candidate-region-element-controlled",
+        step_count=2,
+    )
+    drag_region = {
+        "region_id": "region-summary-panel",
+        "inferred_kind": "text_region",
+        "acquisition": "drag_region",
+        "rect": {"x": 8, "y": 16, "width": 320, "height": 140},
+        "local_text": ["Quarterly summary", "Revenue 42"],
+    }
+    drag_scope = {
+        "region_id": "region-summary-panel",
+        "mode": "region_scoped_snapshot",
+        "frame_path": ["main"],
+        "frame_rect": {"x": 8, "y": 16, "width": 320, "height": 140},
+    }
+    picked_region = {
+        "region_id": "region-first-row-name",
+        "inferred_kind": "action_region",
+        "acquisition": "picked_element",
+        "rect": {"x": 40, "y": 220, "width": 180, "height": 32},
+        "local_text": ["report.xlsx"],
+        "action_summary": {
+            "controls": [
+                {"tag": "a", "role": "link", "name": "report.xlsx"}
+            ]
+        },
+    }
+    picked_scope = {
+        "region_id": "region-first-row-name",
+        "mode": "region_scoped_snapshot",
+        "frame_path": ["main"],
+        "frame_rect": {"x": 40, "y": 220, "width": 180, "height": 32},
+    }
+    _write_checkpoint(
+        tmp_path,
+        asset_id="candidate-region-element-controlled",
+        step_index=1,
+        step_intent="Extract text from the dragged summary region",
+        recording_mode="natural_language",
+        trace_events=[
+            {
+                "trace_id": "trace-controlled-region-1",
+                "trace_type": "ai_operation",
+                "source": "ai",
+                "user_instruction": "Extract text from the selected summary region",
+                "description": "Extract selected region text",
+                "action": "extract",
+                "region_context": drag_region,
+                "region_scope": drag_scope,
+                "signals": {
+                    "region_selection": {
+                        "region_id": "region-summary-panel",
+                        "inferred_kind": "text_region",
+                        "acquisition": "drag_region",
+                    }
+                },
+                "output_key": "summary_text",
+                "output": {"summary_text": "Revenue 42"},
+                "accepted": True,
+            }
+        ],
+    )
+    _write_checkpoint(
+        tmp_path,
+        asset_id="candidate-region-element-controlled",
+        step_index=2,
+        step_intent="Click the first row name inside the selected list",
+        recording_mode="natural_language",
+        trace_events=[
+            {
+                "trace_id": "trace-controlled-region-2",
+                "trace_type": "ai_operation",
+                "source": "ai",
+                "user_instruction": "Click the first row name inside the selected list",
+                "description": "Click selected first-row element",
+                "action": "click",
+                "region_context": picked_region,
+                "region_scope": picked_scope,
+                "signals": {
+                    "region_selection": {
+                        "region_id": "region-first-row-name",
+                        "inferred_kind": "action_region",
+                        "acquisition": "picked_element",
+                    }
+                },
+                "output_key": "clicked_row_name",
+                "output": {"clicked_row_name": "report.xlsx"},
+                "accepted": True,
+            }
+        ],
+    )
+
+    report = run_user_input_replay(tmp_path)
+
+    assert report["summary"]["status"] == "passed"
+    assert report["summary"]["replayed_event_count"] == 2
+    assert report["summary"]["region_context_event_count"] == 2
+    assert report["summary"]["region_acquisitions"] == {
+        "drag_region": 1,
+        "picked_element": 1,
+    }
+    assert "element_context" not in json.dumps(report, ensure_ascii=False)
+
+
 def test_user_input_replay_failure_retains_checkpoint_and_trace_log_context(tmp_path: Path):
     _write_scenario_asset(tmp_path, asset_id="candidate-broken", step_count=1)
     _write_checkpoint(

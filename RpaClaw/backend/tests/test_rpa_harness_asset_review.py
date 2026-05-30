@@ -255,6 +255,116 @@ def test_asset_review_cli_writes_selected_asset_review_packet(tmp_path: Path):
     assert "Extract repository star count" in content
 
 
+def test_review_packet_surfaces_region_acquisition_without_promoting_asset(tmp_path: Path):
+    capture_dir = tmp_path / "region-capture"
+    _write_json(
+        capture_dir / "scenario.json",
+        {
+            "schema_version": "rpa-harness-scenario-v0",
+            "asset_id": "region-capture",
+            "capture_scope": "full_sop",
+            "sop_intent": "Review region and picked-element capture evidence",
+            "source": {
+                "recording_id": "session-region-capture",
+                "captured_at": "2026-05-30T09:00:00",
+                "capture_mode": "harness",
+                "capture_trigger": "full_sop",
+            },
+            "asset_status": "draft",
+            "sensitivity": "local-only",
+            "governance": {
+                "promotion_status": "captured",
+                "runner_modes": ["offline_core_chain"],
+                "core_chain_coverage": [],
+                "expected_signals_reviewed": False,
+                "sensitivity_reviewed": False,
+                "review_notes": "F020 captured region-selection review fixture.",
+            },
+            "step_checkpoints": [
+                {"step_index": 1, "checkpoint_path": "steps/001/checkpoint.json"},
+                {"step_index": 2, "checkpoint_path": "steps/002/checkpoint.json"},
+            ],
+        },
+    )
+    _write_step(
+        capture_dir,
+        step_index=1,
+        step_intent="Extract text from dragged region",
+        before_url="https://fixture.local/report",
+        before_title="Report",
+        after_url="https://fixture.local/report",
+        after_title="Report",
+        trace_events=[
+            {
+                "trace_id": "trace-region-capture-1",
+                "trace_type": "ai_operation",
+                "source": "ai",
+                "action": "extract",
+                "description": "Extract selected region text",
+                "region_context": {
+                    "region_id": "region-summary-panel",
+                    "inferred_kind": "text_region",
+                    "acquisition": "drag_region",
+                    "local_text": ["Quarterly summary"],
+                },
+                "signals": {
+                    "region_selection": {
+                        "region_id": "region-summary-panel",
+                        "acquisition": "drag_region",
+                    }
+                },
+                "accepted": True,
+            }
+        ],
+        expected={},
+    )
+    _write_step(
+        capture_dir,
+        step_index=2,
+        step_intent="Click the first row name",
+        before_url="https://fixture.local/report",
+        before_title="Report",
+        after_url="https://fixture.local/report",
+        after_title="Report",
+        trace_events=[
+            {
+                "trace_id": "trace-region-capture-2",
+                "trace_type": "ai_operation",
+                "source": "ai",
+                "action": "click",
+                "description": "Click selected first-row element",
+                "region_context": {
+                    "region_id": "region-first-row-name",
+                    "inferred_kind": "action_region",
+                    "acquisition": "picked_element",
+                    "local_text": ["report.xlsx"],
+                },
+                "signals": {
+                    "region_selection": {
+                        "region_id": "region-first-row-name",
+                        "acquisition": "picked_element",
+                    }
+                },
+                "accepted": True,
+            }
+        ],
+        expected={},
+    )
+
+    review_path = write_asset_review_packet(tmp_path, "region-capture")
+
+    content = review_path.read_text(encoding="utf-8")
+    assert "Region Selection Evidence" in content
+    assert "region-summary-panel" in content
+    assert "drag_region" in content
+    assert "region-first-row-name" in content
+    assert "picked_element" in content
+    assert "Promotion: `captured`" in content
+    assert "Expected signals reviewed: `false`" in content
+    assert "Sensitivity reviewed: `false`" in content
+    assert "candidate-lite" in content
+
+
 def test_review_packet_includes_lifecycle_and_eligibility_snapshot(tmp_path: Path):
     capture_dir = _write_asset(tmp_path, asset_id="candidate-review")
     scenario_path = capture_dir / "scenario.json"

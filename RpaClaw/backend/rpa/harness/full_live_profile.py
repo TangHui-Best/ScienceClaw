@@ -101,6 +101,7 @@ def _merge_region_candidate(target: dict[str, Any], candidate: Any) -> None:
         "page_url",
         "page_title",
         "inferred_kind",
+        "acquisition",
         "frame_path",
         "rect",
         "local_text",
@@ -116,6 +117,9 @@ def _merge_region_candidate(target: dict[str, Any], candidate: Any) -> None:
         value = candidate.get(key)
         if value not in (None, "", [], {}) and key not in target:
             target[key] = value
+    frame_rect = candidate.get("frame_rect")
+    if isinstance(frame_rect, dict) and frame_rect and "rect" not in target:
+        target["rect"] = frame_rect
 
 
 def _runtime_region_context(source_context: dict[str, Any]) -> dict[str, Any]:
@@ -125,6 +129,7 @@ def _runtime_region_context(source_context: dict[str, Any]) -> dict[str, Any]:
     _merge_region_candidate(normalized, source_context)
     _merge_region_candidate(normalized, source_context.get("target_evidence"))
     _merge_region_candidate(normalized, source_context.get("event"))
+    _merge_region_candidate(normalized, source_context.get("region_scope"))
     _merge_region_candidate(normalized, source_context.get("signals"))
     evidence = {
         key: value
@@ -132,6 +137,7 @@ def _runtime_region_context(source_context: dict[str, Any]) -> dict[str, Any]:
         if key
         in {
             "inferred_kind",
+            "acquisition",
             "frame_path",
             "rect",
             "local_text",
@@ -149,6 +155,27 @@ def _runtime_region_context(source_context: dict[str, Any]) -> dict[str, Any]:
     if evidence:
         normalized["evidence"] = evidence
     return normalized
+
+
+def _region_acquisition(region_context: Any) -> str:
+    if not isinstance(region_context, dict):
+        return ""
+    for key in ("event", "target_evidence", "signals", "region_scope", "evidence"):
+        candidate = region_context.get(key)
+        if isinstance(candidate, dict):
+            acquisition = str(candidate.get("acquisition") or "").strip()
+            if acquisition:
+                return acquisition
+    return str(region_context.get("acquisition") or "").strip()
+
+
+def _region_acquisition_counts(events: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for event in events:
+        acquisition = _region_acquisition(event.get("region_context"))
+        if acquisition:
+            counts[acquisition] = counts.get(acquisition, 0) + 1
+    return {key: counts[key] for key in sorted(counts)}
 
 
 def _scenario_for_event(assets_root: Path, event: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -503,6 +530,7 @@ async def run_full_live_profile(
     status = "failed" if blocking_failures else "passed"
     failure_category = str(blocking_failures[0].get("failure_category") or "full-live-profile-failed") if blocking_failures else ""
     planner_invocation_count = int((live_report.get("summary") or {}).get("planner_invocation_count") or 0)
+    region_acquisitions = _region_acquisition_counts(selected_events)
     return {
         "schema_version": _SCHEMA_VERSION,
         "kind": "full_live_profile",
@@ -519,6 +547,10 @@ async def run_full_live_profile(
             "blocking_failure_count": len(blocking_failures),
             "warning_only_failure_count": len(warning_failures),
             "post_capture_warning_count": int(post_capture.get("warning_count") or 0),
+            "region_context_event_count": len(
+                [event for event in selected_events if event.get("region_context")]
+            ),
+            "region_acquisitions": region_acquisitions,
         },
         "interpretation": {
             "verdict": "regression" if status == "failed" else "no meaningful change",

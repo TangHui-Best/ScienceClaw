@@ -145,6 +145,13 @@ def _region_expected_signal(trace_event: dict[str, Any]) -> dict[str, Any]:
     ).strip()
     if inferred_kind:
         signal["inferred_kind"] = inferred_kind
+    acquisition = str(
+        region_context.get("acquisition")
+        or region_selection.get("acquisition")
+        or ""
+    ).strip()
+    if acquisition:
+        signal["acquisition"] = acquisition
     return signal
 
 
@@ -192,7 +199,7 @@ def build_expected_signal_draft(
         compiler_signals["must_preserve_region_context"] = {
             key: value
             for key, value in region_signal.items()
-            if key in {"region_id", "inferred_kind", "frame_path"}
+            if key in {"region_id", "inferred_kind", "frame_path", "acquisition"}
         }
 
     output_key = str(event.get("output_key") or "").strip()

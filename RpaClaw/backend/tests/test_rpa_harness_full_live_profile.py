@@ -275,6 +275,183 @@ async def run(page, results):
 
 
 @pytest.mark.asyncio
+async def test_full_live_profile_passes_picked_element_acquisition_as_generic_region_context(tmp_path: Path):
+    source_root = tmp_path / "source-assets"
+    region_context = {
+        "region_id": "region-download-button",
+        "inferred_kind": "action_region",
+        "acquisition": "picked_element",
+        "rect": {"x": 30, "y": 40, "width": 120, "height": 36},
+        "local_text": ["Download report"],
+        "action_summary": {
+            "controls": [
+                {"tag": "a", "role": "link", "name": "Download report"}
+            ]
+        },
+    }
+    region_scope = {
+        "region_id": "region-download-button",
+        "mode": "region_scoped_snapshot",
+        "frame_path": ["main"],
+        "frame_rect": {"x": 30, "y": 40, "width": 120, "height": 36},
+    }
+    _write_source_asset(source_root)
+    trace_path = source_root / "candidate-live-source" / "steps" / "001" / "trace_events.json"
+    trace_events = json.loads(trace_path.read_text(encoding="utf-8"))
+    trace_events[0]["region_context"] = region_context
+    trace_events[0]["region_scope"] = region_scope
+    trace_events[0]["signals"] = {
+        "region_selection": {
+            "region_id": "region-download-button",
+            "inferred_kind": "action_region",
+            "acquisition": "picked_element",
+        }
+    }
+    trace_path.write_text(json.dumps(trace_events), encoding="utf-8")
+
+    planner_payloads = []
+
+    async def planner(payload):
+        planner_payloads.append(payload)
+        return {
+            "description": "Click selected download element",
+            "output_key": "clicked_download",
+            "code": """
+async def run(page, results):
+    return {"clicked": True}
+""",
+        }
+
+    report = await run_full_live_profile(
+        source_root,
+        generated_assets_root=tmp_path / "generated-assets",
+        planner=planner,
+    )
+
+    selected_context = report["selected_input_events"][0]["region_context"]
+    assert selected_context["event"]["acquisition"] == "picked_element"
+    assert selected_context["region_scope"]["frame_path"] == ["main"]
+    runtime_context = report["controlled_fixtures"][0]["runtime_region_context"]
+    assert runtime_context["region_id"] == "region-download-button"
+    assert runtime_context["acquisition"] == "picked_element"
+    assert runtime_context["evidence"]["acquisition"] == "picked_element"
+    assert planner_payloads[0]["snapshot"]["region_scope"]["region_id"] == "region-download-button"
+    assert planner_payloads[0]["snapshot"]["region_scope"]["frame_rect"] == region_context["rect"]
+    assert "element_context" not in json.dumps(report, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_full_live_profile_reports_controlled_drag_and_picked_element_acquisitions(tmp_path: Path):
+    source_root = tmp_path / "source-assets"
+    generated_root = tmp_path / "generated-assets"
+    drag_region = {
+        "region_id": "region-summary-panel",
+        "inferred_kind": "text_region",
+        "acquisition": "drag_region",
+        "rect": {"x": 8, "y": 16, "width": 320, "height": 140},
+        "local_text": ["Quarterly summary", "Revenue 42"],
+    }
+    picked_region = {
+        "region_id": "region-first-row-name",
+        "inferred_kind": "action_region",
+        "acquisition": "picked_element",
+        "rect": {"x": 40, "y": 220, "width": 180, "height": 32},
+        "local_text": ["report.xlsx"],
+        "action_summary": {
+            "controls": [
+                {"tag": "a", "role": "link", "name": "report.xlsx"}
+            ]
+        },
+    }
+    _write_source_asset(
+        source_root,
+        asset_id="candidate-drag-region",
+        region_context=drag_region,
+    )
+    _write_source_asset(
+        source_root,
+        asset_id="candidate-picked-element",
+        region_context=picked_region,
+    )
+    picked_html_path = source_root / "candidate-picked-element" / "steps" / "001" / "before.html"
+    picked_html_path.write_text(
+        """
+        <html>
+          <head><title>Reports</title></head>
+          <body>
+            <main>
+              <table>
+                <tbody>
+                  <tr><td><a id="first-row-name" href="#download">report.xlsx</a></td></tr>
+                </tbody>
+              </table>
+            </main>
+          </body>
+        </html>
+        """,
+        encoding="utf-8",
+    )
+    after_html_path = source_root / "candidate-picked-element" / "steps" / "001" / "after.html"
+    after_html_path.write_text(picked_html_path.read_text(encoding="utf-8"), encoding="utf-8")
+    picked_trace_path = source_root / "candidate-picked-element" / "steps" / "001" / "trace_events.json"
+    picked_trace = json.loads(picked_trace_path.read_text(encoding="utf-8"))
+    picked_trace[0]["user_instruction"] = "Click the first row name inside the selected list"
+    picked_trace[0]["description"] = "Click selected first-row element"
+    picked_trace[0]["action"] = "click"
+    picked_trace[0]["output_key"] = "clicked_row_name"
+    picked_trace[0]["output"] = {"clicked_row_name": "report.xlsx"}
+    picked_trace_path.write_text(json.dumps(picked_trace), encoding="utf-8")
+
+    planner_payloads = []
+
+    async def planner(payload):
+        planner_payloads.append(payload)
+        if payload["instruction"].startswith("Click"):
+            return {
+                "description": "Click selected first-row element",
+                "output_key": "clicked_row_name",
+                "code": """
+async def run(page, results):
+    await page.locator('#first-row-name').click()
+    return {
+        "clicked_row_name": "report.xlsx",
+        "action_performed": True,
+        "action_type": "click",
+    }
+""",
+            }
+        return {
+            "description": "Extract selected region text",
+            "output_key": "invoice_total",
+            "code": """
+async def run(page, results):
+    return (await page.locator('#invoice-total').inner_text()).strip()
+""",
+        }
+
+    report = await run_full_live_profile(
+        source_root,
+        generated_assets_root=generated_root,
+        planner=planner,
+    )
+
+    assert report["summary"]["status"] == "passed", report
+    assert report["summary"]["selected_input_event_count"] == 2
+    assert report["summary"]["region_context_event_count"] == 2
+    assert report["summary"]["region_acquisitions"] == {
+        "drag_region": 1,
+        "picked_element": 1,
+    }
+    assert len(planner_payloads) == 2
+    assert {
+        payload["snapshot"]["region_scope"]["acquisition"]
+        for payload in planner_payloads
+    } == {"drag_region", "picked_element"}
+    assert report["post_capture"]["scenario_count"] == 2
+    assert "element_context" not in json.dumps(report, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
 async def test_full_live_profile_rejects_generated_assets_inside_source_root(tmp_path: Path):
     source_root = tmp_path / "source-assets"
     _write_source_asset(source_root)

@@ -185,11 +185,13 @@ def test_region_scoped_trace_expected_signals_preserve_selected_region_semantics
                 "region_context": {
                     "region_id": "region-1",
                     "inferred_kind": "table_region",
+                    "acquisition": "picked_element",
                 },
                 "signals": {
                     "region_selection": {
                         "region_id": "region-1",
                         "inferred_kind": "table_region",
+                        "acquisition": "picked_element",
                     }
                 },
             }
@@ -201,12 +203,15 @@ def test_region_scoped_trace_expected_signals_preserve_selected_region_semantics
         "mode": "region_scoped_snapshot",
         "frame_path": ["iframe.detail"],
         "inferred_kind": "table_region",
+        "acquisition": "picked_element",
     }
     assert draft.action_signals["region_selection"]["region_id"] == "region-1"
+    assert draft.action_signals["region_selection"]["acquisition"] == "picked_element"
     assert draft.compiler_signals["must_preserve_region_context"] == {
         "region_id": "region-1",
         "inferred_kind": "table_region",
         "frame_path": ["iframe.detail"],
+        "acquisition": "picked_element",
     }
 
 

@@ -174,11 +174,18 @@ def _region_context(checkpoint: HarnessStepCheckpoint, event: dict[str, Any]) ->
     target_region = checkpoint.action.target_evidence.get("region")
     if isinstance(target_region, dict) and target_region:
         context["target_evidence"] = target_region
-    event_region = event.get("region")
+    event_region = event.get("region_context")
+    if not isinstance(event_region, dict) or not event_region:
+        event_region = event.get("region")
     if isinstance(event_region, dict) and event_region:
         context["event"] = event_region
+    region_scope = event.get("region_scope")
+    if isinstance(region_scope, dict) and region_scope:
+        context["region_scope"] = region_scope
     signals = event.get("signals") if isinstance(event.get("signals"), dict) else {}
-    signal_region = signals.get("region") if isinstance(signals, dict) else None
+    signal_region = signals.get("region_selection") if isinstance(signals, dict) else None
+    if not isinstance(signal_region, dict) or not signal_region:
+        signal_region = signals.get("region") if isinstance(signals, dict) else None
     if isinstance(signal_region, dict) and signal_region:
         context["signals"] = signal_region
     return context
@@ -587,6 +594,13 @@ def _summary(
         failure_category = "no-replay-baseline-assets"
     elif blocking_failures:
         failure_category = "user-input-replay-failed"
+    region_acquisitions = _counter_dict(
+        [
+            _region_acquisition(event.get("region_context"))
+            for event in events
+            if isinstance(event.get("region_context"), dict)
+        ]
+    )
     return {
         "status": "failed" if failure_category else "passed",
         "failure_category": failure_category,
@@ -609,10 +623,26 @@ def _summary(
         ),
         "event_kinds": _counter_dict([str(event.get("event_kind") or "") for event in events]),
         "injected_boundaries": _counter_dict([str(event.get("injected_boundary") or "") for event in events]),
+        "region_context_event_count": len(
+            [event for event in events if event.get("region_context")]
+        ),
+        "region_acquisitions": region_acquisitions,
         "trace_ids": sorted({str(event.get("trace_id") or "") for event in events if event.get("trace_id")}),
         "session_ids": sorted({str(event.get("session_id") or "") for event in events if event.get("session_id")}),
         "result_ids": sorted({str(event.get("result_id") or "") for event in events if event.get("result_id")}),
     }
+
+
+def _region_acquisition(region_context: Any) -> str:
+    if not isinstance(region_context, dict):
+        return ""
+    for key in ("event", "target_evidence", "signals", "region_scope"):
+        candidate = region_context.get(key)
+        if isinstance(candidate, dict):
+            acquisition = str(candidate.get("acquisition") or "").strip()
+            if acquisition:
+                return acquisition
+    return str(region_context.get("acquisition") or "").strip()
 
 
 def run_user_input_replay(

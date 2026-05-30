@@ -2,7 +2,15 @@
 
 > 说明：这是项目运行态的分支/待办记录，不是 Harness artifact，因此不再保留 `doc_kind` frontmatter。
 
-_Updated: 2026-05-27_
+_Updated: 2026-05-30_
+
+## Current Handoff
+
+- F020.2-F020.4 已落地：controlled fixture 覆盖 `drag_region` / `picked_element`，Review Packet 显示 region acquisition，覆盖矩阵记录在 `docs/rpa/harness/f020-region-element-selection-coverage-matrix.md`。
+- 下一步若继续扩展，应在真实内网录制 captured/candidate-lite region-selection asset，并由人工确认 expected signals / sensitivity 后再考虑 blocking candidate。
+- F020 区域与元素选择 Harness 剩余切片改为依次执行。交接入口：`docs/rpa/harness/f020-region-element-selection-handoff-2026-05-30.md`。
+- 当前已完成 F020.1：`region_context` / `region_scope` / `signals.region_selection` / `acquisition=picked_element` 在 user-input replay、full-live profile 和 expected signals 中保留。
+- 新会话下一步从 F020.2 controlled asset / fixture 开始；随后推进 F020.3 real capture asset，再推进 F020.4 coverage matrix。
 
 ## Active Branch Map
 
@@ -28,6 +36,7 @@ _Updated: 2026-05-27_
 - 区域选择优化：继续在 `codex/rpa-region-selection-optimization-v2` 上推进。下一步把 `/section-texts` 手动 fixture 接入 runner-backed eval case，或保存一次手动 region selection 录制/编译 artifact，证明可依赖 section/container anchor 走确定性编译，缺 anchor 的自由文本走 runtime AI 且不嵌入录制现场文本。
 - iframe 修复：先建立可复现 iframe scenario，再进入 `codex/rpa-iframe-frame-context-fix-v2`。
 - Harness 验证：内网运行 live-agent eval 时参考 `codex/rpa-harness-region-integration` 上的 F012/EV-012 和 `docs/rpa/harness/live-agent-eval.md`。
+- Harness v1.1 风险收敛：F019 已承接 controlled download side effect；区域/元素选择模拟闭环继续在 F020 推进，参考 `docs/features/F020-rpa-harness-region-element-selection-simulation.md` 与 `docs/rpa/harness/v1.1-region-selection-download-risk-todo.md`。
 
 ## Active
 

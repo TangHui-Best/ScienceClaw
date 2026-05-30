@@ -2297,14 +2297,29 @@ def _compact_snapshot_for_runtime(
     if not region_scope:
         return _compact_snapshot(snapshot, instruction)
     try:
-        return _compact_snapshot(snapshot, instruction, region_scope=region_scope)
+        compact = _compact_snapshot(snapshot, instruction, region_scope=region_scope)
+        if isinstance(compact, dict):
+            _merge_compact_region_scope(compact, region_scope)
+        return compact
     except TypeError as exc:
         if "region_scope" not in str(exc):
             raise
         compact = _compact_snapshot(snapshot, instruction)
         if isinstance(compact, dict):
             compact.setdefault("region_scope", dict(region_scope))
+            _merge_compact_region_scope(compact, region_scope)
         return compact
+
+
+def _merge_compact_region_scope(compact_snapshot: Dict[str, Any], region_scope: Dict[str, Any]) -> None:
+    snapshot_scope = compact_snapshot.get("region_scope")
+    if not isinstance(snapshot_scope, dict):
+        compact_snapshot["region_scope"] = dict(region_scope)
+        return
+    for key in ("region_id", "mode", "frame_path", "frame_rect", "acquisition"):
+        value = region_scope.get(key)
+        if value not in (None, "", [], {}) and key not in snapshot_scope:
+            snapshot_scope[key] = value
 
 
 def _region_scope_from_context(region_context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -2324,6 +2339,7 @@ def _region_scope_from_context(region_context: Optional[Dict[str, Any]]) -> Dict
         "viewport_rect": dict(rect),
         "frame_path": _compact_list(evidence.get("frame_path")),
         "frame_rect": dict(rect),
+        "acquisition": str(context.get("acquisition") or evidence.get("acquisition") or ""),
         "warnings": _compact_list(evidence.get("warnings")),
     }
 
@@ -2336,6 +2352,7 @@ def _compact_region_context(region_context: Optional[Dict[str, Any]]) -> Dict[st
             key: context.get(key)
             for key in (
                 "inferred_kind",
+                "acquisition",
                 "frame_path",
                 "rect",
                 "local_text",
@@ -2359,6 +2376,7 @@ def _compact_region_context(region_context: Optional[Dict[str, Any]]) -> Dict[st
     _set_if_present(compact, "page_url", context.get("page_url") or evidence.get("url"))
     _set_if_present(compact, "page_title", context.get("page_title") or evidence.get("title"))
     _set_if_present(compact, "inferred_kind", evidence.get("inferred_kind"))
+    _set_if_present(compact, "acquisition", context.get("acquisition") or evidence.get("acquisition"))
     _set_if_present(compact, "frame_path", _compact_list(evidence.get("frame_path")))
     _set_if_present(compact, "rect", evidence.get("rect"))
     _set_if_present(compact, "local_text", _compact_list(evidence.get("local_text"), limit=20))

@@ -347,6 +347,46 @@ def _evidence_summary_rows(steps: list[StepReviewEvidence]) -> list[str]:
     return rows
 
 
+def _region_selection_evidence_rows(steps: list[StepReviewEvidence]) -> list[str]:
+    rows = [
+        "## 区域选择证据（Region Selection Evidence）",
+        "",
+        "| Step | Region ID | Acquisition | Kind | Local evidence |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    found = False
+    for step in steps:
+        for event in step.trace_events:
+            region = event.get("region_context")
+            if not isinstance(region, dict) or not region:
+                signals = event.get("signals") if isinstance(event.get("signals"), dict) else {}
+                region = signals.get("region_selection") if isinstance(signals, dict) else {}
+            if not isinstance(region, dict) or not region:
+                continue
+            found = True
+            local_text = region.get("local_text")
+            if isinstance(local_text, list):
+                local_evidence = ", ".join(_sanitize_text(item) for item in local_text[:3] if _sanitize_text(item))
+            else:
+                local_evidence = _sanitize_text(local_text)
+            rows.append(
+                "| "
+                + " | ".join(
+                    [
+                        str(step.checkpoint.step_index),
+                        _markdown_cell(region.get("region_id")),
+                        _markdown_cell(region.get("acquisition")),
+                        _markdown_cell(region.get("inferred_kind")),
+                        _markdown_cell(local_evidence),
+                    ]
+                )
+                + " |"
+            )
+    if not found:
+        rows.append("| - | - | - | - | - |")
+    return rows
+
+
 def _validation_line(validation_report: dict[str, Any]) -> str:
     summary = validation_report.get("summary") or {}
     blocking = int(summary.get("blocking_issue_count") or 0)
@@ -507,6 +547,8 @@ def build_asset_review_packet(assets_root: str | Path, asset_id: str) -> str:
         "## 证据摘要（Evidence Summary）",
         "",
         *_evidence_summary_rows(steps),
+        "",
+        *_region_selection_evidence_rows(steps),
         "",
         "## 自动检查（Auto Checks）",
         "",
