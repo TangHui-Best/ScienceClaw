@@ -1,11 +1,8 @@
----
-title: Two Assets Governed Harness Run
-date: 2026-05-19
-feature: F010
-status: passed
----
-
 # 两个已升级资产 Harness 核心链路分析报告
+
+> 生命周期说明：本文是 2026-05-19 当时资产池状态的 historical report，不能作为当前
+> asset-pool readiness 证据。判断当前状态前，必须对当前 asset root 重新运行
+> `run_asset_pool_doctor` 或 `run_catalog --format lifecycle`。
 
 ## 执行结论
 

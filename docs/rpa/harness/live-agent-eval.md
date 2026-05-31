@@ -1,9 +1,8 @@
----
-title: Live Agent Eval
-status: active
----
-
 # Live Agent Eval：验证自然语言 SOP 转义能力
+
+> 生命周期说明：本文是 live-agent evaluation runner 的 active guide。它被
+> F012/F017 Evidence 引用，但自身不是 Harness Feature/Evidence/ADR/Lesson。
+> 交付与 closeout 状态以 F012/EV-012 或 F017/EV-017 为准。
 
 ## 背景
 

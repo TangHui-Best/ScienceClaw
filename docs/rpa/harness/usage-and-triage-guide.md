@@ -1,5 +1,10 @@
 ﻿# RPA Harness 使用与问题定位指南
 
+> 生命周期说明：本文是当前 RPA Harness runner 使用与问题定位指南。它说明如何执行
+> 和解读 Harness 命令，但不替代当前 Feature/Evidence，也不替代对真实 asset root
+> 的体检。如果历史示例与当前输出冲突，以 `run_asset_pool_doctor`、
+> `run_catalog --format lifecycle` 和所属 Feature/Evidence 为准。
+
 ## 当前入口
 
 内网接管和封箱状态先读：

@@ -1,5 +1,10 @@
 # RPA Harness 2026-05 Archive
 
+> 生命周期说明：本目录是 archived historical material。这些文件可以解释
+> F013-F018 当时如何执行，但不能作为当前接管、资产 promotion 或资产池 readiness
+> 的入口。当前入口是 `docs/rpa/harness/internal-handoff-and-freeze-guide.md`、
+> `docs/rpa/harness/RPA-Harness-v1-设计.md` 和 canonical Feature/Evidence。
+
 本目录保存已经完成或被新入口取代的 RPA Harness 历史计划。它们仍可用于审计实现过程、恢复上下文或理解某个阶段的取舍，但不再作为当前内网接管、资产治理或运行诊断的入口。
 
 当前入口：

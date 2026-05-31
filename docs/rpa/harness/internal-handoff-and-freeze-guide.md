@@ -1,5 +1,11 @@
 # RPA Harness 内网接管与封箱指南
 
+> 生命周期说明：本文是当前 RPA Harness 内网接管与封箱入口。判断当前资产池状态时，
+> 应先读本文，而不是历史 phase plan 或旧运行报告。本文是 guide，不是 Harness
+> Feature/Evidence/ADR/Lesson；正式交付与 closeout 状态以
+> `docs/features/F023-rpa-harness-internal-handoff-freeze.md` 和
+> `docs/evidence/EV-023-rpa-harness-internal-handoff-freeze.md` 为准。
+
 ## 目的
 
 这份文档是从当前外网开发机切换到内网开发前的 RPA Harness 单入口。它回答四个问题：

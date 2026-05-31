@@ -1,5 +1,9 @@
 ﻿# RPA Harness v1 Design
 
+> 生命周期说明：本文是当前 v1 设计总入口和兼容索引，不是 implementation plan，
+> 也不能单独作为完成证据。判断当前接管/封箱状态时先读
+> `internal-handoff-and-freeze-guide.md`；判断交付状态时读关联 Feature/Evidence。
+
 ## Vision
 
 RPA Harness v1 把 Phase 0-5 已经完成的能力收束成一个可执行、可解释、
