@@ -36,7 +36,7 @@ Agents explain.
 Humans govern.
 ```
 
-- Exit Gate source: this Feature, [EV-015](../evidence/EV-015-rpa-harness-v1-asset-lifecycle-operationalization.md), [Phase 3 plan](../rpa/harness/f015-rpa-harness-v1-phase-3-plan.md), [F013](F013-rpa-harness-v1-asset-driven-user-input-replay.md), [F014](F014-rpa-harness-v1-evidence-report-trust-loop.md), [RPA Harness v1 design](../rpa/harness/rpa-harness-v1-asset-driven-user-input-replay.md), [ADR-003](../decisions/ADR-003-rpa-golden-evaluation-uses-assets-not-live-agent-chat.md), and [F010](F010-assisted-asset-review-and-promotion-pipeline.md).
+- Exit Gate source: this Feature, [EV-015](../evidence/EV-015-rpa-harness-v1-asset-lifecycle-operationalization.md), [Phase 3 plan](../archive/2026-05/rpa-harness/f015-rpa-harness-v1-phase-3-plan.md), [F013](F013-rpa-harness-v1-asset-driven-user-input-replay.md), [F014](F014-rpa-harness-v1-evidence-report-trust-loop.md), [RPA Harness v1 design](../rpa/harness/rpa-harness-v1-asset-driven-user-input-replay.md), [ADR-003](../decisions/ADR-003-rpa-golden-evaluation-uses-assets-not-live-agent-chat.md), and [F010](F010-assisted-asset-review-and-promotion-pipeline.md).
 
 ## Current Status
 
@@ -73,7 +73,7 @@ Vision Gate:
 ## Links
 
 - Evidence: [EV-015 RPA Harness v1 Asset Lifecycle Operationalization Evidence](../evidence/EV-015-rpa-harness-v1-asset-lifecycle-operationalization.md)
-- Plan: [F015 Phase 3 implementation plan](../rpa/harness/f015-rpa-harness-v1-phase-3-plan.md)
+- Plan: [F015 Phase 3 implementation plan](../archive/2026-05/rpa-harness/f015-rpa-harness-v1-phase-3-plan.md)
 - Previous Feature: [F014 RPA Harness v1 Evidence / Report Trust Loop](F014-rpa-harness-v1-evidence-report-trust-loop.md)
 - Previous Evidence: [EV-014 RPA Harness v1 Evidence / Report Trust Loop Evidence](../evidence/EV-014-rpa-harness-v1-evidence-report-trust-loop.md)
 - Design: [RPA Harness v1 Asset-Driven User Input Replay](../rpa/harness/rpa-harness-v1-asset-driven-user-input-replay.md)

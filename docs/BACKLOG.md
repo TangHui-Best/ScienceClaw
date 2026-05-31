@@ -2,9 +2,11 @@
 
 > 说明：这是项目运行态的分支/待办记录，不是 Harness artifact，因此不再保留 `doc_kind` frontmatter。
 
-_Updated: 2026-05-30_
+_Updated: 2026-05-31_
 
 ## Current Handoff
+
+- F023 封箱接管已完成：当前入口是 `docs/rpa/harness/internal-handoff-and-freeze-guide.md`，Asset Pool Doctor 入口是 `python -m backend.rpa.harness.run_asset_pool_doctor --assets <asset_root> --format summary --lang zh`。后续内网开发应先用 doctor/catalog 判断当前 asset root 的真实治理状态，不要引用历史报告替代当前事实。
 
 - F020.2-F020.4 已落地：controlled fixture 覆盖 `drag_region` / `picked_element`，Review Packet 显示 region acquisition，覆盖矩阵记录在 `docs/rpa/harness/f020-region-element-selection-coverage-matrix.md`。
 - 下一步若继续扩展，应在真实内网录制 captured/candidate-lite region-selection asset，并由人工确认 expected signals / sensitivity 后再考虑 blocking candidate。
@@ -39,6 +41,16 @@ _Updated: 2026-05-30_
 - Harness v1.1 风险收敛：F019 已承接 controlled download side effect；区域/元素选择模拟闭环继续在 F020 推进，参考 `docs/features/F020-rpa-harness-region-element-selection-simulation.md` 与 `docs/rpa/harness/v1.1-region-selection-download-risk-todo.md`。
 
 ## Active
+
+### TraceSkillCompiler Generalization Hardening
+
+- Source: F022/F023 封箱检查确认，当前剩余 compiler 风险应归属到 RPA core，而不是继续扩张 Harness。
+- Boundary doc: `docs/rpa/trace-skill-compiler-risk-ownership.md`
+- Status: backlog; do not implement in F023.
+- Trigger examples: `compiler-hardcoded-observed-value`, generated Skill freezes recorded link text/URL/project name/list item, missing `output_key` / `_results`, replay output shape mismatch caused by compiler/generalization contract.
+- Required verification after fix: rerun Asset Pool Doctor for the same asset root, rerun deterministic profile or focused compiler/skill replay runner, and record Evidence on the owning RPA core Feature.
+
+Do not fix these by adding Harness site rules, promotion shortcuts, or expected-signal exceptions.
 
 ### Live Agent Eval For RPA Harness Internal Validation
 

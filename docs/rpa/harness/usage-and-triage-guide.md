@@ -1,5 +1,15 @@
 ﻿# RPA Harness 使用与问题定位指南
 
+## 当前入口
+
+内网接管和封箱状态先读：
+
+```text
+docs/rpa/harness/internal-handoff-and-freeze-guide.md
+```
+
+本文继续作为 runner 使用与问题定位指南。若本文的历史示例与当前资产池状态冲突，以 `run_asset_pool_doctor` / `run_catalog --format lifecycle` 的当前输出为准。
+
 ## 目的
 
 这份文档说明当前 RPA Harness 如何执行、如何阅读输出、以及其它 Agent
@@ -22,7 +32,7 @@ compiler、selector 或 extraction 的缺陷悄悄修在 Harness 里面。
 | Stateful SOP Capture-to-Skill | 用受管 Full SOP asset 模拟录制输入边界，重建 session-style accepted traces，编译完整 SOP Skill，并可控 replay。 | recording-to-Skill 内部链路漂移、accepted trace 缺失、完整 SOP 编译或 replay 失败。 |
 | Observability / blast radius | 汇总状态、failure categories、受影响资产、受影响页面形态、confidence risks。 | 判断失败是单点、资产级、runner 级，还是覆盖度不足。 |
 
-当前 bootstrap baseline 已经有两个 blocking `candidate` assets：
+历史 bootstrap baseline 曾经有两个 blocking `candidate` assets：
 
 ```text
 data/rpa_harness_assets_bootstrap/hcap-4be6265f43eb42dfa259182207aa64cc
@@ -36,10 +46,20 @@ GitHub Trending -> 点击 tinyhumansai / openhuman -> 提取 fork_count
 GitHub Trending -> 点击 tinyhumansai / openhuman -> 提取 star_count
 ```
 
-所以 Harness 已经能证明“沉淀 Full SOP 资产 -> accepted traces ->
+这些历史报告证明过“沉淀 Full SOP 资产 -> accepted traces ->
 TraceSkillCompiler -> generated Skill -> controlled replay”的基本闭环。
-但当前覆盖仍集中在 GitHub 和简单详情页字段提取；真正提升价值的下一步是录制
-更多内网真实资产并审核 promoted。
+但不要把历史报告当成当前 asset root 的治理状态。当前工作区里的
+`data/rpa_harness_assets_bootstrap` 可能只包含 `draft` / `candidate-lite`
+资产，甚至没有 blocking baseline。每次接手或迁移前都应先运行：
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m backend.rpa.harness.run_asset_pool_doctor --assets data\rpa_harness_assets_bootstrap --format summary --lang zh
+```
+
+如果 `blocking_baseline_asset_ids=[]`，只能说明当前资产池证据不足，不能声称
+RPA Agent 在 blocking baseline 上健康。真正提升价值的下一步是录制更多内网真实资产、
+生成 Review Packet、完成 expected/sensitivity review，并通过 CLI promoted。
 
 ## 环境准备
 
@@ -477,6 +497,34 @@ Residual risk:
 ```text
 record real asset -> review/promote asset -> run Harness -> expose failure
   -> fix owning RPA core component -> rerun same asset -> capture Evidence
+```
+
+### Asset Pool Doctor
+
+接手一个资产池时，先跑轻量体检。它不新增 runner，不自动 promotion，只读取资产治理状态并给出下一步建议：
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m backend.rpa.harness.run_asset_pool_doctor --assets <asset_root> --format summary --lang zh
+```
+
+机器 JSON：
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m backend.rpa.harness.run_asset_pool_doctor --assets <asset_root> --output tmp-harness-asset-pool-doctor.json
+```
+
+优先看：
+
+```text
+summary.readiness
+summary.blocking_baseline_count
+summary.warning_only_count
+summary.recommended_next_action
+blocking_baseline_asset_ids
+warning_only_asset_ids
+excluded_assets[*].reasons
 ```
 
 ## F013 deterministic profile

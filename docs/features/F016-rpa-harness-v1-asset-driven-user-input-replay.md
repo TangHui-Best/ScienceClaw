@@ -51,7 +51,7 @@ Humans govern.
 ```
 
 - Exit Gate source: this Feature, [EV-016](../evidence/EV-016-rpa-harness-v1-asset-driven-user-input-replay.md),
-  [Phase 4 plan](../rpa/harness/f016-rpa-harness-v1-phase-4-plan.md),
+  [Phase 4 plan](../archive/2026-05/rpa-harness/f016-rpa-harness-v1-phase-4-plan.md),
   [RPA Harness v1 design](../rpa/harness/rpa-harness-v1-asset-driven-user-input-replay.md),
   [F015](F015-rpa-harness-v1-asset-lifecycle-operationalization.md),
   [EV-015](../evidence/EV-015-rpa-harness-v1-asset-lifecycle-operationalization.md),
@@ -131,7 +131,7 @@ Vision Gate:
 ## Links
 
 - Evidence: [EV-016 RPA Harness v1 Asset-Driven User Input Replay Evidence](../evidence/EV-016-rpa-harness-v1-asset-driven-user-input-replay.md)
-- Plan: [F016 Phase 4 implementation plan](../rpa/harness/f016-rpa-harness-v1-phase-4-plan.md)
+- Plan: [F016 Phase 4 implementation plan](../archive/2026-05/rpa-harness/f016-rpa-harness-v1-phase-4-plan.md)
 - Previous Feature: [F015 RPA Harness v1 Asset Lifecycle Operationalization](F015-rpa-harness-v1-asset-lifecycle-operationalization.md)
 - Previous Evidence: [EV-015 RPA Harness v1 Asset Lifecycle Operationalization Evidence](../evidence/EV-015-rpa-harness-v1-asset-lifecycle-operationalization.md)
 - Design: [RPA Harness v1 Asset-Driven User Input Replay](../rpa/harness/rpa-harness-v1-asset-driven-user-input-replay.md)

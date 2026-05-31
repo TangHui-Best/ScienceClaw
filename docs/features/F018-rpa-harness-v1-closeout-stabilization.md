@@ -116,7 +116,7 @@ Doc Lifecycle:
 ## Links
 
 - Evidence: [EV-018 RPA Harness v1 Closeout / Stabilization Evidence](../evidence/EV-018-rpa-harness-v1-closeout-stabilization.md)
-- Plan: [F018 closeout / stabilization plan](../rpa/harness/f018-rpa-harness-v1-closeout-stabilization-plan.md)
+- Plan: [F018 closeout / stabilization plan](../archive/2026-05/rpa-harness/f018-rpa-harness-v1-closeout-stabilization-plan.md)
 - Design entrypoint: [RPA Harness v1 Design](../rpa/harness/RPA-Harness-v1-设计.md)
 - Detailed design: [RPA Harness v1 Asset-Driven User Input Replay](../rpa/harness/rpa-harness-v1-asset-driven-user-input-replay.md)
 - Decision: [ADR-003 RPA Golden Evaluation Uses Scenario Assets, Not Direct Agent Chat](../decisions/ADR-003-rpa-golden-evaluation-uses-assets-not-live-agent-chat.md)

@@ -63,10 +63,10 @@ Knowledge Retrieval:
 
 - Read `docs/features/F013-rpa-harness-v1-asset-driven-user-input-replay.md`.
 - Read `docs/evidence/EV-013-rpa-harness-v1-asset-driven-user-input-replay.md`.
-- Read `docs/rpa/harness/f013-rpa-harness-v1-phase-1-plan.md`.
+- Read `docs/archive/2026-05/rpa-harness/f013-rpa-harness-v1-phase-1-plan.md`.
 - Read `docs/features/F014-rpa-harness-v1-evidence-report-trust-loop.md`.
 - Read `docs/evidence/EV-014-rpa-harness-v1-evidence-report-trust-loop.md`.
-- Read `docs/rpa/harness/f014-rpa-harness-v1-phase-2-plan.md`.
+- Read `docs/archive/2026-05/rpa-harness/f014-rpa-harness-v1-phase-2-plan.md`.
 - Read `docs/rpa/harness/rpa-harness-v1-asset-driven-user-input-replay.md`.
 - Read `docs/decisions/ADR-003-rpa-golden-evaluation-uses-assets-not-live-agent-chat.md`.
 - Read `docs/features/F003-golden-scenario-asset-model.md` through `docs/features/F010-assisted-asset-review-and-promotion-pipeline.md`.
@@ -280,7 +280,7 @@ summary includes lifecycle distribution, blocking baseline assets, warning-only 
 
 - Feature: `docs/features/F015-rpa-harness-v1-asset-lifecycle-operationalization.md`
 - Evidence: `docs/evidence/EV-015-rpa-harness-v1-asset-lifecycle-operationalization.md`
-- Plan: `docs/rpa/harness/f015-rpa-harness-v1-phase-3-plan.md`
+- Plan: `docs/archive/2026-05/rpa-harness/f015-rpa-harness-v1-phase-3-plan.md`
 - Lifecycle summary: `docs/rpa/harness/reports/2026-05-28-f015-lifecycle-summary.json`
 - Golden eligibility report: `docs/rpa/harness/reports/2026-05-28-f015-golden-eligibility.json`
 - Deterministic profile JSON: `docs/rpa/harness/reports/2026-05-28-f015-deterministic-profile.json`

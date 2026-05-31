@@ -25,7 +25,7 @@ updated: 2026-05-28
   - 不自动 promotion candidate/golden。
   - 不把 region selection 开成特殊 Harness 架构线。
   - 不重写 governed regression、validation、snapshot、compiler、skill replay 或 stateful SOP runner。
-- Exit Gate source: this Feature, [EV-014](../evidence/EV-014-rpa-harness-v1-evidence-report-trust-loop.md), [Phase 2 plan](../rpa/harness/f014-rpa-harness-v1-phase-2-plan.md), [F013](F013-rpa-harness-v1-asset-driven-user-input-replay.md), [EV-013](../evidence/EV-013-rpa-harness-v1-asset-driven-user-input-replay.md), [RPA Harness v1 design](../rpa/harness/rpa-harness-v1-asset-driven-user-input-replay.md), [ADR-003](../decisions/ADR-003-rpa-golden-evaluation-uses-assets-not-live-agent-chat.md), and [F003-F010](F003-golden-scenario-asset-model.md).
+- Exit Gate source: this Feature, [EV-014](../evidence/EV-014-rpa-harness-v1-evidence-report-trust-loop.md), [Phase 2 plan](../archive/2026-05/rpa-harness/f014-rpa-harness-v1-phase-2-plan.md), [F013](F013-rpa-harness-v1-asset-driven-user-input-replay.md), [EV-013](../evidence/EV-013-rpa-harness-v1-asset-driven-user-input-replay.md), [RPA Harness v1 design](../rpa/harness/rpa-harness-v1-asset-driven-user-input-replay.md), [ADR-003](../decisions/ADR-003-rpa-golden-evaluation-uses-assets-not-live-agent-chat.md), and [F003-F010](F003-golden-scenario-asset-model.md).
 
 ## Current Status
 
@@ -59,7 +59,7 @@ Vision Gate:
 ## Links
 
 - Evidence: [EV-014 RPA Harness v1 Evidence / Report Trust Loop Evidence](../evidence/EV-014-rpa-harness-v1-evidence-report-trust-loop.md)
-- Plan: [F014 Phase 2 implementation plan](../rpa/harness/f014-rpa-harness-v1-phase-2-plan.md)
+- Plan: [F014 Phase 2 implementation plan](../archive/2026-05/rpa-harness/f014-rpa-harness-v1-phase-2-plan.md)
 - Previous Feature: [F013 RPA Harness v1 Asset-Driven User Input Replay](F013-rpa-harness-v1-asset-driven-user-input-replay.md)
 - Previous Evidence: [EV-013 RPA Harness v1 Asset-Driven User Input Replay Evidence](../evidence/EV-013-rpa-harness-v1-asset-driven-user-input-replay.md)
 - Design: [RPA Harness v1 Asset-Driven User Input Replay](../rpa/harness/rpa-harness-v1-asset-driven-user-input-replay.md)

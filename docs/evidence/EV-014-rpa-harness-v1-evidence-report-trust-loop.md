@@ -56,7 +56,7 @@ Knowledge Retrieval:
 - Read `docs/features/F013-rpa-harness-v1-asset-driven-user-input-replay.md`.
 - Read `docs/evidence/EV-013-rpa-harness-v1-asset-driven-user-input-replay.md`.
 - Read `docs/rpa/harness/rpa-harness-v1-asset-driven-user-input-replay.md`.
-- Read `docs/rpa/harness/f013-rpa-harness-v1-phase-1-plan.md`.
+- Read `docs/archive/2026-05/rpa-harness/f013-rpa-harness-v1-phase-1-plan.md`.
 - Read `docs/rpa/harness/usage-and-triage-guide.md`.
 - Read `docs/decisions/ADR-003-rpa-golden-evaluation-uses-assets-not-live-agent-chat.md`.
 - Read `docs/features/F003-golden-scenario-asset-model.md` through `docs/features/F010-assisted-asset-review-and-promotion-pipeline.md`.
@@ -93,7 +93,7 @@ Phase 1 P2 documentation fix:
 
 ```text
 Updated docs/rpa/harness/usage-and-triage-guide.md and
-docs/rpa/harness/f013-rpa-harness-v1-phase-1-plan.md so deterministic
+docs/archive/2026-05/rpa-harness/f013-rpa-harness-v1-phase-1-plan.md so deterministic
 summary examples pass --machine-report and do not produce "not written".
 ```
 
@@ -249,7 +249,7 @@ Scanned 203 markdown file(s). Checked 32 knowledge artifact(s). Errors: 0. Warni
 
 - Feature: `docs/features/F014-rpa-harness-v1-evidence-report-trust-loop.md`
 - Evidence: `docs/evidence/EV-014-rpa-harness-v1-evidence-report-trust-loop.md`
-- Plan: `docs/rpa/harness/f014-rpa-harness-v1-phase-2-plan.md`
+- Plan: `docs/archive/2026-05/rpa-harness/f014-rpa-harness-v1-phase-2-plan.md`
 - Profile runner: `RpaClaw/backend/rpa/harness/profile_runner.py`
 - Profile CLI: `RpaClaw/backend/rpa/harness/run_harness_profile.py`
 - Focused tests: `RpaClaw/backend/tests/test_rpa_harness_profile_runner.py`

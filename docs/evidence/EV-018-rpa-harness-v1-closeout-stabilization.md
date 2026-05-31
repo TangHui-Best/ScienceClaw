@@ -467,7 +467,7 @@ Scanned 222 markdown file(s). Checked 40 knowledge artifact(s). Errors: 0. Warni
 
 - Feature: `docs/features/F018-rpa-harness-v1-closeout-stabilization.md`
 - Evidence: `docs/evidence/EV-018-rpa-harness-v1-closeout-stabilization.md`
-- Plan: `docs/rpa/harness/f018-rpa-harness-v1-closeout-stabilization-plan.md`
+- Plan: `docs/archive/2026-05/rpa-harness/f018-rpa-harness-v1-closeout-stabilization-plan.md`
 - v1 entrypoint: `docs/rpa/harness/RPA-Harness-v1-设计.md`
 - Usage guide: `docs/rpa/harness/usage-and-triage-guide.md`
 - Deterministic report: `docs/rpa/harness/reports/2026-05-28-f018-deterministic-profile.json`

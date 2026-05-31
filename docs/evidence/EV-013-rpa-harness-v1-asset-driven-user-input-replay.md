@@ -238,7 +238,7 @@ Updated attribution:
 ## Artifacts
 
 - Feature: `docs/features/F013-rpa-harness-v1-asset-driven-user-input-replay.md`
-- Plan: `docs/rpa/harness/f013-rpa-harness-v1-phase-1-plan.md`
+- Plan: `docs/archive/2026-05/rpa-harness/f013-rpa-harness-v1-phase-1-plan.md`
 - Evidence: `docs/evidence/EV-013-rpa-harness-v1-asset-driven-user-input-replay.md`
 - Design: `docs/rpa/harness/rpa-harness-v1-asset-driven-user-input-replay.md`
 - Profile runner: `RpaClaw/backend/rpa/harness/profile_runner.py`

@@ -19,7 +19,10 @@ Humans govern.
 
 [RPA Harness v1: Asset-Driven User Input Replay](rpa-harness-v1-asset-driven-user-input-replay.md)
 
-本文件是 v1 的总入口。未来 Agent 或人类如果只读一份 v1 文档，应先读这里。
+本文件是 v1 的设计总入口。若任务是从当前外网开发机切换到内网开发、判断封箱状态、
+选择资产池体检命令或确认当前 bootstrap 资产治理状态，应先读
+[RPA Harness 内网接管与封箱指南](internal-handoff-and-freeze-guide.md)。
+未来 Agent 或人类如果只读一份 v1 设计文档，应先读这里。
 录制后审查、人工正确性判断、Skill 泛化预期和资产升级的最短操作说明见：
 [RPA Harness 资产录制与审查最小流程](资产录制与审查最小流程.md)。
 

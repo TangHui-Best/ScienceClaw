@@ -26,7 +26,7 @@ Phase 1 的目标不是再造 runner，而是把 F003-F010 已有能力包装成
   - 不让外层 Agent 点击 RPA 产品 UI 作为默认执行路径。
   - 不自动 promotion `candidate` / `golden`；人类继续治理资产状态。
   - 不把 region selection 变成特殊架构线；它只是 user input context 的一种。
-- Exit Gate source: this Feature, [EV-013](../evidence/EV-013-rpa-harness-v1-asset-driven-user-input-replay.md), [Phase 1 plan](../rpa/harness/f013-rpa-harness-v1-phase-1-plan.md), [RPA Harness v1 design](../rpa/harness/rpa-harness-v1-asset-driven-user-input-replay.md), [RPA Golden Evaluation Vision](../rpa/harness/golden-evaluation-vision.md), [ADR-003](../decisions/ADR-003-rpa-golden-evaluation-uses-assets-not-live-agent-chat.md), and [F010](F010-assisted-asset-review-and-promotion-pipeline.md).
+- Exit Gate source: this Feature, [EV-013](../evidence/EV-013-rpa-harness-v1-asset-driven-user-input-replay.md), [Phase 1 plan](../archive/2026-05/rpa-harness/f013-rpa-harness-v1-phase-1-plan.md), [RPA Harness v1 design](../rpa/harness/rpa-harness-v1-asset-driven-user-input-replay.md), [RPA Golden Evaluation Vision](../rpa/harness/golden-evaluation-vision.md), [ADR-003](../decisions/ADR-003-rpa-golden-evaluation-uses-assets-not-live-agent-chat.md), and [F010](F010-assisted-asset-review-and-promotion-pipeline.md).
 
 ## Current Status
 
@@ -66,7 +66,7 @@ Vision Gate:
 ## Links
 
 - Design: [RPA Harness v1 Asset-Driven User Input Replay](../rpa/harness/rpa-harness-v1-asset-driven-user-input-replay.md)
-- Plan: [F013 Phase 1 implementation plan](../rpa/harness/f013-rpa-harness-v1-phase-1-plan.md)
+- Plan: [F013 Phase 1 implementation plan](../archive/2026-05/rpa-harness/f013-rpa-harness-v1-phase-1-plan.md)
 - Evidence: [EV-013 RPA Harness v1 Asset-Driven User Input Replay Evidence](../evidence/EV-013-rpa-harness-v1-asset-driven-user-input-replay.md)
 - Vision: [RPA Golden Evaluation Vision](../rpa/harness/golden-evaluation-vision.md)
 - Decision: [ADR-003 RPA Golden Evaluation Uses Scenario Assets, Not Direct Agent Chat](../decisions/ADR-003-rpa-golden-evaluation-uses-assets-not-live-agent-chat.md)

@@ -1,0 +1,6 @@
+{
+  "provider": "openai-compatible",
+  "model_name": "replace-with-internal-model-name",
+  "base_url": "https://replace-with-internal-model-endpoint/v1",
+  "api_key": "DO_NOT_COMMIT_REAL_KEY"
+}

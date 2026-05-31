@@ -260,7 +260,7 @@ Scanned 212 markdown file(s). Checked 36 knowledge artifact(s). Errors: 0. Warni
 
 - Feature: `docs/features/F016-rpa-harness-v1-asset-driven-user-input-replay.md`
 - Evidence: `docs/evidence/EV-016-rpa-harness-v1-asset-driven-user-input-replay.md`
-- Plan: `docs/rpa/harness/f016-rpa-harness-v1-phase-4-plan.md`
+- Plan: `docs/archive/2026-05/rpa-harness/f016-rpa-harness-v1-phase-4-plan.md`
 - Replay runner: `RpaClaw/backend/rpa/harness/user_input_replay.py`
 - Replay CLI: `RpaClaw/backend/rpa/harness/run_user_input_replay.py`
 - Focused tests: `RpaClaw/backend/tests/test_rpa_harness_user_input_replay.py`

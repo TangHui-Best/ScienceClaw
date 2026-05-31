@@ -406,7 +406,7 @@ F017.2 review follow-up:
 
 - Feature: `docs/features/F017-rpa-harness-v1-full-live-profile-integration.md`
 - Evidence: `docs/evidence/EV-017-rpa-harness-v1-full-live-profile-integration.md`
-- Plan: `docs/rpa/harness/f017-rpa-harness-v1-phase-5-plan.md`
+- Plan: `docs/archive/2026-05/rpa-harness/f017-rpa-harness-v1-phase-5-plan.md`
 - Runner module: `RpaClaw/backend/rpa/harness/full_live_profile.py`
 - Live eval extension: `RpaClaw/backend/rpa/harness/live_agent_eval.py`
 - Profile dispatch: `RpaClaw/backend/rpa/harness/profile_runner.py`

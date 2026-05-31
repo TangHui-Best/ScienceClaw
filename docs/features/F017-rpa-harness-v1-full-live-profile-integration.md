@@ -53,7 +53,7 @@ Humans govern.
   - 不改变 deterministic profile 的默认语义。
 
 Exit Gate source: this Feature, [EV-017](../evidence/EV-017-rpa-harness-v1-full-live-profile-integration.md),
-[Phase 5 plan](../rpa/harness/f017-rpa-harness-v1-phase-5-plan.md),
+[Phase 5 plan](../archive/2026-05/rpa-harness/f017-rpa-harness-v1-phase-5-plan.md),
 [RPA Harness v1 design](../rpa/harness/rpa-harness-v1-asset-driven-user-input-replay.md),
 [F016](F016-rpa-harness-v1-asset-driven-user-input-replay.md),
 [EV-016](../evidence/EV-016-rpa-harness-v1-asset-driven-user-input-replay.md),
@@ -147,7 +147,7 @@ Vision Gate:
 ## Links
 
 - Evidence: [EV-017 RPA Harness v1 Full/Live Profile Integration Evidence](../evidence/EV-017-rpa-harness-v1-full-live-profile-integration.md)
-- Plan: [F017 Phase 5 implementation plan](../rpa/harness/f017-rpa-harness-v1-phase-5-plan.md)
+- Plan: [F017 Phase 5 implementation plan](../archive/2026-05/rpa-harness/f017-rpa-harness-v1-phase-5-plan.md)
 - Previous Feature: [F016 RPA Harness v1 Asset-Driven User Input Replay](F016-rpa-harness-v1-asset-driven-user-input-replay.md)
 - Live substrate: [F012 Live Agent Eval For RPA Harness](F012-live-agent-eval-for-rpa-harness.md)
 - Design: [RPA Harness v1 Asset-Driven User Input Replay](../rpa/harness/rpa-harness-v1-asset-driven-user-input-replay.md)
