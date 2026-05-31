@@ -477,8 +477,9 @@ If this direction is accepted, the next design discussion should answer:
 - OpenClaw browser tool documentation: <https://docs.openclaw.ai/tools/browser>
 - OpenClaw FAQ: <https://docs.openclaw.ai/help/faq>
 - ScienceClaw trace-first architecture:
-  [trace-first-architecture.md](/E:/Work-Project/OtherWork/ScienceClaw/docs/rpa/trace-first-architecture.md)
+  [ADR-001 RPA Trace Is The Single Accepted Timeline](../decisions/ADR-001-rpa-trace-is-single-accepted-timeline.md)
 - ScienceClaw failure repair policy:
-  [failure-repair-policy.md](/E:/Work-Project/OtherWork/ScienceClaw/docs/rpa/failure-repair-policy.md)
+  see AGENTS.md RPA/Agent architecture rules 2-5 and current repair evidence in
+  [EV-001 RPA Trace Source Convergence](../evidence/EV-001-rpa-trace-source-convergence.md)
 - ScienceClaw snapshot candidate analysis:
-  [snapshot-candidate-collection-analysis.md](/E:/Work-Project/OtherWork/ScienceClaw/docs/rpa/snapshot-candidate-collection-analysis.md)
+  [snapshot-candidate-collection-analysis.md](snapshot-candidate-collection-analysis.md)
