@@ -11,22 +11,13 @@
 
 RpaClaw is a privacy-first personal research assistant with a local RPA skill recording system. The current RPA direction is **Trace-first Recording + Post-hoc Skill Compilation**.
 
-## Harness Delivery Records
+## Harness Entry
 
-- Scope: multi-feature Harness, RPA architecture, or other high-risk implementation sequences.
-- Requirement: agents MUST create or update the active Feature page before implementation starts, and MUST update the linked Evidence record with verification, commit hash, reviewer status, and residual risk before advancing to the next feature slice.
-- Requirement: an implementation plan is not a substitute for Feature/Evidence closeout. If closeout is missing, report `implementation done, harness closeout pending` instead of claiming readiness or continuing feature delivery.
-- Source: `docs/lessons/LL-001-harness-feature-evidence-closeout-miss.md`.
-- Rationale: prevents code-only progress from replacing recoverable project memory.
-
-## RPA Harness Asset Review Entry
-
-- Scope: Full SOP 录制资产、Harness asset、expected signals、资产升级、promotion、candidate/candidate-lite/golden 相关任务。
-- Requirement: agents MUST first read `docs/rpa/harness/资产录制与审查最小流程.md` before judging asset correctness or recommending promotion.
-- Requirement: agents MUST NOT treat `runtime_status=success` as asset acceptance; distinguish recorded facts, human acceptance criteria, expected signals, sensitivity, and promotion status.
-- Requirement: before moving an asset from `captured` toward `candidate` or `golden`, agents MUST confirm expected signals and sensitivity have been human-reviewed.
-- Source: `docs/rpa/harness/资产录制与审查最小流程.md`.
-- Rationale: prevents captured-but-wrong steps or hardcoded generated Skills from entering the regression baseline.
+- Scope: Harness/RPA architecture work, asset governance, promotion, regression baseline, handoff, readiness claims, or any task involving Harness assets.
+- Requirement: agents MUST use `docs/rpa/harness/README.md` as the human-readable Harness entry point, then follow the linked detailed guide that matches the task.
+- Requirement: for non-trivial or multi-slice Harness/RPA work, agents MUST preserve Feature/Evidence closeout per `docs/lessons/LL-001-harness-feature-evidence-closeout-miss.md`; if closeout is missing, report `implementation done, harness closeout pending`.
+- Requirement: agents MUST NOT treat `runtime_status=success`, `candidate-lite`, historical reports, or full-live generated artifacts as blocking baseline acceptance; `candidate` / `golden` promotion still requires human-reviewed expected signals and sensitivity.
+- Rationale: keeps `AGENTS.md` as a short behavioral entry while the operational flow lives in the Harness README and linked guides.
 
 ## Project Stack
 
@@ -100,8 +91,9 @@ Default local/desktop mode opens as the bootstrap admin without login. Set `AUTH
 RPA architecture docs:
 
 - [Trace single accepted timeline ADR](docs/decisions/ADR-001-rpa-trace-is-single-accepted-timeline.md)
-- [RPA Harness v0 design](docs/rpa/harness/rpa-harness-v0-design.md)
-- [RPA Harness regression strategy](docs/rpa/harness/regression-strategy.md)
+- [RPA Harness README](docs/rpa/harness/README.md)
+- [RPA Harness v1 design](docs/rpa/harness/RPA-Harness-v1-设计.md)
+- [RPA Harness internal handoff and freeze guide](docs/rpa/harness/internal-handoff-and-freeze-guide.md)
 - [TraceSkillCompiler generalization](docs/rpa/trace-skill-compiler-generalization.md)
 
 ## Key RPA Files
