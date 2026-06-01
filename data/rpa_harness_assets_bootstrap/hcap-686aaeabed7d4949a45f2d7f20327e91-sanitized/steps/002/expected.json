@@ -1,0 +1,66 @@
+{
+  "snapshot_signals": {
+    "must_preserve_region_scope": {
+      "region_id": "region-39c2517c69954e38bafd5b710c13022e",
+      "mode": "region_scoped_snapshot",
+      "inferred_kind": "action_region"
+    }
+  },
+  "action_signals": {
+    "expected_action_type": "ai_operation",
+    "step_intent": "点击和SKILL最相关的项目",
+    "region_selection": {
+      "region_id": "region-39c2517c69954e38bafd5b710c13022e",
+      "mode": "region_scoped_snapshot",
+      "inferred_kind": "action_region"
+    }
+  },
+  "compiler_signals": {
+    "must_preserve_region_context": {
+      "region_id": "region-39c2517c69954e38bafd5b710c13022e",
+      "inferred_kind": "action_region"
+    },
+    "must_not_hardcode_observed_values": [
+      "click",
+      "anthropics / skills"
+    ]
+  },
+  "state_signals": {
+    "observed_output_shape": {
+      "type": "object",
+      "keys": [
+        "action_performed",
+        "action_type",
+        "clicked_item"
+      ]
+    },
+    "sanitization_contract": {
+      "placeholders": [
+        {
+          "token": "<SESSION_ID_1>",
+          "category": "auth/session",
+          "semantic_type": "session_identifier",
+          "shape": "identifier"
+        },
+        {
+          "token": "<SESSION_ID_2>",
+          "category": "auth/session",
+          "semantic_type": "session_identifier",
+          "shape": "identifier"
+        },
+        {
+          "token": "<EMAIL_1>",
+          "category": "PII",
+          "semantic_type": "email",
+          "shape": "email"
+        }
+      ],
+      "runtime_secret_refs": [],
+      "controlled_fixtures": [],
+      "replay_assertions": [
+        "sanitized asset preserves output shape and SOP replay evidence",
+        "raw sensitive values are replaced by semantic placeholders"
+      ]
+    }
+  }
+}

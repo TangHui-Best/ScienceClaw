@@ -1,0 +1,73 @@
+{
+  "step_index": 5,
+  "step_id": "trace-459c2bc4edaf4dd68d2a73c8123d291b",
+  "step_intent": "获取前10项Issues的标题信息",
+  "recording_mode": "natural_language",
+  "page_patterns": [],
+  "captured_at": "2026-05-30T10:49:43.757053",
+  "before": {
+    "url": "https://github.com/harry0703/MoneyPrinterTurbo/issues",
+    "title": "Issues · harry0703/MoneyPrinterTurbo · GitHub",
+    "html_path": "steps/005/before.html",
+    "html_sha256": "2a476c8373c4184267e0bb788a2f2039269bd8023f9e5969ea12c85e7063cfd2",
+    "same_as_before": false,
+    "capture_quality": {
+      "status": "stable",
+      "reason": "",
+      "attempts": 2,
+      "settle_ms": 200,
+      "url": "https://github.com/harry0703/MoneyPrinterTurbo/issues",
+      "html_bytes": 309036,
+      "body_text_chars": 37312,
+      "title_present": true,
+      "ready_state": "complete",
+      "url_stable": true,
+      "title_stable": true,
+      "html_stable": true,
+      "shell_like": false
+    },
+    "screenshot_path": "",
+    "raw_snapshot_path": "",
+    "compact_snapshot_path": "",
+    "active_page_id": "",
+    "iframe_metadata": []
+  },
+  "action": {
+    "trace_events_path": "steps/005/trace_events.json",
+    "expected_action_type": "",
+    "target_evidence": {}
+  },
+  "after": {
+    "url": "https://github.com/harry0703/MoneyPrinterTurbo/issues",
+    "title": "Issues · harry0703/MoneyPrinterTurbo · GitHub",
+    "html_path": "steps/005/before.html",
+    "html_sha256": "2a476c8373c4184267e0bb788a2f2039269bd8023f9e5969ea12c85e7063cfd2",
+    "same_as_before": true,
+    "capture_quality": {
+      "status": "stable",
+      "reason": "",
+      "attempts": 2,
+      "settle_ms": 200,
+      "url": "https://github.com/harry0703/MoneyPrinterTurbo/issues",
+      "html_bytes": 309036,
+      "body_text_chars": 37312,
+      "title_present": true,
+      "ready_state": "complete",
+      "url_stable": true,
+      "title_stable": true,
+      "html_stable": true,
+      "shell_like": false
+    },
+    "screenshot_path": "",
+    "raw_snapshot_path": "",
+    "compact_snapshot_path": "",
+    "active_page_id": "",
+    "iframe_metadata": []
+  },
+  "runtime_result": {
+    "status": "success",
+    "error": null
+  },
+  "expected_path": "steps/005/expected.json",
+  "failure_path": ""
+}

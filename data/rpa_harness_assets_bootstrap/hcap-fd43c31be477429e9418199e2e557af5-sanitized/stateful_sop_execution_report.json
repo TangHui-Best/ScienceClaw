@@ -1,0 +1,88 @@
+{
+  "schema_version": "rpa-harness-stateful-sop-capture-to-skill-v0",
+  "summary": {
+    "status": "failed",
+    "runtime_ai_model_config_source": "harness_explicit_model_config",
+    "eligible_capture_count": 1,
+    "total": 1,
+    "passed": 0,
+    "failed": 1,
+    "failure_categories": {
+      "controlled-replay-execution-error": 1
+    }
+  },
+  "assets": [
+    {
+      "asset_id": "hcap-fd43c31be477429e9418199e2e557af5-sanitized",
+      "status": "failed",
+      "failure_category": "controlled-replay-execution-error",
+      "sop_intent": "",
+      "step_count": 5,
+      "accepted_trace_count": 5,
+      "runtime_result_keys": [
+        "about_content",
+        "issue_titles"
+      ],
+      "generated_skill_size": 15572,
+      "steps": [
+        {
+          "step_index": 1,
+          "step_id": "trace-556572b0-b417-437e-beb0-111e0421a333",
+          "step_intent": "导航到 https://github.com/trending",
+          "recording_mode": "manual",
+          "input_boundary": "manual_recording_adapter",
+          "status": "passed",
+          "failure_category": "",
+          "error": ""
+        },
+        {
+          "step_index": 2,
+          "step_id": "trace-19d723145a01420eacac41639aa6aa78",
+          "step_intent": "点击和金融最相关的项目",
+          "recording_mode": "natural_language",
+          "input_boundary": "natural_language_runtime_result",
+          "status": "passed",
+          "failure_category": "",
+          "error": ""
+        },
+        {
+          "step_index": 3,
+          "step_id": "trace-71f4f3a1687447a592f99d39c3c7ab4f",
+          "step_intent": "获取About的内容",
+          "recording_mode": "natural_language",
+          "input_boundary": "natural_language_runtime_result",
+          "status": "passed",
+          "failure_category": "",
+          "error": ""
+        },
+        {
+          "step_index": 4,
+          "step_id": "trace-ef1afc7b-e420-42cb-a2df-5aa123e3e6de",
+          "step_intent": "点击 link(\"Issues 10\")",
+          "recording_mode": "manual",
+          "input_boundary": "manual_recording_adapter",
+          "status": "passed",
+          "failure_category": "",
+          "error": ""
+        },
+        {
+          "step_index": 5,
+          "step_id": "trace-459c2bc4edaf4dd68d2a73c8123d291b",
+          "step_intent": "获取前10项Issues的标题信息",
+          "recording_mode": "natural_language",
+          "input_boundary": "natural_language_runtime_result",
+          "status": "passed",
+          "failure_category": "",
+          "error": ""
+        }
+      ],
+      "replay": {
+        "status": "failed",
+        "failure_category": "controlled-replay-execution-error",
+        "actual_output": {},
+        "missing_text": [],
+        "error": "TimeoutError: Locator.click: Timeout 10000ms exceeded.\nCall log:\n  - waiting for get_by_role(\"link\", name=\"Issues 10\")\n"
+      }
+    }
+  ]
+}

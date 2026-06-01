@@ -1,0 +1,1336 @@
+{
+  "schema_version": "rpa-harness-sensitivity-scan-v0",
+  "summary": {
+    "asset_count": 1,
+    "finding_count": 142,
+    "repo_safe_blocked_count": 0,
+    "repo_safe_blocked_asset_ids": [],
+    "categories": {
+      "public-web-noise": 100,
+      "sanitized-placeholder": 42
+    },
+    "recommended_sensitivity": {
+      "sanitized": 1
+    },
+    "sanitized_replay_preserved_count": 1
+  },
+  "assets": [
+    {
+      "asset_id": "hcap-686aaeabed7d4949a45f2d7f20327e91-sanitized",
+      "risk_level": "low",
+      "recommended_sensitivity": "sanitized",
+      "repo_safe_blocked": false,
+      "finding_count": 142,
+      "category_counts": {
+        "public-web-noise": 100,
+        "sanitized-placeholder": 42
+      },
+      "findings": [
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "sanitization_report.json",
+          "line": 9,
+          "reason": "sanitized placeholder",
+          "excerpt": "\"token\": \"<redacted:sanitized-placeholder>\",",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "sanitization_report.json",
+          "line": 15,
+          "reason": "sanitized placeholder",
+          "excerpt": "\"token\": \"<redacted:sanitized-placeholder>\",",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "sanitization_report.json",
+          "line": 21,
+          "reason": "sanitized placeholder",
+          "excerpt": "\"token\": \"<redacted:sanitized-placeholder>\",",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/001/after.html",
+          "line": 87,
+          "reason": "common public web page token marker",
+          "excerpt": "<meta name=\"request-id\" content=\"E235:2239B3:62E2B61:63F3A1A:6A186D57\" data-pjax-transient=\"true\"><meta name=\"html-safe-nonce\" content=\"3fed129c9f1a654be67e86c71d03650cb4bf519ea...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/001/after.html",
+          "line": 627,
+          "reason": "common public web page token marker",
+          "excerpt": "<div data-view-component=\"true\" class=\"Overlay-body\"> <!-- '\"` --><!-- </textarea></xmp> --><form id=\"code-search-feedback-form\" data-turbo=\"false\" action=\"/search/feedback\" acc...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/001/after.html",
+          "line": 665,
+          "reason": "common public web page token marker",
+          "excerpt": "<!-- '\"` --><!-- </textarea></xmp> --><form id=\"custom-scopes-dialog-form\" data-turbo=\"false\" action=\"/search/custom_scopes\" accept-charset=\"UTF-8\" method=\"post\"><input type=\"hi...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/001/after.html",
+          "line": 4033,
+          "reason": "common public web page token marker",
+          "excerpt": "<<redacted:public-web-noise>-link>",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/001/after.html",
+          "line": 4034,
+          "reason": "common public web page token marker",
+          "excerpt": "<button type=\"button\" class=\"Link--secondary underline-on-hover border-0 p-0 color-bg-transparent\" data-action=\"click:<redacted:public-web-noise>-link#showConsentManagement\" dat...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/001/after.html",
+          "line": 4037,
+          "reason": "common public web page token marker",
+          "excerpt": "</<redacted:public-web-noise>-link>",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/001/after.html",
+          "line": 4041,
+          "reason": "common public web page token marker",
+          "excerpt": "<<redacted:public-web-noise>-link>",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/001/after.html",
+          "line": 4042,
+          "reason": "common public web page token marker",
+          "excerpt": "<button type=\"button\" class=\"Link--secondary underline-on-hover border-0 p-0 color-bg-transparent text-left\" data-action=\"click:<redacted:public-web-noise>-link#showConsentManag...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/001/after.html",
+          "line": 4045,
+          "reason": "common public web page token marker",
+          "excerpt": "</<redacted:public-web-noise>-link>",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/001/after.html",
+          "line": 4055,
+          "reason": "common public web page token marker",
+          "excerpt": "<ghcc-consent id=\"ghcc\" class=\"position-fixed bottom-0 left-0\" style=\"z-index: 999999\" data-locale=\"en\" data-initial-<redacted:public-web-noise>-allowed=\"\" data-cookie-consent-r...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/001/after.html",
+          "line": 4055,
+          "reason": "common public web page token marker",
+          "excerpt": "<ghcc-consent id=\"ghcc\" class=\"position-fixed bottom-0 left-0\" style=\"z-index: 999999\" data-locale=\"en\" data-initial-cookie-consent-allowed=\"\" data-<redacted:public-web-noise>-r...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/001/expected.json",
+          "line": 14,
+          "reason": "sanitized placeholder",
+          "excerpt": "\"token\": \"<redacted:sanitized-placeholder>\",",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/001/expected.json",
+          "line": 20,
+          "reason": "sanitized placeholder",
+          "excerpt": "\"token\": \"<redacted:sanitized-placeholder>\",",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/001/expected.json",
+          "line": 26,
+          "reason": "sanitized placeholder",
+          "excerpt": "\"token\": \"<redacted:sanitized-placeholder>\",",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/002/after.html",
+          "line": 165,
+          "reason": "common public web page token marker",
+          "excerpt": "<meta name=\"request-id\" content=\"17E5:2CCCEE:621AF34:6332EE3:6A186DF2\" data-pjax-transient=\"true\"><meta name=\"html-safe-nonce\" content=\"3fed129c9f1a654be67e86c71d03650cb4bf519ea...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/002/after.html",
+          "line": 759,
+          "reason": "common public web page token marker",
+          "excerpt": "<div data-view-component=\"true\" class=\"Overlay-body\"> <!-- '\"` --><!-- </textarea></xmp> --><form id=\"code-search-feedback-form\" data-turbo=\"false\" action=\"/search/feedback\" acc...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/002/after.html",
+          "line": 797,
+          "reason": "common public web page token marker",
+          "excerpt": "<!-- '\"` --><!-- </textarea></xmp> --><form id=\"custom-scopes-dialog-form\" data-turbo=\"false\" action=\"/search/custom_scopes\" accept-charset=\"UTF-8\" method=\"post\"><input type=\"hi...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/002/after.html",
+          "line": 1266,
+          "reason": "common public web page token marker",
+          "excerpt": "<script type=\"application/json\" data-target=\"react-app.embeddedData\">{\"payload\":{\"codeViewRepoRoute\":{\"path\":\"/\",\"refInfo\":{\"name\":\"main\",\"listCacheKey\":\"v0:1779199870.0\",\"canEd...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/002/after.html",
+          "line": 1266,
+          "reason": "common public web page token marker",
+          "excerpt": "<script type=\"application/json\" data-target=\"react-app.embeddedData\">{\"payload\":{\"codeViewRepoRoute\":{\"path\":\"/\",\"refInfo\":{\"name\":\"main\",\"listCacheKey\":\"v0:1779199870.0\",\"canEd...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/002/after.html",
+          "line": 1266,
+          "reason": "common public web page token marker",
+          "excerpt": "<script type=\"application/json\" data-target=\"react-app.embeddedData\">{\"payload\":{\"codeViewRepoRoute\":{\"path\":\"/\",\"refInfo\":{\"name\":\"main\",\"listCacheKey\":\"v0:1779199870.0\",\"canEd...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/002/after.html",
+          "line": 1769,
+          "reason": "common public web page token marker",
+          "excerpt": "<<redacted:public-web-noise>-link data-catalyst=\"\">",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/002/after.html",
+          "line": 1770,
+          "reason": "common public web page token marker",
+          "excerpt": "<button type=\"button\" class=\"Link--secondary underline-on-hover border-0 p-0 color-bg-transparent\" data-action=\"click:<redacted:public-web-noise>-link#showConsentManagement\" dat...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/002/after.html",
+          "line": 1773,
+          "reason": "common public web page token marker",
+          "excerpt": "</<redacted:public-web-noise>-link>",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/002/after.html",
+          "line": 1777,
+          "reason": "common public web page token marker",
+          "excerpt": "<<redacted:public-web-noise>-link data-catalyst=\"\">",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/002/after.html",
+          "line": 1778,
+          "reason": "common public web page token marker",
+          "excerpt": "<button type=\"button\" class=\"Link--secondary underline-on-hover border-0 p-0 color-bg-transparent text-left\" data-action=\"click:<redacted:public-web-noise>-link#showConsentManag...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/002/after.html",
+          "line": 1781,
+          "reason": "common public web page token marker",
+          "excerpt": "</<redacted:public-web-noise>-link>",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/002/after.html",
+          "line": 1791,
+          "reason": "common public web page token marker",
+          "excerpt": "<ghcc-consent id=\"ghcc\" class=\"position-fixed bottom-0 left-0\" style=\"z-index: 999999\" data-locale=\"en\" data-initial-<redacted:public-web-noise>-allowed=\"\" data-cookie-consent-r...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/002/after.html",
+          "line": 1791,
+          "reason": "common public web page token marker",
+          "excerpt": "<ghcc-consent id=\"ghcc\" class=\"position-fixed bottom-0 left-0\" style=\"z-index: 999999\" data-locale=\"en\" data-initial-cookie-consent-allowed=\"\" data-<redacted:public-web-noise>-r...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/002/before.html",
+          "line": 100,
+          "reason": "common public web page token marker",
+          "excerpt": "<meta name=\"request-id\" content=\"E235:2239B3:62E2B61:63F3A1A:6A186D57\" data-pjax-transient=\"true\"><meta name=\"html-safe-nonce\" content=\"3fed129c9f1a654be67e86c71d03650cb4bf519ea...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/002/before.html",
+          "line": 772,
+          "reason": "common public web page token marker",
+          "excerpt": "<div data-view-component=\"true\" class=\"Overlay-body\"> <!-- '\"` --><!-- </textarea></xmp> --><form id=\"code-search-feedback-form\" data-turbo=\"false\" action=\"/search/feedback\" acc...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/002/before.html",
+          "line": 810,
+          "reason": "common public web page token marker",
+          "excerpt": "<!-- '\"` --><!-- </textarea></xmp> --><form id=\"custom-scopes-dialog-form\" data-turbo=\"false\" action=\"/search/custom_scopes\" accept-charset=\"UTF-8\" method=\"post\"><input type=\"hi...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/002/before.html",
+          "line": 4178,
+          "reason": "common public web page token marker",
+          "excerpt": "<<redacted:public-web-noise>-link data-catalyst=\"\">",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/002/before.html",
+          "line": 4179,
+          "reason": "common public web page token marker",
+          "excerpt": "<button type=\"button\" class=\"Link--secondary underline-on-hover border-0 p-0 color-bg-transparent\" data-action=\"click:<redacted:public-web-noise>-link#showConsentManagement\" dat...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/002/before.html",
+          "line": 4182,
+          "reason": "common public web page token marker",
+          "excerpt": "</<redacted:public-web-noise>-link>",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/002/before.html",
+          "line": 4186,
+          "reason": "common public web page token marker",
+          "excerpt": "<<redacted:public-web-noise>-link data-catalyst=\"\">",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/002/before.html",
+          "line": 4187,
+          "reason": "common public web page token marker",
+          "excerpt": "<button type=\"button\" class=\"Link--secondary underline-on-hover border-0 p-0 color-bg-transparent text-left\" data-action=\"click:<redacted:public-web-noise>-link#showConsentManag...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/002/before.html",
+          "line": 4190,
+          "reason": "common public web page token marker",
+          "excerpt": "</<redacted:public-web-noise>-link>",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/002/before.html",
+          "line": 4200,
+          "reason": "common public web page token marker",
+          "excerpt": "<ghcc-consent id=\"ghcc\" class=\"position-fixed bottom-0 left-0\" style=\"z-index: 999999\" data-locale=\"en\" data-initial-<redacted:public-web-noise>-allowed=\"\" data-cookie-consent-r...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/002/before.html",
+          "line": 4200,
+          "reason": "common public web page token marker",
+          "excerpt": "<ghcc-consent id=\"ghcc\" class=\"position-fixed bottom-0 left-0\" style=\"z-index: 999999\" data-locale=\"en\" data-initial-cookie-consent-allowed=\"\" data-<redacted:public-web-noise>-r...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/002/expected.json",
+          "line": 40,
+          "reason": "sanitized placeholder",
+          "excerpt": "\"token\": \"<redacted:sanitized-placeholder>\",",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/002/expected.json",
+          "line": 46,
+          "reason": "sanitized placeholder",
+          "excerpt": "\"token\": \"<redacted:sanitized-placeholder>\",",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/002/expected.json",
+          "line": 52,
+          "reason": "sanitized placeholder",
+          "excerpt": "\"token\": \"<redacted:sanitized-placeholder>\",",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/002/trace_events.json",
+          "line": 4825,
+          "reason": "sanitized placeholder",
+          "excerpt": "\"<redacted:sanitized-placeholder>\": \"<SESSION_ID_1>\",",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/002/trace_events.json",
+          "line": 4825,
+          "reason": "sanitized placeholder",
+          "excerpt": "\"<SESSION_ID_2>\": \"<redacted:sanitized-placeholder>\",",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/003/after.html",
+          "line": 165,
+          "reason": "common public web page token marker",
+          "excerpt": "<meta name=\"request-id\" content=\"17E5:2CCCEE:621AF34:6332EE3:6A186DF2\" data-pjax-transient=\"true\"><meta name=\"html-safe-nonce\" content=\"3fed129c9f1a654be67e86c71d03650cb4bf519ea...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/003/after.html",
+          "line": 759,
+          "reason": "common public web page token marker",
+          "excerpt": "<div data-view-component=\"true\" class=\"Overlay-body\"> <!-- '\"` --><!-- </textarea></xmp> --><form id=\"code-search-feedback-form\" data-turbo=\"false\" action=\"/search/feedback\" acc...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/003/after.html",
+          "line": 797,
+          "reason": "common public web page token marker",
+          "excerpt": "<!-- '\"` --><!-- </textarea></xmp> --><form id=\"custom-scopes-dialog-form\" data-turbo=\"false\" action=\"/search/custom_scopes\" accept-charset=\"UTF-8\" method=\"post\"><input type=\"hi...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/003/after.html",
+          "line": 1266,
+          "reason": "common public web page token marker",
+          "excerpt": "<script type=\"application/json\" data-target=\"react-app.embeddedData\">{\"payload\":{\"codeViewRepoRoute\":{\"path\":\"/\",\"refInfo\":{\"name\":\"main\",\"listCacheKey\":\"v0:1779199870.0\",\"canEd...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/003/after.html",
+          "line": 1266,
+          "reason": "common public web page token marker",
+          "excerpt": "<script type=\"application/json\" data-target=\"react-app.embeddedData\">{\"payload\":{\"codeViewRepoRoute\":{\"path\":\"/\",\"refInfo\":{\"name\":\"main\",\"listCacheKey\":\"v0:1779199870.0\",\"canEd...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/003/after.html",
+          "line": 1266,
+          "reason": "common public web page token marker",
+          "excerpt": "<script type=\"application/json\" data-target=\"react-app.embeddedData\">{\"payload\":{\"codeViewRepoRoute\":{\"path\":\"/\",\"refInfo\":{\"name\":\"main\",\"listCacheKey\":\"v0:1779199870.0\",\"canEd...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/003/after.html",
+          "line": 1304,
+          "reason": "sanitized placeholder",
+          "excerpt": "Mid-session agent updates: sessions.update(<redacted:sanitized-placeholder>, agent={tools, mcp_servers}, vault_ids=[...]) — session-local override (doesn't bump agent version),...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/003/after.html",
+          "line": 1314,
+          "reason": "sanitized placeholder",
+          "excerpt": "Mid-session agent updates: sessions.update(<redacted:sanitized-placeholder>, agent={tools, mcp_servers}, vault_ids=[...]) — session-local override (doesn't bump agent version),...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/003/after.html",
+          "line": 1325,
+          "reason": "sanitized placeholder",
+          "excerpt": "Co-authored-by: Claude &lt;<redacted:sanitized-placeholder>&gt;\" class=\"Link--secondary\" href=\"/anthropics/skills/commit/69c0b1a0674149f27b61b2635f935524b6add202\">Add link to Ag...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/003/after.html",
+          "line": 1332,
+          "reason": "sanitized placeholder",
+          "excerpt": "Co-authored-by: Claude &lt;<redacted:sanitized-placeholder>&gt;\" class=\"Link--secondary\" href=\"/anthropics/skills/commit/69c0b1a0674149f27b61b2635f935524b6add202\">)</a></div></d...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/003/after.html",
+          "line": 1339,
+          "reason": "sanitized placeholder",
+          "excerpt": "Co-authored-by: Claude &lt;<redacted:sanitized-placeholder>&gt;\" class=\"Link--secondary\" href=\"/anthropics/skills/commit/69c0b1a0674149f27b61b2635f935524b6add202\">Add link to Ag...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/003/after.html",
+          "line": 1346,
+          "reason": "sanitized placeholder",
+          "excerpt": "Co-authored-by: Claude &lt;<redacted:sanitized-placeholder>&gt;\" class=\"Link--secondary\" href=\"/anthropics/skills/commit/69c0b1a0674149f27b61b2635f935524b6add202\">)</a></div></d...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/003/after.html",
+          "line": 1839,
+          "reason": "common public web page token marker",
+          "excerpt": "<<redacted:public-web-noise>-link data-catalyst=\"\">",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/003/after.html",
+          "line": 1840,
+          "reason": "common public web page token marker",
+          "excerpt": "<button type=\"button\" class=\"Link--secondary underline-on-hover border-0 p-0 color-bg-transparent\" data-action=\"click:<redacted:public-web-noise>-link#showConsentManagement\" dat...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/003/after.html",
+          "line": 1843,
+          "reason": "common public web page token marker",
+          "excerpt": "</<redacted:public-web-noise>-link>",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/003/after.html",
+          "line": 1847,
+          "reason": "common public web page token marker",
+          "excerpt": "<<redacted:public-web-noise>-link data-catalyst=\"\">",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/003/after.html",
+          "line": 1848,
+          "reason": "common public web page token marker",
+          "excerpt": "<button type=\"button\" class=\"Link--secondary underline-on-hover border-0 p-0 color-bg-transparent text-left\" data-action=\"click:<redacted:public-web-noise>-link#showConsentManag...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/003/after.html",
+          "line": 1851,
+          "reason": "common public web page token marker",
+          "excerpt": "</<redacted:public-web-noise>-link>",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/003/after.html",
+          "line": 1861,
+          "reason": "common public web page token marker",
+          "excerpt": "<ghcc-consent id=\"ghcc\" class=\"position-fixed bottom-0 left-0\" style=\"z-index: 999999\" data-locale=\"en\" data-initial-<redacted:public-web-noise>-allowed=\"\" data-cookie-consent-r...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/003/after.html",
+          "line": 1861,
+          "reason": "common public web page token marker",
+          "excerpt": "<ghcc-consent id=\"ghcc\" class=\"position-fixed bottom-0 left-0\" style=\"z-index: 999999\" data-locale=\"en\" data-initial-cookie-consent-allowed=\"\" data-<redacted:public-web-noise>-r...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/003/before.html",
+          "line": 165,
+          "reason": "common public web page token marker",
+          "excerpt": "<meta name=\"request-id\" content=\"17E5:2CCCEE:621AF34:6332EE3:6A186DF2\" data-pjax-transient=\"true\"><meta name=\"html-safe-nonce\" content=\"3fed129c9f1a654be67e86c71d03650cb4bf519ea...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/003/before.html",
+          "line": 759,
+          "reason": "common public web page token marker",
+          "excerpt": "<div data-view-component=\"true\" class=\"Overlay-body\"> <!-- '\"` --><!-- </textarea></xmp> --><form id=\"code-search-feedback-form\" data-turbo=\"false\" action=\"/search/feedback\" acc...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/003/before.html",
+          "line": 797,
+          "reason": "common public web page token marker",
+          "excerpt": "<!-- '\"` --><!-- </textarea></xmp> --><form id=\"custom-scopes-dialog-form\" data-turbo=\"false\" action=\"/search/custom_scopes\" accept-charset=\"UTF-8\" method=\"post\"><input type=\"hi...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/003/before.html",
+          "line": 1266,
+          "reason": "common public web page token marker",
+          "excerpt": "<script type=\"application/json\" data-target=\"react-app.embeddedData\">{\"payload\":{\"codeViewRepoRoute\":{\"path\":\"/\",\"refInfo\":{\"name\":\"main\",\"listCacheKey\":\"v0:1779199870.0\",\"canEd...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/003/before.html",
+          "line": 1266,
+          "reason": "common public web page token marker",
+          "excerpt": "<script type=\"application/json\" data-target=\"react-app.embeddedData\">{\"payload\":{\"codeViewRepoRoute\":{\"path\":\"/\",\"refInfo\":{\"name\":\"main\",\"listCacheKey\":\"v0:1779199870.0\",\"canEd...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/003/before.html",
+          "line": 1266,
+          "reason": "common public web page token marker",
+          "excerpt": "<script type=\"application/json\" data-target=\"react-app.embeddedData\">{\"payload\":{\"codeViewRepoRoute\":{\"path\":\"/\",\"refInfo\":{\"name\":\"main\",\"listCacheKey\":\"v0:1779199870.0\",\"canEd...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/003/before.html",
+          "line": 1304,
+          "reason": "sanitized placeholder",
+          "excerpt": "Mid-session agent updates: sessions.update(<redacted:sanitized-placeholder>, agent={tools, mcp_servers}, vault_ids=[...]) — session-local override (doesn't bump agent version),...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/003/before.html",
+          "line": 1314,
+          "reason": "sanitized placeholder",
+          "excerpt": "Mid-session agent updates: sessions.update(<redacted:sanitized-placeholder>, agent={tools, mcp_servers}, vault_ids=[...]) — session-local override (doesn't bump agent version),...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/003/before.html",
+          "line": 1325,
+          "reason": "sanitized placeholder",
+          "excerpt": "Co-authored-by: Claude &lt;<redacted:sanitized-placeholder>&gt;\" class=\"Link--secondary\" href=\"/anthropics/skills/commit/69c0b1a0674149f27b61b2635f935524b6add202\">Add link to Ag...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/003/before.html",
+          "line": 1332,
+          "reason": "sanitized placeholder",
+          "excerpt": "Co-authored-by: Claude &lt;<redacted:sanitized-placeholder>&gt;\" class=\"Link--secondary\" href=\"/anthropics/skills/commit/69c0b1a0674149f27b61b2635f935524b6add202\">)</a></div></d...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/003/before.html",
+          "line": 1339,
+          "reason": "sanitized placeholder",
+          "excerpt": "Co-authored-by: Claude &lt;<redacted:sanitized-placeholder>&gt;\" class=\"Link--secondary\" href=\"/anthropics/skills/commit/69c0b1a0674149f27b61b2635f935524b6add202\">Add link to Ag...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/003/before.html",
+          "line": 1346,
+          "reason": "sanitized placeholder",
+          "excerpt": "Co-authored-by: Claude &lt;<redacted:sanitized-placeholder>&gt;\" class=\"Link--secondary\" href=\"/anthropics/skills/commit/69c0b1a0674149f27b61b2635f935524b6add202\">)</a></div></d...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/003/before.html",
+          "line": 1839,
+          "reason": "common public web page token marker",
+          "excerpt": "<<redacted:public-web-noise>-link data-catalyst=\"\">",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/003/before.html",
+          "line": 1840,
+          "reason": "common public web page token marker",
+          "excerpt": "<button type=\"button\" class=\"Link--secondary underline-on-hover border-0 p-0 color-bg-transparent\" data-action=\"click:<redacted:public-web-noise>-link#showConsentManagement\" dat...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/003/before.html",
+          "line": 1843,
+          "reason": "common public web page token marker",
+          "excerpt": "</<redacted:public-web-noise>-link>",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/003/before.html",
+          "line": 1847,
+          "reason": "common public web page token marker",
+          "excerpt": "<<redacted:public-web-noise>-link data-catalyst=\"\">",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/003/before.html",
+          "line": 1848,
+          "reason": "common public web page token marker",
+          "excerpt": "<button type=\"button\" class=\"Link--secondary underline-on-hover border-0 p-0 color-bg-transparent text-left\" data-action=\"click:<redacted:public-web-noise>-link#showConsentManag...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/003/before.html",
+          "line": 1851,
+          "reason": "common public web page token marker",
+          "excerpt": "</<redacted:public-web-noise>-link>",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/003/before.html",
+          "line": 1861,
+          "reason": "common public web page token marker",
+          "excerpt": "<ghcc-consent id=\"ghcc\" class=\"position-fixed bottom-0 left-0\" style=\"z-index: 999999\" data-locale=\"en\" data-initial-<redacted:public-web-noise>-allowed=\"\" data-cookie-consent-r...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/003/before.html",
+          "line": 1861,
+          "reason": "common public web page token marker",
+          "excerpt": "<ghcc-consent id=\"ghcc\" class=\"position-fixed bottom-0 left-0\" style=\"z-index: 999999\" data-locale=\"en\" data-initial-cookie-consent-allowed=\"\" data-<redacted:public-web-noise>-r...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/003/expected.json",
+          "line": 38,
+          "reason": "sanitized placeholder",
+          "excerpt": "\"token\": \"<redacted:sanitized-placeholder>\",",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/003/expected.json",
+          "line": 44,
+          "reason": "sanitized placeholder",
+          "excerpt": "\"token\": \"<redacted:sanitized-placeholder>\",",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/003/expected.json",
+          "line": 50,
+          "reason": "sanitized placeholder",
+          "excerpt": "\"token\": \"<redacted:sanitized-placeholder>\",",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/003/trace_events.json",
+          "line": 362,
+          "reason": "sanitized placeholder",
+          "excerpt": "\"<redacted:sanitized-placeholder>\": \"<SESSION_ID_1>\",",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/003/trace_events.json",
+          "line": 362,
+          "reason": "sanitized placeholder",
+          "excerpt": "\"<SESSION_ID_2>\": \"<redacted:sanitized-placeholder>\",",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/004/after.html",
+          "line": 332,
+          "reason": "common public web page token marker",
+          "excerpt": "}</style><link rel=\"stylesheet\" type=\"text/css\" href=\"https://github.githubassets.com/assets/96037.b47130c546233528.module.css\" crossorigin=\"anonymous\"><link crossorigin=\"anonym...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/004/after.html",
+          "line": 759,
+          "reason": "common public web page token marker",
+          "excerpt": "<div data-view-component=\"true\" class=\"Overlay-body\"> <!-- '\"` --><!-- </textarea></xmp> --><form id=\"code-search-feedback-form\" data-turbo=\"false\" action=\"/search/feedback\" acc...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/004/after.html",
+          "line": 797,
+          "reason": "common public web page token marker",
+          "excerpt": "<!-- '\"` --><!-- </textarea></xmp> --><form id=\"custom-scopes-dialog-form\" data-turbo=\"false\" action=\"/search/custom_scopes\" accept-charset=\"UTF-8\" method=\"post\"><input type=\"hi...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/004/after.html",
+          "line": 3560,
+          "reason": "common public web page token marker",
+          "excerpt": "<<redacted:public-web-noise>-link data-catalyst=\"\">",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/004/after.html",
+          "line": 3561,
+          "reason": "common public web page token marker",
+          "excerpt": "<button type=\"button\" class=\"Link--secondary underline-on-hover border-0 p-0 color-bg-transparent\" data-action=\"click:<redacted:public-web-noise>-link#showConsentManagement\" dat...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/004/after.html",
+          "line": 3564,
+          "reason": "common public web page token marker",
+          "excerpt": "</<redacted:public-web-noise>-link>",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/004/after.html",
+          "line": 3568,
+          "reason": "common public web page token marker",
+          "excerpt": "<<redacted:public-web-noise>-link data-catalyst=\"\">",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/004/after.html",
+          "line": 3569,
+          "reason": "common public web page token marker",
+          "excerpt": "<button type=\"button\" class=\"Link--secondary underline-on-hover border-0 p-0 color-bg-transparent text-left\" data-action=\"click:<redacted:public-web-noise>-link#showConsentManag...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/004/after.html",
+          "line": 3572,
+          "reason": "common public web page token marker",
+          "excerpt": "</<redacted:public-web-noise>-link>",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/004/after.html",
+          "line": 3582,
+          "reason": "common public web page token marker",
+          "excerpt": "<ghcc-consent id=\"ghcc\" class=\"position-fixed bottom-0 left-0\" style=\"z-index: 999999\" data-locale=\"en\" data-initial-<redacted:public-web-noise>-allowed=\"\" data-cookie-consent-r...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/004/after.html",
+          "line": 3582,
+          "reason": "common public web page token marker",
+          "excerpt": "<ghcc-consent id=\"ghcc\" class=\"position-fixed bottom-0 left-0\" style=\"z-index: 999999\" data-locale=\"en\" data-initial-cookie-consent-allowed=\"\" data-<redacted:public-web-noise>-r...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/004/before.html",
+          "line": 165,
+          "reason": "common public web page token marker",
+          "excerpt": "<meta name=\"request-id\" content=\"17E5:2CCCEE:621AF34:6332EE3:6A186DF2\" data-pjax-transient=\"true\"><meta name=\"html-safe-nonce\" content=\"3fed129c9f1a654be67e86c71d03650cb4bf519ea...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/004/before.html",
+          "line": 759,
+          "reason": "common public web page token marker",
+          "excerpt": "<div data-view-component=\"true\" class=\"Overlay-body\"> <!-- '\"` --><!-- </textarea></xmp> --><form id=\"code-search-feedback-form\" data-turbo=\"false\" action=\"/search/feedback\" acc...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/004/before.html",
+          "line": 797,
+          "reason": "common public web page token marker",
+          "excerpt": "<!-- '\"` --><!-- </textarea></xmp> --><form id=\"custom-scopes-dialog-form\" data-turbo=\"false\" action=\"/search/custom_scopes\" accept-charset=\"UTF-8\" method=\"post\"><input type=\"hi...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/004/before.html",
+          "line": 1266,
+          "reason": "common public web page token marker",
+          "excerpt": "<script type=\"application/json\" data-target=\"react-app.embeddedData\">{\"payload\":{\"codeViewRepoRoute\":{\"path\":\"/\",\"refInfo\":{\"name\":\"main\",\"listCacheKey\":\"v0:1779199870.0\",\"canEd...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/004/before.html",
+          "line": 1266,
+          "reason": "common public web page token marker",
+          "excerpt": "<script type=\"application/json\" data-target=\"react-app.embeddedData\">{\"payload\":{\"codeViewRepoRoute\":{\"path\":\"/\",\"refInfo\":{\"name\":\"main\",\"listCacheKey\":\"v0:1779199870.0\",\"canEd...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/004/before.html",
+          "line": 1266,
+          "reason": "common public web page token marker",
+          "excerpt": "<script type=\"application/json\" data-target=\"react-app.embeddedData\">{\"payload\":{\"codeViewRepoRoute\":{\"path\":\"/\",\"refInfo\":{\"name\":\"main\",\"listCacheKey\":\"v0:1779199870.0\",\"canEd...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/004/before.html",
+          "line": 1304,
+          "reason": "sanitized placeholder",
+          "excerpt": "Mid-session agent updates: sessions.update(<redacted:sanitized-placeholder>, agent={tools, mcp_servers}, vault_ids=[...]) — session-local override (doesn't bump agent version),...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/004/before.html",
+          "line": 1314,
+          "reason": "sanitized placeholder",
+          "excerpt": "Mid-session agent updates: sessions.update(<redacted:sanitized-placeholder>, agent={tools, mcp_servers}, vault_ids=[...]) — session-local override (doesn't bump agent version),...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/004/before.html",
+          "line": 1325,
+          "reason": "sanitized placeholder",
+          "excerpt": "Co-authored-by: Claude &lt;<redacted:sanitized-placeholder>&gt;\" class=\"Link--secondary\" href=\"/anthropics/skills/commit/69c0b1a0674149f27b61b2635f935524b6add202\">Add link to Ag...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/004/before.html",
+          "line": 1332,
+          "reason": "sanitized placeholder",
+          "excerpt": "Co-authored-by: Claude &lt;<redacted:sanitized-placeholder>&gt;\" class=\"Link--secondary\" href=\"/anthropics/skills/commit/69c0b1a0674149f27b61b2635f935524b6add202\">)</a></div></d...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/004/before.html",
+          "line": 1339,
+          "reason": "sanitized placeholder",
+          "excerpt": "Co-authored-by: Claude &lt;<redacted:sanitized-placeholder>&gt;\" class=\"Link--secondary\" href=\"/anthropics/skills/commit/69c0b1a0674149f27b61b2635f935524b6add202\">Add link to Ag...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/004/before.html",
+          "line": 1346,
+          "reason": "sanitized placeholder",
+          "excerpt": "Co-authored-by: Claude &lt;<redacted:sanitized-placeholder>&gt;\" class=\"Link--secondary\" href=\"/anthropics/skills/commit/69c0b1a0674149f27b61b2635f935524b6add202\">)</a></div></d...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/004/before.html",
+          "line": 1839,
+          "reason": "common public web page token marker",
+          "excerpt": "<<redacted:public-web-noise>-link data-catalyst=\"\">",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/004/before.html",
+          "line": 1840,
+          "reason": "common public web page token marker",
+          "excerpt": "<button type=\"button\" class=\"Link--secondary underline-on-hover border-0 p-0 color-bg-transparent\" data-action=\"click:<redacted:public-web-noise>-link#showConsentManagement\" dat...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/004/before.html",
+          "line": 1843,
+          "reason": "common public web page token marker",
+          "excerpt": "</<redacted:public-web-noise>-link>",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/004/before.html",
+          "line": 1847,
+          "reason": "common public web page token marker",
+          "excerpt": "<<redacted:public-web-noise>-link data-catalyst=\"\">",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/004/before.html",
+          "line": 1848,
+          "reason": "common public web page token marker",
+          "excerpt": "<button type=\"button\" class=\"Link--secondary underline-on-hover border-0 p-0 color-bg-transparent text-left\" data-action=\"click:<redacted:public-web-noise>-link#showConsentManag...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/004/before.html",
+          "line": 1851,
+          "reason": "common public web page token marker",
+          "excerpt": "</<redacted:public-web-noise>-link>",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/004/before.html",
+          "line": 1861,
+          "reason": "common public web page token marker",
+          "excerpt": "<ghcc-consent id=\"ghcc\" class=\"position-fixed bottom-0 left-0\" style=\"z-index: 999999\" data-locale=\"en\" data-initial-<redacted:public-web-noise>-allowed=\"\" data-cookie-consent-r...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/004/before.html",
+          "line": 1861,
+          "reason": "common public web page token marker",
+          "excerpt": "<ghcc-consent id=\"ghcc\" class=\"position-fixed bottom-0 left-0\" style=\"z-index: 999999\" data-locale=\"en\" data-initial-cookie-consent-allowed=\"\" data-<redacted:public-web-noise>-r...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/004/expected.json",
+          "line": 20,
+          "reason": "sanitized placeholder",
+          "excerpt": "\"token\": \"<redacted:sanitized-placeholder>\",",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/004/expected.json",
+          "line": 26,
+          "reason": "sanitized placeholder",
+          "excerpt": "\"token\": \"<redacted:sanitized-placeholder>\",",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/004/expected.json",
+          "line": 32,
+          "reason": "sanitized placeholder",
+          "excerpt": "\"token\": \"<redacted:sanitized-placeholder>\",",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/005/before.html",
+          "line": 332,
+          "reason": "common public web page token marker",
+          "excerpt": "}</style><link rel=\"stylesheet\" type=\"text/css\" href=\"https://github.githubassets.com/assets/96037.b47130c546233528.module.css\" crossorigin=\"anonymous\"><link crossorigin=\"anonym...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/005/before.html",
+          "line": 759,
+          "reason": "common public web page token marker",
+          "excerpt": "<div data-view-component=\"true\" class=\"Overlay-body\"> <!-- '\"` --><!-- </textarea></xmp> --><form id=\"code-search-feedback-form\" data-turbo=\"false\" action=\"/search/feedback\" acc...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/005/before.html",
+          "line": 797,
+          "reason": "common public web page token marker",
+          "excerpt": "<!-- '\"` --><!-- </textarea></xmp> --><form id=\"custom-scopes-dialog-form\" data-turbo=\"false\" action=\"/search/custom_scopes\" accept-charset=\"UTF-8\" method=\"post\"><input type=\"hi...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/005/before.html",
+          "line": 3560,
+          "reason": "common public web page token marker",
+          "excerpt": "<<redacted:public-web-noise>-link data-catalyst=\"\">",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/005/before.html",
+          "line": 3561,
+          "reason": "common public web page token marker",
+          "excerpt": "<button type=\"button\" class=\"Link--secondary underline-on-hover border-0 p-0 color-bg-transparent\" data-action=\"click:<redacted:public-web-noise>-link#showConsentManagement\" dat...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/005/before.html",
+          "line": 3564,
+          "reason": "common public web page token marker",
+          "excerpt": "</<redacted:public-web-noise>-link>",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/005/before.html",
+          "line": 3568,
+          "reason": "common public web page token marker",
+          "excerpt": "<<redacted:public-web-noise>-link data-catalyst=\"\">",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/005/before.html",
+          "line": 3569,
+          "reason": "common public web page token marker",
+          "excerpt": "<button type=\"button\" class=\"Link--secondary underline-on-hover border-0 p-0 color-bg-transparent text-left\" data-action=\"click:<redacted:public-web-noise>-link#showConsentManag...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/005/before.html",
+          "line": 3572,
+          "reason": "common public web page token marker",
+          "excerpt": "</<redacted:public-web-noise>-link>",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/005/before.html",
+          "line": 3582,
+          "reason": "common public web page token marker",
+          "excerpt": "<ghcc-consent id=\"ghcc\" class=\"position-fixed bottom-0 left-0\" style=\"z-index: 999999\" data-locale=\"en\" data-initial-<redacted:public-web-noise>-allowed=\"\" data-cookie-consent-r...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "public-web-noise",
+          "severity": "info",
+          "file": "steps/005/before.html",
+          "line": 3582,
+          "reason": "common public web page token marker",
+          "excerpt": "<ghcc-consent id=\"ghcc\" class=\"position-fixed bottom-0 left-0\" style=\"z-index: 999999\" data-locale=\"en\" data-initial-cookie-consent-allowed=\"\" data-<redacted:public-web-noise>-r...",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/005/expected.json",
+          "line": 48,
+          "reason": "sanitized placeholder",
+          "excerpt": "\"token\": \"<redacted:sanitized-placeholder>\",",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/005/expected.json",
+          "line": 54,
+          "reason": "sanitized placeholder",
+          "excerpt": "\"token\": \"<redacted:sanitized-placeholder>\",",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/005/expected.json",
+          "line": 60,
+          "reason": "sanitized placeholder",
+          "excerpt": "\"token\": \"<redacted:sanitized-placeholder>\",",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/005/trace_events.json",
+          "line": 7090,
+          "reason": "sanitized placeholder",
+          "excerpt": "\"<redacted:sanitized-placeholder>\": \"<SESSION_ID_1>\",",
+          "repo_safe_blocker": false
+        },
+        {
+          "category": "sanitized-placeholder",
+          "severity": "info",
+          "file": "steps/005/trace_events.json",
+          "line": 7090,
+          "reason": "sanitized placeholder",
+          "excerpt": "\"<SESSION_ID_2>\": \"<redacted:sanitized-placeholder>\",",
+          "repo_safe_blocker": false
+        }
+      ],
+      "sanitized_replay_contract": {
+        "status": "preserved",
+        "placeholders": [
+          {
+            "token": "<SESSION_ID_1>",
+            "semantic_type": "session_identifier",
+            "shape": "identifier"
+          },
+          {
+            "token": "<SESSION_ID_2>",
+            "semantic_type": "session_identifier",
+            "shape": "identifier"
+          },
+          {
+            "token": "<EMAIL_1>",
+            "semantic_type": "email",
+            "shape": "email"
+          }
+        ],
+        "runtime_secret_refs": [],
+        "controlled_fixtures": [],
+        "replay_assertions": [
+          "sanitized asset preserves output shape and SOP replay evidence",
+          "raw sensitive values are replaced by semantic placeholders"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "step_index": 5,
+  "step_id": "trace-ec7e86d24e0143c2a1221897b79a4828",
+  "step_intent": "获取前10项PR的标题",
+  "recording_mode": "natural_language",
+  "page_patterns": [],
+  "captured_at": "2026-05-29T00:37:54.810548",
+  "before": {
+    "url": "https://github.com/anthropics/skills/pulls",
+    "title": "Pull requests · anthropics/skills · GitHub",
+    "html_path": "steps/005/before.html",
+    "html_sha256": "a0974d528b9b42fd7ce631e7053d6451cb49c9e9faad2fce40eeecdc46877402",
+    "same_as_before": false,
+    "capture_quality": {
+      "status": "stable",
+      "reason": "",
+      "attempts": 2,
+      "settle_ms": 200,
+      "url": "https://github.com/anthropics/skills/pulls",
+      "html_bytes": 345750,
+      "body_text_chars": 25556,
+      "title_present": true,
+      "ready_state": "complete",
+      "url_stable": true,
+      "title_stable": true,
+      "html_stable": true,
+      "shell_like": false
+    },
+    "screenshot_path": "",
+    "raw_snapshot_path": "",
+    "compact_snapshot_path": "",
+    "active_page_id": "",
+    "iframe_metadata": []
+  },
+  "action": {
+    "trace_events_path": "steps/005/trace_events.json",
+    "expected_action_type": "",
+    "target_evidence": {}
+  },
+  "after": {
+    "url": "https://github.com/anthropics/skills/pulls",
+    "title": "Pull requests · anthropics/skills · GitHub",
+    "html_path": "steps/005/before.html",
+    "html_sha256": "a0974d528b9b42fd7ce631e7053d6451cb49c9e9faad2fce40eeecdc46877402",
+    "same_as_before": true,
+    "capture_quality": {
+      "status": "stable",
+      "reason": "",
+      "attempts": 2,
+      "settle_ms": 200,
+      "url": "https://github.com/anthropics/skills/pulls",
+      "html_bytes": 345750,
+      "body_text_chars": 25556,
+      "title_present": true,
+      "ready_state": "complete",
+      "url_stable": true,
+      "title_stable": true,
+      "html_stable": true,
+      "shell_like": false
+    },
+    "screenshot_path": "",
+    "raw_snapshot_path": "",
+    "compact_snapshot_path": "",
+    "active_page_id": "",
+    "iframe_metadata": []
+  },
+  "runtime_result": {
+    "status": "success",
+    "error": null
+  },
+  "expected_path": "steps/005/expected.json",
+  "failure_path": ""
+}

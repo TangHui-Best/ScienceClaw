@@ -1,0 +1,29 @@
+{
+  "schema_version": "rpa-harness-sanitization-report-v0",
+  "source_asset_id": "hcap-686aaeabed7d4949a45f2d7f20327e91",
+  "target_asset_id": "hcap-686aaeabed7d4949a45f2d7f20327e91-sanitized",
+  "target_path": "data/rpa_harness_assets_bootstrap/hcap-686aaeabed7d4949a45f2d7f20327e91-sanitized",
+  "placeholder_count": 3,
+  "placeholders": [
+    {
+      "token": "<SESSION_ID_1>",
+      "category": "auth/session",
+      "semantic_type": "session_identifier",
+      "shape": "identifier"
+    },
+    {
+      "token": "<SESSION_ID_2>",
+      "category": "auth/session",
+      "semantic_type": "session_identifier",
+      "shape": "identifier"
+    },
+    {
+      "token": "<EMAIL_1>",
+      "category": "PII",
+      "semantic_type": "email",
+      "shape": "email"
+    }
+  ],
+  "replacement_count": 3,
+  "raw_asset_preserved": true
+}

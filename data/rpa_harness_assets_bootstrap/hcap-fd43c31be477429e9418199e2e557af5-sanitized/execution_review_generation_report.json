@@ -1,0 +1,15 @@
+{
+  "schema_version": "rpa-harness-asset-execution-review-generation-v0",
+  "summary": {
+    "asset_count": 1,
+    "generated_count": 1
+  },
+  "assets": [
+    {
+      "asset_id": "hcap-fd43c31be477429e9418199e2e557af5-sanitized",
+      "status": "generated",
+      "path": "E:/Work-Project/OtherWork/ScienceClaw/data/rpa_harness_assets_bootstrap/hcap-fd43c31be477429e9418199e2e557af5-sanitized/execution_review.md",
+      "missing_reports": []
+    }
+  ]
+}

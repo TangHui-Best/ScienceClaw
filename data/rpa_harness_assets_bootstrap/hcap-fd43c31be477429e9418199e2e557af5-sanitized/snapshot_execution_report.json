@@ -1,0 +1,204 @@
+{
+  "summary": {
+    "total": 5,
+    "passed": 5,
+    "failed": 0
+  },
+  "assets": [
+    {
+      "asset_id": "hcap-fd43c31be477429e9418199e2e557af5-sanitized",
+      "step_id": "trace-556572b0-b417-437e-beb0-111e0421a333",
+      "step_index": 1,
+      "step_intent": "导航到 https://github.com/trending",
+      "page_patterns": [],
+      "status": "passed",
+      "failure_category": "",
+      "missing_text": [],
+      "snapshot_source": "production-dom-snapshot-v1",
+      "source_html_size": 39,
+      "raw_snapshot_size": 307,
+      "compact_snapshot_size": 239,
+      "compression_ratio": 0.7785,
+      "source_signal_status": "not_checked",
+      "raw_signal_status": "not_checked",
+      "compact_signal_status": "not_checked",
+      "region_scope_status": "not_checked",
+      "snapshot_quality": {
+        "source": "production-dom-snapshot-v1",
+        "raw": {
+          "frame_count": 1,
+          "actionable_node_count": 0,
+          "content_node_count": 0,
+          "container_count": 0,
+          "table_view_count": 0,
+          "detail_view_count": 0
+        },
+        "compact": {
+          "mode": "clean_snapshot",
+          "expanded_region_count": 0,
+          "sampled_region_count": 0,
+          "region_catalogue_count": 0,
+          "table_view_count": 0,
+          "detail_view_count": 0,
+          "form_view_count": 0
+        }
+      }
+    },
+    {
+      "asset_id": "hcap-fd43c31be477429e9418199e2e557af5-sanitized",
+      "step_id": "trace-19d723145a01420eacac41639aa6aa78",
+      "step_index": 2,
+      "step_intent": "点击和金融最相关的项目",
+      "page_patterns": [],
+      "status": "passed",
+      "failure_category": "",
+      "missing_text": [],
+      "snapshot_source": "production-dom-snapshot-v1",
+      "source_html_size": 658372,
+      "raw_snapshot_size": 400027,
+      "compact_snapshot_size": 587,
+      "compression_ratio": 0.0015,
+      "source_signal_status": "not_checked",
+      "raw_signal_status": "not_checked",
+      "compact_signal_status": "not_checked",
+      "region_scope_status": "present",
+      "snapshot_quality": {
+        "source": "production-dom-snapshot-v1",
+        "raw": {
+          "frame_count": 1,
+          "actionable_node_count": 120,
+          "content_node_count": 160,
+          "container_count": 21,
+          "table_view_count": 0,
+          "detail_view_count": 0
+        },
+        "compact": {
+          "mode": "region_scoped_snapshot",
+          "expanded_region_count": 0,
+          "sampled_region_count": 0,
+          "region_catalogue_count": 0,
+          "table_view_count": 0,
+          "detail_view_count": 0,
+          "form_view_count": 0
+        }
+      }
+    },
+    {
+      "asset_id": "hcap-fd43c31be477429e9418199e2e557af5-sanitized",
+      "step_id": "trace-71f4f3a1687447a592f99d39c3c7ab4f",
+      "step_index": 3,
+      "step_intent": "获取About的内容",
+      "page_patterns": [],
+      "status": "passed",
+      "failure_category": "",
+      "missing_text": [],
+      "snapshot_source": "production-dom-snapshot-v1",
+      "source_html_size": 515766,
+      "raw_snapshot_size": 548959,
+      "compact_snapshot_size": 763,
+      "compression_ratio": 0.0014,
+      "source_signal_status": "not_checked",
+      "raw_signal_status": "not_checked",
+      "compact_signal_status": "not_checked",
+      "region_scope_status": "present",
+      "snapshot_quality": {
+        "source": "production-dom-snapshot-v1",
+        "raw": {
+          "frame_count": 1,
+          "actionable_node_count": 120,
+          "content_node_count": 160,
+          "container_count": 21,
+          "table_view_count": 4,
+          "detail_view_count": 0
+        },
+        "compact": {
+          "mode": "region_scoped_snapshot",
+          "expanded_region_count": 0,
+          "sampled_region_count": 0,
+          "region_catalogue_count": 0,
+          "table_view_count": 0,
+          "detail_view_count": 0,
+          "form_view_count": 0
+        }
+      }
+    },
+    {
+      "asset_id": "hcap-fd43c31be477429e9418199e2e557af5-sanitized",
+      "step_id": "trace-ef1afc7b-e420-42cb-a2df-5aa123e3e6de",
+      "step_index": 4,
+      "step_intent": "点击 link(\"Issues 10\")",
+      "page_patterns": [],
+      "status": "passed",
+      "failure_category": "",
+      "missing_text": [],
+      "snapshot_source": "production-dom-snapshot-v1",
+      "source_html_size": 515751,
+      "raw_snapshot_size": 549157,
+      "compact_snapshot_size": 57422,
+      "compression_ratio": 0.1046,
+      "source_signal_status": "present",
+      "raw_signal_status": "present",
+      "compact_signal_status": "present",
+      "region_scope_status": "not_checked",
+      "snapshot_quality": {
+        "source": "production-dom-snapshot-v1",
+        "raw": {
+          "frame_count": 1,
+          "actionable_node_count": 120,
+          "content_node_count": 160,
+          "container_count": 21,
+          "table_view_count": 4,
+          "detail_view_count": 0
+        },
+        "compact": {
+          "mode": "clean_snapshot",
+          "expanded_region_count": 28,
+          "sampled_region_count": 0,
+          "region_catalogue_count": 28,
+          "table_view_count": 4,
+          "detail_view_count": 0,
+          "form_view_count": 0
+        }
+      }
+    },
+    {
+      "asset_id": "hcap-fd43c31be477429e9418199e2e557af5-sanitized",
+      "step_id": "trace-459c2bc4edaf4dd68d2a73c8123d291b",
+      "step_index": 5,
+      "step_intent": "获取前10项Issues的标题信息",
+      "page_patterns": [],
+      "status": "passed",
+      "failure_category": "",
+      "missing_text": [],
+      "snapshot_source": "production-dom-snapshot-v1",
+      "source_html_size": 308225,
+      "raw_snapshot_size": 329388,
+      "compact_snapshot_size": 637,
+      "compression_ratio": 0.0019,
+      "source_signal_status": "not_checked",
+      "raw_signal_status": "not_checked",
+      "compact_signal_status": "not_checked",
+      "region_scope_status": "present",
+      "snapshot_quality": {
+        "source": "production-dom-snapshot-v1",
+        "raw": {
+          "frame_count": 1,
+          "actionable_node_count": 75,
+          "content_node_count": 160,
+          "container_count": 9,
+          "table_view_count": 0,
+          "detail_view_count": 0
+        },
+        "compact": {
+          "mode": "region_scoped_snapshot",
+          "expanded_region_count": 0,
+          "sampled_region_count": 0,
+          "region_catalogue_count": 0,
+          "table_view_count": 0,
+          "detail_view_count": 0,
+          "form_view_count": 0
+        }
+      }
+    }
+  ]
+}
