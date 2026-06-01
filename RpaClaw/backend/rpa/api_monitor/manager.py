@@ -45,6 +45,7 @@ from .directed_trace import (
 
 from .confidence import dedup_key_for_tool, score_api_candidate, summarize_rejection_reasons
 from .intent_filter import filter_by_intent
+from .intent_pruner import IntentPruneCandidate, IntentPruneItem, IntentPruneResult, prune_candidates_by_intent
 from .llm_analyzer import analyze_elements, generate_tool_definition
 from .models import ApiMonitorSession, ApiToolDefinition, ApiToolGenerationCandidate, CapturedApiCall, DirectedAnalysisTrace
 from .network_capture import NetworkCaptureEngine, dedup_key
@@ -53,6 +54,13 @@ logger = logging.getLogger(__name__)
 
 PAGE_TIMEOUT_MS = 60_000
 DOM_CONTEXT_SCAN_TIMEOUT_S = 2.0
+INTENT_PRUNE_DEBOUNCE_SECONDS = 3.0
+INTENT_PRUNE_MAX_BATCH_SIZE = 8
+INTENT_PRUNE_TIMEOUT_S = 60.0
+INTENT_PRUNE_MAX_RETRIES = 2
+INTENT_PRUNE_RETRY_BASE_DELAY_S = 2.0
+INTENT_PRUNE_CONCURRENCY = 2
+INTENT_PRUNE_CHUNK_SIZE = 6
 
 # ── Interactive element scanner ──────────────────────────────────────
 
@@ -481,7 +489,11 @@ class ApiMonitorSessionManager:
         self._generation_tasks: Dict[str, Dict[str, asyncio.Task[None]]] = defaultdict(dict)
         self._generation_followups: Set[tuple[str, str]] = set()
         self._generation_semaphore = asyncio.Semaphore(2)
+        self._intent_prune_semaphore = asyncio.Semaphore(INTENT_PRUNE_CONCURRENCY)
         self._analysis_event_sinks: Dict[str, Callable[[str, dict], None]] = {}
+        self._intent_prune_buffers: Dict[str, set[str]] = defaultdict(set)
+        self._intent_prune_tasks: Dict[str, asyncio.Task] = {}
+        self._intent_prune_flushing: Dict[str, bool] = {}
 
     def _emit_analysis_event(self, session_id: str, event: str, data: dict) -> None:
         sink = self._analysis_event_sinks.get(session_id)
@@ -501,6 +513,14 @@ class ApiMonitorSessionManager:
             "retry_after": candidate.retry_after.isoformat() if candidate.retry_after else None,
             "rejection_reason": candidate.rejection_reason,
             "intent_filter_reason": candidate.intent_filter_reason,
+            "intent_group": candidate.intent_group,
+            "intent_reason": candidate.intent_reason,
+            "intent_score": candidate.intent_score,
+            "intent_rank": candidate.intent_rank,
+            "intent_batch_id": candidate.intent_batch_id,
+            "intent_prune_attempts": candidate.intent_prune_attempts,
+            "intent_prune_error": candidate.intent_prune_error,
+            "intent_prune_retry_after": candidate.intent_prune_retry_after.isoformat() if candidate.intent_prune_retry_after else None,
         }
 
     def register_screencast(self, session_id: str, controller: SessionScreencastController) -> None:
@@ -622,6 +642,15 @@ class ApiMonitorSessionManager:
         self._last_action_at.pop(session_id, None)
         self._stop_recording_tasks.pop(session_id, None)
         await self._stop_recording_drain_task(session_id)
+        self._intent_prune_buffers.pop(session_id, None)
+        self._intent_prune_flushing.pop(session_id, None)
+        prune_task = self._intent_prune_tasks.pop(session_id, None)
+        if prune_task and not prune_task.done():
+            prune_task.cancel()
+            try:
+                await prune_task
+            except asyncio.CancelledError:
+                pass
         self._last_recording_tools.pop(session_id, None)
         self._last_recording_calls.pop(session_id, None)
         # Clean up frame-to-page mapping for all pages in this session
@@ -917,6 +946,22 @@ class ApiMonitorSessionManager:
             new_calls,
             model_config=model_config,
         )
+        await self._flush_intent_prune_buffer(session_id, model_config=model_config)
+        # 防御性检查：确保所有 pending/stale/failed 候选项在有意图时都经过了裁剪
+        session_after = self.sessions.get(session_id)
+        if session_after and (session_after.intent or "").strip():
+            missed = [
+                c for c in session_after.generation_candidates
+                if c.status in ("pending", "stale", "failed")
+            ]
+            if missed:
+                logger.warning(
+                    "[ApiMonitor] session=%s %d candidates missed intent prune after stop, re-flushing",
+                    session_id, len(missed),
+                )
+                for c in missed:
+                    self._intent_prune_buffers.setdefault(session_id, set()).add(c.id)
+                await self._flush_intent_prune_buffer(session_id, model_config=model_config)
         self._last_recording_calls[session_id] = list(new_calls)
         session.status = "idle"
         session.updated_at = datetime.now()
@@ -1708,14 +1753,15 @@ class ApiMonitorSessionManager:
 
         tools: List[ApiToolDefinition] = []
 
+        # Phase 1: Score each group and collect high-confidence candidates
+        high_confidence: list[tuple[str, list[CapturedApiCall], object, ApiToolGenerationCandidate]] = []
+
         for key, group_calls in groups.items():
-            # Take up to 5 samples per group
             samples = group_calls[:5]
             first = samples[0]
             method = first.request.method
             url_pattern = first.url_pattern or first.request.url
 
-            # Round 1: Rule-based confidence scoring (before LLM generation)
             confidence_result = score_api_candidate(samples)
 
             if confidence_result.score < 80:
@@ -1731,43 +1777,56 @@ class ApiMonitorSessionManager:
                 )
                 continue
 
-            # Round 2: AI intent filter (only when intent is provided)
-            intent = session.intent
-            final_score = confidence_result.score
-            if intent and intent.strip():
-                try:
-                    intent_result = await filter_by_intent(
-                        samples, intent.strip(), confidence_result.reasons,
-                        model_config=model_config,
-                    )
-                    if not intent_result.relevant:
-                        final_score = confidence_result.score - 25
-                        candidate = _create_rejected_candidate(
-                            session_id, key, method, url_pattern, samples,
-                            confidence_result, dom_context=dom_context,
-                            page_url=session.target_url or "",
-                            status="intent_filtered",
-                            intent_filter_reason=intent_result.reason,
-                            adjusted_score=final_score,
-                        )
-                        session.generation_candidates.append(candidate)
-                        self._emit_analysis_event(
-                            session_id, "api_candidate_intent_filtered",
-                            {
-                                **self._candidate_event_payload(candidate),
-                                "score": final_score,
-                                "intent_filter_reason": intent_result.reason,
-                            },
-                        )
-                        continue
-                except Exception as exc:
-                    logger.warning("[ApiMonitor] Intent filter failed for %s: %s", key, exc)
+            candidate = _create_rejected_candidate(
+                session_id, key, method, url_pattern, samples,
+                confidence_result, dom_context=dom_context,
+                page_url=session.target_url or "",
+                status="pending",
+            )
+            candidate.rejection_reason = None
+            session.generation_candidates.append(candidate)
+            high_confidence.append((key, samples, confidence_result, candidate))
 
-            # Generate tool definition via LLM
+        # Phase 2: Batch intent prune all high-confidence candidates together
+        prune_by_key: dict[str, IntentPruneItem] = {}
+        intent = (session.intent or "").strip()
+        if intent and high_confidence:
+            prune_candidates = [
+                self._intent_prune_candidate(session, candidate, confidence_result)
+                for _key, _samples, confidence_result, candidate in high_confidence
+            ]
+            prune_result = await self._prune_candidates_with_retry(
+                session,
+                [candidate for _key, _samples, _confidence_result, candidate in high_confidence],
+                prune_candidates,
+                intent,
+                model_config=model_config,
+            )
+            prune_by_key = {item.candidate_key: item for item in prune_result.items}
+            for _key, _samples, _confidence_result, candidate in high_confidence:
+                item = prune_by_key.get(self._candidate_key_for_prune(candidate))
+                if item:
+                    self._apply_prune_item_to_candidate(
+                        session,
+                        candidate,
+                        item,
+                        batch_id=prune_result.batch_id,
+                    )
+                    self._emit_analysis_event(
+                        session_id,
+                        "api_candidate_intent_pruned",
+                        self._candidate_event_payload(candidate),
+                    )
+
+        # Phase 3: Generate tools only for candidates that passed pruning
+        for _key, samples, confidence_result, candidate in high_confidence:
+            if candidate.status in ("intent_filtered", "intent_review"):
+                continue
+
             try:
                 yaml_def = await generate_tool_definition(
-                    method=method,
-                    url_pattern=url_pattern,
+                    method=candidate.method,
+                    url_pattern=candidate.url_pattern,
                     samples=samples,
                     page_context=session.target_url or "",
                     dom_context=dom_context,
@@ -1779,8 +1838,8 @@ class ApiMonitorSessionManager:
                 contract = parse_api_monitor_tool_yaml(yaml_def)
                 name, description = _metadata_from_contract(
                     contract,
-                    method=method,
-                    url_pattern=url_pattern,
+                    method=candidate.method,
+                    url_pattern=candidate.url_pattern,
                 )
                 validation_status = "valid" if contract.valid else "invalid"
                 validation_errors = contract.validation_errors if contract.validation_errors else []
@@ -1789,33 +1848,48 @@ class ApiMonitorSessionManager:
                     session_id=session_id,
                     name=name,
                     description=description,
-                    method=method,
-                    url_pattern=url_pattern,
+                    method=candidate.method,
+                    url_pattern=candidate.url_pattern,
                     yaml_definition=yaml_def,
                     source_calls=[c.id for c in samples],
                     source=source,
                     confidence=confidence_result.confidence,
                     score=confidence_result.score,
-                    selected=True,
+                    selected=False,
                     confidence_reasons=confidence_result.reasons,
                     source_evidence=confidence_result.evidence_summary,
                     validation_status=validation_status,
                     validation_errors=validation_errors,
                 )
 
+                # Apply reserve/intent logic consistent with realtime path
+                reserve = candidate.intent_group == "supporting"
+                tool.is_reserve = reserve
+                tool.intent_group = candidate.intent_group
+                tool.intent_reason = candidate.intent_reason or candidate.intent_filter_reason
+                tool.intent_score = candidate.intent_score
+                tool.selected = not reserve
+
                 session.tool_definitions.append(tool)
                 tools.append(tool)
 
+                candidate.status = "generated"
+                candidate.tool_id = tool.id
+                candidate.updated_at = datetime.now()
+
                 logger.info(
                     "[ApiMonitor] Generated tool '%s' for %s %s (score: %d)",
-                    name, method, url_pattern, confidence_result.score,
+                    name, candidate.method, candidate.url_pattern, confidence_result.score,
                 )
 
             except Exception as exc:
                 logger.warning(
                     "[ApiMonitor] Failed to generate tool for %s: %s",
-                    key, exc,
+                    candidate.url_pattern, exc,
                 )
+                candidate.status = "failed"
+                candidate.error = str(exc)
+                candidate.updated_at = datetime.now()
 
         self._dedup_session_tools(session_id, tools)
 
@@ -2189,7 +2263,7 @@ class ApiMonitorSessionManager:
                 (item for item in (session.generation_candidates if session else []) if item.id == candidate_id),
                 None,
             )
-            if followup_requested and candidate and candidate.status in ("pending", "stale", "failed", "confidence_rejected", "intent_filtered"):
+            if followup_requested and candidate and candidate.status in ("pending", "stale", "failed", "confidence_rejected", "intent_filtered", "intent_review"):
                 self._enqueue_generation_candidate(session_id, candidate_id, model_config=model_config, skip_filter=skip_filter)
 
     def _mark_generation_candidate_failed(
@@ -2229,6 +2303,350 @@ class ApiMonitorSessionManager:
         if calls:
             return calls
         return [call for call in session.captured_calls if self._candidate_dedup_key(call) == candidate.dedup_key][:5]
+
+    def _request_summary_for_prune(self, calls: list[CapturedApiCall]) -> str:
+        if not calls:
+            return "(无请求体)"
+        first = calls[0]
+        body = first.request.body or ""
+        return (body[:500] + "...") if len(body) > 500 else (body or "(无请求体)")
+
+    def _response_summary_for_prune(self, calls: list[CapturedApiCall]) -> str:
+        if not calls:
+            return "(无响应)"
+        first = calls[0]
+        if not first.response:
+            return "(无响应)"
+        parts = [f"状态码: {first.response.status}"]
+        if first.response.content_type:
+            parts.append(f"Content-Type: {first.response.content_type}")
+        body = first.response.body or ""
+        if body:
+            parts.append("响应体: " + ((body[:800] + "...") if len(body) > 800 else body))
+        return "\n".join(parts)
+
+    def _step_summary_for_prune(self, candidate: ApiToolGenerationCandidate) -> str:
+        lines = []
+        for item in candidate.step_metadata[:3]:
+            lines.append(
+                f"{item.get('action', '')} {item.get('action_description', '')} "
+                f"on {item.get('page_url', '')}"
+            )
+        return "\n".join(line.strip() for line in lines if line.strip()) or "(无操作摘要)"
+
+    def _candidate_key_for_prune(self, candidate: ApiToolGenerationCandidate) -> str:
+        return candidate.dedup_key or f"{candidate.method.upper()} {candidate.url_pattern}"
+
+    def _intent_prune_candidate(
+        self,
+        session: ApiMonitorSession,
+        candidate: ApiToolGenerationCandidate,
+        confidence_result,
+    ) -> IntentPruneCandidate:
+        calls = self._calls_for_candidate(session, candidate)
+        return IntentPruneCandidate(
+            candidate_key=self._candidate_key_for_prune(candidate),
+            method=candidate.method,
+            url_pattern=candidate.url_pattern,
+            confidence_score=confidence_result.score,
+            confidence_reasons=confidence_result.reasons,
+            request_summary=self._request_summary_for_prune(calls),
+            response_summary=self._response_summary_for_prune(calls),
+            step_summary=self._step_summary_for_prune(candidate),
+            page_url=candidate.capture_page_url or session.target_url or "",
+            title=candidate.capture_title or "",
+        )
+
+    def _intent_prune_retry_delay(self, failed_attempts: int) -> float:
+        return INTENT_PRUNE_RETRY_BASE_DELAY_S * (2 ** max(failed_attempts - 1, 0))
+
+    def _intent_prune_failure_reason(self, error: str) -> str:
+        return f"意图裁剪多次失败，需人工确认：{error or '未知错误'}"
+
+    def _mark_intent_prune_retrying(
+        self,
+        session: ApiMonitorSession,
+        candidates: list[ApiToolGenerationCandidate],
+        *,
+        error: str,
+        retry_after: datetime,
+    ) -> None:
+        for candidate in candidates:
+            candidate.status = "intent_prune_retrying"
+            candidate.intent_prune_error = error
+            candidate.intent_prune_retry_after = retry_after
+            candidate.updated_at = datetime.now()
+            self._emit_analysis_event(
+                session.id,
+                "api_candidate_intent_prune_retrying",
+                self._candidate_event_payload(candidate),
+            )
+        session.updated_at = datetime.now()
+
+    def _failed_intent_prune_result(
+        self,
+        candidates: list[ApiToolGenerationCandidate],
+        *,
+        batch_id: str,
+        error: str,
+    ) -> IntentPruneResult:
+        reason = self._intent_prune_failure_reason(error)
+        return IntentPruneResult(
+            batch_id=batch_id,
+            items=[
+                IntentPruneItem(
+                    candidate_key=self._candidate_key_for_prune(candidate),
+                    intent_group="uncertain",
+                    intent_score=0,
+                    intent_rank=None,
+                    intent_reason=reason,
+                )
+                for candidate in candidates
+            ],
+        )
+
+    async def _prune_candidates_with_retry(
+        self,
+        session: ApiMonitorSession,
+        candidates: list[ApiToolGenerationCandidate],
+        prune_candidates: list[IntentPruneCandidate],
+        intent: str,
+        *,
+        model_config: Optional[Dict] = None,
+    ) -> IntentPruneResult:
+        batch_id = f"intent_prune_failed_{uuid.uuid4().hex[:12]}"
+        if not candidates or not prune_candidates:
+            return IntentPruneResult(batch_id=batch_id, items=[])
+
+        last_error = ""
+        max_attempts = 1 + INTENT_PRUNE_MAX_RETRIES
+        for attempt in range(1, max_attempts + 1):
+            for candidate in candidates:
+                candidate.status = "intent_pruning"
+                candidate.intent_prune_attempts = attempt
+                candidate.intent_prune_retry_after = None
+                candidate.updated_at = datetime.now()
+                self._emit_analysis_event(
+                    session.id,
+                    "api_candidate_intent_prune_started",
+                    self._candidate_event_payload(candidate),
+                )
+            session.updated_at = datetime.now()
+
+            try:
+                async with self._intent_prune_semaphore:
+                    result = await asyncio.wait_for(
+                        prune_candidates_by_intent(
+                            prune_candidates,
+                            intent,
+                            page_context=session.target_url or "",
+                            model_config=model_config,
+                        ),
+                        timeout=INTENT_PRUNE_TIMEOUT_S,
+                    )
+                for candidate in candidates:
+                    candidate.status = "intent_pruning"
+                    candidate.intent_prune_error = ""
+                    candidate.intent_prune_retry_after = None
+                    candidate.updated_at = datetime.now()
+                session.updated_at = datetime.now()
+                return result
+            except asyncio.TimeoutError:
+                last_error = f"意图裁剪超过 {INTENT_PRUNE_TIMEOUT_S:.0f}s"
+            except Exception as exc:
+                last_error = str(exc) or exc.__class__.__name__
+
+            if attempt <= INTENT_PRUNE_MAX_RETRIES:
+                delay = self._intent_prune_retry_delay(attempt)
+                retry_after = datetime.now() + timedelta(seconds=delay)
+                self._mark_intent_prune_retrying(
+                    session,
+                    candidates,
+                    error=last_error,
+                    retry_after=retry_after,
+                )
+                if delay > 0:
+                    await asyncio.sleep(delay)
+
+        # Exhausted all retries — leave candidates in retrying state with last error
+        for candidate in candidates:
+            candidate.status = "intent_prune_retrying"
+            candidate.intent_prune_error = last_error
+            candidate.updated_at = datetime.now()
+        session.updated_at = datetime.now()
+
+        return self._failed_intent_prune_result(
+            candidates,
+            batch_id=batch_id,
+            error=last_error,
+        )
+
+    def _apply_prune_item_to_candidate(
+        self,
+        session: ApiMonitorSession,
+        candidate: ApiToolGenerationCandidate,
+        item: IntentPruneItem,
+        *,
+        batch_id: str,
+    ) -> None:
+        candidate.intent_group = item.intent_group
+        candidate.intent_score = item.intent_score
+        candidate.intent_rank = item.intent_rank
+        candidate.intent_reason = item.intent_reason
+        candidate.intent_batch_id = batch_id
+        candidate.intent_prune_retry_after = None
+        if item.intent_group in ("adjacent", "bootstrap", "noise"):
+            candidate.status = "intent_filtered"
+            candidate.intent_filter_reason = item.intent_reason
+        elif item.intent_group == "uncertain":
+            candidate.status = "intent_review"
+            candidate.intent_filter_reason = item.intent_reason
+        candidate.updated_at = datetime.now()
+        session.updated_at = datetime.now()
+
+    def _schedule_intent_prune_flush(
+        self,
+        session_id: str,
+        *,
+        model_config: Optional[Dict] = None,
+        immediate: bool = False,
+    ) -> None:
+        existing = self._intent_prune_tasks.get(session_id)
+        if existing and not existing.done():
+            if self._intent_prune_flushing.get(session_id):
+                # Already in _flush_intent_prune_buffer — don't cancel, would lose popped candidates
+                return
+            # Still in debounce sleep — safe to cancel and replace
+            existing.cancel()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        task = loop.create_task(
+            self._delayed_intent_prune_flush(
+                session_id,
+                model_config=model_config,
+                delay=0 if immediate else INTENT_PRUNE_DEBOUNCE_SECONDS,
+            )
+        )
+        self._intent_prune_tasks[session_id] = task
+
+    async def _delayed_intent_prune_flush(
+        self,
+        session_id: str,
+        *,
+        model_config: Optional[Dict] = None,
+        delay: float = INTENT_PRUNE_DEBOUNCE_SECONDS,
+    ) -> None:
+        try:
+            if delay > 0:
+                await asyncio.sleep(delay)
+            self._intent_prune_flushing[session_id] = True
+            await self._flush_intent_prune_buffer(session_id, model_config=model_config)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            self._intent_prune_flushing.pop(session_id, None)
+            current = asyncio.current_task()
+            if self._intent_prune_tasks.get(session_id) is current:
+                self._intent_prune_tasks.pop(session_id, None)
+            if self._intent_prune_buffers.get(session_id):
+                self._schedule_intent_prune_flush(session_id, model_config=model_config)
+
+    async def _flush_intent_prune_buffer(
+        self,
+        session_id: str,
+        *,
+        model_config: Optional[Dict] = None,
+    ) -> None:
+        session = self.sessions.get(session_id)
+        if session is None:
+            self._intent_prune_buffers.pop(session_id, None)
+            return
+        candidate_ids = list(self._intent_prune_buffers.pop(session_id, set()))
+        candidates = [
+            candidate
+            for candidate in session.generation_candidates
+            if candidate.id in candidate_ids and candidate.status in ("pending", "stale", "failed", "intent_prune_retrying")
+        ]
+        logger.info(
+            "[IntentPrune] session=%s flushing %d buffered candidates (of %d ids)",
+            session_id, len(candidates), len(candidate_ids),
+        )
+        if not candidates:
+            return
+        intent = (session.intent or "").strip()
+        if not intent:
+            for candidate in candidates:
+                self._enqueue_generation_candidate(session_id, candidate.id, model_config=model_config)
+            return
+
+        prune_candidates = []
+        for candidate in candidates:
+            samples = self._calls_for_candidate(session, candidate)
+            if not samples:
+                continue
+            confidence_result = score_api_candidate(
+                samples,
+                action_context=candidate.step_metadata[-1] if candidate.step_metadata else None,
+            )
+            if confidence_result.score < 80:
+                candidate.status = "confidence_rejected"
+                candidate.rejection_reason = summarize_rejection_reasons(confidence_result)
+                self._emit_analysis_event(session_id, "api_candidate_confidence_rejected", self._candidate_event_payload(candidate))
+                continue
+            prune_candidates.append(self._intent_prune_candidate(session, candidate, confidence_result))
+
+        if not prune_candidates:
+            return
+
+        prune_key_to_candidate = {
+            self._candidate_key_for_prune(c): c for c in candidates
+        }
+        all_items: list[IntentPruneItem] = []
+        last_batch_id = ""
+        total_chunks = (len(prune_candidates) + INTENT_PRUNE_CHUNK_SIZE - 1) // INTENT_PRUNE_CHUNK_SIZE
+        for chunk_idx, chunk_start in enumerate(range(0, len(prune_candidates), INTENT_PRUNE_CHUNK_SIZE)):
+            prune_chunk = prune_candidates[chunk_start:chunk_start + INTENT_PRUNE_CHUNK_SIZE]
+            candidate_chunk = [
+                prune_key_to_candidate[pc.candidate_key]
+                for pc in prune_chunk
+                if pc.candidate_key in prune_key_to_candidate
+            ]
+            if not candidate_chunk:
+                continue
+            logger.info(
+                "[IntentPrune] session=%s chunk=%d/%d candidates=%d",
+                session_id, chunk_idx + 1, total_chunks, len(prune_chunk),
+            )
+            chunk_t0 = asyncio.get_event_loop().time()
+            chunk_result = await self._prune_candidates_with_retry(
+                session,
+                candidate_chunk,
+                prune_chunk,
+                intent,
+                model_config=model_config,
+            )
+            chunk_elapsed = asyncio.get_event_loop().time() - chunk_t0
+            group_counts: dict[str, int] = {}
+            for item in chunk_result.items:
+                group_counts[item.intent_group] = group_counts.get(item.intent_group, 0) + 1
+            logger.info(
+                "[IntentPrune] session=%s chunk=%d/%d done %.1fs groups=%s",
+                session_id, chunk_idx + 1, total_chunks, chunk_elapsed, group_counts,
+            )
+            all_items.extend(chunk_result.items)
+            last_batch_id = chunk_result.batch_id
+
+        by_key = {item.candidate_key: item for item in all_items}
+        for candidate in candidates:
+            item = by_key.get(self._candidate_key_for_prune(candidate))
+            if item is None:
+                continue
+            self._apply_prune_item_to_candidate(session, candidate, item, batch_id=last_batch_id)
+            self._emit_analysis_event(session_id, "api_candidate_intent_pruned", self._candidate_event_payload(candidate))
+            if candidate.status not in ("intent_filtered", "intent_review"):
+                self._enqueue_generation_candidate(session_id, candidate.id, model_config=model_config, skip_filter=True)
 
     def _is_rate_limit_error(self, exc: Exception) -> bool:
         text = str(exc).lower()
@@ -2320,6 +2738,16 @@ class ApiMonitorSessionManager:
                 )
             step_context = "\n此 API 在以下操作中被观察到:\n" + "\n".join(lines)
 
+        # 将之前的 YAML 校验错误纳入重新生成上下文，避免 LLM 重复同样的错误
+        _prev_tool = next(
+            (t for t in session.tool_definitions if t.generation_candidate_id == candidate.id),
+            None,
+        )
+        if _prev_tool and _prev_tool.validation_errors:
+            step_context += "\n\n之前的 YAML 定义校验失败，请修正以下错误：\n" + "\n".join(
+                f"- {e}" for e in _prev_tool.validation_errors
+            )
+
         try:
             yaml_def = await generate_tool_definition(
                 method=candidate.method,
@@ -2395,8 +2823,15 @@ class ApiMonitorSessionManager:
         tool.validation_errors = contract.validation_errors if contract.validation_errors else []
         tool.confidence = confidence_result.confidence
         tool.score = confidence_result.score
+        reserve = candidate.intent_group == "supporting" or (skip_filter and candidate.intent_group in ("uncertain", "adjacent", "bootstrap", "noise"))
+        tool.is_reserve = reserve
+        tool.intent_group = candidate.intent_group
+        tool.intent_reason = candidate.intent_reason or candidate.intent_filter_reason
+        tool.intent_score = candidate.intent_score
         if existing is None:
-            tool.selected = True
+            tool.selected = not reserve
+        elif reserve:
+            tool.selected = False
         tool.confidence_reasons = confidence_result.reasons
         tool.source_evidence = confidence_result.evidence_summary
         new_tools = [tool]
@@ -2485,8 +2920,26 @@ class ApiMonitorSessionManager:
             event_name = "api_candidate_created" if _created else "api_candidate_updated"
             self._emit_analysis_event(session_id, event_name, self._candidate_event_payload(candidate))
             changed.append(candidate)
+            intent_str = (session.intent or "").strip()
+            logger.debug(
+                "[ApiMonitor] session=%s candidate=%s status=%s has_intent=%s _created=%s",
+                session_id, candidate.id, candidate.status, bool(intent_str), _created,
+            )
             if candidate.status in ("pending", "stale", "failed"):
-                self._enqueue_generation_candidate(session_id, candidate.id, model_config=model_config)
+                if intent_str:
+                    self._intent_prune_buffers[session_id].add(candidate.id)
+                    self._schedule_intent_prune_flush(
+                        session_id,
+                        model_config=model_config,
+                        immediate=len(self._intent_prune_buffers[session_id]) >= INTENT_PRUNE_MAX_BATCH_SIZE,
+                    )
+                else:
+                    self._enqueue_generation_candidate(session_id, candidate.id, model_config=model_config)
+            elif intent_str:
+                logger.info(
+                    "[ApiMonitor] session=%s candidate=%s skipping intent prune (status=%s)",
+                    session_id, candidate.id, candidate.status,
+                )
         return changed
 
     def _store_evidence_calls(
@@ -2530,7 +2983,7 @@ class ApiMonitorSessionManager:
 
         for call in session.captured_calls:
             candidate, created = self._upsert_generation_candidate(session_id, call)
-            if created or candidate.status in ("pending", "failed", "rate_limited", "stale", "confidence_rejected", "intent_filtered"):
+            if created or candidate.status in ("pending", "failed", "rate_limited", "stale", "confidence_rejected", "intent_filtered", "intent_review"):
                 changed.append(candidate)
 
         if enqueue:
@@ -2672,8 +3125,8 @@ class ApiMonitorSessionManager:
         )
         if candidate is None:
             raise ValueError("Generation candidate not found")
-        if candidate.status not in ("confidence_rejected", "intent_filtered"):
-            raise ValueError("Only rejected/filtered candidates can be force-generated")
+        if candidate.status not in ("confidence_rejected", "intent_filtered", "intent_review"):
+            raise ValueError("Only rejected/filtered/review candidates can be force-generated")
         candidate.status = "pending"
         candidate.error = ""
         candidate.retry_after = None

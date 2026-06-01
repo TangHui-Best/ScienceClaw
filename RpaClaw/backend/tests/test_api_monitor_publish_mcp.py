@@ -694,6 +694,74 @@ def test_publish_persists_manual_token_flow(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_publish_session_excludes_reserve_tools():
+    servers = _MemoryRepo([])
+    tools = _MemoryRepo([])
+    registry = ApiMonitorMcpRegistry(server_repository=servers, tool_repository=tools)
+    session = ApiMonitorSession(
+        id="session_1",
+        user_id="user_1",
+        sandbox_session_id="sandbox_1",
+        target_url="https://example.com/app",
+        tool_definitions=[
+            ApiToolDefinition(
+                session_id="session_1",
+                name="list_orders",
+                description="List orders",
+                method="GET",
+                url_pattern="/api/orders",
+                yaml_definition='swagger: "2.0"\ninfo:\n  title: list_orders\n  version: "1.0"\npaths:\n  /api/orders:\n    get:\n      operationId: list_orders\n      responses:\n        "200":\n          description: OK\n',
+                selected=True,
+            ),
+            ApiToolDefinition(
+                session_id="session_1",
+                name="list_order_statuses",
+                description="List order statuses",
+                method="GET",
+                url_pattern="/api/order/status-options",
+                yaml_definition='swagger: "2.0"\ninfo:\n  title: list_order_statuses\n  version: "1.0"\npaths:\n  /api/order/status-options:\n    get:\n      operationId: list_order_statuses\n      responses:\n        "200":\n          description: OK\n',
+                selected=True,
+                is_reserve=True,
+                intent_group="supporting",
+            ),
+        ],
+    )
+
+    result = await registry.publish_session(
+        session=session,
+        user_id="user_1",
+        mcp_name="Orders MCP",
+        description="",
+        overwrite=False,
+    )
+
+    assert result["tool_count"] == 1
+    stored_server = await servers.find_one({"_id": result["server_id"], "user_id": "user_1"})
+    assert stored_server["tool_count"] == 1
+    stored_tools = await tools.find_many({"mcp_server_id": result["server_id"]})
+    assert [tool["name"] for tool in stored_tools] == ["list_orders"]
+
+
+def test_tool_selection_clears_reserve_flag_when_adopted():
+    tool = ApiToolDefinition(
+        session_id="session_1",
+        name="list_statuses",
+        description="List statuses",
+        method="GET",
+        url_pattern="/api/statuses",
+        yaml_definition="name: list_statuses",
+        selected=False,
+        is_reserve=True,
+    )
+
+    tool.selected = True
+    tool.is_reserve = False
+
+    assert tool.selected is True
+    assert tool.is_reserve is False
+
+
+@pytest.mark.anyio
 async def test_publish_openapi_without_base_path_stores_endpoint_url():
     server_repo = _MemoryRepo()
     tool_repo = _MemoryRepo()

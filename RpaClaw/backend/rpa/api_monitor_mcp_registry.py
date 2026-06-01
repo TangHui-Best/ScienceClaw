@@ -37,7 +37,11 @@ class ApiMonitorMcpRegistry:
         api_monitor_auth: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         now = datetime.now()
-        selected_tools = [tool for tool in session.tool_definitions if getattr(tool, "selected", False)]
+        selected_tools = [
+            tool
+            for tool in session.tool_definitions
+            if getattr(tool, "selected", False) and not getattr(tool, "is_reserve", False)
+        ]
         server_id = existing_server_id or f"mcp_{uuid.uuid4().hex[:12]}"
         existing_server = None
         if existing_server_id:
