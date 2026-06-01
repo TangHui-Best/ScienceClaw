@@ -8,7 +8,7 @@ feature_ids: [F002]
 feature_refs:
   - docs/features/F002-rpa-harness-v0.md
 created: 2026-05-18
-updated: 2026-05-18
+updated: 2026-06-01
 evidence_level: exhaustive
 ---
 
@@ -711,3 +711,75 @@ Closeout status:
 - ADR: not triggered; the patch keeps the existing trace-first and asset-governance boundary.
 - Lesson: not triggered; protection is executable tests plus F002 Patch History.
 - Residual risk: real internal Full SOP assets should be recaptured/reviewed before promotion so existing assets with missing fill steps are not mistaken for healthy baselines.
+
+## F002.7 Fill Checkpoint Before-State Fallback
+
+Executed on 2026-06-01.
+
+User-reported symptom:
+
+```text
+Manual validation showed the account input focus click was no longer captured, and the following test1 fill still did not appear as a Harness step.
+```
+
+Root cause:
+
+- The injected browser capture script only attaches `harness_before_page_state` to `click` and `press` actions.
+- F002.6 intentionally skipped text-input focus-click checkpoints as noise, but its regression test covered a `fill` event that already carried its own before-state.
+- In the real event stream, the skipped focus click held the only before-state that the fill checkpoint needed, so the fill checkpoint writer returned before persisting `steps/001`.
+
+Implementation changes:
+
+- A manual `fill` event without its own before-state now reuses the immediately preceding same-target text-input focus click's `harness_before_page_state`.
+- The reused focus click must match source, tab, frame path, locator target, and adjacent sequence or a short timestamp window.
+- The text-input focus click is still folded out of persisted Harness steps, so the asset records the semantic fill checkpoint rather than a click-plus-fill noise pair.
+
+Focused RED/GREEN verification:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m pytest -q --basetemp E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-harness-fill-followup RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_reuses_focus_click_before_state_for_fill_checkpoint
+```
+
+RED result:
+
+```text
+FAILED ... FileNotFoundError ... hcap-.../steps
+```
+
+GREEN result:
+
+```text
+1 passed in 0.41s
+```
+
+Focused regression:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m pytest -q --basetemp E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-harness-fill-followup RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_captures_manual_trace_checkpoint_from_event_before_html RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_captures_pure_navigation_checkpoint_from_page_baseline RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_captures_manual_fill_with_parameterized_value RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_folds_text_input_focus_click_into_fill_checkpoint RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_reuses_focus_click_before_state_for_fill_checkpoint RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_manual_fill_uses_harness_input_placeholder_runtime_param RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_manual_fill_uses_sensitive_credential_param RpaClaw/backend/tests/test_rpa_harness_expected_signals.py RpaClaw/backend/tests/test_rpa_harness_checkpoint_capture.py RpaClaw/backend/tests/test_rpa_harness_asset_validation.py
+```
+
+Result:
+
+```text
+34 passed in 1.14s
+```
+
+Incident learning:
+
+- Trigger: F002.6 was validated against a synthetic fill event with before-state, while the production browser capture path puts before-state on the preceding click.
+- Recurrence protection: the new regression test reproduces the production event shape and asserts that only `steps/001` fill is persisted, with the raw `test1` value sanitized out.
+- Lesson: not triggered; the durable protection is an executable test tied to the actual capture event boundary, plus this F002 patch row.
+
+Harness knowledge validation:
+
+```powershell
+python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
+```
+
+Result:
+
+```text
+Scanned 256 markdown file(s). Checked 50 knowledge artifact(s). Errors: 0. Warnings: 0.
+```

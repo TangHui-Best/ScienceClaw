@@ -1906,6 +1906,15 @@ class RPASessionManager:
                 break
 
         if step.action == "fill" and step.source == "record":
+            if not isinstance(harness_before_state, dict):
+                focus_before_state = self._text_input_focus_before_state_for_fill(
+                    session_id,
+                    session,
+                    insert_at,
+                    step,
+                )
+                if focus_before_state is not None:
+                    harness_before_state = focus_before_state.model_dump(mode="json")
             insert_at = self._drop_redundant_pre_fill_focus_click(session, insert_at, step)
             previous_step = session.steps[insert_at - 1] if insert_at > 0 else None
             if self._is_same_fill_target(previous_step, step):
@@ -2095,6 +2104,46 @@ class RPASessionManager:
         existing_step.event_timestamp_ms = incoming_step.event_timestamp_ms
         existing_step.timestamp = incoming_step.timestamp
 
+    def _text_input_focus_before_state_for_fill(
+        self,
+        session_id: str,
+        session: RPASession,
+        insert_at: int,
+        fill_step: RPAStep,
+    ) -> Optional[HarnessCapturedPageState]:
+        previous_step = session.steps[insert_at - 1] if insert_at > 0 else None
+        if not self._is_same_text_input_focus_target(previous_step, fill_step):
+            return None
+        return self._manual_harness_before_states.get(session_id, {}).get(previous_step.id)
+
+    @classmethod
+    def _is_same_text_input_focus_target(
+        cls,
+        click_step: Optional[RPAStep],
+        fill_step: RPAStep,
+    ) -> bool:
+        if click_step is None:
+            return False
+        if click_step.action != "click" or fill_step.action != "fill":
+            return False
+        if click_step.source != "record" or fill_step.source != "record":
+            return False
+        if not cls._is_text_input_focus_click(click_step):
+            return False
+        if click_step.target != fill_step.target:
+            return False
+        if click_step.tab_id != fill_step.tab_id or click_step.frame_path != fill_step.frame_path:
+            return False
+
+        click_sequence = click_step.sequence
+        fill_sequence = fill_step.sequence
+        if click_sequence is not None and fill_sequence is not None:
+            return fill_sequence - click_sequence == 1
+
+        click_ts = cls._step_event_ts_ms(click_step)
+        fill_ts = cls._step_event_ts_ms(fill_step)
+        return click_ts <= fill_ts and fill_ts - click_ts <= 3000
+
     @classmethod
     def _is_redundant_pre_fill_focus_click(
         cls,
@@ -2110,6 +2159,9 @@ class RPASessionManager:
             return False
         if click_step.tab_id != fill_step.tab_id or click_step.frame_path != fill_step.frame_path:
             return False
+        is_text_input_focus = cls._is_same_text_input_focus_target(click_step, fill_step)
+        if is_text_input_focus:
+            return True
         if not cls._has_manual_trace_diagnostic_for_step(session, click_step.id):
             return False
 
