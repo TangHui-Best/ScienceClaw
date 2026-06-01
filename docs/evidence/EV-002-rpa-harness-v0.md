@@ -604,3 +604,110 @@ Closeout status:
 - ADR: not triggered; no new architecture decision.
 - Lesson: not triggered; F002 already has Patch Churn Review and this fix stays within its invariant.
 - Residual risk: real Full SOP recapture should be run before promoting this page shape to golden. Existing draft asset remains valid diagnostic evidence but now reports a quality warning.
+
+## F002.6 Manual Fill Checkpoint Capture And Input Parameterization
+
+Executed on 2026-06-01.
+
+User-reported symptom:
+
+```text
+Full SOP Harness recorded the click into an account input, but did not record the subsequent fill value such as test1.
+```
+
+Root cause:
+
+- `_capture_manual_harness_checkpoint_for_step()` allowed `click`, `press`, and navigation-like actions, but excluded manual `fill`.
+- Pure focus clicks on text inputs could be captured as standalone checkpoints even though their semantic purpose was the following fill.
+- Full SOP checkpoint paths followed trace indexes, so skipped actions could leave gaps such as `001`, `002`, `003`, `005`.
+
+Implementation changes:
+
+- Manual `fill` now becomes a Full SOP Harness checkpoint.
+- Fill values are parameterized before asset persistence as `{{input:<key>}}`.
+- The raw input value is replaced across `trace_events.json`, `before.html` / `after.html`, and generated `expected.json` evidence.
+- `expected.json` records `state_signals.sanitized_replay_contract.runtime_input_refs`.
+- Text-input focus clicks are not persisted as standalone Harness checkpoints.
+- Full SOP checkpoint indexes are allocated from persisted checkpoints, while existing checkpoint rewrites keep their original index.
+- `TraceSkillCompiler` compiles `{{input:key}}` values as `kwargs.get("key", "{{input:key}}")`, allowing sanitized assets to replay with either injected runtime input or a controlled sanitized fallback.
+
+Focused RED/GREEN verification:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m pytest -q RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_captures_manual_fill_with_parameterized_value
+```
+
+RED result:
+
+```text
+FAILED ... FileNotFoundError ... steps/001/checkpoint.json
+```
+
+GREEN result:
+
+```text
+1 passed in 0.37s
+```
+
+Additional RED/GREEN verification:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m pytest -q RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_folds_text_input_focus_click_into_fill_checkpoint
+python -m pytest -q RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_manual_fill_uses_harness_input_placeholder_runtime_param
+```
+
+Initial failures confirmed the old behavior captured both focus click and fill checkpoints, and compiled `{{input:account}}` as a literal value. Final focused result:
+
+```text
+3 passed in 0.97s
+```
+
+Focused regression:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m pytest -q --basetemp E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-harness-fill RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_captures_manual_trace_checkpoint_from_event_before_html RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_captures_pure_navigation_checkpoint_from_page_baseline RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_captures_manual_fill_with_parameterized_value RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_folds_text_input_focus_click_into_fill_checkpoint RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_manual_fill_uses_harness_input_placeholder_runtime_param RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_manual_fill_uses_sensitive_credential_param RpaClaw/backend/tests/test_rpa_harness_expected_signals.py RpaClaw/backend/tests/test_rpa_harness_checkpoint_capture.py RpaClaw/backend/tests/test_rpa_harness_asset_validation.py
+```
+
+Result:
+
+```text
+33 passed in 1.41s
+```
+
+Sensitivity/sanitization/stateful smoke:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m pytest -q --basetemp E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-harness-fill-extra RpaClaw/backend/tests/test_rpa_harness_sensitivity_scan.py RpaClaw/backend/tests/test_rpa_harness_asset_sanitization.py RpaClaw/backend/tests/test_rpa_harness_stateful_sop.py
+```
+
+Result:
+
+```text
+17 passed, 1 failed
+```
+
+The failure was `test_stateful_sop_replays_real_governed_candidate_asset`, where the current local bootstrap pool returned `eligible_capture_count=0` instead of the test's expected `1`. This is a local asset-pool state issue and not a failure in the new fill-capture path.
+
+Harness knowledge validation:
+
+```powershell
+python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
+```
+
+Result before this Evidence section:
+
+```text
+Scanned 256 markdown file(s). Checked 50 knowledge artifact(s). Errors: 0. Warnings: 0.
+```
+
+Closeout status:
+
+- Feature patch: F002.6 completed.
+- Evidence level: standard for a non-trivial Harness bugfix.
+- ADR: not triggered; the patch keeps the existing trace-first and asset-governance boundary.
+- Lesson: not triggered; protection is executable tests plus F002 Patch History.
+- Residual risk: real internal Full SOP assets should be recaptured/reviewed before promotion so existing assets with missing fill steps are not mistaken for healthy baselines.

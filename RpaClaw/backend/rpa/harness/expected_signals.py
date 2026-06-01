@@ -155,6 +155,14 @@ def _region_expected_signal(trace_event: dict[str, Any]) -> dict[str, Any]:
     return signal
 
 
+def _input_contract(trace_event: dict[str, Any]) -> dict[str, Any]:
+    signals = trace_event.get("signals")
+    if not isinstance(signals, dict):
+        return {}
+    contract = signals.get("input_contract")
+    return contract if isinstance(contract, dict) else {}
+
+
 def build_expected_signal_draft(
     *,
     step_intent: str,
@@ -189,6 +197,29 @@ def build_expected_signal_draft(
     if action == "fill" and (label or placeholder or role == "textbox"):
         snapshot_signals["must_preserve_label_input_relation"] = True
         compiler_signals["input_value_policy"] = "parameterize"
+    input_contract = _input_contract(event)
+    if input_contract:
+        input_key = str(input_contract.get("input_key") or "").strip()
+        placeholder_value = str(input_contract.get("placeholder") or event.get("value") or "").strip()
+        if input_key:
+            state_signals["sanitized_replay_contract"] = {
+                "status": "preserved",
+                "placeholders": [
+                    {
+                        "token": placeholder_value,
+                        "semantic_type": "runtime_input",
+                        "shape": "input_value",
+                    }
+                ],
+                "runtime_input_refs": [input_key],
+                "runtime_secret_refs": [input_key] if input_contract.get("sensitivity") == "credential" else [],
+                "controlled_fixtures": [],
+                "replay_assertions": [
+                    "fill input value is parameterized before Harness asset persistence",
+                    "runner may supply runtime input by key when replaying the sanitized asset",
+                ],
+            }
+            compiler_signals["input_value_policy"] = "parameterize"
     if recording_mode == "natural_language" and step_intent:
         action_signals["step_intent"] = step_intent
 

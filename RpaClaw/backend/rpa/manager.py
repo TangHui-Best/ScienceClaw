@@ -2283,6 +2283,34 @@ class RPASessionManager:
         except Exception as exc:
             logger.debug("[RPA] Failed to record manual trace for step %s: %s", step.id, exc)
 
+    @staticmethod
+    def _is_text_input_focus_click(step: RPAStep) -> bool:
+        if step.action != "click":
+            return False
+        snapshot = step.element_snapshot if isinstance(step.element_snapshot, dict) else {}
+        tag = str(step.tag or snapshot.get("tag") or "").strip().lower()
+        attrs = snapshot.get("attributes") if isinstance(snapshot.get("attributes"), dict) else {}
+        input_type = str(attrs.get("type") or snapshot.get("type") or "").strip().lower()
+        role = str(attrs.get("role") or snapshot.get("role") or "").strip().lower()
+        non_text_input_types = {
+            "button",
+            "checkbox",
+            "color",
+            "date",
+            "file",
+            "hidden",
+            "image",
+            "radio",
+            "range",
+            "reset",
+            "submit",
+        }
+        if tag == "textarea":
+            return True
+        if tag == "input":
+            return input_type not in non_text_input_types
+        return role == "textbox"
+
     async def _capture_manual_harness_checkpoint_for_step(
         self,
         session_id: str,
@@ -2294,7 +2322,9 @@ class RPASessionManager:
         state = self._harness_capture_sessions.get(session_id)
         if state is None or state.capture_scope != "full_sop":
             return
-        if step.action not in {"click", "press", "navigate", "navigate_click", "navigate_press"}:
+        if self._is_text_input_focus_click(step):
+            return
+        if step.action not in {"click", "fill", "press", "navigate", "navigate_click", "navigate_press"}:
             return
         before_state = self._manual_harness_before_states.get(session_id, {}).get(step.id)
         if before_state is None:

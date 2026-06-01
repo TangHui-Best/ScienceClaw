@@ -1169,6 +1169,11 @@ class TraceSkillCompiler:
         return lookup
 
     def _maybe_parameterize_value(self, value: str) -> str:
+        harness_input = re.fullmatch(r"\{\{input:([A-Za-z_][A-Za-z0-9_]*)\}\}", value)
+        if harness_input:
+            param_name = harness_input.group(1)
+            return f"kwargs.get({param_name!r}, {value!r})"
+
         candidates = self._param_lookup.get(value) or []
         if not candidates:
             return repr(value)

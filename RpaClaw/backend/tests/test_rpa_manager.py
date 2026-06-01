@@ -964,7 +964,7 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
                 MANAGER_MODULE.settings.rpa_harness_capture_enabled = original_enabled
                 MANAGER_MODULE.settings.rpa_harness_assets_dir = original_assets_dir
 
-    async def test_full_sop_harness_skips_unsupported_manual_fill_even_with_before_html(self):
+    async def test_full_sop_harness_captures_manual_fill_with_parameterized_value(self):
         original_enabled = MANAGER_MODULE.settings.rpa_harness_capture_enabled
         original_assets_dir = MANAGER_MODULE.settings.rpa_harness_assets_dir
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1002,8 +1002,99 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
 
                 self.assertEqual(len(self.session.traces), 1)
                 self.assertEqual(self.session.traces[0].action, "fill")
-                self.assertFalse((Path(tmp_dir) / state.capture_id / "steps").exists())
-                self.assertFalse((Path(tmp_dir) / state.capture_id / "scenario.json").exists())
+                step_dir = Path(tmp_dir) / state.capture_id / "steps" / "001"
+                checkpoint = json.loads((step_dir / "checkpoint.json").read_text(encoding="utf-8"))
+                trace_events = json.loads((step_dir / "trace_events.json").read_text(encoding="utf-8"))
+                expected = json.loads((step_dir / "expected.json").read_text(encoding="utf-8"))
+
+                self.assertEqual(checkpoint["recording_mode"], "manual")
+                self.assertEqual(checkpoint["runtime_result"]["status"], "success")
+                self.assertEqual(trace_events[0]["action"], "fill")
+                self.assertEqual(trace_events[0]["value"], "{{input:name}}")
+                self.assertEqual(trace_events[0]["signals"]["input_contract"]["input_key"], "name")
+                self.assertEqual(
+                    expected["state_signals"]["sanitized_replay_contract"]["runtime_input_refs"],
+                    ["name"],
+                )
+
+                persisted_text = "\n".join(
+                    [
+                        (step_dir / "trace_events.json").read_text(encoding="utf-8"),
+                        (step_dir / "expected.json").read_text(encoding="utf-8"),
+                        (step_dir / "after.html").read_text(encoding="utf-8"),
+                    ]
+                )
+                self.assertNotIn("Ada", persisted_text)
+                self.assertIn("{{input:name}}", persisted_text)
+            finally:
+                MANAGER_MODULE.settings.rpa_harness_capture_enabled = original_enabled
+                MANAGER_MODULE.settings.rpa_harness_assets_dir = original_assets_dir
+
+    async def test_full_sop_harness_folds_text_input_focus_click_into_fill_checkpoint(self):
+        original_enabled = MANAGER_MODULE.settings.rpa_harness_capture_enabled
+        original_assets_dir = MANAGER_MODULE.settings.rpa_harness_assets_dir
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            MANAGER_MODULE.settings.rpa_harness_capture_enabled = True
+            MANAGER_MODULE.settings.rpa_harness_assets_dir = tmp_dir
+            try:
+                page = _FakePage(
+                    "https://example.com/login",
+                    "Login",
+                    html="<html><body><input aria-label='Account' value='test1'></body></html>",
+                )
+                tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+                state = self.manager.start_harness_capture(
+                    self.session.id,
+                    capture_scope="full_sop",
+                    enabled=True,
+                )
+
+                await self.manager._handle_event(
+                    self.session.id,
+                    {
+                        "action": "click",
+                        "tab_id": tab_id,
+                        "tag": "INPUT",
+                        "timestamp": 1234567890,
+                        "sequence": 1,
+                        "locator": {"method": "label", "value": "Account"},
+                        "element_snapshot": {"tag": "input", "attributes": {"type": "text"}},
+                        "harness_before_page_state": {
+                            "url": "https://example.com/login",
+                            "title": "Login",
+                            "html": "<html><body><input aria-label='Account'></body></html>",
+                        },
+                    },
+                )
+                await self.manager._handle_event(
+                    self.session.id,
+                    {
+                        "action": "fill",
+                        "tab_id": tab_id,
+                        "tag": "INPUT",
+                        "timestamp": 1234567900,
+                        "sequence": 2,
+                        "value": "test1",
+                        "locator": {"method": "label", "value": "Account"},
+                        "element_snapshot": {"tag": "input", "attributes": {"type": "text"}},
+                        "harness_before_page_state": {
+                            "url": "https://example.com/login",
+                            "title": "Login",
+                            "html": "<html><body><input aria-label='Account'></body></html>",
+                        },
+                    },
+                )
+
+                self.assertEqual([path.name for path in sorted((Path(tmp_dir) / state.capture_id / "steps").iterdir())], ["001"])
+                trace_events = json.loads(
+                    (Path(tmp_dir) / state.capture_id / "steps" / "001" / "trace_events.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                self.assertEqual(trace_events[0]["action"], "fill")
+                self.assertEqual(trace_events[0]["value"], "{{input:account}}")
+                scenario = json.loads((Path(tmp_dir) / state.capture_id / "scenario.json").read_text(encoding="utf-8"))
+                self.assertEqual(scenario["step_checkpoints"], [{"step_index": 1, "checkpoint_path": "steps/001/checkpoint.json"}])
             finally:
                 MANAGER_MODULE.settings.rpa_harness_capture_enabled = original_enabled
                 MANAGER_MODULE.settings.rpa_harness_assets_dir = original_assets_dir

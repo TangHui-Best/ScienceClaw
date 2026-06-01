@@ -798,6 +798,23 @@ def test_manual_fill_uses_sensitive_credential_param():
     assert "fill('{{credential}}')" not in body
 
 
+def test_manual_fill_uses_harness_input_placeholder_runtime_param():
+    trace = RPAAcceptedTrace(
+        trace_id="account-fill",
+        trace_type=RPATraceType.MANUAL_ACTION,
+        action="fill",
+        value="{{input:account}}",
+        locator_candidates=[
+            {"locator": {"method": "role", "role": "textbox", "name": "Account"}, "selected": True},
+        ],
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    body = _execute_body(script)
+
+    assert "get_by_role('textbox', name='Account', exact=True).fill(kwargs.get('account', '{{input:account}}'))" in body
+
+
 def test_manual_fill_uses_plain_param_default_when_configured():
     trace = RPAAcceptedTrace(
         trace_id="username-fill",
