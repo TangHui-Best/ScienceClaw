@@ -1009,6 +1009,7 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
 
                 self.assertEqual(checkpoint["recording_mode"], "manual")
                 self.assertEqual(checkpoint["runtime_result"]["status"], "success")
+                self.assertEqual(checkpoint["step_intent"], '输入 "{{input:name}}" 到 label("Name")')
                 self.assertEqual(trace_events[0]["action"], "fill")
                 self.assertEqual(trace_events[0]["value"], "{{input:name}}")
                 self.assertEqual(trace_events[0]["signals"]["input_contract"]["input_key"], "name")
@@ -1020,6 +1021,7 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
                 persisted_text = "\n".join(
                     [
                         (step_dir / "trace_events.json").read_text(encoding="utf-8"),
+                        (step_dir / "checkpoint.json").read_text(encoding="utf-8"),
                         (step_dir / "expected.json").read_text(encoding="utf-8"),
                         (step_dir / "after.html").read_text(encoding="utf-8"),
                     ]
@@ -1164,6 +1166,145 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(trace_events[0]["value"], "{{input:account}}")
                 self.assertIn("aria-label='Account'", before_html)
                 self.assertNotIn("test1", persisted_text)
+            finally:
+                MANAGER_MODULE.settings.rpa_harness_capture_enabled = original_enabled
+                MANAGER_MODULE.settings.rpa_harness_assets_dir = original_assets_dir
+
+    async def test_full_sop_harness_backfills_out_of_order_fill_checkpoint_from_late_focus_click(self):
+        original_enabled = MANAGER_MODULE.settings.rpa_harness_capture_enabled
+        original_assets_dir = MANAGER_MODULE.settings.rpa_harness_assets_dir
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            MANAGER_MODULE.settings.rpa_harness_capture_enabled = True
+            MANAGER_MODULE.settings.rpa_harness_assets_dir = tmp_dir
+            try:
+                page = _FakePage(
+                    "https://example.com/login",
+                    "Login",
+                    html=(
+                        "<html><body>"
+                        "<input data-testid='login-username' value='admin'>"
+                        "<input data-testid='login-password' type='password'>"
+                        "</body></html>"
+                    ),
+                )
+                tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+                state = self.manager.start_harness_capture(
+                    self.session.id,
+                    capture_scope="full_sop",
+                    enabled=True,
+                )
+
+                await self.manager._handle_event(
+                    self.session.id,
+                    {
+                        "action": "fill",
+                        "tab_id": tab_id,
+                        "tag": "INPUT",
+                        "timestamp": 1234567900,
+                        "sequence": 3,
+                        "value": "admin",
+                        "locator": {"method": "testid", "value": "login-username"},
+                        "element_snapshot": {
+                            "tag": "input",
+                            "attributes": {"type": "text", "data-testid": "login-username"},
+                        },
+                    },
+                )
+                await self.manager._handle_event(
+                    self.session.id,
+                    {
+                        "action": "click",
+                        "tab_id": tab_id,
+                        "tag": "INPUT",
+                        "timestamp": 1234568000,
+                        "sequence": 4,
+                        "locator": {"method": "testid", "value": "login-password"},
+                        "element_snapshot": {
+                            "tag": "input",
+                            "attributes": {"type": "password", "data-testid": "login-password"},
+                        },
+                        "harness_before_page_state": {
+                            "url": "https://example.com/login",
+                            "title": "Login",
+                            "html": (
+                                "<html><body>"
+                                "<input data-testid='login-username' value='admin'>"
+                                "<input data-testid='login-password' type='password'>"
+                                "</body></html>"
+                            ),
+                        },
+                    },
+                )
+                await self.manager._handle_event(
+                    self.session.id,
+                    {
+                        "action": "fill",
+                        "tab_id": tab_id,
+                        "tag": "INPUT",
+                        "timestamp": 1234568100,
+                        "sequence": 5,
+                        "value": "{{credential}}",
+                        "sensitive": True,
+                        "locator": {"method": "testid", "value": "login-password"},
+                        "element_snapshot": {
+                            "tag": "input",
+                            "attributes": {"type": "password", "data-testid": "login-password"},
+                        },
+                    },
+                )
+                await self.manager._handle_event(
+                    self.session.id,
+                    {
+                        "action": "click",
+                        "tab_id": tab_id,
+                        "tag": "INPUT",
+                        "timestamp": 1234567800,
+                        "sequence": 2,
+                        "locator": {"method": "testid", "value": "login-username"},
+                        "element_snapshot": {
+                            "tag": "input",
+                            "attributes": {"type": "text", "data-testid": "login-username"},
+                        },
+                        "harness_before_page_state": {
+                            "url": "https://example.com/login",
+                            "title": "Login",
+                            "html": (
+                                "<html><body>"
+                                "<input data-testid='login-username'>"
+                                "<input data-testid='login-password' type='password'>"
+                                "</body></html>"
+                            ),
+                        },
+                    },
+                )
+
+                steps_dir = Path(tmp_dir) / state.capture_id / "steps"
+                self.assertEqual([path.name for path in sorted(steps_dir.iterdir())], ["001", "002"])
+                first_trace = json.loads((steps_dir / "001" / "trace_events.json").read_text(encoding="utf-8"))[0]
+                second_trace = json.loads((steps_dir / "002" / "trace_events.json").read_text(encoding="utf-8"))[0]
+                second_checkpoint = json.loads((steps_dir / "002" / "checkpoint.json").read_text(encoding="utf-8"))
+                scenario = json.loads((Path(tmp_dir) / state.capture_id / "scenario.json").read_text(encoding="utf-8"))
+                persisted_text = "\n".join(
+                    [
+                        (steps_dir / "001" / "trace_events.json").read_text(encoding="utf-8"),
+                        (steps_dir / "001" / "after.html").read_text(encoding="utf-8"),
+                        (steps_dir / "002" / "trace_events.json").read_text(encoding="utf-8"),
+                        (
+                            Path(tmp_dir)
+                            / state.capture_id
+                            / second_checkpoint["after"]["html_path"]
+                        ).read_text(encoding="utf-8"),
+                    ]
+                )
+
+                self.assertEqual(first_trace["action"], "fill")
+                self.assertEqual(first_trace["locator_candidates"][0]["locator"]["value"], "login-username")
+                self.assertEqual(first_trace["value"], "{{input:login_username}}")
+                self.assertEqual(second_trace["action"], "fill")
+                self.assertEqual(second_trace["locator_candidates"][0]["locator"]["value"], "login-password")
+                self.assertEqual([item["step_index"] for item in scenario["step_checkpoints"]], [1, 2])
+                self.assertNotIn("admin", persisted_text)
+                self.assertNotIn("secret", persisted_text)
             finally:
                 MANAGER_MODULE.settings.rpa_harness_capture_enabled = original_enabled
                 MANAGER_MODULE.settings.rpa_harness_assets_dir = original_assets_dir

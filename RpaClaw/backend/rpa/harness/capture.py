@@ -490,18 +490,24 @@ async def capture_step_checkpoint(
     trace_events: list[dict],
     runtime_status: RuntimeStatus,
     error: str | None = None,
+    use_requested_full_sop_index: bool = False,
+    extra_input_replacements: dict[str, str] | None = None,
 ) -> HarnessStepCheckpoint | None:
     if not state.should_capture_step(step_index):
         return None
     scenario = _load_or_create_scenario_manifest(state, store)
-    step_index = _checkpoint_index_for_write(
-        state=state,
-        store=store,
-        scenario=scenario,
-        requested_step_index=step_index,
-        step_id=step_id,
-    )
-    trace_events, input_replacements = _parameterize_fill_trace_events(trace_events)
+    if not (state.capture_scope == "full_sop" and use_requested_full_sop_index):
+        step_index = _checkpoint_index_for_write(
+            state=state,
+            store=store,
+            scenario=scenario,
+            requested_step_index=step_index,
+            step_id=step_id,
+        )
+    trace_events, current_input_replacements = _parameterize_fill_trace_events(trace_events)
+    input_replacements = dict(extra_input_replacements or {})
+    input_replacements.update(current_input_replacements)
+    step_intent = _replace_recorded_values(step_intent, input_replacements)
     before_state = _sanitize_captured_state(before_state, input_replacements)
     after_state = _sanitize_captured_state(after_state, input_replacements)
 

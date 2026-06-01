@@ -783,3 +783,189 @@ Result:
 ```text
 Scanned 256 markdown file(s). Checked 50 knowledge artifact(s). Errors: 0. Warnings: 0.
 ```
+
+## F002.8 Full SOP Checkpoint Timeline Flush
+
+Executed on 2026-06-01.
+
+User-provided trigger evidence:
+
+```text
+recording session: 95481fbc-0c5b-458c-b898-45d390831c1d
+asset: data/rpa_harness_assets_bootstrap/hcap-db57fa877b8a45f6b20125710d0ac496
+```
+
+Observed asset symptom:
+
+- The generated Skill script contained the semantic login traces: navigate root, navigate login, click username, fill username, fill password, click submit, click menu item.
+- The Harness asset only persisted password fill and later navigation checkpoints; the username click/fill facts were present in the accepted trace timeline but missing from `steps/`.
+
+Root cause:
+
+- Manual Full SOP checkpoint writing was tied to per-event processing time.
+- Browser recording events are emitted through async bindings, so the manager can process a later `fill` before the earlier same-target input-focus `click`.
+- F002.7 could reuse a preceding focus click only when that click had already been inserted before the fill. In the real asset, the fill arrived first, had no before-state, and was skipped. When the earlier click arrived later, it was inserted before the fill in `session.steps`, but it was intentionally folded out as focus-click noise and did not trigger a revisit of the existing fill.
+- This explains why the Skill timeline was correct while the Harness asset was incomplete: Skill compilation used sorted accepted traces, while checkpoint persistence used event arrival side effects.
+
+Implementation changes:
+
+- Manual Full SOP checkpoint capture now records in-memory checkpoint candidates for eligible manual events instead of treating the first arrival as the final persistence decision.
+- The flush path iterates sorted `session.steps`, skips text-input focus clicks as standalone checkpoints, and writes persisted checkpoint indexes from the semantic timeline.
+- A fill checkpoint without its own before-state can be backfilled from a same-target text-input focus click that arrives later but sorts immediately before the fill.
+- Rewriting uses the requested Full SOP checkpoint index so an earlier semantic step can overwrite stale `steps/001` and shift later semantic checkpoints to contiguous indexes.
+- Captured HTML is sanitized with cumulative known input replacements through the current semantic step, so later checkpoints do not reintroduce earlier username values in `after.html`.
+
+Focused RED verification:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m pytest -q --basetemp E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-harness-flush-red RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_backfills_out_of_order_fill_checkpoint_from_late_focus_click
+```
+
+RED result:
+
+```text
+FAILED ... AssertionError: Lists differ: ['001'] != ['001', '002']
+```
+
+Focused GREEN verification:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m pytest -q --basetemp E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-harness-flush-green RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_backfills_out_of_order_fill_checkpoint_from_late_focus_click
+```
+
+GREEN result:
+
+```text
+1 passed in 0.73s
+```
+
+Focused regression:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m pytest -q --basetemp E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-harness-focused RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_captures_manual_trace_checkpoint_from_event_before_html RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_captures_pure_navigation_checkpoint_from_page_baseline RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_captures_manual_fill_with_parameterized_value RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_folds_text_input_focus_click_into_fill_checkpoint RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_reuses_focus_click_before_state_for_fill_checkpoint RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_backfills_out_of_order_fill_checkpoint_from_late_focus_click RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_manual_fill_uses_harness_input_placeholder_runtime_param RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_manual_fill_uses_sensitive_credential_param RpaClaw/backend/tests/test_rpa_harness_expected_signals.py RpaClaw/backend/tests/test_rpa_harness_checkpoint_capture.py RpaClaw/backend/tests/test_rpa_harness_asset_validation.py
+```
+
+Result:
+
+```text
+35 passed in 0.89s
+```
+
+Broader manager regression:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m pytest -q --basetemp E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-rpa-manager RpaClaw/backend/tests/test_rpa_manager.py
+```
+
+Result:
+
+```text
+103 passed in 1.74s
+```
+
+Incident learning:
+
+- Trigger: manual validation used a realistic login SOP where async browser event delivery did not match semantic action order.
+- Patch-chain review: F002.6 fixed fill eligibility, F002.7 fixed missing fill before-state in normal order, and F002.8 moved the persistence boundary upstream to the sorted accepted timeline.
+- Recurrence protection: the new regression reproduces a fill event arriving before its earlier focus click and asserts two persisted semantic checkpoints, contiguous scenario refs, username fill first, password fill second, and no raw username in persisted trace/HTML evidence.
+- Lesson: not created; the durable protection is an executable regression tied to the Harness timeline invariant plus the F002 Patch Churn Review update.
+
+Harness knowledge validation:
+
+```powershell
+python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
+```
+
+Result:
+
+```text
+Scanned 256 markdown file(s). Checked 50 knowledge artifact(s). Errors: 0. Warnings: 0.
+```
+
+## F002.9 Checkpoint Intent Input Sanitization
+
+Executed on 2026-06-01.
+
+User-provided follow-up asset:
+
+```text
+data/rpa_harness_assets_bootstrap/hcap-68802fbce2124f10957b3105cf8d9123
+```
+
+Asset inspection result:
+
+- `scenario.json` contained contiguous checkpoint refs `001` through `006`.
+- Persisted actions matched the provided SOP: root navigation, login navigation, username fill, password fill, login submit navigation, and menu navigation.
+- `trace_events.json` had `{{input:login_username}}` and `{{input:login_password}}`.
+- HTML search found no raw `admin` or `secret`.
+- Residual issue: `steps/003/checkpoint.json.step_intent` still contained `输入 "admin" 到 testid("login-username")`.
+
+Root cause:
+
+- F002.8 sanitized trace events and page states using the input replacement map.
+- The checkpoint's human-readable `step_intent` was written from the pre-sanitized trace description, so a non-sensitive runtime input could still appear in the review entry point.
+
+Implementation changes:
+
+- `capture_step_checkpoint()` now applies the same input replacement map to `step_intent`.
+- The fill-capture regression now asserts that `checkpoint.json.step_intent` uses the placeholder and that `checkpoint.json` is included in raw-value absence checks.
+
+Focused verification:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m pytest -q --basetemp E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-harness-intent RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_captures_manual_fill_with_parameterized_value
+```
+
+Result:
+
+```text
+1 passed in 1.27s
+```
+
+Focused regression:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m pytest -q --basetemp E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-harness-focused RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_captures_manual_trace_checkpoint_from_event_before_html RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_captures_pure_navigation_checkpoint_from_page_baseline RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_captures_manual_fill_with_parameterized_value RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_folds_text_input_focus_click_into_fill_checkpoint RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_reuses_focus_click_before_state_for_fill_checkpoint RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_backfills_out_of_order_fill_checkpoint_from_late_focus_click RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_manual_fill_uses_harness_input_placeholder_runtime_param RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_manual_fill_uses_sensitive_credential_param RpaClaw/backend/tests/test_rpa_harness_expected_signals.py RpaClaw/backend/tests/test_rpa_harness_checkpoint_capture.py RpaClaw/backend/tests/test_rpa_harness_asset_validation.py
+```
+
+Result:
+
+```text
+35 passed in 3.16s
+```
+
+Broader manager regression:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m pytest -q --basetemp E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-rpa-manager RpaClaw/backend/tests/test_rpa_manager.py
+```
+
+Result:
+
+```text
+103 passed in 4.68s
+```
+
+Asset validation command:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m backend.rpa.harness.run_asset_validation --assets data\rpa_harness_assets_bootstrap --output tmp-harness-validation-bootstrap-current.json
+```
+
+Result:
+
+```text
+summary.capture_count=6
+summary.issue_count=4
+summary.blocking_issue_count=0
+summary.categories={"unstable-after-capture": 4}
+hcap-68802fbce2124f10957b3105cf8d9123 had no validation issue entry.
+```
