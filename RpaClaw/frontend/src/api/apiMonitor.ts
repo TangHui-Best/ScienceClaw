@@ -11,6 +11,8 @@ export type ApiToolConfidence = 'high' | 'medium' | 'low'
 
 export type ApiToolGenerationStatus =
   | 'pending'
+  | 'intent_pruning'
+  | 'intent_prune_retrying'
   | 'running'
   | 'generated'
   | 'failed'
@@ -18,6 +20,15 @@ export type ApiToolGenerationStatus =
   | 'stale'
   | 'confidence_rejected'
   | 'intent_filtered'
+  | 'intent_review'
+
+export type ApiMonitorIntentGroup =
+  | 'primary'
+  | 'supporting'
+  | 'adjacent'
+  | 'bootstrap'
+  | 'noise'
+  | 'uncertain'
 
 export interface ApiToolGenerationCandidate {
   id: string
@@ -38,6 +49,14 @@ export interface ApiToolGenerationCandidate {
   capture_dom_digest: string
   rejection_reason?: string | null
   intent_filter_reason?: string | null
+  intent_group?: ApiMonitorIntentGroup | null
+  intent_reason?: string | null
+  intent_score?: number | null
+  intent_rank?: number | null
+  intent_batch_id?: string | null
+  intent_prune_attempts?: number
+  intent_prune_error?: string | null
+  intent_prune_retry_after?: string | null
   created_at: string
   updated_at: string
 }
@@ -89,6 +108,10 @@ export interface ApiToolDefinition {
   generation_candidate_id?: string | null
   validation_status?: 'valid' | 'invalid'
   validation_errors?: string[]
+  is_reserve?: boolean
+  intent_group?: ApiMonitorIntentGroup | null
+  intent_reason?: string | null
+  intent_score?: number | null
   created_at: string
   updated_at: string
 }
