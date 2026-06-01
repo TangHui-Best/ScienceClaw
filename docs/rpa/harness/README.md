@@ -87,6 +87,9 @@ Full SOP 的 `steps/001`, `steps/002` ... 是语义 checkpoint 顺序，不是�
 
 - 导航、点击跳转、表单填值等会成为可审查步骤。
 - 纯输入框 focus click 通常会折叠进随后的 `fill`，避免把“点进输入框”当作业务步骤。
+- 通过 `Ctrl+V` / `Cmd+V` / paste 写入输入框时，物理快捷键不应成为业务
+  `press` 步骤；录制事实应归一为目标输入框的 `fill`，并在 signals 中保留
+  `source_method=paste` 之类的输入方式证据。
 - 如果浏览器事件异步到达，Harness 以排序后的 trace 时间线为准补齐 checkpoint，而不是按事件到达顺序落盘。
 - 表单输入值会在写入资产时参数化，例如 `{{input:login_username}}` / `{{input:login_password}}`；`trace_events.json`、`expected.json`、`checkpoint.json.step_intent` 和 HTML 页面证据都应共享同一套替换。
 

@@ -28,6 +28,9 @@ def _run_actions_probe(scenario: str) -> dict:
             tagName: options.tagName || options.nodeName || 'BUTTON',
             className: options.className || '',
             textContent: options.textContent || '',
+            value: options.value || '',
+            type: options.type || '',
+            isContentEditable: Boolean(options.isContentEditable),
             parentElement: options.parentElement || null,
             children: options.children || [],
             contains(other) {{
@@ -60,6 +63,8 @@ def _run_actions_probe(scenario: str) -> dict:
           console,
           Node: {{ ELEMENT_NODE: 1 }},
           navigator: {{ platform: 'Win32' }},
+          setTimeout,
+          clearTimeout,
           document: {{
             addEventListener(type, handler) {{ listeners[type] = handler; }},
             removeEventListener() {{}},
@@ -70,6 +75,7 @@ def _run_actions_probe(scenario: str) -> dict:
         vm.createContext(context);
         vm.runInContext(fs.readFileSync({json.dumps(str(ACTIONS_JS_PATH))}, 'utf8'), context);
 
+        (async () => {{
         try {{
           const scenario = {json.dumps(scenario)};
           context.__rpaPlaywrightActions.install({{
@@ -99,6 +105,31 @@ def _run_actions_probe(scenario: str) -> dict:
             listeners.mouseover({{ isTrusted: true, target: icon }});
           }}
 
+          if (scenario === 'ctrl-v-uppercase-does-not-emit-press') {{
+            const input = makeElement({{ nodeName: 'INPUT', tagName: 'INPUT', type: 'text' }});
+            listeners.keydown({{
+              isTrusted: true,
+              target: input,
+              key: 'V',
+              code: 'KeyV',
+              ctrlKey: true,
+              altKey: false,
+              metaKey: false,
+              shiftKey: false,
+            }});
+          }}
+
+          if (scenario === 'paste-on-input-emits-fill') {{
+            const input = makeElement({{
+              nodeName: 'INPUT',
+              tagName: 'INPUT',
+              type: 'text',
+              value: 'test1',
+            }});
+            listeners.paste({{ isTrusted: true, target: input }});
+            await new Promise(resolve => setTimeout(resolve, 5));
+          }}
+
           process.stdout.write(JSON.stringify({{ ok: true, emitted }}));
         }} catch (error) {{
           process.stdout.write(JSON.stringify({{
@@ -109,6 +140,7 @@ def _run_actions_probe(scenario: str) -> dict:
           }}));
           process.exitCode = 1;
         }}
+        }})();
         """
     )
     completed = subprocess.run(
@@ -132,3 +164,19 @@ def test_hover_on_inner_icon_targets_outer_button():
     assert event["action"] == "hover"
     assert event["targetNodeName"] == "BUTTON"
     assert event["targetName"] == "Download"
+
+
+def test_ctrl_v_uppercase_does_not_emit_press_action():
+    payload = _run_actions_probe("ctrl-v-uppercase-does-not-emit-press")
+
+    assert payload["emitted"] == []
+
+
+def test_paste_on_text_input_emits_fill_action():
+    payload = _run_actions_probe("paste-on-input-emits-fill")
+
+    event = payload["emitted"][0]
+    assert event["action"] == "fill"
+    assert event["targetNodeName"] == "INPUT"
+    assert event["payload"]["value"] == "test1"
+    assert event["payload"]["signals"]["input_method"]["source_method"] == "paste"

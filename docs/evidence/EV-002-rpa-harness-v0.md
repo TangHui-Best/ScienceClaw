@@ -969,3 +969,92 @@ summary.blocking_issue_count=0
 summary.categories={"unstable-after-capture": 4}
 hcap-68802fbce2124f10957b3105cf8d9123 had no validation issue entry.
 ```
+
+## F002.10 Paste Input Normalization
+
+Executed on 2026-06-01.
+
+User-provided internal trace evidence:
+
+```text
+steps/003 action=press value=V target=textbox("W3账号")
+steps/004 action=press value=V target=textbox("密码")
+```
+
+User confirmed that account, password, and other input fields were filled via
+`Ctrl+V` paste. This is a normal user input method and should compile to
+replayable `fill` calls, not keyboard `press` steps.
+
+Root cause:
+
+- The browser action recorder filtered `Ctrl+V` only when `event.key` was
+  lowercase `v`; an uppercase `V` could leak as `press V`.
+- The screencast paste channel used CDP `Input.insertText`, but did not
+  explicitly ask the injected recorder to persist the current focused editable
+  value as a `fill` trace when the page did not emit a usable input event.
+- Once the accepted trace only contained `press V`, Harness review and
+  `TraceSkillCompiler` had no replay-safe input value to render as `fill`.
+
+Implementation changes:
+
+- Paste shortcuts are filtered case-insensitively in
+  `playwright_recorder_actions.js`.
+- Real paste events on editable fields emit semantic `fill` actions with
+  `signals.input_method.source_method=paste`.
+- `playwright_recorder_capture.js` exposes
+  `window.__rpaRecordCurrentEditableFill()` so screencast paste can convert the
+  focused editable's final value into a normal recorder `fill` event.
+- `SessionScreencastController._dispatch_paste()` calls that helper after
+  `Input.insertText`.
+- Existing fill merge, input parameterization, password sensitivity, and
+  checkpoint flushing remain the downstream normalization path.
+
+Focused RED/GREEN verification:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m pytest RpaClaw\backend\tests\test_rpa_recorder_actions_js.py -q
+python -m pytest RpaClaw\backend\tests\test_rpa_screencast.py::SessionScreencastControllerTests::test_dispatch_paste_requests_current_editable_fill_capture -q
+```
+
+RED result:
+
+```text
+test_ctrl_v_uppercase_does_not_emit_press_action failed with emitted press V
+test_paste_on_text_input_emits_fill_action failed because listeners.paste was missing
+test_dispatch_paste_requests_current_editable_fill_capture failed because page.evaluate was not called
+```
+
+GREEN result:
+
+```text
+RpaClaw/backend/tests/test_rpa_recorder_actions_js.py: 3 passed
+targeted screencast paste test: 1 passed
+```
+
+Focused regression:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m pytest RpaClaw\backend\tests\test_rpa_recorder_actions_js.py RpaClaw\backend\tests\test_rpa_screencast.py -q
+python -m pytest RpaClaw\backend\tests\test_rpa_manager.py -k "fill or capture_js or action_runtime or paste or sequence_order" -q
+```
+
+Result:
+
+```text
+15 passed, 59 warnings
+28 passed, 75 deselected
+```
+
+Closeout notes:
+
+- Feature patch: F002.10 completed.
+- Evidence level: standard for this follow-up bugfix.
+- ADR: not triggered; the fix preserves trace-first recording and treats paste
+  as another input boundary, not a new contract layer.
+- Lesson: not triggered; F002 already has Patch Churn Review, and protection is
+  executable regression plus updated Harness docs.
+- Residual risk: existing internal assets that already persisted `press V`
+  remain diagnostic evidence; they should be recaptured after this fix if they
+  are candidates for promotion.

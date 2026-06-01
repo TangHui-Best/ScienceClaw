@@ -51,6 +51,11 @@ class _FakeContext:
 class _FakePage:
     def __init__(self, context):
         self.context = context
+        self.evaluate_calls = []
+
+    async def evaluate(self, script, arg=None):
+        self.evaluate_calls.append((script, arg))
+        return True
 
 
 class SessionScreencastControllerTests(unittest.IsolatedAsyncioTestCase):
@@ -200,6 +205,24 @@ class SessionScreencastControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ws.messages[-1]["metadata"]["frameHeight"], 900)
         self.assertEqual(ws.messages[-1]["metadata"]["inputWidth"], 800)
         self.assertEqual(ws.messages[-1]["metadata"]["inputHeight"], 600)
+
+    async def test_dispatch_paste_requests_current_editable_fill_capture(self):
+        cdp = _FakeCDPSession()
+        page = _FakePage(_FakeContext())
+        controller = SCREencAST_MODULE.SessionScreencastController(
+            page_provider=lambda: page,
+            tabs_provider=lambda: [],
+        )
+        controller._cdp = cdp
+        controller._page = page
+
+        await controller._dispatch_paste({"text": "test1"})
+
+        self.assertEqual(cdp.sent[0], ("Input.insertText", {"text": "test1"}))
+        self.assertEqual(len(page.evaluate_calls), 1)
+        script, arg = page.evaluate_calls[0]
+        self.assertIn("__rpaRecordCurrentEditableFill", script)
+        self.assertEqual(arg, {"source_method": "paste"})
 
 
 class ScreencastServiceTests(unittest.IsolatedAsyncioTestCase):

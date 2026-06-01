@@ -318,6 +318,9 @@ with a placeholder such as `{{input:login_username}}`:
       "value_policy": "runtime_parameter",
       "raw_value_persisted": false,
       "sensitivity": "parameterized"
+    },
+    "input_method": {
+      "source_method": "paste"
     }
   },
   "sensitive": true
@@ -328,6 +331,14 @@ For credential-like fields, the contract should point to runtime input or
 secret refs rather than preserving the literal value. A text-input focus click
 may provide the before-state evidence for a following fill, but it should not
 usually appear as a standalone business checkpoint.
+
+Text entry can come from typing, IME, browser paste, or screencast
+`Input.insertText`. These physical input methods should still persist as a
+semantic `fill` trace when the editable field value changes. Shortcut keys such
+as `Ctrl+V`, `Cmd+V`, or `Shift+Insert` are transport noise unless the SOP is
+explicitly testing shortcut behavior; they should not replace the replayable
+`fill` fact. When known, store the input method in signals, for example
+`signals.input_method.source_method=paste`.
 
 ## Expected Signals
 
