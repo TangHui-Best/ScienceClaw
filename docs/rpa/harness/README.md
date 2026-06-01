@@ -22,6 +22,14 @@ $assetRoot = 'data\rpa_harness_assets_internal'
 $assetId = '<asset_id>'
 ```
 
+这里 `$env:PYTHONPATH` 是 Python 模块解析环境变量；`$assetRoot` 和 `$assetId` 是
+PowerShell 变量，只是为了让下面的命令少写路径。它们不等价于
+`RPA_HARNESS_CAPTURE_ENABLED` / `RPA_HARNESS_ASSETS_DIR`：
+
+- `RPA_HARNESS_CAPTURE_ENABLED` 和 `RPA_HARNESS_ASSETS_DIR` 控制产品录制时是否写出
+  Harness 资产、写到哪里。
+- `$assetRoot` 和 `$assetId` 控制录制后 CLI 脚本读取哪个资产池、哪个资产。
+
 如果使用本地 bootstrap 资产池，可把 `$assetRoot` 改为：
 
 ```powershell
@@ -74,6 +82,15 @@ $assetRoot = 'data\rpa_harness_assets_bootstrap'
 ```
 
 录制只回答“当时发生了什么”，不回答“业务结果是否正确”。`runtime_status=success` 只说明运行时认为步骤执行完了，不代表资产可以进入回归基线。
+
+Full SOP 的 `steps/001`, `steps/002` ... 是语义 checkpoint 顺序，不是浏览器原始事件流水号。录制器会按最终 accepted trace / `session.steps` 时间线刷新 checkpoint：
+
+- 导航、点击跳转、表单填值等会成为可审查步骤。
+- 纯输入框 focus click 通常会折叠进随后的 `fill`，避免把“点进输入框”当作业务步骤。
+- 如果浏览器事件异步到达，Harness 以排序后的 trace 时间线为准补齐 checkpoint，而不是按事件到达顺序落盘。
+- 表单输入值会在写入资产时参数化，例如 `{{input:login_username}}` / `{{input:login_password}}`；`trace_events.json`、`expected.json`、`checkpoint.json.step_intent` 和 HTML 页面证据都应共享同一套替换。
+
+因此，内网验证 Full SOP 时，应把资产步骤与生成 Skill 的语义步骤对齐，而不是要求每一次 DOM click / focus 都单独出现。若 Skill 有某个语义步骤但资产缺对应 checkpoint，优先按 capture/export 问题处理；若资产有 checkpoint 但 expected 或 generated Skill 不符合业务预期，再进入 review / compiler / replay 归因。
 
 ### 2. 扫描 / 检测：先看资产是否健康
 

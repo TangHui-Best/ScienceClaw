@@ -49,6 +49,8 @@ capture
 
 1. `capture`: 录制或导入 Harness asset，保存 checkpoint、HTML、trace、
    runtime result、expected signals 等事实。
+   Full SOP checkpoint 是语义时间线：输入框 focus click 可折叠进随后的 `fill`，
+   表单输入值应参数化为 `{{input:<key>}}` 或 runtime secret ref。
 2. `review`: 生成 Review Packet，让人和 Agent 阅读事实摘要，而不是直接翻原始
    HTML / trace / checkpoint。
 3. `promote`: 通过 CLI 和人工确认把资产从 `draft` 推进到
@@ -185,8 +187,9 @@ deterministic profile 可以证明：
 
 user-input replay 可以证明：
 
-- 资产中已经捕获的 navigation、click、natural-language instruction 等输入事实
-  能被提取为 replay event。
+- 资产中已经捕获的 navigation、click、fill、natural-language instruction 等输入事实
+  能被提取为 replay event；实际覆盖以当前 runner JSON 的 selected/replayed events
+  为准。
 - `boundary_injections` 记录了脚本 adapter 对输入边界的执行。
 - 第一切片的 adapter 是 record-only；它不证明 live UI side effect，也不证明
   full-live Planner 行为。

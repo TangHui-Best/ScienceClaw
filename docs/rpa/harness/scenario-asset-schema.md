@@ -102,6 +102,13 @@ Example:
 | `governance` | yes | Promotion and runner eligibility metadata for candidate/golden assets. |
 | `step_checkpoints` | yes | Pointers to checkpoint files. |
 
+For `capture_scope=full_sop`, `step_checkpoints` represent the persisted
+semantic checkpoint timeline. They are intentionally not a raw browser event
+stream. The recorder may fold non-semantic focus events into the following
+semantic action and may refresh checkpoint files after async browser events are
+sorted into the accepted trace timeline. Full SOP checkpoint indexes should
+therefore be contiguous over persisted semantic steps.
+
 ## Governance Fields
 
 `governance` turns a raw captured directory into a promotable scenario asset
@@ -223,6 +230,10 @@ For a successful step:
 - `runtime_result.status`
 - `captured_at`
 
+`step_intent` is a human-readable summary for review, but it is still persisted
+asset data. If the trace contains parameterized input values, `step_intent`
+must use the same placeholders instead of raw recorded values.
+
 For a failed step:
 
 - `step_index`
@@ -291,6 +302,33 @@ Minimum useful fields:
 - Before/after URL when available.
 - Output key or result reference when available.
 
+Manual `fill` events use a replay-safe input contract when the recorder can
+derive an input key. The raw value should be replaced in persisted asset files
+with a placeholder such as `{{input:login_username}}`:
+
+```json
+{
+  "action": "fill",
+  "value": "{{input:login_username}}",
+  "signals": {
+    "input_contract": {
+      "input_key": "login_username",
+      "placeholder": "{{input:login_username}}",
+      "replay_value_ref": "kwargs.login_username",
+      "value_policy": "runtime_parameter",
+      "raw_value_persisted": false,
+      "sensitivity": "parameterized"
+    }
+  },
+  "sensitive": true
+}
+```
+
+For credential-like fields, the contract should point to runtime input or
+secret refs rather than preserving the literal value. A text-input focus click
+may provide the before-state evidence for a following fill, but it should not
+usually appear as a standalone business checkpoint.
+
 ## Expected Signals
 
 `expected.json` turns a checkpoint into a regression test.
@@ -343,6 +381,10 @@ evidence chain:
   explicitly reuses the before HTML.
 - Referenced `trace_events.json`, `expected.json`, and failure evidence files
   exist.
+- Full SOP assets should be checked against the semantic SOP timeline, not
+  raw DOM event count. A folded input focus click is not a missing checkpoint
+  if the following `fill` checkpoint exists and contains the before/after
+  evidence.
 
 Draft assets may report non-blocking issues so developers can inspect and
 recapture them. `active` assets with error-level integrity issues should fail

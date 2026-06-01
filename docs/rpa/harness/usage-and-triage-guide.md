@@ -37,6 +37,12 @@ compiler、selector 或 extraction 的缺陷悄悄修在 Harness 里面。
 | Stateful SOP Capture-to-Skill | 用受管 Full SOP asset 模拟录制输入边界，重建 session-style accepted traces，编译完整 SOP Skill，并可控 replay。 | recording-to-Skill 内部链路漂移、accepted trace 缺失、完整 SOP 编译或 replay 失败。 |
 | Observability / blast radius | 汇总状态、failure categories、受影响资产、受影响页面形态、confidence risks。 | 判断失败是单点、资产级、runner 级，还是覆盖度不足。 |
 
+Full SOP 步骤连续性按语义 checkpoint 判断，不按浏览器原始事件数判断。输入框 focus click
+会折叠到后续 `fill`；账号、密码、搜索词等输入值应在资产里表现为
+`{{input:<key>}}` 或 runtime secret 引用。若 generated Skill 的语义步骤完整，而资产
+缺对应 checkpoint，优先看 capture/export；若资产 checkpoint 完整但 replay 或 generated
+Skill 不符合预期，再看 expected、compiler 或 Skill replay。
+
 历史 bootstrap baseline 曾经有两个 blocking `candidate` assets：
 
 ```text
@@ -287,6 +293,7 @@ python -m backend.rpa.harness.run_asset_promote --assets data\rpa_harness_assets
    检查顺序：
 
    - `accepted_trace_count`：应匹配可接受 SOP 步骤数量。
+     这里的数量是语义 accepted trace 数，不包含被折叠的输入框 focus click。
    - `steps[*].failure_category`：看是否是 missing trace events、
      invalid checkpoint、missing accepted trace 或 capture-to-trace error。
    - `compile.failure_category`：看完整 SOP trace 编译是否失败。
@@ -306,6 +313,7 @@ python -m backend.rpa.harness.run_asset_promote --assets data\rpa_harness_assets
 | `missing-trace-events` | 步骤缺 trace evidence。 | 资产质量或 recording trace capture。 |
 | `invalid-trace-events` | trace events JSON 损坏。 | 资产整理或 recording export。 |
 | `missing-accepted-trace` | 没有 accepted trace event 可驱动 runner。 | recording trace acceptance 或资产质量。 |
+| `step-index-gap` / Full SOP checkpoint 不连续 | `scenario.json.step_checkpoints` 不能覆盖连续语义步骤。 | capture/export 或资产整理；不要先改 planner/compiler。 |
 | `raw-snapshot-missing-signal` | production raw snapshot 不含期望事实。 | Snapshot extraction。 |
 | `compact-snapshot-lost-signal` | raw 有事实但 compact 丢了。 | Snapshot compaction。 |
 | `compiler-hardcoded-observed-value` | Skill 脚本冻结录制现场值。 | `TraceSkillCompiler` 或 dataflow inference。 |
@@ -350,6 +358,8 @@ python -m backend.rpa.harness.run_asset_promote --assets data\rpa_harness_assets
 
 6. 做 expected signals review。expected signals 应表达业务意图，不应冻结偶然的
    absolute selector 或临时页面文案。
+   对表单输入步骤，还要确认 `trace_events.json`、`checkpoint.json.step_intent`、
+   HTML 和 `expected.json` 都使用同一套 input placeholder / secret ref，不保留现场值。
 
 7. 明确确认 expected 和 sensitivity 后，用 CLI 升级为 blocking `candidate`。
    不要手改 governance JSON：
@@ -808,7 +818,7 @@ injection
 boundary、status、trace/session/result id 和 input signal。第一切片的 adapter
 是 record-only：它证明脚本边界被执行和记录，不证明 live UI side effect。
 
-当前 bootstrap assets 真实覆盖：
+早期 bootstrap assets 曾经主要覆盖：
 
 ```text
 navigation
@@ -816,9 +826,11 @@ click
 natural_language_instruction
 ```
 
-`type`、`select`、`submit` 和 region selection 使用同一个通用 event model，但是否
-具备真实覆盖取决于资产中是否已经捕获对应 trace/checkpoint 事实。不要因为测试
-fixture 支持这些事件就声称 bootstrap baseline 已经覆盖真实表单输入或区域选择。
+当前录制路径已经支持把表单 `fill` 写入 Harness checkpoint，并把输入值参数化为
+`{{input:<key>}}`。但某个资产池是否真的具备 fill/type/select/submit/region
+coverage，仍然取决于当前 runner JSON 里 selected/replayed events 和对应
+trace/checkpoint 事实。不要因为测试 fixture 或某次 draft asset 支持这些事件，就声称
+blocking baseline 已经覆盖真实表单输入或区域选择。
 
 失败分析顺序：
 

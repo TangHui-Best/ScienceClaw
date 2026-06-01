@@ -27,7 +27,7 @@ Harness 是回归、诊断、证据和治理层。它不负责在自身内部修
 
 ## 当前封箱状态
 
-截至 2026-05-31，本机代码侧已经具备：
+截至 2026-06-01，本机代码侧已经具备：
 
 - 资产校验：`run_asset_validation`
 - 资产目录与生命周期报告：`run_catalog --format lifecycle`
@@ -40,6 +40,9 @@ Harness 是回归、诊断、证据和治理层。它不负责在自身内部修
 - user-input replay：`run_user_input_replay`
 - full-live profile：`run_harness_profile --profile full-live`
 - governed regression：`run_governed_regression`
+- Full SOP 语义 checkpoint 刷新：手动录制资产按最终 accepted trace / `session.steps`
+  顺序落盘，输入框 focus click 会折叠到后续 `fill`，表单输入值写成
+  `{{input:<key>}}` 或 runtime secret ref。
 
 但当前 `data/rpa_harness_assets_bootstrap` 的本机状态不能再被口头描述为“已有 blocking baseline”。在本机检查中，当前资产池是：
 
@@ -167,6 +170,11 @@ trust_limits
 归因规则：
 
 - 资产缺文件、JSON 损坏、缺 trace events：先处理资产或 capture/export。
+- Full SOP 里 generated Skill 有语义步骤但资产缺 checkpoint：先处理 capture/export；
+  不要因为输入框 focus click 被折叠就判定漏步骤。
+- 表单输入步骤若在 `trace_events.json`、`checkpoint.json.step_intent`、HTML 或
+  `expected.json` 中保留 raw 输入值：先处理 Harness asset sanitization / capture
+  写入边界。
 - raw snapshot 缺目标事实：检查 production DOM snapshot。
 - raw 有事实但 compact 丢：检查 snapshot compression。
 - `compiler-hardcoded-observed-value`：修 `TraceSkillCompiler` 或 dataflow inference，不要在 Harness 里加例外。
