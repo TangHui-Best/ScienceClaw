@@ -310,6 +310,25 @@ python -m backend.rpa.harness.run_asset_execution_review `
 <assetRoot>/<assetId>/execution_review.md
 ```
 
+如果需要把 SOP→Skill 核心链路的 generated Skill 和报告落成可审查文件，使用 asset-local core-chain 导出：
+
+```powershell
+python -m backend.rpa.harness.run_asset_core_chain `
+  --assets $assetRoot `
+  --asset-id $assetId
+```
+
+它会生成或更新：
+
+```text
+<assetRoot>/<assetId>/core-chain-report.md
+<assetRoot>/<assetId>/core-chain-full-report.json
+<assetRoot>/<assetId>/generated_skills/full_sop/skill.py
+<assetRoot>/<assetId>/generated_skills/steps/<NNN>/skill.py
+```
+
+这些文件是资产执行证据，必须跟随对应资产存放；不要把它们默认写到 Agent CLI 启动目录、仓库根目录或临时 `tmp-generated-skills` 目录。CLI 的 `--output` 只用于额外写一份聚合 JSON，不替代 asset-local 报告。
+
 分析失败时，先判断归属：
 
 | 现象 | 优先归属 |

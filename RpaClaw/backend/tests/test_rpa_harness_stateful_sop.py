@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+from backend.rpa.harness.asset_core_chain import run_asset_core_chain_export
+from backend.rpa.harness.run_asset_core_chain import main as run_asset_core_chain_main
 from backend.rpa.harness.stateful_sop import run_stateful_sop_capture_to_skill
 
 
@@ -423,3 +425,90 @@ def test_stateful_sop_injects_explicit_model_config_into_generated_skill(
     runtime_context = received["_runtime_context"]
     assert runtime_context["runtime_ai"]["model_config"]["model_name"] == "test-model"
     assert runtime_context["runtime_ai"]["source"] == "harness_explicit_model_config"
+
+
+def test_asset_core_chain_export_writes_reports_and_skills_under_asset_dir(tmp_path: Path):
+    assets = _write_stateful_asset(tmp_path)
+
+    report = run_asset_core_chain_export(assets, asset_ids={"asset-stateful"})
+
+    asset_dir = assets / "asset-stateful"
+    assert report["summary"]["asset_count"] == 1
+    assert report["summary"]["asset_ids"] == ["asset-stateful"]
+    assert (asset_dir / "core-chain-report.md").exists()
+    assert (asset_dir / "core-chain-full-report.json").exists()
+    assert (asset_dir / "generated_skills" / "full_sop" / "skill.py").exists()
+    assert (asset_dir / "generated_skills" / "full_sop" / "compile_metadata.json").exists()
+    for index in ("001", "002", "003"):
+        assert (asset_dir / "generated_skills" / "steps" / index / "skill.py").exists()
+        assert (asset_dir / "generated_skills" / "steps" / index / "compile_metadata.json").exists()
+
+    assert not (assets / "core-chain-report.md").exists()
+    assert not (assets / "core-chain-full-report.json").exists()
+    assert not (assets / "tmp-generated-skills").exists()
+
+    full_sop_skill = (asset_dir / "generated_skills" / "full_sop" / "skill.py").read_text(encoding="utf-8")
+    step_skill = (asset_dir / "generated_skills" / "steps" / "001" / "skill.py").read_text(encoding="utf-8")
+    machine_report = json.loads((asset_dir / "core-chain-full-report.json").read_text(encoding="utf-8"))
+    full_metadata = json.loads(
+        (asset_dir / "generated_skills" / "full_sop" / "compile_metadata.json").read_text(encoding="utf-8")
+    )
+
+    assert "async def execute_skill" in full_sop_skill
+    assert "async def execute_skill" in step_skill
+    assert machine_report["assets"][0]["asset_id"] == "asset-stateful"
+    assert machine_report["assets"][0]["generated_skills"]["full_sop"]["relative_path"] == (
+        "generated_skills/full_sop/skill.py"
+    )
+    assert full_metadata["asset_id"] == "asset-stateful"
+    assert full_metadata["scope"] == "full_sop"
+    assert full_metadata["trace_count"] == 3
+
+
+def test_asset_core_chain_cli_writes_asset_local_artifacts(tmp_path: Path):
+    assets = _write_stateful_asset(tmp_path)
+    aggregate_report = tmp_path / "aggregate-core-chain.json"
+
+    exit_code = run_asset_core_chain_main(
+        [
+            "--assets",
+            str(assets),
+            "--asset-id",
+            "asset-stateful",
+            "--output",
+            str(aggregate_report),
+        ]
+    )
+
+    asset_dir = assets / "asset-stateful"
+    aggregate = json.loads(aggregate_report.read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert aggregate["summary"]["asset_ids"] == ["asset-stateful"]
+    assert (asset_dir / "core-chain-report.md").exists()
+    assert (asset_dir / "core-chain-full-report.json").exists()
+    assert (asset_dir / "generated_skills" / "full_sop" / "skill.py").exists()
+    assert (asset_dir / "generated_skills" / "steps" / "001" / "skill.py").exists()
+
+
+def test_asset_core_chain_cli_fails_when_no_asset_selected(tmp_path: Path):
+    assets = _write_stateful_asset(tmp_path)
+    aggregate_report = tmp_path / "missing-asset-core-chain.json"
+
+    exit_code = run_asset_core_chain_main(
+        [
+            "--assets",
+            str(assets),
+            "--asset-id",
+            "missing-asset",
+            "--output",
+            str(aggregate_report),
+        ]
+    )
+
+    aggregate = json.loads(aggregate_report.read_text(encoding="utf-8"))
+    assert exit_code == 1
+    assert aggregate["summary"]["status"] == "failed"
+    assert aggregate["summary"]["failure_category"] == "no-assets-selected"
+    assert aggregate["summary"]["asset_count"] == 0
+    assert not (assets / "core-chain-report.md").exists()
+    assert not (assets / "generated_skills").exists()

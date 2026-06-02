@@ -1216,3 +1216,85 @@ Closeout notes:
 - Residual risk: already captured draft assets with globally rewritten HTML
   remain historical evidence; they should be recaptured before any promotion to
   `candidate` or `golden`.
+
+## F002.13 Asset-local Core-chain Exports
+
+Executed on 2026-06-02.
+
+Scope boundary:
+
+- This slice adds a Harness diagnostic/export entrypoint only.
+- It does not change recorder event capture, accepted trace reconstruction,
+  `TraceSkillCompiler` output logic, Skill replay validation, or download
+  side-effect handling.
+- It makes generated Skill scripts and core-chain reports asset-local evidence
+  instead of Agent working-directory scratch files.
+
+Root cause:
+
+- Internal Agent workflows were generating files such as `core-chain-report.md`,
+  `core-chain-full-report.json`, and `tmp-generated-skills/...` relative to the
+  Agent CLI/project working directory.
+- Those files describe one concrete asset, but their location made handoff,
+  cleanup, and later audit ambiguous.
+- The canonical Harness runners compiled Skills in memory and recorded sizes or
+  failure categories, but did not expose an asset-local export path for human
+  inspection.
+
+Implementation changes:
+
+- Added `backend.rpa.harness.asset_core_chain.run_asset_core_chain_export()`.
+- Added CLI entrypoint `python -m backend.rpa.harness.run_asset_core_chain`.
+- For each selected asset, the runner now writes:
+  - `<asset>/core-chain-report.md`
+  - `<asset>/core-chain-full-report.json`
+  - `<asset>/generated_skills/full_sop/skill.py`
+  - `<asset>/generated_skills/full_sop/compile_metadata.json`
+  - `<asset>/generated_skills/steps/<NNN>/skill.py`
+  - `<asset>/generated_skills/steps/<NNN>/compile_metadata.json`
+- The CLI still accepts an optional aggregate `--output`, but the per-asset
+  evidence is always written under the selected asset directory.
+
+Focused RED verification:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m pytest --basetemp E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-asset-core-chain RpaClaw\backend\tests\test_rpa_harness_stateful_sop.py -k "asset_core_chain_export" -q
+```
+
+RED result:
+
+```text
+ModuleNotFoundError: No module named 'backend.rpa.harness.asset_core_chain'
+```
+
+Focused GREEN verification:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m pytest --basetemp E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-asset-core-chain-one RpaClaw\backend\tests\test_rpa_harness_stateful_sop.py -k "asset_core_chain" -q
+python -m pytest --basetemp E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-asset-core-chain-fixture RpaClaw\backend\tests\test_rpa_harness_stateful_sop.py RpaClaw\backend\tests\test_rpa_harness_skill_replay.py RpaClaw\backend\tests\test_rpa_harness_governed_regression.py RpaClaw\backend\tests\test_rpa_harness_profile_runner.py -k "not real_governed" -q
+```
+
+Result:
+
+```text
+3 passed, 9 deselected
+41 passed, 2 deselected
+```
+
+Closeout notes:
+
+- Feature patch: F002.13 completed.
+- Evidence level: standard for this Harness diagnostic-output enhancement.
+- ADR: not triggered; this preserves existing trace-first and post-hoc compiler
+  boundaries while changing only where diagnostic artifacts are written.
+- Lesson: not triggered; F002 Patch Churn Review records the asset-local output
+  boundary, and tests lock it.
+- Residual risk: existing Agent wrappers may still create top-level tmp files
+  until updated to call `run_asset_core_chain`; those files should be treated as
+  legacy scratch output, not canonical Harness evidence.
+- Verification note: the full local set including `real_governed` bootstrap
+  tests reported two failures because the fixed real asset id was not eligible
+  in the current local asset pool (`eligible_capture_count=0`). The fixture
+  runner set excluding those environment-dependent tests passed.
