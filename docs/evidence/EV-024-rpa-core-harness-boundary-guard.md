@@ -67,6 +67,24 @@ npm.cmd run test -- RecorderPage.test.ts
 npm.cmd run type-check
 ```
 
+F024.3 duplicate password fill regression:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'; python -m pytest --basetemp .pytest-tmp-f024-password-focused RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_collapses_duplicate_sensitive_fill_with_sequence_gap RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_consecutive_fill_events_collapse_to_latest_value_on_same_target_frame_tab RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_non_consecutive_fill_events_do_not_collapse_when_same_target_arrives_out_of_order RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_fill_merge_rebuilds_recorded_action_value -q
+```
+
+```powershell
+$env:PYTHONPATH='RpaClaw'; python -m pytest --basetemp .pytest-tmp-f024-password-harness RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_captures_manual_fill_with_parameterized_value RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_folds_text_input_focus_click_into_fill_checkpoint RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_reuses_focus_click_before_state_for_fill_checkpoint RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_backfills_out_of_order_fill_checkpoint_from_late_focus_click -q
+```
+
+```powershell
+$env:PYTHONPATH='RpaClaw'; python -m pytest --basetemp .pytest-tmp-f024-password-manager RpaClaw/backend/tests/test_rpa_manager.py -q
+```
+
+```powershell
+$env:PYTHONPATH='RpaClaw'; python -m pytest --basetemp .pytest-tmp-f024-password-compiler RpaClaw/backend/tests/test_rpa_trace_timeline.py::test_trace_timeline_exposes_sensitive_fill_contract_without_raw_trace_dependency RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_manual_fill_uses_sensitive_credential_param RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_manual_fill_uses_harness_input_placeholder_runtime_param RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_duplicate_sensitive_fill_values_consume_params_in_order -q
+```
+
 Harness structure:
 
 ```powershell
@@ -93,6 +111,11 @@ python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --
 - F024.2 Timeline + compiler download focused regression: `3 passed`。
 - F024.2 Harness controlled download focused regression: `3 passed, 29 warnings`。Warnings are existing Python 3.14 / FastAPI deprecation warnings.
 - F024.2 frontend type-check: failed on pre-existing unrelated TypeScript errors in `ActivityPanel.vue`, `ChatMessage.vue`, `DesktopTitleBar.vue`, `SessionItem.vue`, `ChatPage.vue`, `desktopWindow.ts`, and related files; no reported error referenced `RecorderPage.vue` or `RecorderPage.test.ts`.
+- F024.3 RED duplicate sensitive fill regression: `1 failed` before fix. Two same-target password fill events with a sequence gap produced two accepted steps/traces and two Harness checkpoints.
+- F024.3 focused duplicate/fill regression: `4 passed`。Same-target same-value fill events across a short sequence gap now collapse, while non-consecutive different values remain separate.
+- F024.3 Harness fill checkpoint regression: `4 passed`。Full SOP Harness capture still folds focus-click checkpoints and persists parameterized fill values without raw input text in `trace_events.json` / checkpoint / expected / captured HTML.
+- F024.3 manager regression: `104 passed`。
+- F024.3 timeline/compiler sensitive fill regression: `4 passed`。Credential and Harness input placeholders still compile to runtime parameters; intentionally distinct password fields still consume `password` / `password_2` in order.
 
 ## Harness Validation
 

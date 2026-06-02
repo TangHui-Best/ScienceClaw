@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 RPA_PAGE_TIMEOUT_MS = 60000
 HOVER_PROMOTION_WINDOW_MS = 2500
+RECORDED_FILL_DUPLICATE_WINDOW_MS = 3000
 TRACE_DOWNLOAD_SETTLE_TIMEOUT_S = 3.0
 TRACE_DOWNLOAD_SETTLE_POLL_S = 0.05
 TRACE_DOWNLOAD_ACTION_TOKENS = (
@@ -2106,22 +2107,28 @@ class RPASessionManager:
 
         return False
 
-    @staticmethod
-    def _is_same_fill_target(existing_step: Optional[RPAStep], incoming_step: RPAStep) -> bool:
+    @classmethod
+    def _is_same_fill_target(cls, existing_step: Optional[RPAStep], incoming_step: RPAStep) -> bool:
         if existing_step is None:
             return False
         existing_sequence = existing_step.sequence
         incoming_sequence = incoming_step.sequence
-        return (
+        if not (
             existing_step.action == "fill"
             and existing_step.source == incoming_step.source
             and existing_step.target == incoming_step.target
             and existing_step.frame_path == incoming_step.frame_path
             and existing_step.tab_id == incoming_step.tab_id
-            and existing_sequence is not None
-            and incoming_sequence is not None
-            and abs(existing_sequence - incoming_sequence) == 1
-        )
+        ):
+            return False
+        if existing_sequence is not None and incoming_sequence is not None:
+            if abs(existing_sequence - incoming_sequence) == 1:
+                return True
+        if existing_step.value != incoming_step.value:
+            return False
+        existing_ts = cls._step_event_ts_ms(existing_step)
+        incoming_ts = cls._step_event_ts_ms(incoming_step)
+        return abs(incoming_ts - existing_ts) <= RECORDED_FILL_DUPLICATE_WINDOW_MS
 
     @staticmethod
     def _merge_fill_step(existing_step: RPAStep, incoming_step: RPAStep) -> None:

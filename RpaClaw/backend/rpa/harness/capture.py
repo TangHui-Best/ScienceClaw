@@ -147,6 +147,22 @@ def _replace_recorded_values(text: str, replacements: dict[str, str]) -> str:
     return sanitized
 
 
+def _sanitize_trace_event_recorded_text(
+    trace_events: list[dict],
+    replacements: dict[str, str],
+) -> list[dict]:
+    if not replacements:
+        return trace_events
+    for event in trace_events:
+        if not isinstance(event, dict):
+            continue
+        for key in ("description", "user_instruction"):
+            value = event.get(key)
+            if isinstance(value, str):
+                event[key] = _replace_recorded_values(value, replacements)
+    return trace_events
+
+
 def _html_replacement_for_value(value: str, replacements: dict[str, str], *, attribute: bool) -> str | None:
     placeholder = replacements.get(html_unescape(value))
     if placeholder is None:
@@ -515,6 +531,7 @@ async def capture_step_checkpoint(
     trace_events, current_input_replacements = _parameterize_fill_trace_events(trace_events)
     input_replacements = dict(extra_input_replacements or {})
     input_replacements.update(current_input_replacements)
+    trace_events = _sanitize_trace_event_recorded_text(trace_events, input_replacements)
     step_intent = _replace_recorded_values(step_intent, input_replacements)
     before_state = _sanitize_captured_state(before_state, input_replacements)
     after_state = _sanitize_captured_state(after_state, input_replacements)

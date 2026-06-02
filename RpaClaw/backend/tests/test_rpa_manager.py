@@ -1309,6 +1309,75 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
                 MANAGER_MODULE.settings.rpa_harness_capture_enabled = original_enabled
                 MANAGER_MODULE.settings.rpa_harness_assets_dir = original_assets_dir
 
+    async def test_full_sop_harness_collapses_duplicate_sensitive_fill_with_sequence_gap(self):
+        original_enabled = MANAGER_MODULE.settings.rpa_harness_capture_enabled
+        original_assets_dir = MANAGER_MODULE.settings.rpa_harness_assets_dir
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            MANAGER_MODULE.settings.rpa_harness_capture_enabled = True
+            MANAGER_MODULE.settings.rpa_harness_assets_dir = tmp_dir
+            try:
+                page = _FakePage(
+                    "https://example.com/login",
+                    "Login",
+                    html="<html><body><input aria-label='Password' type='password'></body></html>",
+                )
+                tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+                state = self.manager.start_harness_capture(
+                    self.session.id,
+                    capture_scope="full_sop",
+                    enabled=True,
+                )
+                password_locator = {"method": "role", "role": "textbox", "name": "Password"}
+                event_base = {
+                    "action": "fill",
+                    "tab_id": tab_id,
+                    "tag": "INPUT",
+                    "value": "{{credential}}",
+                    "sensitive": True,
+                    "locator": password_locator,
+                    "element_snapshot": {
+                        "tag": "input",
+                        "attributes": {"type": "password"},
+                    },
+                    "harness_before_page_state": {
+                        "url": "https://example.com/login",
+                        "title": "Login",
+                        "html": "<html><body><input aria-label='Password' type='password'></body></html>",
+                    },
+                }
+
+                await self.manager._handle_event(
+                    self.session.id,
+                    {
+                        **event_base,
+                        "timestamp": 1234568100,
+                        "sequence": 3,
+                    },
+                )
+                await self.manager._handle_event(
+                    self.session.id,
+                    {
+                        **event_base,
+                        "timestamp": 1234568200,
+                        "sequence": 5,
+                    },
+                )
+
+                self.assertEqual([step.action for step in self.session.steps], ["fill"])
+                self.assertEqual(len(self.session.traces), 1)
+                self.assertEqual(self.session.traces[0].action, "fill")
+                self.assertTrue(self.session.traces[0].sensitive)
+
+                steps_dir = Path(tmp_dir) / state.capture_id / "steps"
+                self.assertEqual([path.name for path in sorted(steps_dir.iterdir())], ["001"])
+                trace_events = json.loads((steps_dir / "001" / "trace_events.json").read_text(encoding="utf-8"))
+                self.assertEqual(len(trace_events), 1)
+                self.assertEqual(trace_events[0]["action"], "fill")
+                self.assertEqual(trace_events[0]["value"], "{{input:password}}")
+            finally:
+                MANAGER_MODULE.settings.rpa_harness_capture_enabled = original_enabled
+                MANAGER_MODULE.settings.rpa_harness_assets_dir = original_assets_dir
+
     async def test_harness_runtime_flag_updates_registered_pages(self):
         page = _FakePage("https://example.com", "Example")
         await self.manager.register_page(self.session.id, page, make_active=True)
