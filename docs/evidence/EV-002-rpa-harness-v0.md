@@ -1136,3 +1136,83 @@ Closeout notes:
 - Residual risk: weak unlabeled inputs still cannot receive true business
   semantics without user/DOM evidence; they now receive stable names such as
   `textbox_1` instead of generic `input`.
+
+## F002.12 Scoped Fill Value Sanitization
+
+Executed on 2026-06-02.
+
+Scope boundary:
+
+- This slice fixes Harness asset persistence only.
+- It does not change recorder event capture, RPA manager ordering,
+  `RecordingRuntimeAgent`, `TraceSkillCompiler`, Recorder UI, or runtime skill
+  replay behavior.
+- It keeps fill parameterization as a write-time Harness asset concern rather
+  than introducing a contract-first recording layer.
+
+Root cause:
+
+- `harness.capture` reused one `replacements` map for three different
+  surfaces: trace nodes, human-readable `step_intent`, and full captured HTML.
+- The trace path recursively replaced every string field, so raw input `a`
+  could corrupt selector metadata and even the generated placeholder itself.
+- The HTML path applied bare `str.replace()` to the whole document, so ordinary
+  tags, attribute names, labels, and body text could be rewritten into invalid
+  HTML.
+
+Implementation changes:
+
+- `fill` trace parameterization now only changes the structured `value` field
+  and adds `signals.input_contract`.
+- Human-readable text replacement now uses ASCII token boundaries, so `a` in
+  `Fill a into the Name field` is replaced while `Name` is preserved.
+- Captured HTML sanitization now only replaces complete recorded values inside
+  `input[value]` and `textarea` contents; labels, tag names, attribute names,
+  selectors, and other trace metadata are preserved.
+
+Focused RED verification:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m pytest -q --basetemp .pytest-tmp-pr59-harness-red RpaClaw/backend/tests/test_rpa_harness_checkpoint_capture.py::test_fill_parameterization_preserves_trace_metadata_and_html_structure
+```
+
+RED result:
+
+```text
+expected {{input:name}}, got {{input:n{{input:name}}me}}
+```
+
+Focused GREEN/regression verification:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m pytest -q --basetemp .pytest-tmp-pr59-harness-green-one RpaClaw/backend/tests/test_rpa_harness_checkpoint_capture.py::test_fill_parameterization_preserves_trace_metadata_and_html_structure
+python -m pytest -q --basetemp .pytest-tmp-pr59-harness-green-checkpoint RpaClaw/backend/tests/test_rpa_harness_checkpoint_capture.py
+python -m pytest -q --basetemp .pytest-tmp-pr59-harness-green-ai RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py
+python -m pytest -q --basetemp .pytest-tmp-pr59-harness-green-compiler RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py
+python -m pytest -q --basetemp .pytest-tmp-pr59-harness-focused RpaClaw/backend/tests/test_rpa_harness_expected_signals.py RpaClaw/backend/tests/test_rpa_harness_checkpoint_capture.py RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py RpaClaw/backend/tests/test_rpa_harness_snapshot_regression.py RpaClaw/backend/tests/test_rpa_harness_compiler_regression.py RpaClaw/backend/tests/test_rpa_harness_asset_validation.py RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_captures_pure_navigation_checkpoint_from_page_baseline
+```
+
+Result:
+
+```text
+single regression: 1 passed
+checkpoint capture: 11 passed
+AI capture integration: 6 passed, 29 warnings
+trace skill compiler: 109 passed
+focused F002 Harness set: 53 passed, 29 warnings
+```
+
+Closeout notes:
+
+- Feature patch: F002.12 completed.
+- Evidence level: exhaustive for this high-risk Harness asset-fact follow-up,
+  because the fix includes RED/GREEN proof plus focused F002 Harness regression.
+- ADR: not triggered; the fix preserves the existing Trace-first Recording +
+  Post-hoc Skill Compilation boundary.
+- Lesson: not triggered; F002 Patch Churn Review now records the new boundary,
+  and the protection is executable regression.
+- Residual risk: already captured draft assets with globally rewritten HTML
+  remain historical evidence; they should be recaptured before any promotion to
+  `candidate` or `golden`.

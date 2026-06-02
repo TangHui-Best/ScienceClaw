@@ -5,6 +5,7 @@ import json
 import re
 from copy import deepcopy
 from datetime import datetime
+from html import escape as html_escape, unescape as html_unescape
 from typing import Literal
 from uuid import uuid4
 
@@ -84,6 +85,18 @@ def _html_bytes(html: str) -> int:
     return len((html or "").encode("utf-8"))
 
 
+_INPUT_TAG_RE = re.compile(r"<input\b[^>]*>", re.IGNORECASE | re.DOTALL)
+_TEXTAREA_RE = re.compile(
+    r"(?P<open><textarea\b[^>]*>)(?P<value>.*?)(?P<close></textarea\s*>)",
+    re.IGNORECASE | re.DOTALL,
+)
+_VALUE_ATTR_RE = re.compile(
+    r"(?P<prefix>\bvalue\s*=\s*)"
+    r"(?:(?P<quote>[\"'])(?P<quoted>.*?)(?P=quote)|(?P<unquoted>[^\s\"'=<>`]+))",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
 def _parameterize_fill_trace_events(trace_events: list[dict]) -> tuple[list[dict], dict[str, str]]:
     parameterized = deepcopy(trace_events)
     replacements: dict[str, str] = {}
@@ -118,30 +131,65 @@ def _parameterize_fill_trace_events(trace_events: list[dict]) -> tuple[list[dict
         }
         event["signals"] = signals
         event["sensitive"] = True
-    if replacements:
-        parameterized = [
-            _sanitize_trace_node(event, replacements) if isinstance(event, dict) else event
-            for event in parameterized
-        ]
     return parameterized, replacements
 
 
 def _replace_recorded_values(text: str, replacements: dict[str, str]) -> str:
     sanitized = text or ""
     for raw_value, placeholder in replacements.items():
-        if raw_value:
-            sanitized = sanitized.replace(raw_value, placeholder)
+        if not raw_value:
+            continue
+        sanitized = re.sub(
+            rf"(?<![A-Za-z0-9_]){re.escape(raw_value)}(?![A-Za-z0-9_])",
+            lambda _match: placeholder,
+            sanitized,
+        )
     return sanitized
 
 
-def _sanitize_trace_node(value: object, replacements: dict[str, str]) -> object:
-    if isinstance(value, str):
-        return _replace_recorded_values(value, replacements)
-    if isinstance(value, list):
-        return [_sanitize_trace_node(item, replacements) for item in value]
-    if isinstance(value, dict):
-        return {key: _sanitize_trace_node(item, replacements) for key, item in value.items()}
-    return value
+def _html_replacement_for_value(value: str, replacements: dict[str, str], *, attribute: bool) -> str | None:
+    placeholder = replacements.get(html_unescape(value))
+    if placeholder is None:
+        return None
+    return html_escape(placeholder, quote=attribute)
+
+
+def _sanitize_input_tag(tag: str, replacements: dict[str, str]) -> tuple[str, bool]:
+    changed = False
+
+    def replace_value(match: re.Match[str]) -> str:
+        nonlocal changed
+        raw_attr_value = match.group("quoted") if match.group("quote") else match.group("unquoted")
+        replacement = _html_replacement_for_value(raw_attr_value or "", replacements, attribute=True)
+        if replacement is None:
+            return match.group(0)
+        changed = True
+        quote = match.group("quote") or '"'
+        return f"{match.group('prefix')}{quote}{replacement}{quote}"
+
+    return _VALUE_ATTR_RE.sub(replace_value, tag, count=1), changed
+
+
+def _sanitize_html_input_values(html: str, replacements: dict[str, str]) -> tuple[str, bool]:
+    changed = False
+
+    def replace_input(match: re.Match[str]) -> str:
+        nonlocal changed
+        tag, tag_changed = _sanitize_input_tag(match.group(0), replacements)
+        changed = changed or tag_changed
+        return tag
+
+    def replace_textarea(match: re.Match[str]) -> str:
+        nonlocal changed
+        replacement = _html_replacement_for_value(match.group("value"), replacements, attribute=False)
+        if replacement is None:
+            return match.group(0)
+        changed = True
+        return f"{match.group('open')}{replacement}{match.group('close')}"
+
+    sanitized = _INPUT_TAG_RE.sub(replace_input, html or "")
+    sanitized = _TEXTAREA_RE.sub(replace_textarea, sanitized)
+    return sanitized, changed
 
 
 def _sanitize_captured_state(
@@ -150,8 +198,8 @@ def _sanitize_captured_state(
 ) -> HarnessCapturedPageState | None:
     if state is None or not replacements:
         return state
-    sanitized_html = _replace_recorded_values(state.html, replacements)
-    if sanitized_html == state.html:
+    sanitized_html, changed = _sanitize_html_input_values(state.html, replacements)
+    if not changed:
         return state
     quality = dict(state.capture_quality or {})
     quality["input_values_parameterized"] = True

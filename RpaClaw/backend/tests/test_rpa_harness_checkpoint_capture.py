@@ -265,6 +265,57 @@ async def test_loading_navigation_after_state_is_saved_as_partial_not_stable(tmp
 
 
 @pytest.mark.asyncio
+async def test_fill_parameterization_preserves_trace_metadata_and_html_structure(tmp_path: Path):
+    state = HarnessCaptureSessionState(
+        capture_id="hcap-test",
+        session_id="session-1",
+        capture_scope="full_sop",
+    )
+    store = HarnessAssetStore(tmp_path)
+    html = "<html><body><label>Name</label><input name='account' value='a'><textarea>a</textarea></body></html>"
+
+    checkpoint = await capture_step_checkpoint(
+        state,
+        store,
+        step_index=1,
+        step_id="step-fill-1",
+        step_intent="Fill a into the Name field",
+        recording_mode="manual",
+        before_page=_FakePage(url="https://example.test/form", title="Form", html=html),
+        after_page=_FakePage(url="https://example.test/form", title="Form", html=html),
+        trace_events=[
+            {
+                "trace_id": "trace-fill-1",
+                "action": "fill",
+                "selector": "input[name='account']",
+                "value": "a",
+                "target_evidence": {"label": "Name"},
+                "signals": {"label": "Name", "source_method": "typing"},
+            }
+        ],
+        runtime_status="success",
+    )
+
+    step_dir = tmp_path / "hcap-test" / "steps" / "001"
+    trace_event = json.loads((step_dir / "trace_events.json").read_text(encoding="utf-8"))[0]
+    before_html = (step_dir / "before.html").read_text(encoding="utf-8")
+    checkpoint_json = json.loads((step_dir / "checkpoint.json").read_text(encoding="utf-8"))
+
+    assert checkpoint is not None
+    assert trace_event["value"] == "{{input:name}}"
+    assert trace_event["selector"] == "input[name='account']"
+    assert trace_event["signals"]["label"] == "Name"
+    assert trace_event["target_evidence"]["label"] == "Name"
+    assert checkpoint_json["step_intent"] == "Fill {{input:name}} into the Name field"
+    assert "<label>Name</label>" in before_html
+    assert "name='account'" in before_html
+    assert "value='{{input:name}}'" in before_html
+    assert "<textarea>{{input:name}}</textarea>" in before_html
+    assert "<l{{input:name}}bel>" not in before_html
+    assert "n{{input:name}}me=" not in before_html
+
+
+@pytest.mark.asyncio
 async def test_scenario_manifest_accumulates_captured_step_refs(tmp_path: Path):
     state = HarnessCaptureSessionState(
         capture_id="hcap-test",
