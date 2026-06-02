@@ -1,4 +1,5 @@
 import json
+import asyncio
 from pathlib import Path
 import sys
 import types
@@ -173,6 +174,79 @@ async def test_ai_chat_capture_writes_real_before_after_checkpoint(monkeypatch, 
         assert expected["action_signals"]["target_role"] == "link"
         assert expected["action_signals"]["target_text_contains"] == "ScienceClaw"
         assert expected["snapshot_signals"]["must_contain_text"] == ["ScienceClaw"]
+    finally:
+        manager._harness_capture_sessions.pop(session.id, None)
+        manager.sessions.pop(session.id, None)
+
+
+@pytest.mark.asyncio
+async def test_full_sop_capture_preserves_delayed_download_signal_in_core_trace(monkeypatch, tmp_path: Path):
+    manager = ROUTE_MODULE.rpa_manager
+    session = RPASession(id="harness-ai-delayed-download", user_id="u1", sandbox_session_id="sandbox")
+    manager.sessions[session.id] = session
+    page = _MutableFakePage()
+    page._html = "<html><body><table><tbody><tr><td>first-row.xlsx</td></tr></tbody></table></body></html>"
+
+    monkeypatch.setattr(ROUTE_MODULE.settings, "rpa_harness_capture_enabled", True)
+    monkeypatch.setattr(ROUTE_MODULE.settings, "rpa_harness_assets_dir", str(tmp_path))
+    manager.start_harness_capture(session.id, capture_scope="full_sop", enabled=True)
+
+    class FakeRecordingRuntimeAgent:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def run(self, **kwargs):
+            before = RPAPageState(url=page.url, title=await page.title())
+
+            async def enqueue_download():
+                await asyncio.sleep(0.05)
+                session.pending_download_events.append(
+                    {
+                        "filename": "first-row.xlsx",
+                        "url": "https://example.test/exportQuery",
+                        "tab_id": "tab-export",
+                    }
+                )
+
+            asyncio.create_task(enqueue_download())
+            trace = RPAAcceptedTrace(
+                trace_id="trace-ai-download",
+                trace_type=RPATraceType.AI_OPERATION,
+                source="ai",
+                user_instruction="点击列表中第一行的文件名称",
+                description="Click the file name link in the first row of the export list table",
+                before_page=before,
+                after_page=RPAPageState(url=page.url, title=await page.title()),
+                ai_execution=RPAAIExecution(
+                    code=(
+                        "async def run(page, results):\n"
+                        "    await page.locator('tbody tr').first.locator('td[data-colid=\"col_25\"] a').click()\n"
+                        "    return {'action_performed': True}"
+                    )
+                ),
+            )
+            return RecordingAgentResult(
+                success=True,
+                trace=trace,
+                message="Recording command completed.",
+            )
+
+    monkeypatch.setattr(ROUTE_MODULE, "RecordingRuntimeAgent", FakeRecordingRuntimeAgent)
+    monkeypatch.setattr(manager, "get_page", lambda target_session_id: page if target_session_id == session.id else None)
+
+    try:
+        response = await ROUTE_MODULE.chat_with_assistant(
+            session.id,
+            ROUTE_MODULE.ChatRequest(message="点击列表中第一行的文件名称"),
+            type("User", (), {"id": "u1"})(),
+        )
+        await _drain_sse(response)
+
+        assert session.traces[0].signals["download"]["filename"] == "first-row.xlsx"
+        step_dir = tmp_path / manager.get_harness_capture_session(session.id).capture_id / "steps" / "001"
+        trace_events = json.loads((step_dir / "trace_events.json").read_text(encoding="utf-8"))
+        assert trace_events[0]["signals"]["download"]["filename"] == "first-row.xlsx"
+        assert trace_events[0]["signals"]["download"]["tab_id"] == "tab-export"
     finally:
         manager._harness_capture_sessions.pop(session.id, None)
         manager.sessions.pop(session.id, None)

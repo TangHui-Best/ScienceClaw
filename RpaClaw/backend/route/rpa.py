@@ -260,6 +260,7 @@ async def _apply_recording_agent_result(session_id: str, result: RecordingAgentR
     for diagnostic in result.diagnostics:
         await rpa_manager.append_trace_diagnostic(session_id, diagnostic)
     if result.trace:
+        await rpa_manager.finalize_trace_side_effects(session_id, result.trace)
         await rpa_manager.append_trace(session_id, result.trace)
     if result.output_key:
         rpa_manager.write_runtime_result(session_id, result.output_key, result.output)

@@ -80,6 +80,9 @@ Default local/desktop mode opens as the bootstrap admin without login. Set `AUTH
 - **军规 10：不要盲目把空值视为失败。**
   空字符串、空列表、空表格或缺省字段在很多业务场景中可能是合法结果，不能为了修复某个空提取案例就新增“空值不是成功”的泛化硬拦截。遇到空提取应先定位 root cause（如 selector 过宽、候选排序错误、snapshot 缺失、planner 误判或编译策略不匹配），将空值作为诊断 evidence 或进入 repair，而不是用全局非空校验替代真正修复。
 
+- **军规 11：Harness 不得影响 SOP 转 Skill 主链路。**
+  Harness capture、review、replay、asset governance 只能观察、沉淀和验证已经由 RPA 核心链路 finalized 的 accepted trace / expected signals，不得参与或改变 recorder 事实捕获、下载/弹窗/导航归因、trace 排序、dataflow 推断或 `TraceSkillCompiler` 动作分支。若开启/关闭 Harness 导致录制步骤、trace signals 或生成 Skill 不一致，必须优先按核心链路边界回归处理，不能让 Harness 兜底修正主链路事实。参见 `docs/decisions/ADR-004-rpa-core-owns-recording-facts-harness-adapts-only.md`。
+
 ## RPA Implementation Boundaries
 
 - 录制阶段自然语言步骤由 `RecordingRuntimeAgent` 执行，只处理当前用户指令，不重新规划整套 SOP。

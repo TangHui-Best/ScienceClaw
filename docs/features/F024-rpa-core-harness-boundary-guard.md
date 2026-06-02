@@ -22,7 +22,7 @@ updated: 2026-06-02
 
 ## Current Status
 
-Done。已修复 simple click plan 缺少 download signal 捕获的问题；已建立 timeline 投影测试、Core/Harness 边界 ADR、Lesson 和项目级规则。Focused Core/Harness 回归与 Harness knowledge check 已通过。
+Done。已修复 simple click plan 缺少 download signal 捕获的问题；F024.1 进一步修复 Full SOP Harness capture 开启时，AI 点击触发的延迟下载晚于 `agent.run()`、早于 checkpoint capture 导致当前 trace 丢失 `signals.download` 的回归。已建立 timeline 投影测试、Core/Harness 边界 ADR、Lesson 和项目级规则。Focused Core/Harness 回归与 Harness knowledge check 已通过。
 
 ## Links
 
@@ -41,13 +41,13 @@ Done。已修复 simple click plan 缺少 download signal 捕获的问题；已�
 - [x] 编译器仍只消费 accepted trace；Harness controlled download 仍是 replay/asset 验证能力，不定义产品录制事实。
 - [x] AGENTS.md 增加可验证规则：Harness/RPA 变更触碰 Core 文件时必须跑 Core SOP->SKILL 回归。
 - [x] 完整 focused Core/Harness 回归命令完成并记录在 EV-024。
+- [x] Full SOP Harness capture 开启时，paused 期间晚到的 download event 在 append trace 前由 Core finalization 归并到当前 AI trace，并写入 Harness checkpoint 的 `trace_events.json`。
 
 ## Patch History
 
-None yet.
-
 | Patch | Date | Commit | Symptom | Root Cause | Protection | Status |
 | --- | --- | --- | --- | --- | --- | --- |
+| F024.1 | 2026-06-02 | pending | 开启 Full SOP Harness capture 后，“点击列表中第一行的文件名称”真实触发下载，但生成 Skill 第 10 步没有 `expect_download()`；不开 Harness 时偶尔能靠 standalone download fallback 成功。 | route 在 `agent.run()` 后立即 `append_trace()`，而 manager 的 paused pending download 可能在 Harness after checkpoint 期间才到达，错过当前 trace 的 pending merge 点。 | `test_apply_recording_agent_result_waits_for_paused_download_before_append`；`test_full_sop_capture_preserves_delayed_download_signal_in_core_trace`；EV-024 focused Core/Harness 回归。 | done |
 
 ## Evidence
 

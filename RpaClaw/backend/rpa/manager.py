@@ -31,6 +31,32 @@ logger = logging.getLogger(__name__)
 
 RPA_PAGE_TIMEOUT_MS = 60000
 HOVER_PROMOTION_WINDOW_MS = 2500
+TRACE_DOWNLOAD_SETTLE_TIMEOUT_S = 3.0
+TRACE_DOWNLOAD_SETTLE_POLL_S = 0.05
+TRACE_DOWNLOAD_ACTION_TOKENS = (
+    ".click(",
+    ".press(",
+    ".check(",
+    ".uncheck(",
+    ".select_option(",
+)
+TRACE_DOWNLOAD_INTENT_TOKENS = (
+    "download",
+    "file",
+    "file name",
+    "filename",
+    "attachment",
+    "xlsx",
+    "xls",
+    "csv",
+    "pdf",
+    "zip",
+    "下载",
+    "文件",
+    "文件名",
+    "文件名称",
+    "附件",
+)
 
 
 class RPAStep(BaseModel):
@@ -2300,6 +2326,36 @@ class RPASessionManager:
         trace.signals = signals
         session.pending_download_events.clear()
 
+    @staticmethod
+    def _trace_has_download_signal(trace: RPAAcceptedTrace) -> bool:
+        signals = trace.signals if isinstance(trace.signals, dict) else {}
+        return isinstance(signals.get("download"), dict)
+
+    @classmethod
+    def _should_wait_for_pending_download(cls, trace: RPAAcceptedTrace) -> bool:
+        if trace.trace_type != RPATraceType.AI_OPERATION or trace.source != "ai":
+            return False
+        code = str(trace.ai_execution.code if trace.ai_execution else "")
+        if not any(token in code for token in TRACE_DOWNLOAD_ACTION_TOKENS):
+            return False
+        if cls._trace_url_changed(trace):
+            return False
+        text = " ".join(
+            str(value or "")
+            for value in (
+                trace.user_instruction,
+                trace.description,
+                code,
+            )
+        ).lower()
+        return any(token in text for token in TRACE_DOWNLOAD_INTENT_TOKENS)
+
+    @staticmethod
+    def _trace_url_changed(trace: RPAAcceptedTrace) -> bool:
+        before = str(getattr(trace.before_page, "url", "") or "").rstrip("/")
+        after = str(getattr(trace.after_page, "url", "") or "").rstrip("/")
+        return bool(before and after and before != after)
+
     async def append_trace_diagnostic(self, session_id: str, diagnostic: RPATraceDiagnostic) -> List[RPATraceDiagnostic]:
         session = self.sessions.get(session_id)
         if not session:
@@ -2319,6 +2375,28 @@ class RPASessionManager:
         if not session:
             raise ValueError(f"Session {session_id} not found")
         session.runtime_results.write(key, value)
+
+    async def finalize_trace_side_effects(
+        self,
+        session_id: str,
+        trace: RPAAcceptedTrace,
+        *,
+        timeout_s: float = TRACE_DOWNLOAD_SETTLE_TIMEOUT_S,
+    ) -> None:
+        session = self.sessions.get(session_id)
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+
+        self._merge_pending_downloads_into_trace(session, trace)
+        if self._trace_has_download_signal(trace) or not self._should_wait_for_pending_download(trace):
+            return
+
+        deadline = asyncio.get_running_loop().time() + max(0.0, timeout_s)
+        while asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(TRACE_DOWNLOAD_SETTLE_POLL_S)
+            self._merge_pending_downloads_into_trace(session, trace)
+            if self._trace_has_download_signal(trace):
+                return
 
     def store_region_context(
         self,
