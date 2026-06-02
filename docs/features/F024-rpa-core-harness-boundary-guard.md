@@ -51,6 +51,7 @@ Done。已修复 simple click plan 缺少 download signal 捕获的问题；F024
 | F024.2 | 2026-06-02 | pending | 内网验证发现生成脚本已有下载处理，但录制页左侧实时步骤仍只显示点击文件名，不显示下载副作用。 | 实时录制页 SSE 路径使用 `mapServerTraces()` 直接把 raw trace 映射为展示步骤，只读取 `description/user_instruction/action`，没有投影 trace 上已有的 `signals.download`。 | 新增 RecorderPage RED/GREEN 回归，要求 `trace_added` 中的 `signals.download.filename` 在左侧步骤中可见；实现只改展示字段，不新增 trace、不读取 Harness artifact、不触碰 compiler。 | done |
 
 | F024.3 | 2026-06-02 | pending | 内网验证发现开启 Full SOP Harness capture 后，配置页录制步骤和生成 Skill 都出现两次密码输入；不开启 Harness capture 时正常。 | Harness capture 额外采集当前编辑框状态后，密码输入可能同时产生浏览器 input fill 和 current editable fill；中间的 focus click 被 Core/Harness 折叠后，两条 fill 指向同一密码框但 sequence 不相邻，旧去重只接受相邻 sequence，导致 accepted trace 多出一次密码 fill。 | Core recorder 的 fill 去重扩展为同一 target/frame/tab/source、相同 value、短时间窗口内可跨 sequence 空洞合并；Harness trace persistence 只对 trace 文案字段同步替换输入占位符，避免 raw input 从 `description` 泄漏；新增重复敏感 fill 回归并跑完整 manager 回归。 | done |
+| F024.4 | 2026-06-02 | pending | 全面审视 Harness/Core 边界时发现，`navigate_active_tab()` 只有在 Full SOP Harness capture 开启时才同步 append navigation trace；不开 Harness 时依赖浏览器 `framenavigated` 异步回流，导致同一导航入口的 accepted trace 来源和时机受 Harness 开关影响。 | 导航 endpoint 为了写 Harness entry-navigation checkpoint，把 Core navigation trace 创建放进了 Harness 条件分支，同时只在 Harness 分支 suppress 底层 navigation event。 | Core navigation trace 创建上移为无条件主链路行为，底层 `framenavigated` suppress 也无条件执行以避免重复；Harness 开启时只额外写 before/after HTML checkpoint。新增不开 Harness 的 navigation trace 回归，并保留 Full SOP checkpoint 回归。 | done |
 
 ## Patch Churn Review
 
@@ -59,6 +60,7 @@ F024 已出现 3 个补丁，但三次不是同一站点规则的堆叠，而是
 - F024.1 处理 AI 执行边界的 download 归并时机，确保 Core accepted trace 拥有真实下载事实。
 - F024.2 处理前端实时 timeline 投影，确保 UI 只展示 Core trace 已有事实，不从 Harness artifact 合成事实。
 - F024.3 处理 manual recorder fill 归并与 Harness artifact 参数化，确保 Full SOP Harness capture 不能让同一输入动作在 Core accepted timeline 中变成两条事实。
+- F024.4 处理 URL 导航入口，确保 Core navigation trace 是否产生不再依赖 Harness capture 开关。
 
 零基审视结论：不需要 fork Harness/Core 双链路，也不需要让 Harness capture 过滤浏览器事件；这两条都会制造第二事实源。继续坚持 ADR-004：Core recorder 负责定义唯一录制事实，Harness 只观察、复制、验证。后续若再次出现 Harness 开启/关闭导致 accepted trace 语义不同，应优先补 Core 事实归并/副作用捕获的通用规则，并同时添加 Harness enabled/disabled 主链路回归。
 

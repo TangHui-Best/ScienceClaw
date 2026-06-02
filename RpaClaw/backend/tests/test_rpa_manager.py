@@ -3308,6 +3308,30 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(page.wait_for_load_state_calls, ["domcontentloaded"])
         self.assertEqual(next(tab for tab in tabs if tab["tab_id"] == tab_id)["url"], "https://example.com")
 
+    async def test_navigate_active_tab_records_core_trace_without_harness_capture(self):
+        page = _FakePage("about:blank", "Blank")
+        await self.manager.register_page(self.session.id, page, make_active=True)
+
+        await self.manager.navigate_active_tab(self.session.id, "example.com")
+
+        self.assertEqual(len(self.session.traces), 1)
+        trace = self.session.traces[0]
+        self.assertEqual(trace.trace_type.value, "navigation")
+        self.assertEqual(trace.action, "navigate")
+        self.assertEqual(trace.source, "manual")
+        self.assertEqual(trace.before_page.url, "about:blank")
+        self.assertEqual(trace.after_page.url, "https://example.com")
+        self.assertEqual(trace.value, "https://example.com")
+
+    async def test_navigate_active_tab_does_not_record_trace_when_session_paused(self):
+        page = _FakePage("about:blank", "Blank")
+        await self.manager.register_page(self.session.id, page, make_active=True)
+        self.session.paused = True
+
+        await self.manager.navigate_active_tab(self.session.id, "example.com")
+
+        self.assertEqual(len(self.session.traces), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

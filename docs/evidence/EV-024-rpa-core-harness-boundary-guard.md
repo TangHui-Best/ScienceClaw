@@ -85,6 +85,16 @@ $env:PYTHONPATH='RpaClaw'; python -m pytest --basetemp .pytest-tmp-f024-password
 $env:PYTHONPATH='RpaClaw'; python -m pytest --basetemp .pytest-tmp-f024-password-compiler RpaClaw/backend/tests/test_rpa_trace_timeline.py::test_trace_timeline_exposes_sensitive_fill_contract_without_raw_trace_dependency RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_manual_fill_uses_sensitive_credential_param RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_manual_fill_uses_harness_input_placeholder_runtime_param RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_duplicate_sensitive_fill_values_consume_params_in_order -q
 ```
 
+F024.4 Core/Harness navigation boundary audit:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'; python -m pytest --basetemp .pytest-tmp-f024-nav-red RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_navigate_active_tab_records_core_trace_without_harness_capture -q
+```
+
+```powershell
+$env:PYTHONPATH='RpaClaw'; python -m pytest --basetemp .pytest-tmp-f024-nav-focused RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_navigate_active_tab_records_core_trace_without_harness_capture RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_navigate_active_tab_does_not_record_trace_when_session_paused RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_navigate_active_tab_normalizes_url_and_updates_metadata RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py::test_full_sop_capture_records_entry_navigation_checkpoint -q
+```
+
 Harness structure:
 
 ```powershell
@@ -116,6 +126,9 @@ python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --
 - F024.3 Harness fill checkpoint regression: `4 passed`。Full SOP Harness capture still folds focus-click checkpoints and persists parameterized fill values without raw input text in `trace_events.json` / checkpoint / expected / captured HTML.
 - F024.3 manager regression: `104 passed`。
 - F024.3 timeline/compiler sensitive fill regression: `4 passed`。Credential and Harness input placeholders still compile to runtime parameters; intentionally distinct password fields still consume `password` / `password_2` in order.
+- F024.4 boundary audit found one remaining intrusion: `navigate_active_tab()` created Core navigation trace only inside the Harness Full SOP branch. RED regression: `1 failed` with `len(session.traces) == 0` when Harness capture was disabled.
+- F024.4 GREEN navigation boundary regression: `4 passed, 29 warnings`。Warnings are existing Python 3.14 / FastAPI deprecation warnings. Core navigation trace is now recorded without Harness capture, paused sessions still do not record navigation facts, and Full SOP Harness capture still writes the entry navigation checkpoint.
+- F024.4 final audit regression: `test_rpa_manager.py` `106 passed`; entry-navigation/download Harness focused regression `2 passed, 29 warnings`; timeline/compiler download focused regression `3 passed`; strict Harness knowledge validation `Errors: 0. Warnings: 0`.
 
 ## Harness Validation
 

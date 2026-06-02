@@ -650,41 +650,74 @@ class RPASessionManager:
 
         normalized_url = self._normalize_url(url)
         harness_state = self._harness_capture_sessions.get(session_id)
-        harness_before_state = None
-        harness_step_index = len(session.traces) + 1
-        if (
-            settings.rpa_harness_capture_enabled
+        should_record_navigation = session.status == "recording" and not session.paused
+        harness_active = (
+            should_record_navigation
+            and settings.rpa_harness_capture_enabled
             and harness_state is not None
             and harness_state.capture_scope == "full_sop"
-        ):
+        )
+        harness_before_state = None
+        before_page = RPAPageState(
+            url=getattr(page, "url", "") or "",
+            title=await self._safe_page_title(page),
+        )
+        harness_step_index = len(session.traces) + 1
+        if harness_active:
             harness_before_state = await capture_current_page_state(page)
-            self._suppressed_navigation_events.setdefault(session_id, {})[session.active_tab_id] = normalized_url
 
-        await page.goto(normalized_url)
-        await page.wait_for_load_state("domcontentloaded")
+        suppressed = self._suppressed_navigation_events.setdefault(session_id, {})
+        suppressed[session.active_tab_id] = normalized_url
+        try:
+            await page.goto(normalized_url)
+            await page.wait_for_load_state("domcontentloaded")
+        finally:
+            suppressed = self._suppressed_navigation_events.get(session_id, {})
+            if suppressed.get(session.active_tab_id) == normalized_url:
+                suppressed.pop(session.active_tab_id, None)
+            if not suppressed:
+                self._suppressed_navigation_events.pop(session_id, None)
 
         tab = self._tab_meta.get(session_id, {}).get(session.active_tab_id)
+        after_title = await self._safe_page_title(page)
         if tab:
             tab.url = getattr(page, "url", normalized_url) or normalized_url
             tab.last_seen_at = datetime.now()
-            title = await self._safe_page_title(page)
-            if title:
-                tab.title = title
+            if after_title:
+                tab.title = after_title
 
-        if harness_before_state is not None:
-            after_state = await capture_current_page_state(page)
-            trace = RPAAcceptedTrace(
-                trace_id=f"trace-{uuid.uuid4()}",
-                trace_type=RPATraceType.NAVIGATION,
-                source="manual",
-                action="navigate",
-                description=f"Navigate to {normalized_url}",
-                before_page=RPAPageState(url=harness_before_state.url, title=harness_before_state.title),
-                after_page=RPAPageState(url=after_state.url, title=after_state.title),
-                value=normalized_url,
-                signals={"tab": {"tab_id": session.active_tab_id}},
-            )
-            await self.append_trace(session_id, trace)
+        after_page = RPAPageState(
+            url=getattr(page, "url", normalized_url) or normalized_url,
+            title=after_title,
+        )
+        if not should_record_navigation:
+            return {
+                "tab_id": session.active_tab_id,
+                "url": getattr(page, "url", normalized_url) or normalized_url,
+            }
+
+        after_state = await capture_current_page_state(page) if harness_before_state is not None else None
+        trace = RPAAcceptedTrace(
+            trace_id=f"trace-{uuid.uuid4()}",
+            trace_type=RPATraceType.NAVIGATION,
+            source="manual",
+            action="navigate",
+            description=f"Navigate to {normalized_url}",
+            before_page=(
+                RPAPageState(url=harness_before_state.url, title=harness_before_state.title)
+                if harness_before_state is not None
+                else before_page
+            ),
+            after_page=(
+                RPAPageState(url=after_state.url, title=after_state.title)
+                if after_state is not None
+                else after_page
+            ),
+            value=normalized_url,
+            signals={"tab": {"tab_id": session.active_tab_id}},
+        )
+        await self.append_trace(session_id, trace)
+        if harness_before_state is not None and after_state is not None:
             await self.capture_harness_step_checkpoint(
                 session_id,
                 step_index=harness_step_index,
