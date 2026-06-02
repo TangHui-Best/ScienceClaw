@@ -257,3 +257,128 @@ async def test_capture_writes_expected_signal_draft(tmp_path: Path):
     assert expected["action_signals"]["expected_action_type"] == "click"
     assert expected["snapshot_signals"]["must_contain_text"] == ["ScienceClaw"]
 
+
+@pytest.mark.asyncio
+async def test_fill_parameterization_uses_semantic_input_keys_without_touching_download(tmp_path: Path):
+    state = HarnessCaptureSessionState(
+        capture_id="hcap-test",
+        session_id="session-1",
+        capture_scope="full_sop",
+    )
+    store = HarnessAssetStore(tmp_path)
+
+    await capture_step_checkpoint(
+        state,
+        store,
+        step_index=1,
+        step_id="step-1",
+        step_intent="Enter W3 account, password, and download a file",
+        recording_mode="manual",
+        before_page=_FakePage(
+            url="https://example.test/login",
+            title="Login",
+            html="<html><body><input placeholder='W3账号'><input placeholder='密码'></body></html>",
+        ),
+        after_page=_FakePage(
+            url="https://example.test/report",
+            title="Report",
+            html="<html><body><a>report.xlsx</a></body></html>",
+        ),
+        trace_events=[
+            {
+                "trace_id": "trace-account",
+                "action": "fill",
+                "value": "test1",
+                "locator_candidates": [
+                    {
+                        "selected": True,
+                        "locator": {"method": "role", "role": "textbox", "name": "W3账号"},
+                    }
+                ],
+            },
+            {
+                "trace_id": "trace-password",
+                "action": "fill",
+                "value": "secret-value",
+                "sensitive": True,
+                "locator_candidates": [
+                    {
+                        "selected": True,
+                        "locator": {"method": "role", "role": "textbox", "name": "密码"},
+                    }
+                ],
+            },
+            {
+                "trace_id": "trace-download",
+                "action": "click",
+                "signals": {"download": {"filename": "report.xlsx", "count": 1}},
+            },
+        ],
+        runtime_status="success",
+    )
+
+    step_dir = tmp_path / "hcap-test" / "steps" / "001"
+    trace_events = json.loads((step_dir / "trace_events.json").read_text(encoding="utf-8"))
+    expected = json.loads((step_dir / "expected.json").read_text(encoding="utf-8"))
+
+    assert trace_events[0]["value"] == "{{input:w3_account}}"
+    assert trace_events[0]["signals"]["input_contract"]["input_key"] == "w3_account"
+    assert trace_events[1]["value"] == "{{input:password}}"
+    assert trace_events[1]["signals"]["input_contract"]["input_key"] == "password"
+    assert trace_events[2]["signals"]["download"] == {"filename": "report.xlsx", "count": 1}
+    assert expected["state_signals"]["sanitized_replay_contract"]["runtime_input_refs"] == ["w3_account"]
+
+
+@pytest.mark.asyncio
+async def test_fill_parameterization_names_weak_nth_textbox_locator_stably(tmp_path: Path):
+    state = HarnessCaptureSessionState(
+        capture_id="hcap-test",
+        session_id="session-1",
+        capture_scope="full_sop",
+    )
+    store = HarnessAssetStore(tmp_path)
+
+    await capture_step_checkpoint(
+        state,
+        store,
+        step_index=1,
+        step_id="step-1",
+        step_intent="Enter report filter",
+        recording_mode="manual",
+        before_page=_FakePage(
+            url="https://example.test/report",
+            title="Report",
+            html="<html><body><input></body></html>",
+        ),
+        after_page=_FakePage(
+            url="https://example.test/report",
+            title="Report",
+            html="<html><body><input value='TEST'></body></html>",
+        ),
+        trace_events=[
+            {
+                "trace_id": "trace-filter",
+                "action": "fill",
+                "value": "TEST",
+                "locator_candidates": [
+                    {
+                        "selected": True,
+                        "locator": {
+                            "method": "nth",
+                            "locator": {"method": "role", "role": "textbox"},
+                            "index": 0,
+                        },
+                    }
+                ],
+            }
+        ],
+        runtime_status="success",
+    )
+
+    trace_events = json.loads(
+        (tmp_path / "hcap-test" / "steps" / "001" / "trace_events.json").read_text(encoding="utf-8")
+    )
+
+    assert trace_events[0]["value"] == "{{input:textbox_1}}"
+    assert trace_events[0]["signals"]["input_contract"]["input_key"] == "textbox_1"
+

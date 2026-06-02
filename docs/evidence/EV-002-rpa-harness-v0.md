@@ -8,7 +8,7 @@ feature_ids: [F002]
 feature_refs:
   - docs/features/F002-rpa-harness-v0.md
 created: 2026-05-18
-updated: 2026-06-01
+updated: 2026-06-02
 evidence_level: exhaustive
 ---
 
@@ -1058,3 +1058,81 @@ Closeout notes:
 - Residual risk: existing internal assets that already persisted `press V`
   remain diagnostic evidence; they should be recaptured after this fix if they
   are candidates for promotion.
+
+## F002.11 Fill Input Contract Naming
+
+Executed on 2026-06-02.
+
+Scope boundary:
+
+- This slice improves only sanitized fill input contract names such as
+  `{{input:w3_account}}`, `{{input:password}}`, and `{{input:textbox_1}}`.
+- It does not change recorder event capture, accepted trace sorting,
+  `manual_step_to_trace`, `TraceSkillCompiler` action rendering, or download
+  side-effect merging.
+
+Root cause:
+
+- The previous key derivation stripped non-ASCII label text, so labels such as
+  `W3账号` and `密码` could collapse to `w3` or `input`.
+- Weak locators such as `textbox >> nth=0` did not recurse into their base role,
+  so they also fell back to generic `input`.
+- `manager.py` and `harness/capture.py` carried duplicate key derivation logic,
+  increasing the chance of future drift between full-sop cumulative
+  sanitization and checkpoint persistence.
+
+Implementation changes:
+
+- Added `backend.rpa.harness.input_contract.derive_fill_input_key()` as a
+  deterministic fill-only helper.
+- The helper preserves explicit existing `input_contract.input_key`, derives
+  names from target evidence and selected locator candidates, maps common
+  field-label terms such as account/password/query to stable ASCII tokens, and
+  falls back to stable weak-locator names such as `textbox_1`.
+- `harness.capture` and `manager` now share this helper for write-time
+  parameterization and cumulative input replacements.
+- Non-fill traces are untouched; tests assert a click trace's
+  `signals.download` remains unchanged while adjacent fill traces are renamed.
+
+Focused RED verification:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m pytest --basetemp E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-harness-input-names RpaClaw\backend\tests\test_rpa_harness_expected_signals.py -k "semantic_input_keys or weak_nth" -q
+```
+
+RED result:
+
+```text
+test_fill_parameterization_uses_semantic_input_keys_without_touching_download
+  expected {{input:w3_account}}, got {{input:w3}}
+test_fill_parameterization_names_weak_nth_textbox_locator_stably
+  expected {{input:textbox_1}}, got {{input:input}}
+```
+
+Focused GREEN/regression verification:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m pytest --basetemp E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-harness-input-names RpaClaw\backend\tests\test_rpa_harness_expected_signals.py -k "semantic_input_keys or weak_nth" -q
+python -m pytest --basetemp E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-harness-input-names RpaClaw\backend\tests\test_rpa_harness_expected_signals.py RpaClaw\backend\tests\test_rpa_harness_checkpoint_capture.py RpaClaw\backend\tests\test_rpa_manager.py RpaClaw\backend\tests\test_rpa_recorder_actions_js.py RpaClaw\backend\tests\test_rpa_screencast.py RpaClaw\backend\tests\test_rpa_trace_skill_compiler.py -k "harness or fill or paste or download" -q
+```
+
+Result:
+
+```text
+2 passed, 8 deselected
+56 passed, 191 deselected
+```
+
+Closeout notes:
+
+- Feature patch: F002.11 completed.
+- Evidence level: standard for this follow-up enhancement.
+- ADR: not triggered; this preserves the trace-first boundary and does not add
+  a contract-first recording layer.
+- Lesson: not triggered; the F002 Patch Churn Review now records the boundary
+  that readability improvements belong in fill-only sanitization metadata.
+- Residual risk: weak unlabeled inputs still cannot receive true business
+  semantics without user/DOM evidence; they now receive stable names such as
+  `textbox_1` instead of generic `input`.

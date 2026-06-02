@@ -23,6 +23,7 @@ from .trace_recorder import infer_dataflow_for_ai_fill, infer_dataflow_for_fill,
 from .harness.capture import HarnessCapturedPageState, HarnessCaptureSessionState
 from .harness.capture import capture_current_page_state, capture_step_checkpoint
 from .harness.config import harness_assets_dir
+from .harness.input_contract import derive_fill_input_key
 from .harness.store import HarnessAssetStore
 from backend.config import settings
 
@@ -2147,36 +2148,6 @@ class RPASessionManager:
             return before_state
         return self._manual_harness_before_states.get(session_id, {}).get(previous_step.id)
 
-    @staticmethod
-    def _harness_slug_input_key(value: str) -> str:
-        text = re.sub(r"[^A-Za-z0-9_]+", "_", str(value or "").strip().lower()).strip("_")
-        if not text:
-            return "input"
-        if text[0].isdigit():
-            text = f"input_{text}"
-        return text[:48] or "input"
-
-    @classmethod
-    def _harness_fill_input_key(cls, trace_event: Dict[str, Any]) -> str:
-        signals = trace_event.get("signals") if isinstance(trace_event.get("signals"), dict) else {}
-        contract = signals.get("input_contract") if isinstance(signals.get("input_contract"), dict) else {}
-        if contract.get("input_key"):
-            return cls._harness_slug_input_key(str(contract.get("input_key") or ""))
-        for candidate in trace_event.get("locator_candidates") or []:
-            if not isinstance(candidate, dict):
-                continue
-            locator = candidate.get("locator") if isinstance(candidate.get("locator"), dict) else candidate
-            if not isinstance(locator, dict):
-                continue
-            method = str(locator.get("method") or "").strip().lower()
-            primary = str(locator.get("value") or locator.get("name") or "").strip()
-            if method in {"label", "placeholder", "testid", "title", "alt"} and primary:
-                return cls._harness_slug_input_key(primary)
-            fallback = str(locator.get("name") or locator.get("value") or locator.get("role") or "").strip()
-            if fallback:
-                return cls._harness_slug_input_key(fallback)
-        return "input"
-
     @classmethod
     def _harness_input_replacements_for_trace(cls, trace: RPAAcceptedTrace) -> Dict[str, str]:
         event = trace.model_dump(mode="json")
@@ -2185,7 +2156,7 @@ class RPASessionManager:
         raw_value = str(event.get("value") or "")
         if not raw_value or raw_value.startswith("{{input:"):
             return {}
-        input_key = cls._harness_fill_input_key(event)
+        input_key = derive_fill_input_key(event)
         return {raw_value: f"{{{{input:{input_key}}}}}"}
 
     @classmethod

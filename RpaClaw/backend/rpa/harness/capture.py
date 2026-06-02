@@ -23,6 +23,7 @@ from .models import (
     RuntimeStatus,
 )
 from .expected_signals import build_expected_signal_draft
+from .input_contract import derive_fill_input_key
 from .store import HarnessAssetStore
 
 
@@ -83,47 +84,6 @@ def _html_bytes(html: str) -> int:
     return len((html or "").encode("utf-8"))
 
 
-def _slug_input_key(value: str) -> str:
-    text = re.sub(r"[^A-Za-z0-9_]+", "_", str(value or "").strip().lower()).strip("_")
-    if not text:
-        return "input"
-    if text[0].isdigit():
-        text = f"input_{text}"
-    return text[:48] or "input"
-
-
-def _first_non_empty(*values: object) -> str:
-    for value in values:
-        text = str(value or "").strip()
-        if text:
-            return text
-    return ""
-
-
-def _fill_input_key(trace_event: dict) -> str:
-    signals = trace_event.get("signals") if isinstance(trace_event.get("signals"), dict) else {}
-    contract = signals.get("input_contract") if isinstance(signals.get("input_contract"), dict) else {}
-    if contract.get("input_key"):
-        return _slug_input_key(str(contract.get("input_key") or ""))
-
-    for candidate in trace_event.get("locator_candidates") or []:
-        if not isinstance(candidate, dict):
-            continue
-        locator = candidate.get("locator") if isinstance(candidate.get("locator"), dict) else candidate
-        if not isinstance(locator, dict):
-            continue
-        method = str(locator.get("method") or "").strip().lower()
-        if method in {"label", "placeholder", "testid", "title", "alt"}:
-            key = _first_non_empty(locator.get("value"), locator.get("name"))
-            if key:
-                return _slug_input_key(key)
-        key = _first_non_empty(locator.get("name"), locator.get("value"), locator.get("role"))
-        if key:
-            return _slug_input_key(key)
-
-    return "input"
-
-
 def _parameterize_fill_trace_events(trace_events: list[dict]) -> tuple[list[dict], dict[str, str]]:
     parameterized = deepcopy(trace_events)
     replacements: dict[str, str] = {}
@@ -136,7 +96,7 @@ def _parameterize_fill_trace_events(trace_events: list[dict]) -> tuple[list[dict
         raw_value = str(event.get("value") or "")
         if not raw_value:
             continue
-        base_key = _fill_input_key(event)
+        base_key = derive_fill_input_key(event)
         input_key = base_key
         suffix = 2
         while input_key in used_keys:

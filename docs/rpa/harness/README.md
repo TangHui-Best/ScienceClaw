@@ -92,6 +92,7 @@ Full SOP 的 `steps/001`, `steps/002` ... 是语义 checkpoint 顺序，不是�
   `source_method=paste` 之类的输入方式证据。
 - 如果浏览器事件异步到达，Harness 以排序后的 trace 时间线为准补齐 checkpoint，而不是按事件到达顺序落盘。
 - 表单输入值会在写入资产时参数化，例如 `{{input:login_username}}` / `{{input:login_password}}`；`trace_events.json`、`expected.json`、`checkpoint.json.step_intent` 和 HTML 页面证据都应共享同一套替换。
+- 输入参数名只来自 `fill` 的稳定证据（已有 `input_contract`、`data-testid`、`label`、`placeholder`、`role name`、弱 locator 序号等），用于提升 review/replay 可读性；它不参与 recorder 事件捕获、accepted trace 排序、下载归因或 compiler 动作分支。
 
 因此，内网验证 Full SOP 时，应把资产步骤与生成 Skill 的语义步骤对齐，而不是要求每一次 DOM click / focus 都单独出现。若 Skill 有某个语义步骤但资产缺对应 checkpoint，优先按 capture/export 问题处理；若资产有 checkpoint 但 expected 或 generated Skill 不符合业务预期，再进入 review / compiler / replay 归因。
 
