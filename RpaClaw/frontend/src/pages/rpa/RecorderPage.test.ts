@@ -452,6 +452,43 @@ describe('RecorderPage trace timeline convergence', () => {
     app.unmount();
   });
 
+  it('preserves download summaries when polling the projected session timeline', async () => {
+    get.mockResolvedValue({
+      data: {
+        session: {
+          timeline: [
+            {
+              kind: 'trace',
+              trace_id: 'trace-download',
+              trace_type: 'ai_operation',
+              source: 'ai',
+              action: 'ai_operation',
+              title: 'Click table row column action',
+              summary: 'Click table row column action，并下载 export.xlsx',
+              raw_trace: {
+                signals: {
+                  download: {
+                    filename: 'export.xlsx',
+                  },
+                },
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    const { app, root } = await mountRecorderPage();
+    await vi.advanceTimersByTimeAsync(3000);
+    await flushAsyncUpdates();
+
+    expect(root.textContent).toContain('Click table row column action');
+    expect(root.textContent).toContain('export.xlsx');
+    expect(root.textContent).toContain('下载');
+
+    app.unmount();
+  });
+
   it('includes pending region id in the next assistant chat request', async () => {
     get.mockResolvedValue({ data: { session: { timeline: [] } } });
     mockChatSse([

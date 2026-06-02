@@ -5,7 +5,7 @@ scope: project
 feature_refs:
   - docs/features/F024-rpa-core-harness-boundary-guard.md
 created: 2026-06-02
-updated: 2026-06-02
+updated: 2026-06-03
 evidence_level: exhaustive
 ---
 
@@ -95,6 +95,20 @@ $env:PYTHONPATH='RpaClaw'; python -m pytest --basetemp .pytest-tmp-f024-nav-red 
 $env:PYTHONPATH='RpaClaw'; python -m pytest --basetemp .pytest-tmp-f024-nav-focused RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_navigate_active_tab_records_core_trace_without_harness_capture RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_navigate_active_tab_does_not_record_trace_when_session_paused RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_navigate_active_tab_normalizes_url_and_updates_metadata RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py::test_full_sop_capture_records_entry_navigation_checkpoint -q
 ```
 
+F024.5 projected timeline download display regression:
+
+```powershell
+npm.cmd run test -- RecorderPage.test.ts -t "preserves download summaries"
+```
+
+```powershell
+npm.cmd run test -- RecorderPage.test.ts
+```
+
+```powershell
+npm.cmd run type-check
+```
+
 Harness structure:
 
 ```powershell
@@ -129,6 +143,10 @@ python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --
 - F024.4 boundary audit found one remaining intrusion: `navigate_active_tab()` created Core navigation trace only inside the Harness Full SOP branch. RED regression: `1 failed` with `len(session.traces) == 0` when Harness capture was disabled.
 - F024.4 GREEN navigation boundary regression: `4 passed, 29 warnings`。Warnings are existing Python 3.14 / FastAPI deprecation warnings. Core navigation trace is now recorded without Harness capture, paused sessions still do not record navigation facts, and Full SOP Harness capture still writes the entry navigation checkpoint.
 - F024.4 final audit regression: `test_rpa_manager.py` `106 passed`; entry-navigation/download Harness focused regression `2 passed, 29 warnings`; timeline/compiler download focused regression `3 passed`; strict Harness knowledge validation `Errors: 0. Warnings: 0`.
+- F024.5 RED projected timeline download display regression: `1 failed` as expected. Polling `session.timeline` showed only `Click table row column action`; `export.xlsx` from the projected timeline summary/raw trace download signal was not visible.
+- F024.5 GREEN focused projected timeline regression: `1 passed`. The recorded-step timeline now preserves the download filename when polling projected timeline data.
+- F024.5 RecorderPage regression: `28 passed`.
+- F024.5 frontend type-check: failed on pre-existing unrelated TypeScript errors in `ActivityPanel.vue`, `ChatMessage.vue`, `DesktopTitleBar.vue`, `FilePanel.vue`, `SessionItem.vue`, settings components, `ChatPage.vue`, `desktopWindow.ts`, and related files. No reported error referenced `src/utils/rpaConfigureTimeline.ts` or `src/pages/rpa/RecorderPage.test.ts`.
 
 ## Harness Validation
 
@@ -144,6 +162,7 @@ python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --
 - Code: `RpaClaw/backend/route/rpa.py`
 - Code: `RpaClaw/backend/rpa/trace_timeline.py`
 - Code: `RpaClaw/frontend/src/pages/rpa/RecorderPage.vue`
+- Code: `RpaClaw/frontend/src/utils/rpaConfigureTimeline.ts`
 - Tests: `RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py`
 - Tests: `RpaClaw/backend/tests/test_rpa_route_trace.py`
 - Tests: `RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py`

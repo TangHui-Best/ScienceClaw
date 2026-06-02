@@ -110,6 +110,27 @@ const projectionDisplayId = (item: RpaTimelineProjectionItem, index: number) => 
   return item.trace_id || item.diagnostic_id || item.id || `trace-${index}`;
 };
 
+const getProjectionDownloadDisplay = (item: RpaTimelineProjectionItem): string => {
+  const download = item.raw_trace?.signals?.download;
+  if (!download || typeof download !== 'object') return '';
+  const filename = String(download.filename || '').trim();
+  return filename ? `并下载 ${filename}` : '并触发下载';
+};
+
+const projectionDescription = (item: RpaTimelineProjectionItem): string => {
+  const base = item.title || item.summary || item.action;
+  const downloadDisplay = getProjectionDownloadDisplay(item);
+  if (!downloadDisplay) return base;
+
+  const summary = item.summary || '';
+  const filename = String(item.raw_trace?.signals?.download?.filename || '').trim();
+  if (summary && (summary.includes(downloadDisplay) || (filename && summary.includes(filename)))) {
+    return summary;
+  }
+  if (base.includes(downloadDisplay)) return base;
+  return `${base}，${downloadDisplay}`;
+};
+
 export const mapRpaTimelineProjection = (session: any): RpaConfigureStep[] => {
   const timeline = Array.isArray(session?.timeline) ? session.timeline : [];
   return timeline.map((item: RpaTimelineProjectionItem, index: number) => ({
@@ -125,7 +146,7 @@ export const mapRpaTimelineProjection = (session: any): RpaConfigureStep[] => {
       details: item.trace_type || item.kind,
     },
     value: item.value,
-    description: item.title || item.summary || item.action,
+    description: projectionDescription(item),
     label: item.summary || item.action,
     sensitive: !!item.sensitive,
     url: item.url || '',
