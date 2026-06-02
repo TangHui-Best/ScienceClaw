@@ -191,4 +191,11 @@ def _trace_summary(trace: RPAAcceptedTrace, title: str) -> str:
         output_key = str(decision.get("output_key") or "").strip() if isinstance(decision, dict) else ""
         if output_key:
             return output_key
-    return trace.description or title
+    summary = trace.description or title
+    download = signals.get("download") if isinstance(signals, dict) else None
+    if isinstance(download, dict):
+        filename = str(download.get("filename") or "").strip()
+        if filename:
+            return f"{summary}，并下载 {filename}"
+        return f"{summary}，并触发下载"
+    return summary

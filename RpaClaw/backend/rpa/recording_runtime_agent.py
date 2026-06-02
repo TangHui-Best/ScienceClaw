@@ -43,6 +43,68 @@ _DOWNLOAD_EVENT_DRAIN_TIMEOUT_S = 0.5
 _RECORDING_PLANNER_MIN_OUTPUT_TOKENS = 8192
 
 
+class _DownloadEventCapture:
+    def __init__(self, page: Any):
+        self.page = page
+        self.events: List[Dict[str, Any]] = []
+        self._observed: Optional[asyncio.Future] = None
+        self._attached = False
+
+    def start(self) -> None:
+        self._observed = asyncio.get_running_loop().create_future()
+        page_on = getattr(self.page, "on", None)
+        if not callable(page_on):
+            return
+        try:
+            page_on("download", self._on_download)
+            self._attached = True
+        except Exception:
+            self._attached = False
+
+    def _on_download(self, download: Any) -> None:
+        self.events.append(
+            {
+                "filename": str(getattr(download, "suggested_filename", "") or ""),
+                "url": str(getattr(self.page, "url", "") or ""),
+            }
+        )
+        if self._observed is not None and not self._observed.done():
+            self._observed.set_result(True)
+
+    async def drain(self, *, should_wait: bool) -> None:
+        if not self._attached:
+            return
+        await asyncio.sleep(0)
+        if self.events or not should_wait or self._observed is None:
+            return
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(self._observed),
+                timeout=_DOWNLOAD_EVENT_DRAIN_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError:
+            pass
+
+    def close(self) -> None:
+        if not self._attached:
+            return
+        remover = getattr(self.page, "remove_listener", None) or getattr(self.page, "off", None)
+        if callable(remover):
+            try:
+                remover("download", self._on_download)
+            except Exception:
+                pass
+
+    def signal(self) -> Optional[Dict[str, Any]]:
+        if not self.events:
+            return None
+        download_signal = dict(self.events[0])
+        download_signal["count"] = len(self.events)
+        if len(self.events) > 1:
+            download_signal["files"] = list(self.events)
+        return download_signal
+
+
 RECORDING_RUNTIME_SYSTEM_PROMPT = """You operate exactly one RPA recording command.
 Return JSON only.
 Schema:
@@ -554,7 +616,7 @@ class RecordingRuntimeAgent:
             output=output,
             ai_execution=RPAAIExecution(
                 language="snapshot" if str(plan.get("action_type") or "").strip() == "extract_snapshot" else "python",
-                code=_extract_snapshot_preview_code(plan) if str(plan.get("action_type") or "").strip() == "extract_snapshot" else str(plan.get("code") or ""),
+                code=_trace_replay_code_from_plan(plan),
                 output=output,
                 error=result.get("error"),
                 repair_attempted=repair_attempted,
@@ -623,8 +685,23 @@ class RecordingRuntimeAgent:
                 selector = str(plan.get("selector") or "")
                 if not selector:
                     return {"success": False, "error": "click plan missing selector", "output": ""}
-                await page.locator(selector).first.click()
-                return {"success": True, "output": "clicked", "effect": {"type": "click", "action_performed": True}}
+                download_capture = _DownloadEventCapture(page)
+                download_capture.start()
+                try:
+                    await page.locator(selector).first.click()
+                    await download_capture.drain(should_wait=True)
+                finally:
+                    download_capture.close()
+                response = {
+                    "success": True,
+                    "output": "clicked",
+                    "effect": {"type": "click", "action_performed": True},
+                }
+                download_signal = download_capture.signal()
+                if download_signal:
+                    response["signals"] = {"download": download_signal}
+                    response["effect"] = {"type": "download", "action_performed": True}
+                return response
 
             if action_type == "fill":
                 selector = str(plan.get("selector") or "")
@@ -651,21 +728,9 @@ class RecordingRuntimeAgent:
             if not callable(runner):
                 return {"success": False, "error": "No run(page, results) function defined", "output": ""}
             navigation_history: List[str] = []
-            download_events: List[Dict[str, Any]] = []
-            download_observed = asyncio.get_running_loop().create_future()
             original_goto = getattr(page, "goto", None)
             goto_wrapped = False
-            download_handler_attached = False
-
-            def on_download(download: Any) -> None:
-                download_events.append(
-                    {
-                        "filename": str(getattr(download, "suggested_filename", "") or ""),
-                        "url": str(getattr(page, "url", "") or ""),
-                    }
-                )
-                if not download_observed.done():
-                    download_observed.set_result(True)
+            download_capture = _DownloadEventCapture(page)
 
             if callable(original_goto):
                 async def tracked_goto(url: str, *args: Any, **kwargs: Any) -> Any:
@@ -681,36 +746,15 @@ class RecordingRuntimeAgent:
                 except Exception:
                     goto_wrapped = False
 
-            page_on = getattr(page, "on", None)
-            if callable(page_on):
-                try:
-                    page_on("download", on_download)
-                    download_handler_attached = True
-                except Exception:
-                    download_handler_attached = False
+            download_capture.start()
 
             try:
                 output = runner(page, runtime_results)
                 if inspect.isawaitable(output):
                     output = await output
-                if download_handler_attached:
-                    await asyncio.sleep(0)
-                    if not download_events and _should_drain_download_events(plan, code):
-                        try:
-                            await asyncio.wait_for(
-                                asyncio.shield(download_observed),
-                                timeout=_DOWNLOAD_EVENT_DRAIN_TIMEOUT_S,
-                            )
-                        except asyncio.TimeoutError:
-                            pass
+                await download_capture.drain(should_wait=_should_drain_download_events(plan, code))
             finally:
-                if download_handler_attached:
-                    remover = getattr(page, "remove_listener", None) or getattr(page, "off", None)
-                    if callable(remover):
-                        try:
-                            remover("download", on_download)
-                        except Exception:
-                            pass
+                download_capture.close()
                 if goto_wrapped:
                     try:
                         setattr(page, "goto", original_goto)
@@ -720,11 +764,8 @@ class RecordingRuntimeAgent:
             response = {"success": True, "error": None, "output": output}
             if navigation_history:
                 response["navigation_history"] = navigation_history
-            if download_events:
-                download_signal = dict(download_events[0])
-                download_signal["count"] = len(download_events)
-                if len(download_events) > 1:
-                    download_signal["files"] = list(download_events)
+            download_signal = download_capture.signal()
+            if download_signal:
                 response["signals"] = {"download": download_signal}
                 response["effect"] = {"type": "download", "action_performed": True}
             return response
@@ -888,6 +929,47 @@ def _build_region_plan_validation_payload(
             ),
         },
     }
+
+
+def _trace_replay_code_from_plan(plan: Dict[str, Any]) -> str:
+    action_type = str(plan.get("action_type") or "").strip().lower()
+    if action_type == "extract_snapshot":
+        return _extract_snapshot_preview_code(plan)
+
+    code = str(plan.get("code") or "")
+    if code.strip():
+        return code
+
+    if action_type == "click":
+        selector = str(plan.get("selector") or "").strip()
+        if selector:
+            return (
+                "async def run(page, results):\n"
+                f"    await page.locator({selector!r}).first.click()\n"
+                "    return {'action_performed': True}"
+            )
+
+    if action_type == "fill":
+        selector = str(plan.get("selector") or "").strip()
+        value = str(plan.get("value") or "")
+        if selector:
+            return (
+                "async def run(page, results):\n"
+                f"    await page.locator({selector!r}).first.fill({value!r})\n"
+                "    return {'action_performed': True, 'action_type': 'fill', 'filled_value': "
+                f"{value!r}" + "}"
+            )
+
+    if action_type == "goto":
+        url = str(plan.get("url") or "").strip()
+        if url:
+            return (
+                "async def run(page, results):\n"
+                f"    await page.goto({url!r}, wait_until='domcontentloaded')\n"
+                "    return {'action_performed': True}"
+            )
+
+    return ""
 
 
 def _extract_snapshot_preview_code(plan: Dict[str, Any]) -> str:

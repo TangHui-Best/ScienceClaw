@@ -227,6 +227,23 @@ def test_trace_timeline_projects_region_backed_trace_evidence():
     }
 
 
+def test_trace_timeline_projects_download_signal_in_summary():
+    trace = RPAAcceptedTrace(
+        trace_id="trace-download-click",
+        trace_type=RPATraceType.AI_OPERATION,
+        source="ai",
+        user_instruction="点击列表中第一行的文件名称",
+        description="Click first file name",
+        after_page=RPAPageState(url="https://example.test/files", title="Files"),
+        signals={"download": {"filename": "first-row.pdf", "count": 1}},
+    )
+
+    [item] = build_trace_timeline_items(traces=[trace], trace_diagnostics=[])
+
+    assert item.summary == "Click first file name，并下载 first-row.pdf"
+    assert item.raw_trace["signals"]["download"]["filename"] == "first-row.pdf"
+
+
 def test_trace_timeline_projects_diagnostics_without_accepting_them():
     diagnostic = RPATraceDiagnostic(
         diagnostic_id="diag-1",
