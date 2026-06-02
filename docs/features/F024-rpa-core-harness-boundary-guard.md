@@ -48,6 +48,7 @@ Done。已修复 simple click plan 缺少 download signal 捕获的问题；F024
 | Patch | Date | Commit | Symptom | Root Cause | Protection | Status |
 | --- | --- | --- | --- | --- | --- | --- |
 | F024.1 | 2026-06-02 | pending | 开启 Full SOP Harness capture 后，“点击列表中第一行的文件名称”真实触发下载，但生成 Skill 第 10 步没有 `expect_download()`；不开 Harness 时偶尔能靠 standalone download fallback 成功。 | route 在 `agent.run()` 后立即 `append_trace()`，而 manager 的 paused pending download 可能在 Harness after checkpoint 期间才到达，错过当前 trace 的 pending merge 点。 | `test_apply_recording_agent_result_waits_for_paused_download_before_append`；`test_full_sop_capture_preserves_delayed_download_signal_in_core_trace`；EV-024 focused Core/Harness 回归。 | done |
+| F024.2 | 2026-06-02 | pending | 内网验证发现生成脚本已有下载处理，但录制页左侧实时步骤仍只显示点击文件名，不显示下载副作用。 | 实时录制页 SSE 路径使用 `mapServerTraces()` 直接把 raw trace 映射为展示步骤，只读取 `description/user_instruction/action`，没有投影 trace 上已有的 `signals.download`。 | 新增 RecorderPage RED/GREEN 回归，要求 `trace_added` 中的 `signals.download.filename` 在左侧步骤中可见；实现只改展示字段，不新增 trace、不读取 Harness artifact、不触碰 compiler。 | done |
 
 ## Evidence
 

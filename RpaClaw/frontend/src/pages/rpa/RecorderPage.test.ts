@@ -424,6 +424,34 @@ describe('RecorderPage trace timeline convergence', () => {
     app.unmount();
   });
 
+  it('projects download signals from live trace events into the recording timeline display', async () => {
+    get.mockResolvedValue({ data: { session: { timeline: [] } } });
+
+    const { app, root } = await mountRecorderPage();
+    await vi.advanceTimersByTimeAsync(3000);
+    await flushAsyncUpdates();
+
+    const textarea = root.querySelector<HTMLTextAreaElement>('textarea');
+    expect(textarea).not.toBeNull();
+    textarea!.value = 'click first file name';
+    textarea!.dispatchEvent(new Event('input'));
+    await flushAsyncUpdates();
+
+    mockChatSse([
+      'event: trace_added\ndata: {"trace_id":"trace-download","trace_type":"ai_operation","source":"ai","description":"Click first file name","user_instruction":"Click the first row file name","signals":{"download":{"filename":"export.xlsx"}}}\n\n',
+      'event: agent_done\ndata: {"message":"done","trace_count":1}\n\n',
+    ]);
+
+    root.querySelector<HTMLButtonElement>('button.flex.h-8.w-8')?.click();
+    await flushAsyncUpdates();
+
+    expect(root.textContent).toContain('Click first file name');
+    expect(root.textContent).toContain('export.xlsx');
+    expect(root.textContent).toContain('下载');
+
+    app.unmount();
+  });
+
   it('includes pending region id in the next assistant chat request', async () => {
     get.mockResolvedValue({ data: { session: { timeline: [] } } });
     mockChatSse([

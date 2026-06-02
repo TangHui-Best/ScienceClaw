@@ -53,6 +53,20 @@ $env:PYTHONPATH='RpaClaw'; python -m pytest --basetemp .pytest-tmp-f024-compiler
 $env:PYTHONPATH='RpaClaw'; python -m pytest --basetemp .pytest-tmp-f024-harness RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py::test_full_sop_capture_preserves_delayed_download_signal_in_core_trace RpaClaw/backend/tests/test_rpa_harness_skill_replay.py::test_skill_replay_serves_controlled_download_and_validates_saved_file RpaClaw/backend/tests/test_rpa_harness_live_agent_eval.py::test_live_agent_eval_controlled_download_is_captured_as_trace_signal -q
 ```
 
+F024.2 live RecorderPage download projection regression:
+
+```powershell
+npm.cmd run test -- RecorderPage.test.ts -t "projects download signals"
+```
+
+```powershell
+npm.cmd run test -- RecorderPage.test.ts
+```
+
+```powershell
+npm.cmd run type-check
+```
+
 Harness structure:
 
 ```powershell
@@ -72,6 +86,13 @@ python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --
 - Harness controlled download focused regression: first run failed before业务断言 because Windows default pytest temp root `C:\Users\HUAWEI\AppData\Local\Temp\pytest-of-HUAWEI` was not accessible; rerun with workspace `--basetemp` passed, final rerun: `2 passed in 13.40s`。
 - F024.1 Harness focused regression: `3 passed in 12.83s`。
 - Changed core test files: `99 passed, 30 warnings in 5.28s`。Warnings are existing Python 3.14 / FastAPI deprecation warnings, not F024 behavior failures.
+- F024.2 RED live RecorderPage projection test: failed as expected because the SSE `trace_added` raw trace contained `signals.download.filename=export.xlsx`, but the left timeline text did not include `export.xlsx`。
+- F024.2 GREEN focused live RecorderPage projection: `1 passed`。The live trace display now shows the click title plus the existing download signal filename.
+- F024.2 RecorderPage regression: `27 passed`。
+- F024.2 Core recording download focused regression: `4 passed, 29 warnings`。Warnings are existing Python 3.14 / FastAPI deprecation warnings, not F024.2 behavior failures.
+- F024.2 Timeline + compiler download focused regression: `3 passed`。
+- F024.2 Harness controlled download focused regression: `3 passed, 29 warnings`。Warnings are existing Python 3.14 / FastAPI deprecation warnings.
+- F024.2 frontend type-check: failed on pre-existing unrelated TypeScript errors in `ActivityPanel.vue`, `ChatMessage.vue`, `DesktopTitleBar.vue`, `SessionItem.vue`, `ChatPage.vue`, `desktopWindow.ts`, and related files; no reported error referenced `RecorderPage.vue` or `RecorderPage.test.ts`.
 
 ## Harness Validation
 
@@ -86,10 +107,12 @@ python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --
 - Code: `RpaClaw/backend/rpa/manager.py`
 - Code: `RpaClaw/backend/route/rpa.py`
 - Code: `RpaClaw/backend/rpa/trace_timeline.py`
+- Code: `RpaClaw/frontend/src/pages/rpa/RecorderPage.vue`
 - Tests: `RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py`
 - Tests: `RpaClaw/backend/tests/test_rpa_route_trace.py`
 - Tests: `RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py`
 - Tests: `RpaClaw/backend/tests/test_rpa_trace_timeline.py`
+- Tests: `RpaClaw/frontend/src/pages/rpa/RecorderPage.test.ts`
 - Project rule: `AGENTS.md`
 
 ## Notes

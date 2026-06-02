@@ -154,13 +154,29 @@ const formatTraceType = (traceType?: string) => {
   return value || 'Trace';
 };
 
+const getTraceDownloadDisplay = (trace: any): string => {
+  const download = trace?.signals?.download;
+  if (!download || typeof download !== 'object') return '';
+  const filename = String(download.filename || '').trim();
+  return filename ? `并下载 ${filename}` : '并触发下载';
+};
+
+const appendTraceDownloadDisplay = (text: string, trace: any): string => {
+  const downloadDisplay = getTraceDownloadDisplay(trace);
+  if (!downloadDisplay) return text;
+  const base = text || formatTraceType(trace?.trace_type);
+  if (base.includes(downloadDisplay)) return base;
+  return `${base}，${downloadDisplay}`;
+};
+
 const mapServerTraces = (serverTraces: any[]) => ([
   { id: '0', title: 'Environment ready', description: 'Playwright browser is ready', status: 'completed', deletable: false },
   ...serverTraces.map((t: any, i: number) => ({
     id: String(i + 1),
     traceId: t.trace_id || '',
-    title: t.description || t.user_instruction || formatTraceType(t.trace_type),
-    description: t.user_instruction || t.action || formatTraceType(t.trace_type),
+    title: appendTraceDownloadDisplay(t.description || t.user_instruction || formatTraceType(t.trace_type), t),
+    description: appendTraceDownloadDisplay(t.user_instruction || t.action || formatTraceType(t.trace_type), t),
+    summary: appendTraceDownloadDisplay('', t),
     status: 'completed',
     source: t.source === 'ai' || t.trace_type === 'ai_operation' ? 'ai' : 'record',
     traceType: t.trace_type,
