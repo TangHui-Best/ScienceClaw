@@ -10,6 +10,7 @@
 ## Project Quick Context
 
 RpaClaw is a privacy-first personal research assistant with a local RPA skill recording system. The current RPA direction is **Trace-first Recording + Post-hoc Skill Compilation**.
+Internal/onboarding agents SHOULD read `docs/project/agent-architecture-onboarding.md` before locating issues or changing code.
 
 ## Harness Entry
 
