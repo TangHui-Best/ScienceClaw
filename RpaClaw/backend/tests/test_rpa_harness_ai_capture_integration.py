@@ -111,6 +111,14 @@ async def _drain_sse(response) -> list[dict]:
     return events
 
 
+@pytest.fixture(autouse=True)
+def _stub_user_model_resolution(monkeypatch):
+    async def fake_resolve_user_model_config(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(ROUTE_MODULE, "_resolve_user_model_config", fake_resolve_user_model_config)
+
+
 @pytest.mark.asyncio
 async def test_ai_chat_capture_writes_real_before_after_checkpoint(monkeypatch, tmp_path: Path):
     manager = ROUTE_MODULE.rpa_manager
