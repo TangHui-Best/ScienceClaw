@@ -1,7 +1,7 @@
 ---
 id: F024
 doc_kind: feature
-status: active
+status: review
 created: 2026-06-02
 updated: 2026-06-03
 ---
@@ -22,7 +22,7 @@ updated: 2026-06-03
 
 ## Current Status
 
-Done。已修复 simple click plan 缺少 download signal 捕获的问题；F024.1 进一步修复 Full SOP Harness capture 开启时，AI 点击触发的延迟下载晚于 `agent.run()`、早于 checkpoint capture 导致当前 trace 丢失 `signals.download` 的回归。已建立 timeline 投影测试、Core/Harness 边界 ADR、Lesson 和项目级规则。Focused Core/Harness 回归与 Harness knowledge check 已通过。
+实现完成，进入人工 review。已修复 simple click plan 缺少 download signal 捕获、Full SOP Harness capture 延迟下载归并、实时与轮询 timeline 下载展示、重复敏感 fill、以及 navigation trace 依赖 Harness 开关等边界问题。已建立 timeline 投影测试、Core/Harness 边界 ADR、Lesson 和项目级规则。Focused Core/Harness 回归与 Harness knowledge check 已通过。
 
 ## Links
 
@@ -47,13 +47,11 @@ Done。已修复 simple click plan 缺少 download signal 捕获的问题；F024
 
 | Patch | Date | Commit | Symptom | Root Cause | Protection | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| F024.1 | 2026-06-02 | pending | 开启 Full SOP Harness capture 后，“点击列表中第一行的文件名称”真实触发下载，但生成 Skill 第 10 步没有 `expect_download()`；不开 Harness 时偶尔能靠 standalone download fallback 成功。 | route 在 `agent.run()` 后立即 `append_trace()`，而 manager 的 paused pending download 可能在 Harness after checkpoint 期间才到达，错过当前 trace 的 pending merge 点。 | `test_apply_recording_agent_result_waits_for_paused_download_before_append`；`test_full_sop_capture_preserves_delayed_download_signal_in_core_trace`；EV-024 focused Core/Harness 回归。 | done |
-| F024.2 | 2026-06-02 | pending | 内网验证发现生成脚本已有下载处理，但录制页左侧实时步骤仍只显示点击文件名，不显示下载副作用。 | 实时录制页 SSE 路径使用 `mapServerTraces()` 直接把 raw trace 映射为展示步骤，只读取 `description/user_instruction/action`，没有投影 trace 上已有的 `signals.download`。 | 新增 RecorderPage RED/GREEN 回归，要求 `trace_added` 中的 `signals.download.filename` 在左侧步骤中可见；实现只改展示字段，不新增 trace、不读取 Harness artifact、不触碰 compiler。 | done |
-
-| F024.3 | 2026-06-02 | pending | 内网验证发现开启 Full SOP Harness capture 后，配置页录制步骤和生成 Skill 都出现两次密码输入；不开启 Harness capture 时正常。 | Harness capture 额外采集当前编辑框状态后，密码输入可能同时产生浏览器 input fill 和 current editable fill；中间的 focus click 被 Core/Harness 折叠后，两条 fill 指向同一密码框但 sequence 不相邻，旧去重只接受相邻 sequence，导致 accepted trace 多出一次密码 fill。 | Core recorder 的 fill 去重扩展为同一 target/frame/tab/source、相同 value、短时间窗口内可跨 sequence 空洞合并；Harness trace persistence 只对 trace 文案字段同步替换输入占位符，避免 raw input 从 `description` 泄漏；新增重复敏感 fill 回归并跑完整 manager 回归。 | done |
-| F024.4 | 2026-06-02 | pending | 全面审视 Harness/Core 边界时发现，`navigate_active_tab()` 只有在 Full SOP Harness capture 开启时才同步 append navigation trace；不开 Harness 时依赖浏览器 `framenavigated` 异步回流，导致同一导航入口的 accepted trace 来源和时机受 Harness 开关影响。 | 导航 endpoint 为了写 Harness entry-navigation checkpoint，把 Core navigation trace 创建放进了 Harness 条件分支，同时只在 Harness 分支 suppress 底层 navigation event。 | Core navigation trace 创建上移为无条件主链路行为，底层 `framenavigated` suppress 也无条件执行以避免重复；Harness 开启时只额外写 before/after HTML checkpoint。新增不开 Harness 的 navigation trace 回归，并保留 Full SOP checkpoint 回归。 | done |
-
-| F024.5 | 2026-06-03 | pending | 内网验证发现 Core trace 已有 `signals.download.filename`，但录制页左侧步骤仍只显示点击文件名，轮询刷新后下载副作用不可见。| F024.2 只修复 live `trace_added -> mapServerTraces()` 展示路径；录制页 3 秒轮询拿到 `session.timeline` 后走 `mapRpaTimelineProjection()`，该路径优先显示 `title`，丢弃后端 summary/raw trace 中的 download 展示信号。| 只修前端 timeline projection 展示：当 projected item 的 `raw_trace.signals.download` 存在时，优先保留 summary 中的下载文件名或追加“并下载/并触发下载”。新增 RecorderPage RED/GREEN 回归覆盖轮询 projected timeline，不改 trace 捕获、Harness capture、compiler 或回放。| done |
+| F024.1 | 2026-06-02 | `99a52749` | 开启 Full SOP Harness capture 后，“点击列表中第一行的文件名称”真实触发下载，但生成 Skill 第 10 步没有 `expect_download()`；不开 Harness 时偶尔能靠 standalone download fallback 成功。 | route 在 `agent.run()` 后立即 `append_trace()`，而 manager 的 paused pending download 可能在 Harness after checkpoint 期间才到达，错过当前 trace 的 pending merge 点。 | `test_apply_recording_agent_result_waits_for_paused_download_before_append`；`test_full_sop_capture_preserves_delayed_download_signal_in_core_trace`；EV-024 focused Core/Harness 回归。 | done |
+| F024.2 | 2026-06-02 | `3a0effe1` | 内网验证发现生成脚本已有下载处理，但录制页左侧实时步骤仍只显示点击文件名，不显示下载副作用。 | 实时录制页 SSE 路径使用 `mapServerTraces()` 直接把 raw trace 映射为展示步骤，只读取 `description/user_instruction/action`，没有投影 trace 上已有的 `signals.download`。 | 新增 RecorderPage RED/GREEN 回归，要求 `trace_added` 中的 `signals.download.filename` 在左侧步骤中可见；实现只改展示字段，不新增 trace、不读取 Harness artifact、不触碰 compiler。 | done |
+| F024.3 | 2026-06-02 | `1d4ed8f5` | 内网验证发现开启 Full SOP Harness capture 后，配置页录制步骤和生成 Skill 都出现两次密码输入；不开启 Harness capture 时正常。 | Harness capture 额外采集当前编辑框状态后，密码输入可能同时产生浏览器 input fill 和 current editable fill；中间的 focus click 被 Core/Harness 折叠后，两条 fill 指向同一密码框但 sequence 不相邻，旧去重只接受相邻 sequence，导致 accepted trace 多出一次密码 fill。 | Core recorder 的 fill 去重扩展为同一 target/frame/tab/source、相同 value、短时间窗口内可跨 sequence 空洞合并；Harness trace persistence 只对 trace 文案字段同步替换输入占位符，避免 raw input 从 `description` 泄漏；新增重复敏感 fill 回归并跑完整 manager 回归。 | done |
+| F024.4 | 2026-06-02 | `1c2850c2` | 全面审视 Harness/Core 边界时发现，`navigate_active_tab()` 只有在 Full SOP Harness capture 开启时才同步 append navigation trace；不开 Harness 时依赖浏览器 `framenavigated` 异步回流，导致同一导航入口的 accepted trace 来源和时机受 Harness 开关影响。 | 导航 endpoint 为了写 Harness entry-navigation checkpoint，把 Core navigation trace 创建放进了 Harness 条件分支，同时只在 Harness 分支 suppress 底层 navigation event。 | Core navigation trace 创建上移为无条件主链路行为，底层 `framenavigated` suppress 也无条件执行以避免重复；Harness 开启时只额外写 before/after HTML checkpoint。新增不开 Harness 的 navigation trace 回归，并保留 Full SOP checkpoint 回归。 | done |
+| F024.5 | 2026-06-03 | `dde739a1` | 内网验证发现 Core trace 已有 `signals.download.filename`，但录制页左侧步骤仍只显示点击文件名，轮询刷新后下载副作用不可见。 | F024.2 只修复 live `trace_added -> mapServerTraces()` 展示路径；录制页 3 秒轮询拿到 `session.timeline` 后走 `mapRpaTimelineProjection()`，该路径优先显示 `title`，丢弃后端 summary/raw trace 中的 download 展示信号。 | 只修前端 timeline projection 展示：当 projected item 的 `raw_trace.signals.download` 存在时，优先保留 summary 中的下载文件名或追加“并下载/并触发下载”。新增 RecorderPage RED/GREEN 回归覆盖轮询 projected timeline，不改 trace 捕获、Harness capture、compiler 或回放。 | done |
 
 ## Patch Churn Review
 

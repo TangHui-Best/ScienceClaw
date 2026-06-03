@@ -27,7 +27,7 @@ Harness 是回归、诊断、证据和治理层。它不负责在自身内部修
 
 ## 当前封箱状态
 
-截至 2026-06-01，本机代码侧已经具备：
+截至 2026-06-03，本机代码侧已经具备：
 
 - 资产校验：`run_asset_validation`
 - 资产目录与生命周期报告：`run_catalog --format lifecycle`
@@ -36,6 +36,7 @@ Harness 是回归、诊断、证据和治理层。它不负责在自身内部修
 - 敏感信息扫描：`run_asset_sensitivity_scan`
 - 脱敏资产副本：`run_asset_sanitize`
 - 执行审查报告：`run_asset_execution_review`
+- 单资产 SOP→Skill 核心链路导出：`run_asset_core_chain`
 - deterministic profile：`run_harness_profile --profile deterministic`
 - user-input replay：`run_user_input_replay`
 - full-live profile：`run_harness_profile --profile full-live`
@@ -43,6 +44,12 @@ Harness 是回归、诊断、证据和治理层。它不负责在自身内部修
 - Full SOP 语义 checkpoint 刷新：手动录制资产按最终 accepted trace / `session.steps`
   顺序落盘，输入框 focus click 会折叠到后续 `fill`，表单输入值写成
   `{{input:<key>}}` 或 runtime secret ref。
+- Core/Harness 边界保护：Harness capture、expected signals、controlled fixtures 和
+  reports 不得定义产品录制事实；download、navigation、fill 去重和 timeline 展示都应以
+  Core accepted trace 为唯一事实来源。相关规则见 `ADR-004` 和 `LL-002`。
+- Asset-local generated Skill 证据：`run_asset_core_chain` 会把
+  `core-chain-report.md`、`core-chain-full-report.json` 和 `generated_skills/`
+  写在对应资产目录下，而不是 Agent 工作目录。
 
 但当前 `data/rpa_harness_assets_bootstrap` 的本机状态不能再被口头描述为“已有 blocking baseline”。在本机检查中，当前资产池是：
 
@@ -135,6 +142,15 @@ trust_limits
    python -m backend.rpa.harness.run_harness_profile --assets data\rpa_harness_assets_internal --profile deterministic --output tmp-harness-profile-deterministic.json
    ```
 
+7. 如果需要人工审查该资产重新生成的 Full SOP Skill 或单步 Skill，运行：
+
+   ```powershell
+   python -m backend.rpa.harness.run_asset_core_chain --assets data\rpa_harness_assets_internal --asset-id <asset_id>
+   ```
+
+   读取该资产目录下的 `core-chain-report.md` 和 `generated_skills/`。这些文件是
+   asset-local execution evidence，不是 capture 阶段保存的事实源。
+
 ## 资产交接必须包含的信息
 
 把一个内网资产交给后续 Agent 前，至少提供：
@@ -180,6 +196,9 @@ trust_limits
 - `compiler-hardcoded-observed-value`：修 `TraceSkillCompiler` 或 dataflow inference，不要在 Harness 里加例外。
 - Skill replay execution error：看 generated Skill、runtime AI model config、controlled fixture。
 - Stateful SOP failed：先看 accepted trace reconstruction，再看 replay。
+- 开启/关闭 Harness capture 导致 accepted trace、navigation trace、download signal、
+  fill 步骤或 timeline 语义不同：优先按 RPA Core/Harness 边界回归处理，不要在
+  Harness expected signals 或 controlled fixture 中补事实。
 
 ## Compiler 风险归属
 
@@ -230,6 +249,8 @@ docs/archive/2026-05/rpa-harness/
 - 不要用 live URL 作为 correctness oracle。
 - 不要为了让 Harness 变绿而添加站点特定规则。
 - 不要在 expected signals 中掩盖 compiler hardcoded observed value。
+- 不要把 `run_asset_core_chain` 生成的 `generated_skills/` 当成 capture 阶段保存的
+  最终 Skill；它是用录制事实重新编译出来的审查证据。
 
 ## 封箱后内网下一步
 

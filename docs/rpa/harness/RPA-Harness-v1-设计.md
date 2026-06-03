@@ -56,13 +56,15 @@ capture
 3. `promote`: 通过 CLI 和人工确认把资产从 `draft` 推进到
    `candidate-lite` / `candidate` / `golden`。
 4. `deterministic`: 默认稳定回归路径，验证受管资产上的核心链路。
-5. `user-input replay`: 从资产中提取用户输入事件链，并用脚本记录输入边界。
-6. `full-live`: 在 controlled fixture 上触发 recording-time intelligent path。
+5. `asset-local core-chain export`: 需要审查某个资产重新编译出的 Full SOP /
+   单步 generated Skill 时，导出 asset-local execution evidence。
+6. `user-input replay`: 从资产中提取用户输入事件链，并用脚本记录输入边界。
+7. `full-live`: 在 controlled fixture 上触发 recording-time intelligent path。
    使用真实模型凭证运行时，它验证 `RecordingRuntimeAgent / Planner / LLM` 路径；
    使用 injected deterministic planner 运行时，它只验证 fixture、Runtime 调用、
    trace/artifact 和 post-capture 检查的集成闭环。
-7. `Agent analysis`: Agent 读取 JSON-first 报告和 summary，解释事实、边界和风险。
-8. `human decision`: 人决定是否修 RPA core、补资产、promote 资产、进入 v1.1，
+8. `Agent analysis`: Agent 读取 JSON-first 报告和 summary，解释事实、边界和风险。
+9. `human decision`: 人决定是否修 RPA core、补资产、promote 资产、进入 v1.1，
    或接受当前 residual risk。
 
 ## Asset Lifecycle
@@ -134,6 +136,28 @@ python -m backend.rpa.harness.run_user_input_replay `
   --machine-report docs\rpa\harness\reports\YYYY-MM-DD-user-input-replay.json
 ```
 
+### Asset-local Core-chain Export
+
+单资产 SOP→Skill 审查入口。它不是新的 profile，也不是 capture 阶段保存的最终
+Skill；它使用已捕获资产事实重新构建 trace session、调用 `TraceSkillCompiler`，
+并把 generated Skill 和报告写回该资产目录：
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m backend.rpa.harness.run_asset_core_chain `
+  --assets data\rpa_harness_assets_bootstrap `
+  --asset-id <asset_id>
+```
+
+输出位置：
+
+```text
+<asset_root>/<asset_id>/core-chain-report.md
+<asset_root>/<asset_id>/core-chain-full-report.json
+<asset_root>/<asset_id>/generated_skills/full_sop/skill.py
+<asset_root>/<asset_id>/generated_skills/steps/<NNN>/skill.py
+```
+
 ### Full-Live Profile
 
 在 controlled fixture 上触发 recording-time intelligent path：
@@ -166,6 +190,7 @@ python -m backend.rpa.harness.run_harness_profile `
 | Situation | Run | Why |
 | --- | --- | --- |
 | 普通 RPA core-chain 变更、PR/readiness closeout、默认回归 | deterministic profile | 最稳定、最可比较，不调用真实 Planner/LLM。 |
+| 需要人工审查某个资产重新生成的 Full SOP / 单步 Skill | asset-local core-chain export | 把 generated Skill 和 core-chain 报告放回资产目录，便于审查和交接。 |
 | 需要确认资产是否能表达用户输入边界、输入事件链、boundary injection 记录 | user-input replay | 证明 captured facts 可以脚本化进入输入边界。 |
 | 修改 Planner/LLM、RecordingRuntimeAgent、自然语言录制路径，或需要高保真受控验证 | full-live profile | 在 controlled fixture 上触发 intelligent path；只有真实模型凭证运行才证明真实 Planner/LLM 行为。 |
 | 新录制或内网资产准备进入治理流程 | Review Packet + lifecycle / eligibility report | 先审查事实、敏感性和 expected signals，再考虑 promotion。 |

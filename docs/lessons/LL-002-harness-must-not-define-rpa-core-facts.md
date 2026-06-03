@@ -29,11 +29,21 @@ Harness 和产品录制共享 `RecordingRuntimeAgent`、accepted trace、`TraceS
 
 F024.1 复现了同一边界的第二种形态：不开 Full SOP Harness capture 时，晚到的 download 可能靠 standalone download fallback 被编译器合并；开启 Full SOP capture 后，checkpoint after-state 抓取延长了 paused 窗口，download event 进入 `pending_download_events` 的时间晚于 `append_trace()`，从而错过当前 AI trace 的合并点。
 
+F024.3-F024.5 又补齐了同一原则在其它层的表现：Full SOP Harness capture
+不能让同一输入动作变成两条 accepted fill；URL navigation trace 不能只有开启
+Harness 时才同步产生；前端实时和轮询 timeline 都只能展示 Core trace 已有的
+`signals.download`，不能从 Harness artifact 合成事实。
+
 ## Fix
 
 在 `RecordingRuntimeAgent` 中引入 Core download event capture 边界，让 simple `click` 与 `run_python` 共享同一种 `signals.download` 结构；timeline 只投影 trace 已有 download signal。
 
 F024.1 在 route/manager 的 Core trace finalization 阶段补上 bounded pending-download settle：自然语言录制结果必须先把 paused pending download 归并到当前 AI trace，再 append accepted trace、写 runtime result 和进入 Harness checkpoint capture。
+
+推广规则：如果开启/关闭 Harness capture 会改变 accepted trace、navigation trace、
+download signal、fill 步骤、生成 Skill 或 timeline 语义，优先修 Core 事实捕获、
+排序、归并或展示投影边界；不要让 Harness expected signals、controlled fixture、
+asset report 或前端补丁成为第二事实源。
 
 ## Protection
 

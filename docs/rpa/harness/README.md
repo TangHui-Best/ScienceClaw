@@ -12,6 +12,17 @@ Humans govern.
 
 也就是说：脚本负责执行检查和生成报告；Agent 负责解释事实、定位风险和建议下一步；人负责确认业务预期、敏感性和资产升级。
 
+常见误区先说明：
+
+```text
+Harness capture 不保存最终导出的 SKILL.md / skill.py。
+capture 保存录制事实；core-chain export 用这些事实重新编译并导出 generated Skill。
+```
+
+因此，审查“录制事实是否完整”看资产 checkpoint / trace / expected；审查
+“SOP→Skill 主链路生成的实际脚本是否符合预期”使用后文的
+`run_asset_core_chain`。
+
 ## 执行前准备
 
 所有命令默认在仓库根目录执行：
@@ -373,6 +384,7 @@ python -m backend.rpa.harness.run_asset_execution_review --assets $assetRoot --a
 - 只想知道当前资产池能不能用于回归：跑 `run_asset_pool_doctor`。
 - 想审一个新录制资产：跑 `run_asset_sensitivity_scan` 和 `run_asset_review`。
 - 想验证 RPA core 改动有没有退化：跑 `run_harness_profile --profile deterministic` 或 `run_governed_regression`。
+- 想查看某个资产重新编译出的 Full SOP / 单步 generated Skill：跑 `run_asset_core_chain`，并读取该资产目录下的 `generated_skills/`。
 - 看到 `blocking_baseline_asset_ids=[]`：不要声称当前 RPA Agent 在 blocking baseline 上健康；这只说明当前资产池还没有足够可信的阻塞基线。
 
 ## 继续阅读

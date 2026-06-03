@@ -87,9 +87,12 @@ replay runner 会用到浏览器能力。
 内网迁移时，直接拉取当前 Harness 分支或 commit：
 
 ```text
-branch: codex/rpa-trace-first-harness
-minimum commit: f9fa5acba42a6d9d0d607a30b9accd96ed446ae0 or newer
+branch: codex/rpa-harness-region-integration
+minimum commit: dde739a1 or newer
 ```
+
+如果内网使用的是其它交接分支，以交接人提供的 branch/commit 为准；不要只凭历史
+phase 文档判断当前 Harness 能力。
 
 ## 标准执行命令
 
@@ -193,6 +196,34 @@ python -m backend.rpa.harness.run_snapshot_regression --assets data\rpa_harness_
 $env:PYTHONPATH='RpaClaw'
 python -m backend.rpa.harness.run_compiler_regression --assets data\rpa_harness_assets_bootstrap
 ```
+
+### 单资产 SOP→Skill core-chain 导出
+
+如果问题是“录制资产重新生成的 Skill 到底长什么样”或“Full SOP
+capture 后 generated Skill 是否符合预期”，不要从 capture 目录里找历史最终
+`SKILL.md`。Harness capture 保存的是录制事实，不保存最终导出包。
+
+使用 asset-local core-chain 导出：
+
+```powershell
+$env:PYTHONPATH='RpaClaw'
+python -m backend.rpa.harness.run_asset_core_chain --assets <asset_root> --asset-id <asset_id>
+```
+
+该命令会在对应资产目录生成：
+
+```text
+<asset_root>/<asset_id>/core-chain-report.md
+<asset_root>/<asset_id>/core-chain-full-report.json
+<asset_root>/<asset_id>/generated_skills/full_sop/skill.py
+<asset_root>/<asset_id>/generated_skills/full_sop/compile_metadata.json
+<asset_root>/<asset_id>/generated_skills/steps/<NNN>/skill.py
+<asset_root>/<asset_id>/generated_skills/steps/<NNN>/compile_metadata.json
+```
+
+这些文件是执行证据，不是新的录制事实。若它们暴露 compiler、dataflow、download、
+navigation 或 runtime AI replay 问题，应回到 owning RPA core component 修复，并用
+同一资产 rerun。
 
 ### 新录制资产 Review Packet
 
@@ -428,6 +459,12 @@ E:\Work-Project\OtherWork\ScienceClaw
    - stateful_sop.assets[*].accepted_trace_count
    - stateful_sop.assets[*].replay.actual_output
    - skill_replay.assets 中带 output_key 的输出项
+
+   如需审查具体 generated Skill，再执行：
+
+   ```powershell
+   python -m backend.rpa.harness.run_asset_core_chain --assets <asset_root> --asset-id <asset_id>
+   ```
 
 5. 生成 Markdown 工程判断报告：
    docs/rpa/harness/reports/YYYY-MM-DD-<report_slug>-governed-run.md
