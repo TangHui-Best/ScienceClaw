@@ -109,6 +109,24 @@ npm.cmd run test -- RecorderPage.test.ts
 npm.cmd run type-check
 ```
 
+F024.6 initial document click noise regression:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw\backend\tests\test_rpa_manager.py::RPASessionManagerTabTests::test_full_sop_harness_ignores_pre_navigation_body_click_noise -q
+```
+
+```powershell
+$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw\backend\tests\test_rpa_manager.py -q
+```
+
+```powershell
+$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw\backend\tests\test_rpa_trace_skill_compiler.py -q
+```
+
+```powershell
+$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw\backend\tests\test_rpa_route_trace.py -q
+```
+
 Harness structure:
 
 ```powershell
@@ -147,6 +165,10 @@ python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --
 - F024.5 GREEN focused projected timeline regression: `1 passed`. The recorded-step timeline now preserves the download filename when polling projected timeline data.
 - F024.5 RecorderPage regression: `28 passed`.
 - F024.5 frontend type-check: failed on pre-existing unrelated TypeScript errors in `ActivityPanel.vue`, `ChatMessage.vue`, `DesktopTitleBar.vue`, `FilePanel.vue`, `SessionItem.vue`, settings components, `ChatPage.vue`, `desktopWindow.ts`, and related files. No reported error referenced `src/utils/rpaConfigureTimeline.ts` or `src/pages/rpa/RecorderPage.test.ts`.
+- F024.6 RED initial document click regression: `1 failed` as expected. With Full SOP Harness capture enabled, a pre-navigation `body` click entered `session.steps` before the real navigation.
+- F024.6 GREEN focused regression: `1 passed`. Initial no-side-effect `body/html` clicks are ignored before Core accepted trace creation.
+- F024.6 manager regression: `107 passed`. Neighboring Harness checkpoint, hover promotion, navigation upgrade, and fill dedupe behavior stayed green.
+- F024.6 SOP->Skill output-side regression: trace compiler `110 passed`; route trace `42 passed, 29 warnings`. Warnings are existing Python 3.14 / FastAPI deprecation warnings, not F024.6 behavior failures.
 
 ## Harness Validation
 

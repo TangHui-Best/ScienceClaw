@@ -1725,6 +1725,51 @@ class RPASessionManager:
                 return True
         return False
 
+    @classmethod
+    def _is_nonsemantic_initial_document_click(cls, session: RPASession, evt: Dict[str, Any]) -> bool:
+        if evt.get("action") != "click":
+            return False
+        if session.steps or session.traces or session.recorded_actions:
+            return False
+        if cls._event_has_side_effect_evidence(evt):
+            return False
+        return cls._is_document_surface_click(evt)
+
+    @staticmethod
+    def _event_has_side_effect_evidence(evt: Dict[str, Any]) -> bool:
+        if evt.get("target_tab_id") or evt.get("source_tab_id"):
+            return True
+        signals = evt.get("signals")
+        if not isinstance(signals, dict):
+            return False
+        side_effect_keys = {
+            "download",
+            "file_chooser",
+            "navigation",
+            "open_tab",
+            "popup",
+            "set_input_files",
+            "tab",
+        }
+        harmless_keys = {"recording"}
+        for key, value in signals.items():
+            if value in (None, "", {}, []):
+                continue
+            if key in side_effect_keys:
+                return True
+            if key not in harmless_keys:
+                return True
+        return False
+
+    @staticmethod
+    def _is_document_surface_click(evt: Dict[str, Any]) -> bool:
+        snapshot = evt.get("element_snapshot") if isinstance(evt.get("element_snapshot"), dict) else {}
+        tag = str(evt.get("tag") or snapshot.get("tag") or "").strip().lower()
+        locator = evt.get("locator") if isinstance(evt.get("locator"), dict) else {}
+        locator_method = str(locator.get("method") or "").strip().lower()
+        locator_value = str(locator.get("value") or "").strip().lower()
+        return tag in {"body", "html"} and locator_method == "css" and locator_value in {"body", "html"}
+
     def _consume_promotable_hover_candidate(self, session_id: str, click_evt: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         candidates = list(self._pending_hover_candidates.get(session_id, []))
         if not candidates:
@@ -1887,6 +1932,11 @@ class RPASessionManager:
             self._attach_harness_navigation_baseline(session_id, evt)
 
         self._normalize_event_locator_payload(evt)
+
+        if self._is_nonsemantic_initial_document_click(session, evt):
+            self._clear_pending_hover_candidates(session_id)
+            logger.debug("[RPA] Ignored nonsemantic initial document click")
+            return
 
         if evt.get("action") == "hover":
             self._queue_hover_candidate(session_id, evt)

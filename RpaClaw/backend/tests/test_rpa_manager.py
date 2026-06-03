@@ -927,6 +927,81 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
                 MANAGER_MODULE.settings.rpa_harness_capture_enabled = original_enabled
                 MANAGER_MODULE.settings.rpa_harness_assets_dir = original_assets_dir
 
+    async def test_full_sop_harness_ignores_pre_navigation_body_click_noise(self):
+        original_enabled = MANAGER_MODULE.settings.rpa_harness_capture_enabled
+        original_assets_dir = MANAGER_MODULE.settings.rpa_harness_assets_dir
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            MANAGER_MODULE.settings.rpa_harness_capture_enabled = True
+            MANAGER_MODULE.settings.rpa_harness_assets_dir = tmp_dir
+            try:
+                page = _FakePage(
+                    "https://example.com/start",
+                    "Start",
+                    html="<html><body><main>Start page</main></body></html>",
+                )
+                tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+                state = self.manager.start_harness_capture(
+                    self.session.id,
+                    capture_scope="full_sop",
+                    enabled=True,
+                )
+                await self.manager.set_harness_capture_runtime_active(self.session.id, True)
+
+                await self.manager._handle_event(
+                    self.session.id,
+                    {
+                        "action": "click",
+                        "tab_id": tab_id,
+                        "tag": "BODY",
+                        "timestamp": 1000,
+                        "sequence": 1,
+                        "locator": {"method": "css", "value": "body"},
+                        "locator_candidates": [
+                            {
+                                "kind": "css",
+                                "selected": True,
+                                "strict_match_count": 1,
+                                "visible_match_count": 1,
+                                "locator": {"method": "css", "value": "body"},
+                            }
+                        ],
+                        "element_snapshot": {"tag": "body", "role": "", "name": "", "text": ""},
+                        "validation": {"status": "ok"},
+                        "harness_before_page_state": {
+                            "url": "https://example.com/start",
+                            "title": "Start",
+                            "html": "<html><body><main>Start page</main></body></html>",
+                        },
+                    },
+                )
+
+                self.assertEqual(len(self.session.steps), 0)
+                self.assertEqual(len(self.session.traces), 0)
+
+                page.url = "https://example.com/destination"
+                page._title = "Destination"
+                page._html = "<html><body><main>Destination page</main></body></html>"
+                await self.manager._handle_event(
+                    self.session.id,
+                    {
+                        "action": "navigate",
+                        "tab_id": tab_id,
+                        "timestamp": 7000,
+                        "sequence": 2,
+                        "url": "https://example.com/destination",
+                    },
+                )
+
+                self.assertEqual([step.action for step in self.session.steps], ["navigate"])
+                self.assertEqual([trace.action for trace in self.session.traces], ["navigate"])
+                step_dir = Path(tmp_dir) / state.capture_id / "steps" / "001"
+                trace_events = json.loads((step_dir / "trace_events.json").read_text(encoding="utf-8"))
+                self.assertEqual(len(trace_events), 1)
+                self.assertEqual(trace_events[0]["action"], "navigate")
+            finally:
+                MANAGER_MODULE.settings.rpa_harness_capture_enabled = original_enabled
+                MANAGER_MODULE.settings.rpa_harness_assets_dir = original_assets_dir
+
     async def test_full_sop_harness_skips_manual_click_without_before_html(self):
         original_enabled = MANAGER_MODULE.settings.rpa_harness_capture_enabled
         original_assets_dir = MANAGER_MODULE.settings.rpa_harness_assets_dir
