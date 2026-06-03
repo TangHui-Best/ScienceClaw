@@ -153,6 +153,7 @@ CAPTURE_SCRIPT_PATH = RPA_VENDOR_DIR / "playwright_recorder_capture.js"
 PLAYWRIGHT_RECORDER_RUNTIME_JS = PLAYWRIGHT_RECORDER_RUNTIME_PATH.read_text(encoding="utf-8")
 PLAYWRIGHT_RECORDER_ACTIONS_JS = PLAYWRIGHT_RECORDER_ACTIONS_PATH.read_text(encoding="utf-8")
 CAPTURE_JS = CAPTURE_SCRIPT_PATH.read_text(encoding="utf-8")
+EXPLICIT_NAVIGATION_SUPPRESS_MARKER = "__explicit_navigation__"
 
 class RPASessionManager:
     def __init__(self):
@@ -667,13 +668,13 @@ class RPASessionManager:
             harness_before_state = await capture_current_page_state(page)
 
         suppressed = self._suppressed_navigation_events.setdefault(session_id, {})
-        suppressed[session.active_tab_id] = normalized_url
+        suppressed[session.active_tab_id] = EXPLICIT_NAVIGATION_SUPPRESS_MARKER
         try:
             await page.goto(normalized_url)
             await page.wait_for_load_state("domcontentloaded")
         finally:
             suppressed = self._suppressed_navigation_events.get(session_id, {})
-            if suppressed.get(session.active_tab_id) == normalized_url:
+            if suppressed.get(session.active_tab_id) == EXPLICIT_NAVIGATION_SUPPRESS_MARKER:
                 suppressed.pop(session.active_tab_id, None)
             if not suppressed:
                 self._suppressed_navigation_events.pop(session_id, None)
@@ -937,6 +938,12 @@ class RPASessionManager:
                 last_url["value"] = new_url
                 suppressed = self._suppressed_navigation_events.get(session_id, {})
                 expected_url = suppressed.get(tab_id)
+                if expected_url == EXPLICIT_NAVIGATION_SUPPRESS_MARKER:
+                    tab = self._tab_meta.get(session_id, {}).get(tab_id)
+                    if tab:
+                        tab.url = new_url
+                        tab.last_seen_at = datetime.now()
+                    return
                 if expected_url and self._navigation_urls_match(new_url, expected_url):
                     suppressed.pop(tab_id, None)
                     if not suppressed:

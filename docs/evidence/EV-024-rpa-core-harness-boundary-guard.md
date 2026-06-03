@@ -127,6 +127,28 @@ $env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw\backend\tests\test_rpa_trace
 $env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw\backend\tests\test_rpa_route_trace.py -q
 ```
 
+F024.7 explicit navigation redirect suppression regression:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'; python -m pytest --basetemp .pytest-tmp-pr59-nav-redirect-red RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_navigate_active_tab_suppresses_redirect_navigation_event -q
+```
+
+```powershell
+$env:PYTHONPATH='RpaClaw'; python -m pytest --basetemp .pytest-tmp-pr59-nav-focused RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_navigate_active_tab_suppresses_redirect_navigation_event RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_navigate_active_tab_records_core_trace_without_harness_capture RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_navigate_active_tab_does_not_record_trace_when_session_paused RpaClaw/backend/tests/test_rpa_manager.py::RPASessionManagerTabTests::test_navigate_active_tab_normalizes_url_and_updates_metadata RpaClaw/backend/tests/test_rpa_harness_ai_capture_integration.py::test_full_sop_capture_records_entry_navigation_checkpoint -q
+```
+
+```powershell
+$env:PYTHONPATH='RpaClaw'; python -m pytest --basetemp .pytest-tmp-pr59-nav-manager RpaClaw/backend/tests/test_rpa_manager.py -q
+```
+
+```powershell
+$env:PYTHONPATH='RpaClaw'; python -m pytest --basetemp .pytest-tmp-pr59-nav-compiler RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q
+```
+
+```powershell
+$env:PYTHONPATH='RpaClaw'; python -m pytest --basetemp .pytest-tmp-pr59-nav-route RpaClaw/backend/tests/test_rpa_route_trace.py -q
+```
+
 Harness structure:
 
 ```powershell
@@ -169,6 +191,10 @@ python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --
 - F024.6 GREEN focused regression: `1 passed`. Initial no-side-effect `body/html` clicks are ignored before Core accepted trace creation.
 - F024.6 manager regression: `107 passed`. Neighboring Harness checkpoint, hover promotion, navigation upgrade, and fill dedupe behavior stayed green.
 - F024.6 SOP->Skill output-side regression: trace compiler `110 passed`; route trace `42 passed, 29 warnings`. Warnings are existing Python 3.14 / FastAPI deprecation warnings, not F024.6 behavior failures.
+- F024.7 RED explicit navigation redirect regression: `1 failed` as expected. A redirecting `navigate_active_tab()` created one event-based navigate step before the explicit navigation trace.
+- F024.7 GREEN explicit navigation redirect regression: `1 passed`. Explicit navigation now suppresses in-flight main-frame navigation events while preserving the final `after_page.url`.
+- F024.7 focused navigation regression: `5 passed, 29 warnings`. Core navigation remains recorded without Harness capture, paused sessions still skip navigation facts, and Full SOP entry navigation checkpoint still passes.
+- F024.7 Core SOP->SKILL regression: manager `108 passed`; trace compiler `110 passed`; route trace `42 passed, 29 warnings`. Warnings are existing Python 3.14 / FastAPI deprecation warnings.
 
 ## Harness Validation
 

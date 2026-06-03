@@ -3398,6 +3398,30 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(trace.after_page.url, "https://example.com")
         self.assertEqual(trace.value, "https://example.com")
 
+    async def test_navigate_active_tab_suppresses_redirect_navigation_event(self):
+        class _RedirectingPage(_FakePage):
+            async def goto(self, url):
+                self.goto_calls.append(url)
+                self.url = "https://example.com/final"
+                self.main_frame.url = self.url
+                self.handlers["framenavigated"](self.main_frame)
+
+        page = _RedirectingPage("about:blank", "Blank")
+        await self.manager.register_page(self.session.id, page, make_active=True)
+
+        await self.manager.navigate_active_tab(self.session.id, "example.com")
+        await asyncio.sleep(0)
+        await self.manager.wait_for_pending_events(self.session.id, timeout_ms=1000)
+
+        self.assertEqual(len(self.session.steps), 0)
+        self.assertEqual(len(self.session.traces), 1)
+        trace = self.session.traces[0]
+        self.assertEqual(trace.trace_type.value, "navigation")
+        self.assertEqual(trace.action, "navigate")
+        self.assertEqual(trace.before_page.url, "about:blank")
+        self.assertEqual(trace.after_page.url, "https://example.com/final")
+        self.assertEqual(trace.value, "https://example.com")
+
     async def test_navigate_active_tab_does_not_record_trace_when_session_paused(self):
         page = _FakePage("about:blank", "Blank")
         await self.manager.register_page(self.session.id, page, make_active=True)
