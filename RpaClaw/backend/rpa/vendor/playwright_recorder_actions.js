@@ -88,10 +88,11 @@
         if (event.key === 'Enter' && ((target && target.nodeName === 'TEXTAREA') || (target && target.isContentEditable))) return false;
         if (['Backspace', 'Delete', 'AltGraph'].indexOf(event.key) >= 0) return false;
         if (event.key === '@' && event.code === 'KeyL') return false;
+        var normalizedKey = event.key.toLowerCase();
         if (navigator.platform.includes('Mac')) {
-            if (event.key === 'v' && event.metaKey) return false;
+            if (normalizedKey === 'v' && event.metaKey) return false;
         } else {
-            if (event.key === 'v' && event.ctrlKey) return false;
+            if (normalizedKey === 'v' && event.ctrlKey) return false;
             if (event.key === 'Insert' && event.shiftKey) return false;
         }
         if (['Shift', 'Control', 'Meta', 'Alt', 'Process'].indexOf(event.key) >= 0) return false;
@@ -165,6 +166,31 @@
             markAction(action, target);
         }
 
+        function isEditableFillTarget(target) {
+            if (!isElement(target)) return false;
+            if (target.nodeName === 'INPUT') return !asCheckbox(target) && !isFileInput(target);
+            return target.nodeName === 'TEXTAREA' || target.isContentEditable;
+        }
+
+        function editableFillPayload(target, sourceMethod) {
+            var isPassword = target.nodeName === 'INPUT' && (target.type || '').toLowerCase() === 'password';
+            return {
+                value: isPassword ? '{{credential}}' : (target.isContentEditable ? (target.innerText || '') : (target.value || '')),
+                sensitive: isPassword,
+                signals: {
+                    input_method: {
+                        source_method: sourceMethod || 'input',
+                    },
+                },
+            };
+        }
+
+        function emitEditableFill(node, sourceMethod) {
+            var target = logicalActionTarget(node, retarget);
+            if (!isEditableFillTarget(target)) return;
+            emitLogicalAction('fill', target, editableFillPayload(target, sourceMethod));
+        }
+
         addListener('focusin', function(event) {
             if (!event.isTrusted || isPaused()) return;
             rememberActiveTarget(event.target);
@@ -236,14 +262,9 @@
                 return;
             }
 
-            if ((target.nodeName === 'INPUT' || target.nodeName === 'TEXTAREA' || target.isContentEditable)) {
-                if (asCheckbox(target)) return;
+            if (isEditableFillTarget(target)) {
                 if (wrongTarget(target)) return;
-                var isPassword = target.nodeName === 'INPUT' && (target.type || '').toLowerCase() === 'password';
-                emitLogicalAction('fill', target, {
-                    value: isPassword ? '{{credential}}' : (target.isContentEditable ? (target.innerText || '') : (target.value || '')),
-                    sensitive: isPassword,
-                });
+                emitEditableFill(target, 'input');
             }
         });
 
@@ -270,6 +291,17 @@
                     signals: { set_input_files: { files: files } },
                 });
             }
+        });
+
+        addListener('paste', function(event) {
+            if (!event.isTrusted || isPaused()) return;
+            var target = logicalActionTarget(event.target, retarget);
+            if (!isEditableFillTarget(target)) return;
+            rememberActiveTarget(target);
+            if (wrongTarget(event.target)) return;
+            setTimeout(function() {
+                emitEditableFill(target, 'paste');
+            }, 0);
         });
 
         addListener('keydown', function(event) {

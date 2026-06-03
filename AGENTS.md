@@ -10,6 +10,18 @@
 ## Project Quick Context
 
 RpaClaw is a privacy-first personal research assistant with a local RPA skill recording system. The current RPA direction is **Trace-first Recording + Post-hoc Skill Compilation**.
+Internal/onboarding agents SHOULD read `docs/project/agent-architecture-onboarding.md` before locating issues or changing code.
+
+## Harness Entry
+
+- Scope: Harness/RPA architecture work, asset governance, promotion, regression baseline, handoff, readiness claims, or any task involving Harness assets.
+- Requirement: agents MUST use `docs/rpa/harness/README.md` as the human-readable Harness entry point, then follow the linked detailed guide that matches the task.
+- Requirement: for non-trivial or multi-slice Harness/RPA work, agents MUST preserve Feature/Evidence closeout per `docs/lessons/LL-001-harness-feature-evidence-closeout-miss.md`; if closeout is missing, report `implementation done, harness closeout pending`.
+- Requirement: agents MUST NOT treat `runtime_status=success`, `candidate-lite`, historical reports, or full-live generated artifacts as blocking baseline acceptance; `candidate` / `golden` promotion still requires human-reviewed expected signals and sensitivity.
+- Requirement: Harness/RPA changes MUST NOT let Harness assets, expected signals, controlled fixtures, or reports define product recording facts. If a Harness/RPA change touches Core files (`recording_runtime_agent.py`, `manager.py`, `trace_models.py`, `trace_recorder.py`, `trace_skill_compiler.py`, `route/rpa.py`, or RPA timeline/configure/test UI), agents MUST run focused Core SOP->SKILL regression tests in addition to Harness tests. Source: `docs/decisions/ADR-004-rpa-core-owns-recording-facts-harness-adapts-only.md`, `docs/lessons/LL-002-harness-must-not-define-rpa-core-facts.md`.
+- Rationale: keeps `AGENTS.md` as a short behavioral entry while the operational flow lives in the Harness README and linked guides.
+
+## Project Stack
 
 - **Backend**: FastAPI, Python, Pydantic v2, LangGraph/DeepAgents, MongoDB.
 - **Frontend**: Vue 3, TypeScript, Vite, Tailwind CSS.
@@ -30,6 +42,7 @@ python -m uvicorn backend.main:app --app-dir .\RpaClaw --host 0.0.0.0 --port 800
 Frontend:
 
 ```powershell
+cd .\RpaClaw\frontend
 $env:BACKEND_URL = "http://localhost:8000"
 npm run dev
 ```
@@ -68,6 +81,9 @@ Default local/desktop mode opens as the bootstrap admin without login. Set `AUTH
 - **军规 10：不要盲目把空值视为失败。**
   空字符串、空列表、空表格或缺省字段在很多业务场景中可能是合法结果，不能为了修复某个空提取案例就新增“空值不是成功”的泛化硬拦截。遇到空提取应先定位 root cause（如 selector 过宽、候选排序错误、snapshot 缺失、planner 误判或编译策略不匹配），将空值作为诊断 evidence 或进入 repair，而不是用全局非空校验替代真正修复。
 
+- **军规 11：Harness 不得影响 SOP 转 Skill 主链路。**
+  Harness capture、review、replay、asset governance 只能观察、沉淀和验证已经由 RPA 核心链路 finalized 的 accepted trace / expected signals，不得参与或改变 recorder 事实捕获、下载/弹窗/导航归因、trace 排序、dataflow 推断或 `TraceSkillCompiler` 动作分支。若开启/关闭 Harness 导致录制步骤、trace signals 或生成 Skill 不一致，必须优先按核心链路边界回归处理，不能让 Harness 兜底修正主链路事实。参见 `docs/decisions/ADR-004-rpa-core-owns-recording-facts-harness-adapts-only.md`。
+
 ## RPA Implementation Boundaries
 
 - 录制阶段自然语言步骤由 `RecordingRuntimeAgent` 执行，只处理当前用户指令，不重新规划整套 SOP。
@@ -79,8 +95,10 @@ Default local/desktop mode opens as the bootstrap admin without login. Set `AUTH
 
 RPA architecture docs:
 
-- [Trace-first architecture](docs/rpa/trace-first-architecture.md)
-- [Failure repair policy](docs/rpa/failure-repair-policy.md)
+- [Trace single accepted timeline ADR](docs/decisions/ADR-001-rpa-trace-is-single-accepted-timeline.md)
+- [RPA Harness README](docs/rpa/harness/README.md)
+- [RPA Harness v1 design](docs/rpa/harness/RPA-Harness-v1-设计.md)
+- [RPA Harness internal handoff and freeze guide](docs/rpa/harness/internal-handoff-and-freeze-guide.md)
 - [TraceSkillCompiler generalization](docs/rpa/trace-skill-compiler-generalization.md)
 
 ## Key RPA Files
@@ -107,11 +125,11 @@ RPA architecture docs:
 ## Common Pitfalls
 
 - **Pydantic v2**: use `model_dump()`, not `.dict()`.
-- **Sandbox processes**: browser services have `autorestart=true`; use `supervisorctl stop/start`, not `pkill`.
+- **Sandbox/container processes**: browser services may have `autorestart=true`; in that environment use `supervisorctl stop/start`, not `pkill`.
 - **Playwright event loop**: use `page.wait_for_timeout(N)`, not `time.sleep(N)` inside async scripts.
 - **Frontend API double prefix**: `apiClient` already includes `/api/v1`.
 - **Local mode RPA**: set `STORAGE_BACKEND=local`; local mode uses CDP screencast, not VNC.
 - **Docker VNC mode**: use noVNC via port `18080`, not raw VNC port `16080`.
-- **Long-running sandbox scripts**: use `nohup` plus sentinel-file polling; MCP shell calls kill child process trees when the call returns.
+- **Long-running sandbox/container scripts**: use `nohup` plus sentinel-file polling in Linux sandbox/container environments; do not assume this applies to Windows local shells.
 - **Skills discovery**: `SKILL.md` must include YAML front matter.
 - **Desktop tools in local mode**: host tool library lives under `TOOLS_DIR`; `/app/Tools` is the sandbox-visible mount path.

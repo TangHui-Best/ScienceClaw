@@ -1,0 +1,5 @@
+{
+  "error": "Recording planner failed to return a valid plan.",
+  "captured_at": "2026-05-28T21:09:23.239057",
+  "step_intent": "获取stars数"
+}

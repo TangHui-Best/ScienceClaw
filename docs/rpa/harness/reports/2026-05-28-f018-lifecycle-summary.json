@@ -1,0 +1,63 @@
+{
+  "schema_version": "rpa-harness-asset-lifecycle-summary-v1",
+  "summary": {
+    "asset_count": 2,
+    "lifecycle_distribution": {
+      "candidate": 2
+    },
+    "promotion_statuses": {
+      "candidate": 2
+    },
+    "asset_statuses": {
+      "active": 2
+    },
+    "sensitivity": {
+      "local-only": 1,
+      "repo-safe": 1
+    }
+  },
+  "review_state": {
+    "expected_signals_reviewed": 2,
+    "expected_signals_unreviewed": 0,
+    "sensitivity_reviewed": 2,
+    "sensitivity_unreviewed": 0
+  },
+  "blocking_baseline_asset_ids": [
+    "hcap-4be6265f43eb42dfa259182207aa64cc",
+    "hcap-de463b7bb608482e9b5bcdd5b78a224e"
+  ],
+  "warning_only_asset_ids": [],
+  "golden_asset_ids": [],
+  "coverage_boundary": {
+    "runner_modes": {
+      "offline_core_chain": 2,
+      "skill_replay_e2e": 2,
+      "stateful_sop_capture_to_skill": 2
+    },
+    "core_chain_coverage": {
+      "html_to_raw_snapshot": 2,
+      "planner_action_selection": 2,
+      "raw_to_compact_snapshot": 2,
+      "skill_replay": 2,
+      "stateful_capture_to_skill": 2,
+      "trace_to_skill": 2
+    },
+    "page_patterns": [
+      "card-list",
+      "data-extraction",
+      "detail-page",
+      "multi-page",
+      "semantic-selection"
+    ],
+    "hosts": [
+      "github.com"
+    ]
+  },
+  "lifecycle_warnings": [],
+  "trust_limits": [
+    "Current asset pool coverage is narrow",
+    "bootstrap coverage does not prove global RPA health",
+    "candidate-lite assets are warning-only and not blocking baseline",
+    "golden eligibility is advisory until human approval"
+  ]
+}

@@ -1,0 +1,97 @@
+{
+  "snapshot_signals": {
+    "must_preserve_region_scope": {
+      "region_id": "region-71cf664aa3bd4b9dbc6c0f63f658759b",
+      "mode": "region_scoped_snapshot",
+      "inferred_kind": "text_region"
+    }
+  },
+  "action_signals": {
+    "expected_action_type": "ai_operation",
+    "step_intent": "获取About的内容",
+    "region_selection": {
+      "region_id": "region-71cf664aa3bd4b9dbc6c0f63f658759b",
+      "mode": "region_scoped_snapshot",
+      "inferred_kind": "text_region"
+    }
+  },
+  "compiler_signals": {
+    "must_preserve_region_context": {
+      "region_id": "region-71cf664aa3bd4b9dbc6c0f63f658759b",
+      "inferred_kind": "text_region"
+    },
+    "must_preserve_output_keys": [
+      "about_content"
+    ],
+    "must_not_hardcode_observed_values": [
+      "利用AI大模型，一键生成高清短视频 Generate short videos with one click using AI LLM."
+    ]
+  },
+  "state_signals": {
+    "output_key": "about_content",
+    "observed_output_shape": {
+      "type": "object",
+      "keys": [
+        "about_content"
+      ]
+    },
+    "sanitization_contract": {
+      "placeholders": [
+        {
+          "token": "<EMAIL_1>",
+          "category": "PII",
+          "semantic_type": "email",
+          "shape": "email"
+        },
+        {
+          "token": "<EMAIL_2>",
+          "category": "PII",
+          "semantic_type": "email",
+          "shape": "email"
+        },
+        {
+          "token": "<EMAIL_3>",
+          "category": "PII",
+          "semantic_type": "email",
+          "shape": "email"
+        },
+        {
+          "token": "<LOCAL_PATH_1>",
+          "category": "local-path",
+          "semantic_type": "local_path",
+          "shape": "path"
+        },
+        {
+          "token": "<LOCAL_PATH_2>",
+          "category": "local-path",
+          "semantic_type": "local_path",
+          "shape": "path"
+        },
+        {
+          "token": "<LOCAL_PATH_3>",
+          "category": "local-path",
+          "semantic_type": "local_path",
+          "shape": "path"
+        },
+        {
+          "token": "<SESSION_ID_1>",
+          "category": "auth/session",
+          "semantic_type": "session_identifier",
+          "shape": "identifier"
+        },
+        {
+          "token": "<SESSION_ID_2>",
+          "category": "auth/session",
+          "semantic_type": "session_identifier",
+          "shape": "identifier"
+        }
+      ],
+      "runtime_secret_refs": [],
+      "controlled_fixtures": [],
+      "replay_assertions": [
+        "sanitized asset preserves output shape and SOP replay evidence",
+        "raw sensitive values are replaced by semantic placeholders"
+      ]
+    }
+  }
+}

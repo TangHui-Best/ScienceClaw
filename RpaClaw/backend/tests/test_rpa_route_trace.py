@@ -1,4 +1,5 @@
 import importlib
+import asyncio
 import json
 import sys
 import types
@@ -1395,6 +1396,53 @@ async def test_apply_recording_agent_result_persists_trace_and_runtime_output():
 
         assert session.traces[0].output_key == "selected_project"
         assert session.runtime_results.resolve_ref("selected_project.url") == "https://github.com/owner/repo"
+    finally:
+        manager.sessions.pop(session.id, None)
+
+
+@pytest.mark.asyncio
+async def test_apply_recording_agent_result_waits_for_paused_download_before_append():
+    manager = ROUTE_MODULE.rpa_manager
+    session = RPASession(id="route-trace-delayed-download", user_id="u1", sandbox_session_id="sandbox")
+    session.paused = True
+    manager.sessions[session.id] = session
+
+    async def enqueue_download():
+        await asyncio.sleep(0.05)
+        session.pending_download_events.append(
+            {
+                "filename": "first-row.xlsx",
+                "url": "https://example.test/exportQuery",
+                "tab_id": "tab-export",
+            }
+        )
+
+    try:
+        trace = RPAAcceptedTrace(
+            trace_id="trace-ai-file-click",
+            trace_type=RPATraceType.AI_OPERATION,
+            source="ai",
+            user_instruction="点击列表中第一行的文件名称",
+            description="Click the file name link in the first row of the export list table",
+            ai_execution=RPAAIExecution(
+                code=(
+                    "async def run(page, results):\n"
+                    "    await page.locator('tbody tr').first.locator('td[data-colid=\"col_25\"] a').click()\n"
+                    "    return {'action_performed': True}"
+                )
+            ),
+        )
+
+        task = asyncio.create_task(enqueue_download())
+        await ROUTE_MODULE._apply_recording_agent_result(
+            session.id,
+            RecordingAgentResult(success=True, trace=trace),
+        )
+        await task
+
+        assert session.traces[0].signals["download"]["filename"] == "first-row.xlsx"
+        assert session.traces[0].signals["download"]["tab_id"] == "tab-export"
+        assert session.pending_download_events == []
     finally:
         manager.sessions.pop(session.id, None)
 

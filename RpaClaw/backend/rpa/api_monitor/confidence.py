@@ -85,7 +85,7 @@ def score_api_candidate(
         desc = action_context.get("description", "")
         reasons.append(f"由用户操作确认触发: {desc}" if desc else "由用户操作确认触发")
 
-    
+
     if json_response:
         score += 25
         breakdown["json_response"] = 25

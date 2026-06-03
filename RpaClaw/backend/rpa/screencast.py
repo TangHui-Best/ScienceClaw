@@ -368,8 +368,25 @@ class SessionScreencastController:
             return
         try:
             await self._cdp.send("Input.insertText", {"text": text})
+            await self._request_current_editable_fill_capture(source_method="paste")
         except Exception as exc:
             logger.debug(f"[Screencast] paste dispatch error: {exc}")
+
+    async def _request_current_editable_fill_capture(self, *, source_method: str) -> None:
+        page = self._page
+        if page is None:
+            return
+        try:
+            await asyncio.sleep(0)
+            await page.evaluate(
+                """payload => {
+                    if (typeof window.__rpaRecordCurrentEditableFill !== 'function') return false;
+                    return window.__rpaRecordCurrentEditableFill(payload);
+                }""",
+                {"source_method": source_method},
+            )
+        except Exception as exc:
+            logger.debug(f"[Screencast] paste fill capture error: {exc}")
 
     async def _refresh_input_metrics(self, force: bool = False) -> None:
         if not self._cdp:

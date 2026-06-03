@@ -1175,7 +1175,7 @@ onBeforeUnmount(() => {
       <!-- Background gradient matching ToolsPage -->
       <div class="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.22),transparent_32%),linear-gradient(115deg,#0ea5e9_0%,#0284c7_52%,#0369a1_100%)]"></div>
       <div class="absolute -right-16 -top-20 h-52 w-52 rounded-full bg-white/10 blur-3xl"></div>
-      
+
       <div class="relative px-5 py-5 sm:px-7">
         <div class="flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
           <div class="flex items-center gap-3">
@@ -1270,7 +1270,7 @@ onBeforeUnmount(() => {
     <div class="flex-1 flex overflow-hidden p-5 sm:px-7 pb-6 gap-5">
       <!-- Left: Browser viewport -->
       <section class="flex-1 flex flex-col relative rounded-3xl border border-slate-200/80 bg-white shadow-sm overflow-hidden dark:border-white/10 dark:bg-[#17181d]">
-        
+
         <!-- Action Toolbar -->
         <div v-if="sessionId" class="flex items-center border-b border-slate-100 dark:border-white/10 bg-white dark:bg-[#1a1a1a] shrink-0 p-4 gap-3 z-10 relative">
           <!-- Unified Action Menu -->
@@ -1380,7 +1380,7 @@ onBeforeUnmount(() => {
             <span class="text-[var(--text-primary)] text-xs font-bold tracking-wider">实时视图</span>
           </div>
         </div>
-        
+
         <!-- Status Bar -->
         <div class="h-10 border-t border-slate-100 dark:border-white/10 bg-white dark:bg-[#1a1a1a] flex items-center px-4 gap-4 text-xs text-[var(--text-secondary)] flex-shrink-0">
           <div class="flex items-center gap-1.5 font-medium">
@@ -1489,12 +1489,12 @@ onBeforeUnmount(() => {
                     <div v-else-if="candidate.error" class="text-[10px] text-red-500 break-words line-clamp-2" :title="candidate.error">
                       {{ candidate.error }}
                     </div>
-                    
+
                     <div class="flex items-center justify-between gap-3 text-[10px] text-[var(--text-tertiary)] mt-0.5">
                       <span>样本 {{ candidate.source_call_ids?.length || 0 }}</span>
                       <span v-if="candidate.intent_prune_retry_after">裁剪重试 {{ new Date(candidate.intent_prune_retry_after).toLocaleTimeString() }}</span>
                       <span v-else-if="candidate.retry_after">下次重试 {{ new Date(candidate.retry_after).toLocaleTimeString() }}</span>
-                      
+
                       <div class="flex gap-2 shrink-0 ml-auto">
                         <button
                           class="rounded-lg border border-red-200 px-2 py-1 font-bold text-red-600 transition hover:bg-red-50 dark:border-red-500/20 dark:text-red-400 dark:hover:bg-red-500/10"

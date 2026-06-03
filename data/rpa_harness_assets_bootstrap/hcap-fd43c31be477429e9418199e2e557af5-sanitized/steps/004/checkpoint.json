@@ -1,0 +1,59 @@
+{
+  "step_index": 4,
+  "step_id": "trace-ef1afc7b-e420-42cb-a2df-5aa123e3e6de",
+  "step_intent": "点击 link(\"Issues 10\")",
+  "recording_mode": "manual",
+  "page_patterns": [],
+  "captured_at": "2026-05-30T10:47:35.731693",
+  "before": {
+    "url": "https://github.com/harry0703/MoneyPrinterTurbo",
+    "title": "GitHub - harry0703/MoneyPrinterTurbo: 利用AI大模型，一键生成高清短视频 Generate short videos with one click using AI LLM. · GitHub",
+    "html_path": "steps/004/before.html",
+    "html_sha256": "52da7649fbca86997a6ec57502e1fe48bbdba2e8e2e9be6c6e93d58828a33a3b",
+    "same_as_before": false,
+    "capture_quality": {},
+    "screenshot_path": "",
+    "raw_snapshot_path": "",
+    "compact_snapshot_path": "",
+    "active_page_id": "",
+    "iframe_metadata": []
+  },
+  "action": {
+    "trace_events_path": "steps/004/trace_events.json",
+    "expected_action_type": "",
+    "target_evidence": {}
+  },
+  "after": {
+    "url": "https://github.com/harry0703/MoneyPrinterTurbo",
+    "title": "GitHub - harry0703/MoneyPrinterTurbo: 利用AI大模型，一键生成高清短视频 Generate short videos with one click using AI LLM. · GitHub",
+    "html_path": "steps/004/after.html",
+    "html_sha256": "48410c6408646ac396ca3279b7ec92eefac6cd3e5b539dd299221066a9867654",
+    "same_as_before": false,
+    "capture_quality": {
+      "status": "stable",
+      "reason": "",
+      "attempts": 2,
+      "settle_ms": 200,
+      "url": "https://github.com/harry0703/MoneyPrinterTurbo",
+      "html_bytes": 529183,
+      "body_text_chars": 130198,
+      "title_present": true,
+      "ready_state": "complete",
+      "url_stable": true,
+      "title_stable": true,
+      "html_stable": true,
+      "shell_like": false
+    },
+    "screenshot_path": "",
+    "raw_snapshot_path": "",
+    "compact_snapshot_path": "",
+    "active_page_id": "",
+    "iframe_metadata": []
+  },
+  "runtime_result": {
+    "status": "success",
+    "error": null
+  },
+  "expected_path": "steps/004/expected.json",
+  "failure_path": ""
+}

@@ -1,0 +1,73 @@
+{
+  "step_index": 3,
+  "step_id": "trace-71f4f3a1687447a592f99d39c3c7ab4f",
+  "step_intent": "获取About的内容",
+  "recording_mode": "natural_language",
+  "page_patterns": [],
+  "captured_at": "2026-05-30T10:47:25.021401",
+  "before": {
+    "url": "https://github.com/harry0703/MoneyPrinterTurbo",
+    "title": "GitHub - harry0703/MoneyPrinterTurbo: 利用AI大模型，一键生成高清短视频 Generate short videos with one click using AI LLM. · GitHub",
+    "html_path": "steps/003/before.html",
+    "html_sha256": "07f156cd4630104d7297726ad0dc6fe70cbfd0dd8d2bbe84ccd670963ed69df8",
+    "same_as_before": false,
+    "capture_quality": {
+      "status": "stable",
+      "reason": "",
+      "attempts": 2,
+      "settle_ms": 200,
+      "url": "https://github.com/harry0703/MoneyPrinterTurbo",
+      "html_bytes": 529023,
+      "body_text_chars": 130198,
+      "title_present": true,
+      "ready_state": "complete",
+      "url_stable": true,
+      "title_stable": true,
+      "html_stable": true,
+      "shell_like": false
+    },
+    "screenshot_path": "",
+    "raw_snapshot_path": "",
+    "compact_snapshot_path": "",
+    "active_page_id": "",
+    "iframe_metadata": []
+  },
+  "action": {
+    "trace_events_path": "steps/003/trace_events.json",
+    "expected_action_type": "",
+    "target_evidence": {}
+  },
+  "after": {
+    "url": "https://github.com/harry0703/MoneyPrinterTurbo",
+    "title": "GitHub - harry0703/MoneyPrinterTurbo: 利用AI大模型，一键生成高清短视频 Generate short videos with one click using AI LLM. · GitHub",
+    "html_path": "steps/003/before.html",
+    "html_sha256": "07f156cd4630104d7297726ad0dc6fe70cbfd0dd8d2bbe84ccd670963ed69df8",
+    "same_as_before": true,
+    "capture_quality": {
+      "status": "stable",
+      "reason": "",
+      "attempts": 2,
+      "settle_ms": 200,
+      "url": "https://github.com/harry0703/MoneyPrinterTurbo",
+      "html_bytes": 529023,
+      "body_text_chars": 130198,
+      "title_present": true,
+      "ready_state": "complete",
+      "url_stable": true,
+      "title_stable": true,
+      "html_stable": true,
+      "shell_like": false
+    },
+    "screenshot_path": "",
+    "raw_snapshot_path": "",
+    "compact_snapshot_path": "",
+    "active_page_id": "",
+    "iframe_metadata": []
+  },
+  "runtime_result": {
+    "status": "success",
+    "error": null
+  },
+  "expected_path": "steps/003/expected.json",
+  "failure_path": ""
+}

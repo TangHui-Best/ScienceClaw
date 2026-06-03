@@ -27,7 +27,7 @@ describe('apiMonitor analyzeSession', () => {
 
     expect(createSSEConnection).toHaveBeenCalledWith(
       '/api-monitor/session/session-1/analyze',
-      { method: 'POST', body: { mode: 'free', instruction: '' } },
+      { method: 'POST', body: { mode: 'free', instruction: '', intent: '' } },
       expect.any(Object),
     )
   })
@@ -43,7 +43,10 @@ describe('apiMonitor analyzeSession', () => {
 
     expect(createSSEConnection).toHaveBeenCalledWith(
       '/api-monitor/session/session-1/analyze',
-      { method: 'POST', body: { mode: 'safe_directed', instruction: '搜索订单 123' } },
+      {
+        method: 'POST',
+        body: { mode: 'safe_directed', instruction: '搜索订单 123', intent: '' },
+      },
       expect.any(Object),
     )
   })

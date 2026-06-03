@@ -268,6 +268,28 @@
         return next;
     }
 
+    function isEditableFillTarget(el) {
+        if (!el || !el.tagName) return false;
+        if (el.tagName === 'TEXTAREA' || el.isContentEditable) return true;
+        if (el.tagName !== 'INPUT') return false;
+        var type = (el.getAttribute('type') || el.type || '').toLowerCase();
+        return ['checkbox', 'radio', 'file', 'button', 'submit', 'reset', 'image', 'range'].indexOf(type) < 0;
+    }
+
+    function editableFillPayload(el, sourceMethod) {
+        var type = (el.getAttribute('type') || el.type || '').toLowerCase();
+        var isPassword = el.tagName === 'INPUT' && type === 'password';
+        return {
+            value: isPassword ? '{{credential}}' : (el.isContentEditable ? (el.innerText || '') : (el.value || '')),
+            sensitive: isPassword,
+            signals: {
+                input_method: {
+                    source_method: sourceMethod || 'input'
+                }
+            }
+        };
+    }
+
     var _eventSequence = 0;
 
     function emit(evt) {
@@ -284,6 +306,13 @@
         var locatorBundle = buildLocatorBundle(el);
         var payload = extra && typeof extra === 'object' ? extra : {};
         payload = annotateActionPayload(action, el, payload);
+        if ((action === 'click' || action === 'press') && window.__rpa_harness_capture_active) {
+            payload.harness_before_page_state = {
+                url: location.href,
+                title: document.title || '',
+                html: document.documentElement ? document.documentElement.outerHTML : ''
+            };
+        }
         emit(Object.assign({
             action: action,
             locator: locatorBundle.primary,
@@ -293,6 +322,14 @@
             tag: el && el.tagName ? el.tagName : ''
         }, payload));
     }
+
+    window.__rpaRecordCurrentEditableFill = function(options) {
+        var active = retarget(document.activeElement);
+        if (!isEditableFillTarget(active)) return false;
+        var sourceMethod = options && options.source_method ? options.source_method : 'input';
+        emitAction('fill', active, editableFillPayload(active, sourceMethod));
+        return true;
+    };
 
     if (!window.__rpaPlaywrightActions || !window.__rpaPlaywrightActions.install) {
         console.warn('[RPA] Recorder action runtime is unavailable');

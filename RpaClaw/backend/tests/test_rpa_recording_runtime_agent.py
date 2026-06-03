@@ -72,6 +72,27 @@ class _FakeLocator:
         return None
 
 
+class _DownloadOnClickPage(_FakePage):
+    def __init__(self, filename="report.xlsx"):
+        super().__init__()
+        self.filename = filename
+
+    def locator(self, _selector):
+        return _DownloadOnClickLocator(self)
+
+
+class _DownloadOnClickLocator:
+    def __init__(self, page):
+        self.page = page
+        self.first = self
+
+    def nth(self, _index):
+        return self
+
+    async def click(self):
+        await self.page.trigger_download(self.page.filename)
+
+
 def test_compact_region_context_forwards_scope_and_nested_locators():
     compact = _compact_region_context(
         {
@@ -3179,6 +3200,32 @@ async def test_recording_runtime_agent_waits_briefly_for_click_triggered_downloa
     assert result.success is True
     assert result.trace.signals["download"]["filename"] == "delayed-report.xlsx"
     assert result.trace.output_key == "table_row_action"
+
+
+@pytest.mark.asyncio
+async def test_recording_runtime_agent_records_download_signal_from_simple_click_plan():
+    async def planner(_payload):
+        return {
+            "description": "Click first file name",
+            "action_type": "click",
+            "expected_effect": "click",
+            "selector": "tbody tr:first-child a",
+            "output_key": "file_click",
+        }
+
+    page = _DownloadOnClickPage("first-row.pdf")
+    result = await RecordingRuntimeAgent(planner=planner).run(
+        page=page,
+        instruction="点击列表中第一行的文件名称",
+        runtime_results={},
+    )
+
+    assert result.success is True
+    assert result.trace.signals["download"]["filename"] == "first-row.pdf"
+    assert result.trace.signals["download"]["count"] == 1
+    assert result.trace.output_key == "file_click"
+    assert "async def run(page, results)" in result.trace.ai_execution.code
+    assert "await page.locator('tbody tr:first-child a').first.click()" in result.trace.ai_execution.code
 
 
 @pytest.mark.asyncio

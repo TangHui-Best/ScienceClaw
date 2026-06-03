@@ -1,0 +1,74 @@
+{
+  "snapshot_signals": {
+    "must_preserve_region_scope": {
+      "region_id": "region-008ee8cb898f4bdf9ce16c6d96177956",
+      "mode": "region_scoped_snapshot",
+      "inferred_kind": "action_region"
+    }
+  },
+  "action_signals": {
+    "expected_action_type": "ai_operation",
+    "step_intent": "获取前10项PR的标题",
+    "region_selection": {
+      "region_id": "region-008ee8cb898f4bdf9ce16c6d96177956",
+      "mode": "region_scoped_snapshot",
+      "inferred_kind": "action_region"
+    }
+  },
+  "compiler_signals": {
+    "must_preserve_region_context": {
+      "region_id": "region-008ee8cb898f4bdf9ce16c6d96177956",
+      "inferred_kind": "action_region"
+    },
+    "must_preserve_output_keys": [
+      "pr_titles"
+    ]
+  },
+  "state_signals": {
+    "output_key": "pr_titles",
+    "observed_output_shape": {
+      "type": "array",
+      "length": 10
+    },
+    "must_contain_text": [
+      "Clarify bundled reference path guidance",
+      "Add Walter Skills to Partner Skills",
+      "fix(xlsx): report recalc timeouts as failures",
+      "skill-creator: don't early-return run_eval detection on non-Skill/Read tools",
+      "Add pii-scrub skill",
+      "fix(xlsx): add Excel compatibility guardrails",
+      "Add lacuna-music skill",
+      "Add wordpress-plugin-development skill",
+      "Fix Windows compatibility in skill-creator eval scripts",
+      "Add AI Use Case Discovery skill with comprehensive assessment framework"
+    ],
+    "sanitization_contract": {
+      "placeholders": [
+        {
+          "token": "<SESSION_ID_1>",
+          "category": "auth/session",
+          "semantic_type": "session_identifier",
+          "shape": "identifier"
+        },
+        {
+          "token": "<SESSION_ID_2>",
+          "category": "auth/session",
+          "semantic_type": "session_identifier",
+          "shape": "identifier"
+        },
+        {
+          "token": "<EMAIL_1>",
+          "category": "PII",
+          "semantic_type": "email",
+          "shape": "email"
+        }
+      ],
+      "runtime_secret_refs": [],
+      "controlled_fixtures": [],
+      "replay_assertions": [
+        "sanitized asset preserves output shape and SOP replay evidence",
+        "raw sensitive values are replaced by semantic placeholders"
+      ]
+    }
+  }
+}

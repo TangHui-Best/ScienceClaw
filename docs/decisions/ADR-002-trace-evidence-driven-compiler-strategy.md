@@ -33,9 +33,9 @@ compiler strategy 由 trace 上的证据画像决定，而不是由输出长相�
 
 ## Alternatives
 
-- 为 GitHub、Jalor 等样本加站点规则：放弃。验证案例不能反向塑造架构。
-- 所有 AI 提取都回退 runtime AI：放弃。会丢掉真实存在的结构化 snapshot 证据。
-- 把 `trace.output` label 当作 field locator fallback：放弃。observed value 是 evidence，不是 replay logic。
+- Compile from output field names. Rejected because output labels are observations, not DOM evidence.
+- Force every replay into runtime AI. Rejected because strong structured traces should compile deterministically.
+- Add site-specific extraction templates. Rejected because the boundary is trace evidence quality, not one site.
 
 ## Consequences
 

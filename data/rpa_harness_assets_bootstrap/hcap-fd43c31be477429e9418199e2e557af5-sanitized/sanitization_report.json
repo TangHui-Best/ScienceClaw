@@ -1,0 +1,59 @@
+{
+  "schema_version": "rpa-harness-sanitization-report-v0",
+  "source_asset_id": "hcap-fd43c31be477429e9418199e2e557af5",
+  "target_asset_id": "hcap-fd43c31be477429e9418199e2e557af5-sanitized",
+  "target_path": "data/rpa_harness_assets_bootstrap/hcap-fd43c31be477429e9418199e2e557af5-sanitized",
+  "placeholder_count": 8,
+  "placeholders": [
+    {
+      "token": "<EMAIL_1>",
+      "category": "PII",
+      "semantic_type": "email",
+      "shape": "email"
+    },
+    {
+      "token": "<EMAIL_2>",
+      "category": "PII",
+      "semantic_type": "email",
+      "shape": "email"
+    },
+    {
+      "token": "<EMAIL_3>",
+      "category": "PII",
+      "semantic_type": "email",
+      "shape": "email"
+    },
+    {
+      "token": "<LOCAL_PATH_1>",
+      "category": "local-path",
+      "semantic_type": "local_path",
+      "shape": "path"
+    },
+    {
+      "token": "<LOCAL_PATH_2>",
+      "category": "local-path",
+      "semantic_type": "local_path",
+      "shape": "path"
+    },
+    {
+      "token": "<LOCAL_PATH_3>",
+      "category": "local-path",
+      "semantic_type": "local_path",
+      "shape": "path"
+    },
+    {
+      "token": "<SESSION_ID_1>",
+      "category": "auth/session",
+      "semantic_type": "session_identifier",
+      "shape": "identifier"
+    },
+    {
+      "token": "<SESSION_ID_2>",
+      "category": "auth/session",
+      "semantic_type": "session_identifier",
+      "shape": "identifier"
+    }
+  ],
+  "replacement_count": 8,
+  "raw_asset_preserved": true
+}

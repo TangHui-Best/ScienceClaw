@@ -158,6 +158,13 @@ class Settings(BaseSettings):
     storage_backend: str = os.environ.get("STORAGE_BACKEND", "mongo")
     local_path_style: str = os.environ.get("LOCAL_PATH_STYLE", "windows").strip().lower() or "windows"
     rpa_recording_debug_snapshot_dir: str = os.environ.get("RPA_RECORDING_DEBUG_SNAPSHOT_DIR", "")
+    rpa_harness_capture_enabled: bool = os.environ.get("RPA_HARNESS_CAPTURE_ENABLED", "false").strip().lower() == "true"
+    rpa_harness_assets_dir: str = _sub(
+        "RPA_HARNESS_ASSETS_DIR",
+        _resolve_home(),
+        "rpa_harness_assets",
+        "./data/rpa_harness_assets",
+    )
 
     # ── RPA_CLAW_HOME: 统一根目录，子目录自动派生 ──
     # 本地后端使用 RPA_CLAW_HOME，沙箱内使用 SANDBOX_RPA_CLAW_HOME（默认 /home/rpaclaw）

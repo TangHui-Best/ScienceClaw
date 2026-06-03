@@ -7,7 +7,7 @@ scope: feature
 feature_refs:
   - docs/features/F001-rpa-trace-source-convergence.md
 created: 2026-05-13
-updated: 2026-05-27
+updated: 2026-06-03
 evidence_level: exhaustive
 ---
 
@@ -938,6 +938,21 @@ Manual smoke:
     - `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q` -> `99 passed`.
 
 ## Current Evidence Snapshot
+
+2026-06-03:
+
+- F001.6 helper prelude hardening: generated Skill helper injection now derives from rendered trace replay lines and dependency closure instead of always embedding the complete helper set. This keeps generated Skills self-contained while removing unused download/runtime-AI/snapshot/iframe helpers from simple scripts.
+- Boundary check: change is limited to `TraceSkillCompiler` code generation and compiler tests. It does not change recorder facts, accepted trace shape, Harness expected signals, asset promotion, or controlled fixtures.
+- RED command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_navigation_script_only_includes_required_helper_prelude -q`
+- RED result before fix: `1 failed`; simple navigation script prelude still included `_download_from_export_task`.
+- Focused GREEN command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_navigation_script_only_includes_required_helper_prelude RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_compiler_uses_source_ref_for_dataflow_fill RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_ai_export_task_download_signal_compiles_to_export_task_helper RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py::test_runtime_ai_instruction_uses_runtime_model_config_kwarg_without_embedding_secret -q`
+- Focused GREEN result: `4 passed`.
+- Compiler suite command: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q`
+- Compiler suite result: `110 passed`.
+- Core SOP->Skill supplement: `New-Item -ItemType Directory -Force .pytest-codex-temp | Out-Null; $env:PYTHONPATH='RpaClaw'; $env:TMP=(Resolve-Path .pytest-codex-temp).Path; $env:TEMP=$env:TMP; python -m pytest RpaClaw/backend/tests/test_rpa_harness_stateful_sop.py::test_asset_core_chain_export_writes_reports_and_skills_under_asset_dir -q` -> `1 passed`. First attempt without `TMP/TEMP` override errored before test setup with Windows temp-directory `PermissionError`.
+- Harness compiler regression command: `New-Item -ItemType Directory -Force .pytest-codex-temp | Out-Null; $env:PYTHONPATH='RpaClaw'; $env:TMP=(Resolve-Path .pytest-codex-temp).Path; $env:TEMP=$env:TMP; python -m pytest RpaClaw/backend/tests/test_rpa_harness_compiler_regression.py -q`
+- Harness compiler regression result: `8 passed`.
+- Final combined rerun: `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q; ... python -m pytest RpaClaw/backend/tests/test_rpa_harness_stateful_sop.py::test_asset_core_chain_export_writes_reports_and_skills_under_asset_dir RpaClaw/backend/tests/test_rpa_harness_compiler_regression.py -q` -> `110 passed`, then `9 passed`.
 
 2026-05-27:
 

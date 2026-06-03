@@ -1,0 +1,40 @@
+{
+  "snapshot_signals": {},
+  "action_signals": {
+    "expected_action_type": "navigate"
+  },
+  "compiler_signals": {},
+  "state_signals": {
+    "observed_output_shape": {
+      "type": "null"
+    },
+    "sanitization_contract": {
+      "placeholders": [
+        {
+          "token": "<SESSION_ID_1>",
+          "category": "auth/session",
+          "semantic_type": "session_identifier",
+          "shape": "identifier"
+        },
+        {
+          "token": "<SESSION_ID_2>",
+          "category": "auth/session",
+          "semantic_type": "session_identifier",
+          "shape": "identifier"
+        },
+        {
+          "token": "<EMAIL_1>",
+          "category": "PII",
+          "semantic_type": "email",
+          "shape": "email"
+        }
+      ],
+      "runtime_secret_refs": [],
+      "controlled_fixtures": [],
+      "replay_assertions": [
+        "sanitized asset preserves output shape and SOP replay evidence",
+        "raw sensitive values are replaced by semantic placeholders"
+      ]
+    }
+  }
+}

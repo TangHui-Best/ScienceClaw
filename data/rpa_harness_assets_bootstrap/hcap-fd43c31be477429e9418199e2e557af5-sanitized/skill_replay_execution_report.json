@@ -1,0 +1,100 @@
+{
+  "schema_version": "rpa-harness-skill-replay-e2e-v0",
+  "summary": {
+    "status": "failed",
+    "runtime_ai_model_config_source": "harness_explicit_model_config",
+    "eligible_capture_count": 1,
+    "total": 5,
+    "passed": 2,
+    "failed": 3,
+    "failure_categories": {
+      "replay-output-shape-mismatch": 3
+    }
+  },
+  "assets": [
+    {
+      "asset_id": "hcap-fd43c31be477429e9418199e2e557af5-sanitized",
+      "step_id": "trace-556572b0-b417-437e-beb0-111e0421a333",
+      "step_index": 1,
+      "step_intent": "导航到 https://github.com/trending",
+      "page_patterns": [],
+      "status": "passed",
+      "failure_category": "",
+      "output_key": "",
+      "actual_output": null,
+      "missing_text": [],
+      "error": "",
+      "controlled_download": {},
+      "generated_skill_size": 12948
+    },
+    {
+      "asset_id": "hcap-fd43c31be477429e9418199e2e557af5-sanitized",
+      "step_id": "trace-19d723145a01420eacac41639aa6aa78",
+      "step_index": 2,
+      "step_intent": "点击和金融最相关的项目",
+      "page_patterns": [],
+      "status": "failed",
+      "failure_category": "replay-output-shape-mismatch",
+      "output_key": "",
+      "actual_output": null,
+      "missing_text": [],
+      "error": "",
+      "controlled_download": {},
+      "generated_skill_size": 12917
+    },
+    {
+      "asset_id": "hcap-fd43c31be477429e9418199e2e557af5-sanitized",
+      "step_id": "trace-71f4f3a1687447a592f99d39c3c7ab4f",
+      "step_index": 3,
+      "step_intent": "获取About的内容",
+      "page_patterns": [],
+      "status": "failed",
+      "failure_category": "replay-output-shape-mismatch",
+      "output_key": "about_content",
+      "actual_output": "利用AI大模型，一键生成高清短视频 Generate short videos with one click using AI LLM.",
+      "missing_text": [],
+      "error": "",
+      "controlled_download": {},
+      "generated_skill_size": 12933
+    },
+    {
+      "asset_id": "hcap-fd43c31be477429e9418199e2e557af5-sanitized",
+      "step_id": "trace-ef1afc7b-e420-42cb-a2df-5aa123e3e6de",
+      "step_index": 4,
+      "step_intent": "点击 link(\"Issues 10\")",
+      "page_patterns": [],
+      "status": "passed",
+      "failure_category": "",
+      "output_key": "",
+      "actual_output": null,
+      "missing_text": [],
+      "error": "",
+      "controlled_download": {},
+      "generated_skill_size": 12959
+    },
+    {
+      "asset_id": "hcap-fd43c31be477429e9418199e2e557af5-sanitized",
+      "step_id": "trace-459c2bc4edaf4dd68d2a73c8123d291b",
+      "step_index": 5,
+      "step_intent": "获取前10项Issues的标题信息",
+      "page_patterns": [],
+      "status": "failed",
+      "failure_category": "replay-output-shape-mismatch",
+      "output_key": "issue_titles",
+      "actual_output": [
+        "[Bug]: PermissionError: [WinError 10013] 以一种访问权限不允许的方式做了一个访问套接字的尝试。\nbugSomething isn't working\nStatus: Open.\n#930 In harry0703/MoneyPrinterTurbo;\n· qianjun2659 opened on May 29, 2026\n 1 comment",
+        "[Feature]: 文案生成缺少自定义功能\nenhancementNew feature or request\nStatus: Open.\n#927 In harry0703/MoneyPrinterTurbo;\n· Joshua-CPUX opened on May 29, 2026",
+        "[Bug]:app.services.video:get_bgm_file:251 - reject unsafe bgm file: ./resource/songs/output000.mp3, song_dir: ./resource/songs, error: file does not exist\nbugSomething isn't working\nStatus: Open.\n#918 In harry0703/MoneyPrinterTurbo;\n· JING202303 opened on May 29, 2026\n 1 comment",
+        "[Feature]: 可以将prompt搞成配置\nenhancementNew feature or request\nStatus: Open.\n#917 In harry0703/MoneyPrinterTurbo;\n· YSM2292411508 opened on May 29, 2026",
+        "💡 Share: AI prompts for better video scripts (tested on MoneyPrinterTurbo)\nStatus: Open.\n#912 In harry0703/MoneyPrinterTurbo;\n· caishen-ai opened on May 29, 2026",
+        "[Feature]: 增加字幕自适应换行/智能断句能力，避免大字号字幕显示不全\nenhancementNew feature or request\nStatus: Open.\n#909 In harry0703/MoneyPrinterTurbo;\n· AaronHowell opened on May 28, 2026\n 1 comment",
+        "[Bug]: 以及打开了全局模式，选择了zh-HK，还是报错无法生成\nbugSomething isn't working\nStatus: Open.\n#908 In harry0703/MoneyPrinterTurbo;\n· yanishuang opened on May 28, 2026\n 2 comments",
+        "[Bug]: 没有字幕 配音也不完整\nbugSomething isn't working\nStatus: Open.\n#906 In harry0703/MoneyPrinterTurbo;\n· Mrliuxu opened on May 28, 2026\n 1 comment"
+      ],
+      "missing_text": [],
+      "error": "",
+      "controlled_download": {},
+      "generated_skill_size": 13216
+    }
+  ]
+}

@@ -1,0 +1,105 @@
+[
+  {
+    "trace_id": "trace-76b08399-dcf5-42f3-92db-32fdf683d380",
+    "trace_type": "manual_action",
+    "source": "manual",
+    "user_instruction": null,
+    "action": "navigate_click",
+    "description": "点击 link(\"Pull requests\") 并跳转页面",
+    "before_page": {
+      "url": "",
+      "title": "",
+      "snapshot_summary": {}
+    },
+    "after_page": {
+      "url": "https://github.com/anthropics/skills/pulls",
+      "title": "",
+      "snapshot_summary": {}
+    },
+    "frame_path": [],
+    "locator_candidates": [
+      {
+        "kind": "role",
+        "score": 0,
+        "strict_match_count": 1,
+        "visible_match_count": 1,
+        "selected": true,
+        "selector": "internal:role=link[name=\"Pull requests\"i]",
+        "playwright_locator": "page.get_by_role(\"link\", name=\"Pull requests\")",
+        "locator": {
+          "method": "role",
+          "role": "link",
+          "name": "Pull requests"
+        },
+        "reason": "selected Playwright candidate is strict unique"
+      },
+      {
+        "kind": "css",
+        "score": 1,
+        "strict_match_count": 1,
+        "visible_match_count": 1,
+        "selected": false,
+        "selector": "#pull-requests-tab",
+        "playwright_locator": "page.locator(\"#pull-requests-tab\")",
+        "locator": {
+          "method": "css",
+          "value": "#pull-requests-tab"
+        },
+        "reason": "Playwright candidate is strict unique"
+      },
+      {
+        "kind": "role",
+        "score": 10,
+        "strict_match_count": 1,
+        "visible_match_count": 1,
+        "selected": false,
+        "locator": {
+          "method": "role",
+          "role": "link",
+          "name": "Pull requests 638"
+        },
+        "reason": "semantic candidate is strict unique"
+      },
+      {
+        "kind": "text",
+        "score": 30,
+        "strict_match_count": 2,
+        "visible_match_count": 2,
+        "selected": false,
+        "locator": {
+          "method": "text",
+          "value": "Pull requests 638"
+        },
+        "reason": "semantic candidate strict matches = 2"
+      }
+    ],
+    "validation": {
+      "status": "ok",
+      "details": "selected Playwright candidate is strict unique",
+      "selected_candidate_index": 0,
+      "selected_candidate_kind": "role"
+    },
+    "signals": {
+      "tab": {
+        "tab_id": "b3e4167d-342c-4c0b-aee5-6e92f40e6ff8"
+      },
+      "recording": {
+        "sequence": 14,
+        "event_timestamp_ms": 1779986099143
+      }
+    },
+    "region_context": {},
+    "region_scope": {},
+    "value": "",
+    "sensitive": false,
+    "output_key": null,
+    "output": null,
+    "ai_execution": null,
+    "locator_stability": null,
+    "dataflow": null,
+    "diagnostics_ref": null,
+    "accepted": true,
+    "started_at": "2026-05-29T00:35:01.728892",
+    "ended_at": "2026-05-29T00:35:01.728892"
+  }
+]

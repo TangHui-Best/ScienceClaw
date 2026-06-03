@@ -1,0 +1,1142 @@
+{
+  "schema_version": "rpa-harness-user-input-replay-v1",
+  "kind": "user_input_replay",
+  "profile": {
+    "name": "deterministic",
+    "execution_mode": "scripted-user-input-events",
+    "uses_live_planner": false,
+    "uses_live_url_oracle": false,
+    "uses_outer_agent_ui_control": false,
+    "governance_mode": "human-governed-assets"
+  },
+  "mode": "deterministic",
+  "summary": {
+    "status": "passed",
+    "failure_category": "",
+    "mode": "deterministic",
+    "selected_asset_count": 2,
+    "blocking_asset_count": 2,
+    "warning_only_asset_count": 0,
+    "excluded_asset_count": 0,
+    "replayed_event_count": 6,
+    "passed_event_count": 6,
+    "failed_event_count": 0,
+    "blocking_failure_count": 0,
+    "warning_only_failure_count": 0,
+    "boundary_injection_count": 6,
+    "boundary_injection_failed_count": 0,
+    "boundary_injection_skipped_count": 0,
+    "event_kinds": {
+      "click": 2,
+      "natural_language_instruction": 2,
+      "navigation": 2
+    },
+    "injected_boundaries": {
+      "scripted_manual_input_boundary": 2,
+      "scripted_natural_language_instruction_boundary": 2,
+      "scripted_navigation_boundary": 2
+    },
+    "trace_ids": [
+      "trace-132c87131a674c84b6f608fe21d5c8d6",
+      "trace-4dc4ac88-c666-4378-9f09-c2b0bd7e51ab",
+      "trace-cd0d9995-99ce-46a9-af23-42ba8fa15052",
+      "trace-d29cd8d5-d33c-4545-9baf-6e52f403a9a3",
+      "trace-ddeb5bda-096e-48e6-a5e0-211ab0defdd1",
+      "trace-e11497a7f1b84fd4b229f2c8672cf4ad"
+    ],
+    "session_ids": [
+      "57f962bc-07f5-43ee-834d-a0021fad40b0",
+      "864e9835-eaf6-474f-b32f-0873119781c0"
+    ],
+    "result_ids": [
+      "hcap-4be6265f43eb42dfa259182207aa64cc:1:trace-ddeb5bda-096e-48e6-a5e0-211ab0defdd1",
+      "hcap-4be6265f43eb42dfa259182207aa64cc:2:trace-4dc4ac88-c666-4378-9f09-c2b0bd7e51ab",
+      "hcap-4be6265f43eb42dfa259182207aa64cc:3:fork_count",
+      "hcap-de463b7bb608482e9b5bcdd5b78a224e:1:trace-cd0d9995-99ce-46a9-af23-42ba8fa15052",
+      "hcap-de463b7bb608482e9b5bcdd5b78a224e:2:trace-d29cd8d5-d33c-4545-9baf-6e52f403a9a3",
+      "hcap-de463b7bb608482e9b5bcdd5b78a224e:3:star_count"
+    ]
+  },
+  "asset_pool": {
+    "schema_version": "rpa-harness-asset-lifecycle-summary-v1",
+    "summary": {
+      "asset_count": 2,
+      "lifecycle_distribution": {
+        "candidate": 2
+      },
+      "promotion_statuses": {
+        "candidate": 2
+      },
+      "asset_statuses": {
+        "active": 2
+      },
+      "sensitivity": {
+        "local-only": 1,
+        "repo-safe": 1
+      }
+    },
+    "review_state": {
+      "expected_signals_reviewed": 2,
+      "expected_signals_unreviewed": 0,
+      "sensitivity_reviewed": 2,
+      "sensitivity_unreviewed": 0
+    },
+    "blocking_baseline_asset_ids": [
+      "hcap-4be6265f43eb42dfa259182207aa64cc",
+      "hcap-de463b7bb608482e9b5bcdd5b78a224e"
+    ],
+    "warning_only_asset_ids": [],
+    "golden_asset_ids": [],
+    "coverage_boundary": {
+      "runner_modes": {
+        "offline_core_chain": 2,
+        "skill_replay_e2e": 2,
+        "stateful_sop_capture_to_skill": 2
+      },
+      "core_chain_coverage": {
+        "html_to_raw_snapshot": 2,
+        "planner_action_selection": 2,
+        "raw_to_compact_snapshot": 2,
+        "skill_replay": 2,
+        "stateful_capture_to_skill": 2,
+        "trace_to_skill": 2
+      },
+      "page_patterns": [
+        "card-list",
+        "data-extraction",
+        "detail-page",
+        "multi-page",
+        "semantic-selection"
+      ],
+      "hosts": [
+        "github.com"
+      ]
+    },
+    "lifecycle_warnings": [],
+    "trust_limits": [
+      "Current asset pool coverage is narrow",
+      "bootstrap coverage does not prove global RPA health",
+      "candidate-lite assets are warning-only and not blocking baseline",
+      "golden eligibility is advisory until human approval"
+    ]
+  },
+  "selected_assets": [
+    {
+      "asset_id": "hcap-4be6265f43eb42dfa259182207aa64cc",
+      "asset_status": "active",
+      "promotion_status": "candidate",
+      "lifecycle": "candidate",
+      "runner_modes": [
+        "offline_core_chain",
+        "skill_replay_e2e",
+        "stateful_sop_capture_to_skill"
+      ],
+      "core_chain_coverage": [
+        "html_to_raw_snapshot",
+        "raw_to_compact_snapshot",
+        "planner_action_selection",
+        "trace_to_skill",
+        "skill_replay",
+        "stateful_capture_to_skill"
+      ],
+      "page_patterns": [
+        "card-list",
+        "detail-page",
+        "multi-page",
+        "semantic-selection",
+        "data-extraction"
+      ],
+      "baseline_role": "blocking"
+    },
+    {
+      "asset_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e",
+      "asset_status": "active",
+      "promotion_status": "candidate",
+      "lifecycle": "candidate",
+      "runner_modes": [
+        "offline_core_chain",
+        "skill_replay_e2e",
+        "stateful_sop_capture_to_skill"
+      ],
+      "core_chain_coverage": [
+        "html_to_raw_snapshot",
+        "raw_to_compact_snapshot",
+        "planner_action_selection",
+        "trace_to_skill",
+        "skill_replay",
+        "stateful_capture_to_skill"
+      ],
+      "page_patterns": [],
+      "baseline_role": "blocking"
+    }
+  ],
+  "selection": {
+    "blocking_baseline_assets": [
+      {
+        "asset_id": "hcap-4be6265f43eb42dfa259182207aa64cc",
+        "asset_status": "active",
+        "promotion_status": "candidate",
+        "lifecycle": "candidate",
+        "runner_modes": [
+          "offline_core_chain",
+          "skill_replay_e2e",
+          "stateful_sop_capture_to_skill"
+        ],
+        "core_chain_coverage": [
+          "html_to_raw_snapshot",
+          "raw_to_compact_snapshot",
+          "planner_action_selection",
+          "trace_to_skill",
+          "skill_replay",
+          "stateful_capture_to_skill"
+        ],
+        "page_patterns": [
+          "card-list",
+          "detail-page",
+          "multi-page",
+          "semantic-selection",
+          "data-extraction"
+        ],
+        "baseline_role": "blocking"
+      },
+      {
+        "asset_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e",
+        "asset_status": "active",
+        "promotion_status": "candidate",
+        "lifecycle": "candidate",
+        "runner_modes": [
+          "offline_core_chain",
+          "skill_replay_e2e",
+          "stateful_sop_capture_to_skill"
+        ],
+        "core_chain_coverage": [
+          "html_to_raw_snapshot",
+          "raw_to_compact_snapshot",
+          "planner_action_selection",
+          "trace_to_skill",
+          "skill_replay",
+          "stateful_capture_to_skill"
+        ],
+        "page_patterns": [],
+        "baseline_role": "blocking"
+      }
+    ],
+    "warning_only_assets": [],
+    "excluded_assets": [],
+    "blocking_baseline_asset_ids": [
+      "hcap-4be6265f43eb42dfa259182207aa64cc",
+      "hcap-de463b7bb608482e9b5bcdd5b78a224e"
+    ],
+    "warning_only_asset_ids": [],
+    "excluded_asset_ids": []
+  },
+  "warning_only_observation": {
+    "asset_ids": [],
+    "blocking": false,
+    "failure_count": 0
+  },
+  "replayed_input_events": [
+    {
+      "event_id": "hcap-4be6265f43eb42dfa259182207aa64cc:1:trace-ddeb5bda-096e-48e6-a5e0-211ab0defdd1",
+      "asset_id": "hcap-4be6265f43eb42dfa259182207aa64cc",
+      "baseline_role": "blocking",
+      "step_index": 1,
+      "step_id": "trace-ddeb5bda-096e-48e6-a5e0-211ab0defdd1",
+      "event_kind": "navigation",
+      "source": "manual",
+      "recording_mode": "manual",
+      "user_instruction": "",
+      "description": "导航到 https://github.com/trending",
+      "step_intent": "导航到 https://github.com/trending",
+      "action": "navigate",
+      "value": "",
+      "target": {},
+      "locator_candidates": [],
+      "region_context": {},
+      "before_page": {
+        "url": "about:blank",
+        "title": "",
+        "html_path": "steps/001/before.html"
+      },
+      "after_page": {
+        "url": "https://github.com/trending",
+        "title": "Trending repositories on GitHub today · GitHub",
+        "html_path": "steps/001/after.html"
+      },
+      "checkpoint_path": "hcap-4be6265f43eb42dfa259182207aa64cc/steps/001/checkpoint.json",
+      "trace_events_path": "hcap-4be6265f43eb42dfa259182207aa64cc/steps/001/trace_events.json",
+      "injected_boundary": "scripted_navigation_boundary",
+      "trace_id": "trace-ddeb5bda-096e-48e6-a5e0-211ab0defdd1",
+      "session_id": "57f962bc-07f5-43ee-834d-a0021fad40b0",
+      "result_id": "hcap-4be6265f43eb42dfa259182207aa64cc:1:trace-ddeb5bda-096e-48e6-a5e0-211ab0defdd1",
+      "output_key": null,
+      "output_shape": {
+        "type": "null"
+      },
+      "source_metadata": {
+        "checkpoint_path": "hcap-4be6265f43eb42dfa259182207aa64cc/steps/001/checkpoint.json",
+        "trace_events_path": "hcap-4be6265f43eb42dfa259182207aa64cc/steps/001/trace_events.json",
+        "recording_mode": "manual",
+        "trace_type": "navigation"
+      },
+      "payload": {
+        "action": "navigate",
+        "user_instruction": "",
+        "value": "",
+        "target": {},
+        "locator_candidates": [],
+        "selected_locator": {},
+        "region_context": {},
+        "before_page": {
+          "url": "about:blank",
+          "title": "",
+          "html_path": "steps/001/before.html"
+        },
+        "after_page": {
+          "url": "https://github.com/trending",
+          "title": "Trending repositories on GitHub today · GitHub",
+          "html_path": "steps/001/after.html"
+        }
+      },
+      "result_refs": {
+        "output_key": null,
+        "output": null,
+        "session_id": "57f962bc-07f5-43ee-834d-a0021fad40b0",
+        "trace_id": "trace-ddeb5bda-096e-48e6-a5e0-211ab0defdd1",
+        "result_id": "hcap-4be6265f43eb42dfa259182207aa64cc:1:trace-ddeb5bda-096e-48e6-a5e0-211ab0defdd1"
+      },
+      "diagnostics": {
+        "accepted": true,
+        "validation": {},
+        "signals": {
+          "tab": {
+            "tab_id": "87012d00-2fdb-49dd-b7e4-29e94a31cb71"
+          },
+          "recording": {
+            "event_timestamp_ms": 1779102586580
+          }
+        },
+        "ai_execution_error": null,
+        "repair_attempted": false,
+        "diagnostics_ref": null,
+        "error": ""
+      },
+      "runtime_result": {
+        "status": "success",
+        "error": ""
+      },
+      "status": "passed",
+      "failure_category": "",
+      "error": "",
+      "injection": {
+        "injection_id": "hcap-4be6265f43eb42dfa259182207aa64cc:1:trace-ddeb5bda-096e-48e6-a5e0-211ab0defdd1:injection",
+        "boundary": "scripted_navigation_boundary",
+        "adapter": "navigation_boundary_adapter",
+        "executed_by": "scripted_user_input_replay_adapter",
+        "status": "passed",
+        "failure_category": ""
+      }
+    },
+    {
+      "event_id": "hcap-4be6265f43eb42dfa259182207aa64cc:2:trace-4dc4ac88-c666-4378-9f09-c2b0bd7e51ab",
+      "asset_id": "hcap-4be6265f43eb42dfa259182207aa64cc",
+      "baseline_role": "blocking",
+      "step_index": 2,
+      "step_id": "trace-4dc4ac88-c666-4378-9f09-c2b0bd7e51ab",
+      "event_kind": "click",
+      "source": "manual",
+      "recording_mode": "manual",
+      "user_instruction": "",
+      "description": "点击 link(\"tinyhumansai / openhuman\") 并跳转页面",
+      "step_intent": "点击 link(\"tinyhumansai / openhuman\") 并跳转页面",
+      "action": "navigate_click",
+      "value": "",
+      "target": {
+        "role": "link",
+        "name": "tinyhumansai / openhuman",
+        "method": "role"
+      },
+      "locator_candidates": [
+        {
+          "kind": "role",
+          "score": 0,
+          "strict_match_count": 1,
+          "visible_match_count": 1,
+          "selected": true,
+          "selector": "internal:role=link[name=\"tinyhumansai / openhuman\"i]",
+          "playwright_locator": "page.get_by_role(\"link\", name=\"tinyhumansai / openhuman\")",
+          "locator": {
+            "method": "role",
+            "role": "link",
+            "name": "tinyhumansai / openhuman"
+          },
+          "reason": "selected Playwright candidate is strict unique"
+        }
+      ],
+      "region_context": {},
+      "before_page": {
+        "url": "https://github.com/trending",
+        "title": "Trending repositories on GitHub today · GitHub",
+        "html_path": "steps/002/before.html"
+      },
+      "after_page": {
+        "url": "https://github.com/tinyhumansai/openhuman",
+        "title": "GitHub - tinyhumansai/openhuman: Your Personal AI super intelligence. Private, Simple and extremely powerful. · GitHub",
+        "html_path": "steps/002/after.html"
+      },
+      "checkpoint_path": "hcap-4be6265f43eb42dfa259182207aa64cc/steps/002/checkpoint.json",
+      "trace_events_path": "hcap-4be6265f43eb42dfa259182207aa64cc/steps/002/trace_events.json",
+      "injected_boundary": "scripted_manual_input_boundary",
+      "trace_id": "trace-4dc4ac88-c666-4378-9f09-c2b0bd7e51ab",
+      "session_id": "57f962bc-07f5-43ee-834d-a0021fad40b0",
+      "result_id": "hcap-4be6265f43eb42dfa259182207aa64cc:2:trace-4dc4ac88-c666-4378-9f09-c2b0bd7e51ab",
+      "output_key": null,
+      "output_shape": {
+        "type": "null"
+      },
+      "source_metadata": {
+        "checkpoint_path": "hcap-4be6265f43eb42dfa259182207aa64cc/steps/002/checkpoint.json",
+        "trace_events_path": "hcap-4be6265f43eb42dfa259182207aa64cc/steps/002/trace_events.json",
+        "recording_mode": "manual",
+        "trace_type": "manual_action"
+      },
+      "payload": {
+        "action": "navigate_click",
+        "user_instruction": "",
+        "value": "",
+        "target": {
+          "role": "link",
+          "name": "tinyhumansai / openhuman",
+          "method": "role"
+        },
+        "locator_candidates": [
+          {
+            "kind": "role",
+            "score": 0,
+            "strict_match_count": 1,
+            "visible_match_count": 1,
+            "selected": true,
+            "selector": "internal:role=link[name=\"tinyhumansai / openhuman\"i]",
+            "playwright_locator": "page.get_by_role(\"link\", name=\"tinyhumansai / openhuman\")",
+            "locator": {
+              "method": "role",
+              "role": "link",
+              "name": "tinyhumansai / openhuman"
+            },
+            "reason": "selected Playwright candidate is strict unique"
+          }
+        ],
+        "selected_locator": {
+          "kind": "role",
+          "score": 0,
+          "strict_match_count": 1,
+          "visible_match_count": 1,
+          "selected": true,
+          "selector": "internal:role=link[name=\"tinyhumansai / openhuman\"i]",
+          "playwright_locator": "page.get_by_role(\"link\", name=\"tinyhumansai / openhuman\")",
+          "locator": {
+            "method": "role",
+            "role": "link",
+            "name": "tinyhumansai / openhuman"
+          },
+          "reason": "selected Playwright candidate is strict unique"
+        },
+        "region_context": {},
+        "before_page": {
+          "url": "https://github.com/trending",
+          "title": "Trending repositories on GitHub today · GitHub",
+          "html_path": "steps/002/before.html"
+        },
+        "after_page": {
+          "url": "https://github.com/tinyhumansai/openhuman",
+          "title": "GitHub - tinyhumansai/openhuman: Your Personal AI super intelligence. Private, Simple and extremely powerful. · GitHub",
+          "html_path": "steps/002/after.html"
+        }
+      },
+      "result_refs": {
+        "output_key": null,
+        "output": null,
+        "session_id": "57f962bc-07f5-43ee-834d-a0021fad40b0",
+        "trace_id": "trace-4dc4ac88-c666-4378-9f09-c2b0bd7e51ab",
+        "result_id": "hcap-4be6265f43eb42dfa259182207aa64cc:2:trace-4dc4ac88-c666-4378-9f09-c2b0bd7e51ab"
+      },
+      "diagnostics": {
+        "accepted": true,
+        "validation": {
+          "status": "ok",
+          "details": "selected Playwright candidate is strict unique",
+          "selected_candidate_index": 0,
+          "selected_candidate_kind": "role"
+        },
+        "signals": {
+          "tab": {
+            "tab_id": "87012d00-2fdb-49dd-b7e4-29e94a31cb71"
+          },
+          "recording": {
+            "sequence": 3,
+            "event_timestamp_ms": 1779102589340
+          }
+        },
+        "ai_execution_error": null,
+        "repair_attempted": false,
+        "diagnostics_ref": null,
+        "error": ""
+      },
+      "runtime_result": {
+        "status": "success",
+        "error": ""
+      },
+      "status": "passed",
+      "failure_category": "",
+      "error": "",
+      "injection": {
+        "injection_id": "hcap-4be6265f43eb42dfa259182207aa64cc:2:trace-4dc4ac88-c666-4378-9f09-c2b0bd7e51ab:injection",
+        "boundary": "scripted_manual_input_boundary",
+        "adapter": "manual_input_boundary_adapter",
+        "executed_by": "scripted_user_input_replay_adapter",
+        "status": "passed",
+        "failure_category": ""
+      }
+    },
+    {
+      "event_id": "hcap-4be6265f43eb42dfa259182207aa64cc:3:trace-132c87131a674c84b6f608fe21d5c8d6",
+      "asset_id": "hcap-4be6265f43eb42dfa259182207aa64cc",
+      "baseline_role": "blocking",
+      "step_index": 3,
+      "step_id": "trace-132c87131a674c84b6f608fe21d5c8d6",
+      "event_kind": "natural_language_instruction",
+      "source": "ai",
+      "recording_mode": "natural_language",
+      "user_instruction": "获取fork数",
+      "description": "Extract the fork count from the GitHub repository page",
+      "step_intent": "获取fork数",
+      "action": null,
+      "value": null,
+      "target": {},
+      "locator_candidates": [],
+      "region_context": {},
+      "before_page": {
+        "url": "https://github.com/tinyhumansai/openhuman",
+        "title": "GitHub - tinyhumansai/openhuman: Your Personal AI super intelligence. Private, Simple and extremely powerful. · GitHub",
+        "html_path": "steps/003/before.html"
+      },
+      "after_page": {
+        "url": "https://github.com/tinyhumansai/openhuman",
+        "title": "GitHub - tinyhumansai/openhuman: Your Personal AI super intelligence. Private, Simple and extremely powerful. · GitHub",
+        "html_path": "steps/003/before.html"
+      },
+      "checkpoint_path": "hcap-4be6265f43eb42dfa259182207aa64cc/steps/003/checkpoint.json",
+      "trace_events_path": "hcap-4be6265f43eb42dfa259182207aa64cc/steps/003/trace_events.json",
+      "injected_boundary": "scripted_natural_language_instruction_boundary",
+      "trace_id": "trace-132c87131a674c84b6f608fe21d5c8d6",
+      "session_id": "57f962bc-07f5-43ee-834d-a0021fad40b0",
+      "result_id": "hcap-4be6265f43eb42dfa259182207aa64cc:3:fork_count",
+      "output_key": "fork_count",
+      "output_shape": {
+        "type": "str"
+      },
+      "source_metadata": {
+        "checkpoint_path": "hcap-4be6265f43eb42dfa259182207aa64cc/steps/003/checkpoint.json",
+        "trace_events_path": "hcap-4be6265f43eb42dfa259182207aa64cc/steps/003/trace_events.json",
+        "recording_mode": "natural_language",
+        "trace_type": "ai_operation"
+      },
+      "payload": {
+        "action": null,
+        "user_instruction": "获取fork数",
+        "value": null,
+        "target": {},
+        "locator_candidates": [],
+        "selected_locator": {},
+        "region_context": {},
+        "before_page": {
+          "url": "https://github.com/tinyhumansai/openhuman",
+          "title": "GitHub - tinyhumansai/openhuman: Your Personal AI super intelligence. Private, Simple and extremely powerful. · GitHub",
+          "html_path": "steps/003/before.html"
+        },
+        "after_page": {
+          "url": "https://github.com/tinyhumansai/openhuman",
+          "title": "GitHub - tinyhumansai/openhuman: Your Personal AI super intelligence. Private, Simple and extremely powerful. · GitHub",
+          "html_path": "steps/003/before.html"
+        }
+      },
+      "result_refs": {
+        "output_key": "fork_count",
+        "output": "Fork 1.3k",
+        "session_id": "57f962bc-07f5-43ee-834d-a0021fad40b0",
+        "trace_id": "trace-132c87131a674c84b6f608fe21d5c8d6",
+        "result_id": "hcap-4be6265f43eb42dfa259182207aa64cc:3:fork_count"
+      },
+      "diagnostics": {
+        "accepted": true,
+        "validation": {},
+        "signals": {},
+        "ai_execution_error": null,
+        "repair_attempted": false,
+        "diagnostics_ref": null,
+        "error": ""
+      },
+      "runtime_result": {
+        "status": "success",
+        "error": ""
+      },
+      "status": "passed",
+      "failure_category": "",
+      "error": "",
+      "injection": {
+        "injection_id": "hcap-4be6265f43eb42dfa259182207aa64cc:3:trace-132c87131a674c84b6f608fe21d5c8d6:injection",
+        "boundary": "scripted_natural_language_instruction_boundary",
+        "adapter": "natural_language_instruction_boundary_adapter",
+        "executed_by": "scripted_user_input_replay_adapter",
+        "status": "passed",
+        "failure_category": ""
+      }
+    },
+    {
+      "event_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e:1:trace-cd0d9995-99ce-46a9-af23-42ba8fa15052",
+      "asset_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e",
+      "baseline_role": "blocking",
+      "step_index": 1,
+      "step_id": "trace-cd0d9995-99ce-46a9-af23-42ba8fa15052",
+      "event_kind": "navigation",
+      "source": "manual",
+      "recording_mode": "manual",
+      "user_instruction": "",
+      "description": "导航到 https://github.com/trending",
+      "step_intent": "导航到 https://github.com/trending",
+      "action": "navigate",
+      "value": "",
+      "target": {},
+      "locator_candidates": [],
+      "region_context": {},
+      "before_page": {
+        "url": "about:blank",
+        "title": "",
+        "html_path": "steps/001/before.html"
+      },
+      "after_page": {
+        "url": "https://github.com/trending",
+        "title": "Trending repositories on GitHub today · GitHub",
+        "html_path": "steps/001/after.html"
+      },
+      "checkpoint_path": "hcap-de463b7bb608482e9b5bcdd5b78a224e/steps/001/checkpoint.json",
+      "trace_events_path": "hcap-de463b7bb608482e9b5bcdd5b78a224e/steps/001/trace_events.json",
+      "injected_boundary": "scripted_navigation_boundary",
+      "trace_id": "trace-cd0d9995-99ce-46a9-af23-42ba8fa15052",
+      "session_id": "864e9835-eaf6-474f-b32f-0873119781c0",
+      "result_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e:1:trace-cd0d9995-99ce-46a9-af23-42ba8fa15052",
+      "output_key": null,
+      "output_shape": {
+        "type": "null"
+      },
+      "source_metadata": {
+        "checkpoint_path": "hcap-de463b7bb608482e9b5bcdd5b78a224e/steps/001/checkpoint.json",
+        "trace_events_path": "hcap-de463b7bb608482e9b5bcdd5b78a224e/steps/001/trace_events.json",
+        "recording_mode": "manual",
+        "trace_type": "navigation"
+      },
+      "payload": {
+        "action": "navigate",
+        "user_instruction": "",
+        "value": "",
+        "target": {},
+        "locator_candidates": [],
+        "selected_locator": {},
+        "region_context": {},
+        "before_page": {
+          "url": "about:blank",
+          "title": "",
+          "html_path": "steps/001/before.html"
+        },
+        "after_page": {
+          "url": "https://github.com/trending",
+          "title": "Trending repositories on GitHub today · GitHub",
+          "html_path": "steps/001/after.html"
+        }
+      },
+      "result_refs": {
+        "output_key": null,
+        "output": null,
+        "session_id": "864e9835-eaf6-474f-b32f-0873119781c0",
+        "trace_id": "trace-cd0d9995-99ce-46a9-af23-42ba8fa15052",
+        "result_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e:1:trace-cd0d9995-99ce-46a9-af23-42ba8fa15052"
+      },
+      "diagnostics": {
+        "accepted": true,
+        "validation": {},
+        "signals": {
+          "tab": {
+            "tab_id": "e19579c6-0230-42ce-bda2-c48d4f5a795f"
+          },
+          "recording": {
+            "event_timestamp_ms": 1779171273431
+          }
+        },
+        "ai_execution_error": null,
+        "repair_attempted": false,
+        "diagnostics_ref": null,
+        "error": ""
+      },
+      "runtime_result": {
+        "status": "success",
+        "error": ""
+      },
+      "status": "passed",
+      "failure_category": "",
+      "error": "",
+      "injection": {
+        "injection_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e:1:trace-cd0d9995-99ce-46a9-af23-42ba8fa15052:injection",
+        "boundary": "scripted_navigation_boundary",
+        "adapter": "navigation_boundary_adapter",
+        "executed_by": "scripted_user_input_replay_adapter",
+        "status": "passed",
+        "failure_category": ""
+      }
+    },
+    {
+      "event_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e:2:trace-d29cd8d5-d33c-4545-9baf-6e52f403a9a3",
+      "asset_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e",
+      "baseline_role": "blocking",
+      "step_index": 2,
+      "step_id": "trace-d29cd8d5-d33c-4545-9baf-6e52f403a9a3",
+      "event_kind": "click",
+      "source": "manual",
+      "recording_mode": "manual",
+      "user_instruction": "",
+      "description": "点击 link(\"tinyhumansai / openhuman\") 并跳转页面",
+      "step_intent": "点击 link(\"tinyhumansai / openhuman\") 并跳转页面",
+      "action": "navigate_click",
+      "value": "",
+      "target": {
+        "role": "link",
+        "name": "tinyhumansai / openhuman",
+        "method": "role"
+      },
+      "locator_candidates": [
+        {
+          "kind": "role",
+          "score": 0,
+          "strict_match_count": 1,
+          "visible_match_count": 1,
+          "selected": true,
+          "selector": "internal:role=link[name=\"tinyhumansai / openhuman\"i]",
+          "playwright_locator": "page.get_by_role(\"link\", name=\"tinyhumansai / openhuman\")",
+          "locator": {
+            "method": "role",
+            "role": "link",
+            "name": "tinyhumansai / openhuman"
+          },
+          "reason": "selected Playwright candidate is strict unique"
+        }
+      ],
+      "region_context": {},
+      "before_page": {
+        "url": "https://github.com/trending",
+        "title": "Trending repositories on GitHub today · GitHub",
+        "html_path": "steps/002/before.html"
+      },
+      "after_page": {
+        "url": "https://github.com/tinyhumansai/openhuman",
+        "title": "GitHub - tinyhumansai/openhuman: Your Personal AI super intelligence. Private, Simple and extremely powerful. · GitHub",
+        "html_path": "steps/002/after.html"
+      },
+      "checkpoint_path": "hcap-de463b7bb608482e9b5bcdd5b78a224e/steps/002/checkpoint.json",
+      "trace_events_path": "hcap-de463b7bb608482e9b5bcdd5b78a224e/steps/002/trace_events.json",
+      "injected_boundary": "scripted_manual_input_boundary",
+      "trace_id": "trace-d29cd8d5-d33c-4545-9baf-6e52f403a9a3",
+      "session_id": "864e9835-eaf6-474f-b32f-0873119781c0",
+      "result_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e:2:trace-d29cd8d5-d33c-4545-9baf-6e52f403a9a3",
+      "output_key": null,
+      "output_shape": {
+        "type": "null"
+      },
+      "source_metadata": {
+        "checkpoint_path": "hcap-de463b7bb608482e9b5bcdd5b78a224e/steps/002/checkpoint.json",
+        "trace_events_path": "hcap-de463b7bb608482e9b5bcdd5b78a224e/steps/002/trace_events.json",
+        "recording_mode": "manual",
+        "trace_type": "manual_action"
+      },
+      "payload": {
+        "action": "navigate_click",
+        "user_instruction": "",
+        "value": "",
+        "target": {
+          "role": "link",
+          "name": "tinyhumansai / openhuman",
+          "method": "role"
+        },
+        "locator_candidates": [
+          {
+            "kind": "role",
+            "score": 0,
+            "strict_match_count": 1,
+            "visible_match_count": 1,
+            "selected": true,
+            "selector": "internal:role=link[name=\"tinyhumansai / openhuman\"i]",
+            "playwright_locator": "page.get_by_role(\"link\", name=\"tinyhumansai / openhuman\")",
+            "locator": {
+              "method": "role",
+              "role": "link",
+              "name": "tinyhumansai / openhuman"
+            },
+            "reason": "selected Playwright candidate is strict unique"
+          }
+        ],
+        "selected_locator": {
+          "kind": "role",
+          "score": 0,
+          "strict_match_count": 1,
+          "visible_match_count": 1,
+          "selected": true,
+          "selector": "internal:role=link[name=\"tinyhumansai / openhuman\"i]",
+          "playwright_locator": "page.get_by_role(\"link\", name=\"tinyhumansai / openhuman\")",
+          "locator": {
+            "method": "role",
+            "role": "link",
+            "name": "tinyhumansai / openhuman"
+          },
+          "reason": "selected Playwright candidate is strict unique"
+        },
+        "region_context": {},
+        "before_page": {
+          "url": "https://github.com/trending",
+          "title": "Trending repositories on GitHub today · GitHub",
+          "html_path": "steps/002/before.html"
+        },
+        "after_page": {
+          "url": "https://github.com/tinyhumansai/openhuman",
+          "title": "GitHub - tinyhumansai/openhuman: Your Personal AI super intelligence. Private, Simple and extremely powerful. · GitHub",
+          "html_path": "steps/002/after.html"
+        }
+      },
+      "result_refs": {
+        "output_key": null,
+        "output": null,
+        "session_id": "864e9835-eaf6-474f-b32f-0873119781c0",
+        "trace_id": "trace-d29cd8d5-d33c-4545-9baf-6e52f403a9a3",
+        "result_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e:2:trace-d29cd8d5-d33c-4545-9baf-6e52f403a9a3"
+      },
+      "diagnostics": {
+        "accepted": true,
+        "validation": {
+          "status": "ok",
+          "details": "selected Playwright candidate is strict unique",
+          "selected_candidate_index": 0,
+          "selected_candidate_kind": "role"
+        },
+        "signals": {
+          "tab": {
+            "tab_id": "e19579c6-0230-42ce-bda2-c48d4f5a795f"
+          },
+          "recording": {
+            "sequence": 3,
+            "event_timestamp_ms": 1779171279714
+          }
+        },
+        "ai_execution_error": null,
+        "repair_attempted": false,
+        "diagnostics_ref": null,
+        "error": ""
+      },
+      "runtime_result": {
+        "status": "success",
+        "error": ""
+      },
+      "status": "passed",
+      "failure_category": "",
+      "error": "",
+      "injection": {
+        "injection_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e:2:trace-d29cd8d5-d33c-4545-9baf-6e52f403a9a3:injection",
+        "boundary": "scripted_manual_input_boundary",
+        "adapter": "manual_input_boundary_adapter",
+        "executed_by": "scripted_user_input_replay_adapter",
+        "status": "passed",
+        "failure_category": ""
+      }
+    },
+    {
+      "event_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e:3:trace-e11497a7f1b84fd4b229f2c8672cf4ad",
+      "asset_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e",
+      "baseline_role": "blocking",
+      "step_index": 3,
+      "step_id": "trace-e11497a7f1b84fd4b229f2c8672cf4ad",
+      "event_kind": "natural_language_instruction",
+      "source": "ai",
+      "recording_mode": "natural_language",
+      "user_instruction": "获取stars数",
+      "description": "获取 GitHub 仓库的 Star 数量",
+      "step_intent": "获取stars数",
+      "action": null,
+      "value": null,
+      "target": {},
+      "locator_candidates": [],
+      "region_context": {},
+      "before_page": {
+        "url": "https://github.com/tinyhumansai/openhuman",
+        "title": "GitHub - tinyhumansai/openhuman: Your Personal AI super intelligence. Private, Simple and extremely powerful. · GitHub",
+        "html_path": "steps/003/before.html"
+      },
+      "after_page": {
+        "url": "https://github.com/tinyhumansai/openhuman",
+        "title": "GitHub - tinyhumansai/openhuman: Your Personal AI super intelligence. Private, Simple and extremely powerful. · GitHub",
+        "html_path": "steps/003/before.html"
+      },
+      "checkpoint_path": "hcap-de463b7bb608482e9b5bcdd5b78a224e/steps/003/checkpoint.json",
+      "trace_events_path": "hcap-de463b7bb608482e9b5bcdd5b78a224e/steps/003/trace_events.json",
+      "injected_boundary": "scripted_natural_language_instruction_boundary",
+      "trace_id": "trace-e11497a7f1b84fd4b229f2c8672cf4ad",
+      "session_id": "864e9835-eaf6-474f-b32f-0873119781c0",
+      "result_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e:3:star_count",
+      "output_key": "star_count",
+      "output_shape": {
+        "type": "object",
+        "keys": [
+          "star_count"
+        ]
+      },
+      "source_metadata": {
+        "checkpoint_path": "hcap-de463b7bb608482e9b5bcdd5b78a224e/steps/003/checkpoint.json",
+        "trace_events_path": "hcap-de463b7bb608482e9b5bcdd5b78a224e/steps/003/trace_events.json",
+        "recording_mode": "natural_language",
+        "trace_type": "ai_operation"
+      },
+      "payload": {
+        "action": null,
+        "user_instruction": "获取stars数",
+        "value": null,
+        "target": {},
+        "locator_candidates": [],
+        "selected_locator": {},
+        "region_context": {},
+        "before_page": {
+          "url": "https://github.com/tinyhumansai/openhuman",
+          "title": "GitHub - tinyhumansai/openhuman: Your Personal AI super intelligence. Private, Simple and extremely powerful. · GitHub",
+          "html_path": "steps/003/before.html"
+        },
+        "after_page": {
+          "url": "https://github.com/tinyhumansai/openhuman",
+          "title": "GitHub - tinyhumansai/openhuman: Your Personal AI super intelligence. Private, Simple and extremely powerful. · GitHub",
+          "html_path": "steps/003/before.html"
+        }
+      },
+      "result_refs": {
+        "output_key": "star_count",
+        "output": {
+          "star_count": "18.3k stars"
+        },
+        "session_id": "864e9835-eaf6-474f-b32f-0873119781c0",
+        "trace_id": "trace-e11497a7f1b84fd4b229f2c8672cf4ad",
+        "result_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e:3:star_count"
+      },
+      "diagnostics": {
+        "accepted": true,
+        "validation": {},
+        "signals": {},
+        "ai_execution_error": null,
+        "repair_attempted": true,
+        "diagnostics_ref": null,
+        "error": ""
+      },
+      "runtime_result": {
+        "status": "success",
+        "error": ""
+      },
+      "status": "passed",
+      "failure_category": "",
+      "error": "",
+      "injection": {
+        "injection_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e:3:trace-e11497a7f1b84fd4b229f2c8672cf4ad:injection",
+        "boundary": "scripted_natural_language_instruction_boundary",
+        "adapter": "natural_language_instruction_boundary_adapter",
+        "executed_by": "scripted_user_input_replay_adapter",
+        "status": "passed",
+        "failure_category": ""
+      }
+    }
+  ],
+  "boundary_injections": [
+    {
+      "injection_id": "hcap-4be6265f43eb42dfa259182207aa64cc:1:trace-ddeb5bda-096e-48e6-a5e0-211ab0defdd1:injection",
+      "event_id": "hcap-4be6265f43eb42dfa259182207aa64cc:1:trace-ddeb5bda-096e-48e6-a5e0-211ab0defdd1",
+      "asset_id": "hcap-4be6265f43eb42dfa259182207aa64cc",
+      "step_index": 1,
+      "event_kind": "navigation",
+      "boundary": "scripted_navigation_boundary",
+      "adapter": "navigation_boundary_adapter",
+      "executed_by": "scripted_user_input_replay_adapter",
+      "status": "passed",
+      "failure_category": "",
+      "trace_id": "trace-ddeb5bda-096e-48e6-a5e0-211ab0defdd1",
+      "session_id": "57f962bc-07f5-43ee-834d-a0021fad40b0",
+      "result_id": "hcap-4be6265f43eb42dfa259182207aa64cc:1:trace-ddeb5bda-096e-48e6-a5e0-211ab0defdd1",
+      "input_signal": {
+        "action": "navigate",
+        "user_instruction": "",
+        "value": "",
+        "target": {},
+        "region_context": {}
+      },
+      "side_effects": "recorded-boundary-injection-only"
+    },
+    {
+      "injection_id": "hcap-4be6265f43eb42dfa259182207aa64cc:2:trace-4dc4ac88-c666-4378-9f09-c2b0bd7e51ab:injection",
+      "event_id": "hcap-4be6265f43eb42dfa259182207aa64cc:2:trace-4dc4ac88-c666-4378-9f09-c2b0bd7e51ab",
+      "asset_id": "hcap-4be6265f43eb42dfa259182207aa64cc",
+      "step_index": 2,
+      "event_kind": "click",
+      "boundary": "scripted_manual_input_boundary",
+      "adapter": "manual_input_boundary_adapter",
+      "executed_by": "scripted_user_input_replay_adapter",
+      "status": "passed",
+      "failure_category": "",
+      "trace_id": "trace-4dc4ac88-c666-4378-9f09-c2b0bd7e51ab",
+      "session_id": "57f962bc-07f5-43ee-834d-a0021fad40b0",
+      "result_id": "hcap-4be6265f43eb42dfa259182207aa64cc:2:trace-4dc4ac88-c666-4378-9f09-c2b0bd7e51ab",
+      "input_signal": {
+        "action": "navigate_click",
+        "user_instruction": "",
+        "value": "",
+        "target": {
+          "role": "link",
+          "name": "tinyhumansai / openhuman",
+          "method": "role"
+        },
+        "region_context": {}
+      },
+      "side_effects": "recorded-boundary-injection-only"
+    },
+    {
+      "injection_id": "hcap-4be6265f43eb42dfa259182207aa64cc:3:trace-132c87131a674c84b6f608fe21d5c8d6:injection",
+      "event_id": "hcap-4be6265f43eb42dfa259182207aa64cc:3:trace-132c87131a674c84b6f608fe21d5c8d6",
+      "asset_id": "hcap-4be6265f43eb42dfa259182207aa64cc",
+      "step_index": 3,
+      "event_kind": "natural_language_instruction",
+      "boundary": "scripted_natural_language_instruction_boundary",
+      "adapter": "natural_language_instruction_boundary_adapter",
+      "executed_by": "scripted_user_input_replay_adapter",
+      "status": "passed",
+      "failure_category": "",
+      "trace_id": "trace-132c87131a674c84b6f608fe21d5c8d6",
+      "session_id": "57f962bc-07f5-43ee-834d-a0021fad40b0",
+      "result_id": "hcap-4be6265f43eb42dfa259182207aa64cc:3:fork_count",
+      "input_signal": {
+        "action": null,
+        "user_instruction": "获取fork数",
+        "value": null,
+        "target": {},
+        "region_context": {}
+      },
+      "side_effects": "recorded-boundary-injection-only"
+    },
+    {
+      "injection_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e:1:trace-cd0d9995-99ce-46a9-af23-42ba8fa15052:injection",
+      "event_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e:1:trace-cd0d9995-99ce-46a9-af23-42ba8fa15052",
+      "asset_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e",
+      "step_index": 1,
+      "event_kind": "navigation",
+      "boundary": "scripted_navigation_boundary",
+      "adapter": "navigation_boundary_adapter",
+      "executed_by": "scripted_user_input_replay_adapter",
+      "status": "passed",
+      "failure_category": "",
+      "trace_id": "trace-cd0d9995-99ce-46a9-af23-42ba8fa15052",
+      "session_id": "864e9835-eaf6-474f-b32f-0873119781c0",
+      "result_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e:1:trace-cd0d9995-99ce-46a9-af23-42ba8fa15052",
+      "input_signal": {
+        "action": "navigate",
+        "user_instruction": "",
+        "value": "",
+        "target": {},
+        "region_context": {}
+      },
+      "side_effects": "recorded-boundary-injection-only"
+    },
+    {
+      "injection_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e:2:trace-d29cd8d5-d33c-4545-9baf-6e52f403a9a3:injection",
+      "event_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e:2:trace-d29cd8d5-d33c-4545-9baf-6e52f403a9a3",
+      "asset_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e",
+      "step_index": 2,
+      "event_kind": "click",
+      "boundary": "scripted_manual_input_boundary",
+      "adapter": "manual_input_boundary_adapter",
+      "executed_by": "scripted_user_input_replay_adapter",
+      "status": "passed",
+      "failure_category": "",
+      "trace_id": "trace-d29cd8d5-d33c-4545-9baf-6e52f403a9a3",
+      "session_id": "864e9835-eaf6-474f-b32f-0873119781c0",
+      "result_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e:2:trace-d29cd8d5-d33c-4545-9baf-6e52f403a9a3",
+      "input_signal": {
+        "action": "navigate_click",
+        "user_instruction": "",
+        "value": "",
+        "target": {
+          "role": "link",
+          "name": "tinyhumansai / openhuman",
+          "method": "role"
+        },
+        "region_context": {}
+      },
+      "side_effects": "recorded-boundary-injection-only"
+    },
+    {
+      "injection_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e:3:trace-e11497a7f1b84fd4b229f2c8672cf4ad:injection",
+      "event_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e:3:trace-e11497a7f1b84fd4b229f2c8672cf4ad",
+      "asset_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e",
+      "step_index": 3,
+      "event_kind": "natural_language_instruction",
+      "boundary": "scripted_natural_language_instruction_boundary",
+      "adapter": "natural_language_instruction_boundary_adapter",
+      "executed_by": "scripted_user_input_replay_adapter",
+      "status": "passed",
+      "failure_category": "",
+      "trace_id": "trace-e11497a7f1b84fd4b229f2c8672cf4ad",
+      "session_id": "864e9835-eaf6-474f-b32f-0873119781c0",
+      "result_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e:3:star_count",
+      "input_signal": {
+        "action": null,
+        "user_instruction": "获取stars数",
+        "value": null,
+        "target": {},
+        "region_context": {}
+      },
+      "side_effects": "recorded-boundary-injection-only"
+    }
+  ],
+  "failures": [],
+  "trace_session_result_ids": {
+    "trace_ids": [
+      "trace-132c87131a674c84b6f608fe21d5c8d6",
+      "trace-4dc4ac88-c666-4378-9f09-c2b0bd7e51ab",
+      "trace-cd0d9995-99ce-46a9-af23-42ba8fa15052",
+      "trace-d29cd8d5-d33c-4545-9baf-6e52f403a9a3",
+      "trace-ddeb5bda-096e-48e6-a5e0-211ab0defdd1",
+      "trace-e11497a7f1b84fd4b229f2c8672cf4ad"
+    ],
+    "session_ids": [
+      "57f962bc-07f5-43ee-834d-a0021fad40b0",
+      "864e9835-eaf6-474f-b32f-0873119781c0"
+    ],
+    "result_ids": [
+      "hcap-4be6265f43eb42dfa259182207aa64cc:1:trace-ddeb5bda-096e-48e6-a5e0-211ab0defdd1",
+      "hcap-4be6265f43eb42dfa259182207aa64cc:2:trace-4dc4ac88-c666-4378-9f09-c2b0bd7e51ab",
+      "hcap-4be6265f43eb42dfa259182207aa64cc:3:fork_count",
+      "hcap-de463b7bb608482e9b5bcdd5b78a224e:1:trace-cd0d9995-99ce-46a9-af23-42ba8fa15052",
+      "hcap-de463b7bb608482e9b5bcdd5b78a224e:2:trace-d29cd8d5-d33c-4545-9baf-6e52f403a9a3",
+      "hcap-de463b7bb608482e9b5bcdd5b78a224e:3:star_count"
+    ]
+  },
+  "trust_limits": [
+    "Current replay uses captured asset facts rather than live user operation",
+    "Passing covered assets does not prove global RPA health",
+    "candidate-lite assets are warning-only and not blocking baseline",
+    "region selection is represented as generic user input context",
+    "Agent explanations are advisory and cannot promote assets automatically"
+  ],
+  "governance_boundary": {
+    "scripts_execute": true,
+    "agents_explain": true,
+    "humans_govern": true,
+    "candidate_lite_warning_only": true,
+    "agents_may_promote_automatically": false
+  }
+}

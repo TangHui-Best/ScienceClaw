@@ -1,0 +1,1217 @@
+{
+  "schema_version": "rpa-harness-profile-run-v1",
+  "profile": {
+    "name": "deterministic",
+    "execution_mode": "scripted-assets",
+    "uses_live_planner": false,
+    "uses_live_url_oracle": false,
+    "governance_mode": "human-governed-assets"
+  },
+  "summary": {
+    "status": "passed",
+    "blocking": false,
+    "first_failure_category": "",
+    "selected_asset_count": 2,
+    "excluded_asset_count": 0,
+    "selected_asset_ids": [
+      "hcap-4be6265f43eb42dfa259182207aa64cc",
+      "hcap-de463b7bb608482e9b5bcdd5b78a224e"
+    ],
+    "excluded_asset_ids": [],
+    "warning_only_observation_count": 0,
+    "warning_only_issue_count": 0
+  },
+  "asset_pool": {
+    "schema_version": "rpa-harness-asset-lifecycle-summary-v1",
+    "summary": {
+      "asset_count": 2,
+      "lifecycle_distribution": {
+        "candidate": 2
+      },
+      "promotion_statuses": {
+        "candidate": 2
+      },
+      "asset_statuses": {
+        "active": 2
+      },
+      "sensitivity": {
+        "local-only": 1,
+        "repo-safe": 1
+      }
+    },
+    "review_state": {
+      "expected_signals_reviewed": 2,
+      "expected_signals_unreviewed": 0,
+      "sensitivity_reviewed": 2,
+      "sensitivity_unreviewed": 0
+    },
+    "blocking_baseline_asset_ids": [
+      "hcap-4be6265f43eb42dfa259182207aa64cc",
+      "hcap-de463b7bb608482e9b5bcdd5b78a224e"
+    ],
+    "warning_only_asset_ids": [],
+    "golden_asset_ids": [],
+    "coverage_boundary": {
+      "runner_modes": {
+        "offline_core_chain": 2,
+        "skill_replay_e2e": 2,
+        "stateful_sop_capture_to_skill": 2
+      },
+      "core_chain_coverage": {
+        "html_to_raw_snapshot": 2,
+        "planner_action_selection": 2,
+        "raw_to_compact_snapshot": 2,
+        "skill_replay": 2,
+        "stateful_capture_to_skill": 2,
+        "trace_to_skill": 2
+      },
+      "page_patterns": [
+        "card-list",
+        "data-extraction",
+        "detail-page",
+        "multi-page",
+        "semantic-selection"
+      ],
+      "hosts": [
+        "github.com"
+      ]
+    },
+    "lifecycle_warnings": [],
+    "trust_limits": [
+      "Current asset pool coverage is narrow",
+      "bootstrap coverage does not prove global RPA health",
+      "candidate-lite assets are warning-only and not blocking baseline",
+      "golden eligibility is advisory until human approval"
+    ]
+  },
+  "interpretation": {
+    "verdict": "no meaningful change",
+    "bounded": true,
+    "comparison_basis": "single-run",
+    "first_failure_category": "",
+    "basis": [
+      "summary.status=passed",
+      "summary.selected_asset_count=2",
+      "summary.first_failure_category=none",
+      "deterministic.observability.runner_signals",
+      "snapshot_failed=0",
+      "compiler_failed=0",
+      "skill_replay_failed=0",
+      "stateful_sop_failed=0"
+    ],
+    "evidence_limits": [
+      "No baseline comparison report was supplied",
+      "Passing covered assets does not prove global RPA health"
+    ],
+    "allowed_verdicts": [
+      "regression",
+      "improvement",
+      "no meaningful change",
+      "insufficient evidence"
+    ],
+    "recommended_agent_flow": [
+      "interpretation",
+      "summary",
+      "profile",
+      "deterministic.observability",
+      "deterministic.validation",
+      "deterministic.snapshot",
+      "deterministic.compiler",
+      "deterministic.skill_replay",
+      "deterministic.stateful_sop"
+    ],
+    "non_goals": [
+      "no automatic root-cause diagnosis",
+      "no automatic asset promotion",
+      "no live/full profile inference"
+    ]
+  },
+  "deterministic": {
+    "schema_version": "rpa-harness-governed-offline-regression-v0",
+    "summary": {
+      "status": "passed",
+      "failure_category": "",
+      "selected_capture_count": 2,
+      "excluded_capture_count": 0,
+      "selected_step_count": 6,
+      "selected_asset_ids": [
+        "hcap-4be6265f43eb42dfa259182207aa64cc",
+        "hcap-de463b7bb608482e9b5bcdd5b78a224e"
+      ],
+      "excluded_asset_ids": [],
+      "promotion_statuses": {
+        "candidate": 2
+      },
+      "page_patterns": [
+        "card-list",
+        "data-extraction",
+        "detail-page",
+        "multi-page",
+        "semantic-selection"
+      ],
+      "core_chain_coverage": {
+        "html_to_raw_snapshot": 2,
+        "planner_action_selection": 2,
+        "raw_to_compact_snapshot": 2,
+        "skill_replay": 2,
+        "stateful_capture_to_skill": 2,
+        "trace_to_skill": 2
+      },
+      "validation_blocking_issue_count": 0,
+      "snapshot_failed": 0,
+      "compiler_failed": 0,
+      "skill_replay_failed": 0,
+      "stateful_sop_failed": 0,
+      "candidate_lite_observed_count": 0,
+      "candidate_lite_warning_count": 0
+    },
+    "selection": {
+      "selected_captures": [
+        {
+          "asset_id": "hcap-4be6265f43eb42dfa259182207aa64cc",
+          "asset_status": "active",
+          "promotion_status": "candidate",
+          "runner_modes": [
+            "offline_core_chain",
+            "skill_replay_e2e",
+            "stateful_sop_capture_to_skill"
+          ],
+          "core_chain_coverage": [
+            "html_to_raw_snapshot",
+            "raw_to_compact_snapshot",
+            "planner_action_selection",
+            "trace_to_skill",
+            "skill_replay",
+            "stateful_capture_to_skill"
+          ],
+          "page_patterns": [
+            "card-list",
+            "detail-page",
+            "multi-page",
+            "semantic-selection",
+            "data-extraction"
+          ]
+        },
+        {
+          "asset_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e",
+          "asset_status": "active",
+          "promotion_status": "candidate",
+          "runner_modes": [
+            "offline_core_chain",
+            "skill_replay_e2e",
+            "stateful_sop_capture_to_skill"
+          ],
+          "core_chain_coverage": [
+            "html_to_raw_snapshot",
+            "raw_to_compact_snapshot",
+            "planner_action_selection",
+            "trace_to_skill",
+            "skill_replay",
+            "stateful_capture_to_skill"
+          ],
+          "page_patterns": []
+        }
+      ],
+      "excluded_captures": []
+    },
+    "candidate_lite_observation": {
+      "schema_version": "rpa-harness-candidate-lite-observation-v0",
+      "summary": {
+        "status": "skipped",
+        "observed_capture_count": 0,
+        "observed_asset_ids": [],
+        "warning_count": 0,
+        "validation_issue_count": 0,
+        "snapshot_failed": 0,
+        "compiler_failed": 0,
+        "skill_replay_failed": 0,
+        "stateful_sop_failed": 0
+      },
+      "selection": {
+        "observed_captures": []
+      },
+      "catalog": {},
+      "validation": {},
+      "snapshot": {},
+      "compiler": {},
+      "skill_replay": {},
+      "stateful_sop": {}
+    },
+    "catalog": {
+      "schema_version": "rpa-harness-catalog-v0",
+      "summary": {
+        "capture_count": 2,
+        "step_count": 6,
+        "successful_step_count": 6,
+        "failed_step_count": 0,
+        "asset_statuses": {
+          "active": 2
+        },
+        "sensitivity": {
+          "local-only": 1,
+          "repo-safe": 1
+        },
+        "promotion_statuses": {
+          "candidate": 2
+        },
+        "runner_modes": {
+          "offline_core_chain": 2,
+          "skill_replay_e2e": 2,
+          "stateful_sop_capture_to_skill": 2
+        },
+        "core_chain_coverage": {
+          "html_to_raw_snapshot": 2,
+          "planner_action_selection": 2,
+          "raw_to_compact_snapshot": 2,
+          "skill_replay": 2,
+          "stateful_capture_to_skill": 2,
+          "trace_to_skill": 2
+        },
+        "recording_modes": {
+          "manual": 4,
+          "natural_language": 2
+        },
+        "runtime_statuses": {
+          "success": 6
+        },
+        "page_patterns": [
+          "card-list",
+          "data-extraction",
+          "detail-page",
+          "multi-page",
+          "semantic-selection"
+        ],
+        "hosts": [
+          "github.com"
+        ],
+        "urls": [
+          "about:blank",
+          "https://github.com/tinyhumansai/openhuman",
+          "https://github.com/trending"
+        ]
+      },
+      "captures": [
+        {
+          "asset_id": "hcap-4be6265f43eb42dfa259182207aa64cc",
+          "capture_scope": "full_sop",
+          "sop_intent": "Navigate GitHub Trending, open a repository, and extract fork count.",
+          "asset_status": "active",
+          "sensitivity": "repo-safe",
+          "governance": {
+            "promotion_status": "candidate",
+            "runner_modes": [
+              "offline_core_chain",
+              "skill_replay_e2e",
+              "stateful_sop_capture_to_skill"
+            ],
+            "core_chain_coverage": [
+              "html_to_raw_snapshot",
+              "raw_to_compact_snapshot",
+              "planner_action_selection",
+              "trace_to_skill",
+              "skill_replay",
+              "stateful_capture_to_skill"
+            ],
+            "expected_signals_reviewed": true,
+            "sensitivity_reviewed": true,
+            "review_notes": "Promoted to candidate after F004 governed regression report excluded it only for missing governance metadata. Public GitHub capture reviewed as repo-safe baseline evidence. F008.1 enables skill_replay_e2e only through captured HTML controlled replay, not live GitHub. F009 enables stateful_sop_capture_to_skill after the Full SOP asset drove session-style accepted trace generation, full SOP Skill compilation, and controlled replay without live GitHub."
+          },
+          "source": {
+            "recording_id": "57f962bc-07f5-43ee-834d-a0021fad40b0",
+            "captured_at": "2026-05-18T19:09:29.662524",
+            "capture_mode": "harness",
+            "capture_trigger": "full_sop"
+          },
+          "page_patterns": [
+            "card-list",
+            "detail-page",
+            "multi-page",
+            "semantic-selection",
+            "data-extraction"
+          ],
+          "scenario_path": "hcap-4be6265f43eb42dfa259182207aa64cc/scenario.json",
+          "step_count": 3,
+          "successful_step_count": 3,
+          "failed_step_count": 0
+        },
+        {
+          "asset_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e",
+          "capture_scope": "full_sop",
+          "sop_intent": "",
+          "asset_status": "active",
+          "sensitivity": "local-only",
+          "governance": {
+            "promotion_status": "candidate",
+            "runner_modes": [
+              "offline_core_chain",
+              "skill_replay_e2e",
+              "stateful_sop_capture_to_skill"
+            ],
+            "core_chain_coverage": [
+              "html_to_raw_snapshot",
+              "raw_to_compact_snapshot",
+              "planner_action_selection",
+              "trace_to_skill",
+              "skill_replay",
+              "stateful_capture_to_skill"
+            ],
+            "expected_signals_reviewed": true,
+            "sensitivity_reviewed": true,
+            "review_notes": ""
+          },
+          "source": {
+            "recording_id": "864e9835-eaf6-474f-b32f-0873119781c0",
+            "captured_at": "2026-05-19T14:14:17.089702",
+            "capture_mode": "harness",
+            "capture_trigger": "full_sop"
+          },
+          "page_patterns": [],
+          "scenario_path": "hcap-de463b7bb608482e9b5bcdd5b78a224e/scenario.json",
+          "step_count": 3,
+          "successful_step_count": 3,
+          "failed_step_count": 0
+        }
+      ],
+      "steps": [
+        {
+          "asset_id": "hcap-4be6265f43eb42dfa259182207aa64cc",
+          "step_index": 1,
+          "step_id": "trace-ddeb5bda-096e-48e6-a5e0-211ab0defdd1",
+          "step_intent": "导航到 https://github.com/trending",
+          "recording_mode": "manual",
+          "runtime_status": "success",
+          "before_url": "about:blank",
+          "after_url": "https://github.com/trending",
+          "before_title": "",
+          "after_title": "Trending repositories on GitHub today · GitHub",
+          "hosts": [
+            "github.com"
+          ],
+          "page_patterns": [
+            "multi-page",
+            "card-list"
+          ],
+          "checkpoint_path": "hcap-4be6265f43eb42dfa259182207aa64cc/steps/001/checkpoint.json",
+          "expected_path": "hcap-4be6265f43eb42dfa259182207aa64cc/steps/001/expected.json",
+          "failure_path": ""
+        },
+        {
+          "asset_id": "hcap-4be6265f43eb42dfa259182207aa64cc",
+          "step_index": 2,
+          "step_id": "trace-4dc4ac88-c666-4378-9f09-c2b0bd7e51ab",
+          "step_intent": "点击 link(\"tinyhumansai / openhuman\") 并跳转页面",
+          "recording_mode": "manual",
+          "runtime_status": "success",
+          "before_url": "https://github.com/trending",
+          "after_url": "https://github.com/tinyhumansai/openhuman",
+          "before_title": "Trending repositories on GitHub today · GitHub",
+          "after_title": "GitHub - tinyhumansai/openhuman: Your Personal AI super intelligence. Private, Simple and extremely powerful. · GitHub",
+          "hosts": [
+            "github.com"
+          ],
+          "page_patterns": [
+            "card-list",
+            "semantic-selection",
+            "multi-page"
+          ],
+          "checkpoint_path": "hcap-4be6265f43eb42dfa259182207aa64cc/steps/002/checkpoint.json",
+          "expected_path": "hcap-4be6265f43eb42dfa259182207aa64cc/steps/002/expected.json",
+          "failure_path": ""
+        },
+        {
+          "asset_id": "hcap-4be6265f43eb42dfa259182207aa64cc",
+          "step_index": 3,
+          "step_id": "trace-132c87131a674c84b6f608fe21d5c8d6",
+          "step_intent": "获取fork数",
+          "recording_mode": "natural_language",
+          "runtime_status": "success",
+          "before_url": "https://github.com/tinyhumansai/openhuman",
+          "after_url": "https://github.com/tinyhumansai/openhuman",
+          "before_title": "GitHub - tinyhumansai/openhuman: Your Personal AI super intelligence. Private, Simple and extremely powerful. · GitHub",
+          "after_title": "GitHub - tinyhumansai/openhuman: Your Personal AI super intelligence. Private, Simple and extremely powerful. · GitHub",
+          "hosts": [
+            "github.com"
+          ],
+          "page_patterns": [
+            "detail-page",
+            "data-extraction"
+          ],
+          "checkpoint_path": "hcap-4be6265f43eb42dfa259182207aa64cc/steps/003/checkpoint.json",
+          "expected_path": "hcap-4be6265f43eb42dfa259182207aa64cc/steps/003/expected.json",
+          "failure_path": ""
+        },
+        {
+          "asset_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e",
+          "step_index": 1,
+          "step_id": "trace-cd0d9995-99ce-46a9-af23-42ba8fa15052",
+          "step_intent": "导航到 https://github.com/trending",
+          "recording_mode": "manual",
+          "runtime_status": "success",
+          "before_url": "about:blank",
+          "after_url": "https://github.com/trending",
+          "before_title": "",
+          "after_title": "Trending repositories on GitHub today · GitHub",
+          "hosts": [
+            "github.com"
+          ],
+          "page_patterns": [],
+          "checkpoint_path": "hcap-de463b7bb608482e9b5bcdd5b78a224e/steps/001/checkpoint.json",
+          "expected_path": "hcap-de463b7bb608482e9b5bcdd5b78a224e/steps/001/expected.json",
+          "failure_path": ""
+        },
+        {
+          "asset_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e",
+          "step_index": 2,
+          "step_id": "trace-d29cd8d5-d33c-4545-9baf-6e52f403a9a3",
+          "step_intent": "点击 link(\"tinyhumansai / openhuman\") 并跳转页面",
+          "recording_mode": "manual",
+          "runtime_status": "success",
+          "before_url": "https://github.com/trending",
+          "after_url": "https://github.com/tinyhumansai/openhuman",
+          "before_title": "Trending repositories on GitHub today · GitHub",
+          "after_title": "GitHub - tinyhumansai/openhuman: Your Personal AI super intelligence. Private, Simple and extremely powerful. · GitHub",
+          "hosts": [
+            "github.com"
+          ],
+          "page_patterns": [],
+          "checkpoint_path": "hcap-de463b7bb608482e9b5bcdd5b78a224e/steps/002/checkpoint.json",
+          "expected_path": "hcap-de463b7bb608482e9b5bcdd5b78a224e/steps/002/expected.json",
+          "failure_path": ""
+        },
+        {
+          "asset_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e",
+          "step_index": 3,
+          "step_id": "trace-e11497a7f1b84fd4b229f2c8672cf4ad",
+          "step_intent": "获取stars数",
+          "recording_mode": "natural_language",
+          "runtime_status": "success",
+          "before_url": "https://github.com/tinyhumansai/openhuman",
+          "after_url": "https://github.com/tinyhumansai/openhuman",
+          "before_title": "GitHub - tinyhumansai/openhuman: Your Personal AI super intelligence. Private, Simple and extremely powerful. · GitHub",
+          "after_title": "GitHub - tinyhumansai/openhuman: Your Personal AI super intelligence. Private, Simple and extremely powerful. · GitHub",
+          "hosts": [
+            "github.com"
+          ],
+          "page_patterns": [],
+          "checkpoint_path": "hcap-de463b7bb608482e9b5bcdd5b78a224e/steps/003/checkpoint.json",
+          "expected_path": "hcap-de463b7bb608482e9b5bcdd5b78a224e/steps/003/expected.json",
+          "failure_path": ""
+        }
+      ],
+      "warnings": []
+    },
+    "validation": {
+      "schema_version": "rpa-harness-validation-v0",
+      "summary": {
+        "capture_count": 2,
+        "issue_count": 0,
+        "blocking_issue_count": 0,
+        "categories": {},
+        "severities": {}
+      },
+      "issues": []
+    },
+    "snapshot": {
+      "summary": {
+        "total": 6,
+        "passed": 6,
+        "failed": 0
+      },
+      "assets": [
+        {
+          "asset_id": "hcap-4be6265f43eb42dfa259182207aa64cc",
+          "step_id": "trace-ddeb5bda-096e-48e6-a5e0-211ab0defdd1",
+          "step_index": 1,
+          "step_intent": "导航到 https://github.com/trending",
+          "page_patterns": [
+            "multi-page",
+            "card-list"
+          ],
+          "status": "passed",
+          "failure_category": "",
+          "missing_text": [],
+          "snapshot_source": "production-dom-snapshot-v1",
+          "source_html_size": 39,
+          "raw_snapshot_size": 307,
+          "compact_snapshot_size": 239,
+          "compression_ratio": 0.7785,
+          "source_signal_status": "not_checked",
+          "raw_signal_status": "not_checked",
+          "compact_signal_status": "not_checked",
+          "region_scope_status": "not_checked",
+          "snapshot_quality": {
+            "source": "production-dom-snapshot-v1",
+            "raw": {
+              "frame_count": 1,
+              "actionable_node_count": 0,
+              "content_node_count": 0,
+              "container_count": 0,
+              "table_view_count": 0,
+              "detail_view_count": 0
+            },
+            "compact": {
+              "mode": "clean_snapshot",
+              "expanded_region_count": 0,
+              "sampled_region_count": 0,
+              "region_catalogue_count": 0,
+              "table_view_count": 0,
+              "detail_view_count": 0,
+              "form_view_count": 0
+            }
+          }
+        },
+        {
+          "asset_id": "hcap-4be6265f43eb42dfa259182207aa64cc",
+          "step_id": "trace-4dc4ac88-c666-4378-9f09-c2b0bd7e51ab",
+          "step_index": 2,
+          "step_intent": "点击 link(\"tinyhumansai / openhuman\") 并跳转页面",
+          "page_patterns": [
+            "card-list",
+            "semantic-selection",
+            "multi-page"
+          ],
+          "status": "passed",
+          "failure_category": "",
+          "missing_text": [],
+          "snapshot_source": "production-dom-snapshot-v1",
+          "source_html_size": 643007,
+          "raw_snapshot_size": 394713,
+          "compact_snapshot_size": 39148,
+          "compression_ratio": 0.0992,
+          "source_signal_status": "present",
+          "raw_signal_status": "present",
+          "compact_signal_status": "present",
+          "region_scope_status": "not_checked",
+          "snapshot_quality": {
+            "source": "production-dom-snapshot-v1",
+            "raw": {
+              "frame_count": 1,
+              "actionable_node_count": 120,
+              "content_node_count": 147,
+              "container_count": 19,
+              "table_view_count": 0,
+              "detail_view_count": 0
+            },
+            "compact": {
+              "mode": "clean_snapshot",
+              "expanded_region_count": 21,
+              "sampled_region_count": 0,
+              "region_catalogue_count": 21,
+              "table_view_count": 0,
+              "detail_view_count": 0,
+              "form_view_count": 0
+            }
+          }
+        },
+        {
+          "asset_id": "hcap-4be6265f43eb42dfa259182207aa64cc",
+          "step_id": "trace-132c87131a674c84b6f608fe21d5c8d6",
+          "step_index": 3,
+          "step_intent": "获取fork数",
+          "page_patterns": [
+            "detail-page",
+            "data-extraction"
+          ],
+          "status": "passed",
+          "failure_category": "",
+          "missing_text": [],
+          "snapshot_source": "production-dom-snapshot-v1",
+          "source_html_size": 569338,
+          "raw_snapshot_size": 608218,
+          "compact_snapshot_size": 35003,
+          "compression_ratio": 0.0576,
+          "source_signal_status": "not_checked",
+          "raw_signal_status": "not_checked",
+          "compact_signal_status": "not_checked",
+          "region_scope_status": "not_checked",
+          "snapshot_quality": {
+            "source": "production-dom-snapshot-v1",
+            "raw": {
+              "frame_count": 1,
+              "actionable_node_count": 120,
+              "content_node_count": 160,
+              "container_count": 10,
+              "table_view_count": 2,
+              "detail_view_count": 0
+            },
+            "compact": {
+              "mode": "clean_snapshot",
+              "expanded_region_count": 12,
+              "sampled_region_count": 0,
+              "region_catalogue_count": 12,
+              "table_view_count": 2,
+              "detail_view_count": 0,
+              "form_view_count": 0
+            }
+          }
+        },
+        {
+          "asset_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e",
+          "step_id": "trace-cd0d9995-99ce-46a9-af23-42ba8fa15052",
+          "step_index": 1,
+          "step_intent": "导航到 https://github.com/trending",
+          "page_patterns": [],
+          "status": "passed",
+          "failure_category": "",
+          "missing_text": [],
+          "snapshot_source": "production-dom-snapshot-v1",
+          "source_html_size": 39,
+          "raw_snapshot_size": 307,
+          "compact_snapshot_size": 239,
+          "compression_ratio": 0.7785,
+          "source_signal_status": "not_checked",
+          "raw_signal_status": "not_checked",
+          "compact_signal_status": "not_checked",
+          "region_scope_status": "not_checked",
+          "snapshot_quality": {
+            "source": "production-dom-snapshot-v1",
+            "raw": {
+              "frame_count": 1,
+              "actionable_node_count": 0,
+              "content_node_count": 0,
+              "container_count": 0,
+              "table_view_count": 0,
+              "detail_view_count": 0
+            },
+            "compact": {
+              "mode": "clean_snapshot",
+              "expanded_region_count": 0,
+              "sampled_region_count": 0,
+              "region_catalogue_count": 0,
+              "table_view_count": 0,
+              "detail_view_count": 0,
+              "form_view_count": 0
+            }
+          }
+        },
+        {
+          "asset_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e",
+          "step_id": "trace-d29cd8d5-d33c-4545-9baf-6e52f403a9a3",
+          "step_index": 2,
+          "step_intent": "点击 link(\"tinyhumansai / openhuman\") 并跳转页面",
+          "page_patterns": [],
+          "status": "passed",
+          "failure_category": "",
+          "missing_text": [],
+          "snapshot_source": "production-dom-snapshot-v1",
+          "source_html_size": 641903,
+          "raw_snapshot_size": 395470,
+          "compact_snapshot_size": 39260,
+          "compression_ratio": 0.0993,
+          "source_signal_status": "present",
+          "raw_signal_status": "present",
+          "compact_signal_status": "present",
+          "region_scope_status": "not_checked",
+          "snapshot_quality": {
+            "source": "production-dom-snapshot-v1",
+            "raw": {
+              "frame_count": 1,
+              "actionable_node_count": 120,
+              "content_node_count": 147,
+              "container_count": 19,
+              "table_view_count": 0,
+              "detail_view_count": 0
+            },
+            "compact": {
+              "mode": "clean_snapshot",
+              "expanded_region_count": 21,
+              "sampled_region_count": 0,
+              "region_catalogue_count": 21,
+              "table_view_count": 0,
+              "detail_view_count": 0,
+              "form_view_count": 0
+            }
+          }
+        },
+        {
+          "asset_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e",
+          "step_id": "trace-e11497a7f1b84fd4b229f2c8672cf4ad",
+          "step_index": 3,
+          "step_intent": "获取stars数",
+          "page_patterns": [],
+          "status": "passed",
+          "failure_category": "",
+          "missing_text": [],
+          "snapshot_source": "production-dom-snapshot-v1",
+          "source_html_size": 568657,
+          "raw_snapshot_size": 620228,
+          "compact_snapshot_size": 35103,
+          "compression_ratio": 0.0566,
+          "source_signal_status": "not_checked",
+          "raw_signal_status": "not_checked",
+          "compact_signal_status": "not_checked",
+          "region_scope_status": "not_checked",
+          "snapshot_quality": {
+            "source": "production-dom-snapshot-v1",
+            "raw": {
+              "frame_count": 1,
+              "actionable_node_count": 120,
+              "content_node_count": 160,
+              "container_count": 10,
+              "table_view_count": 2,
+              "detail_view_count": 0
+            },
+            "compact": {
+              "mode": "clean_snapshot",
+              "expanded_region_count": 12,
+              "sampled_region_count": 0,
+              "region_catalogue_count": 12,
+              "table_view_count": 2,
+              "detail_view_count": 0,
+              "form_view_count": 0
+            }
+          }
+        }
+      ]
+    },
+    "compiler": {
+      "summary": {
+        "total": 6,
+        "passed": 6,
+        "failed": 0
+      },
+      "assets": [
+        {
+          "asset_id": "hcap-4be6265f43eb42dfa259182207aa64cc",
+          "step_id": "trace-ddeb5bda-096e-48e6-a5e0-211ab0defdd1",
+          "step_index": 1,
+          "step_intent": "导航到 https://github.com/trending",
+          "page_patterns": [
+            "multi-page",
+            "card-list"
+          ],
+          "status": "passed",
+          "failure_category": "",
+          "hardcoded_values": [],
+          "hardcoded_executable_values": [],
+          "hardcoded_comment_values": [],
+          "missing_output_keys": [],
+          "missing_dataflow_refs": [],
+          "script_changed": false,
+          "script_diff": ""
+        },
+        {
+          "asset_id": "hcap-4be6265f43eb42dfa259182207aa64cc",
+          "step_id": "trace-4dc4ac88-c666-4378-9f09-c2b0bd7e51ab",
+          "step_index": 2,
+          "step_intent": "点击 link(\"tinyhumansai / openhuman\") 并跳转页面",
+          "page_patterns": [
+            "card-list",
+            "semantic-selection",
+            "multi-page"
+          ],
+          "status": "passed",
+          "failure_category": "",
+          "hardcoded_values": [],
+          "hardcoded_executable_values": [],
+          "hardcoded_comment_values": [],
+          "missing_output_keys": [],
+          "missing_dataflow_refs": [],
+          "script_changed": false,
+          "script_diff": ""
+        },
+        {
+          "asset_id": "hcap-4be6265f43eb42dfa259182207aa64cc",
+          "step_id": "trace-132c87131a674c84b6f608fe21d5c8d6",
+          "step_index": 3,
+          "step_intent": "获取fork数",
+          "page_patterns": [
+            "detail-page",
+            "data-extraction"
+          ],
+          "status": "passed",
+          "failure_category": "",
+          "hardcoded_values": [],
+          "hardcoded_executable_values": [],
+          "hardcoded_comment_values": [],
+          "missing_output_keys": [],
+          "missing_dataflow_refs": [],
+          "script_changed": false,
+          "script_diff": ""
+        },
+        {
+          "asset_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e",
+          "step_id": "trace-cd0d9995-99ce-46a9-af23-42ba8fa15052",
+          "step_index": 1,
+          "step_intent": "导航到 https://github.com/trending",
+          "page_patterns": [],
+          "status": "passed",
+          "failure_category": "",
+          "hardcoded_values": [],
+          "hardcoded_executable_values": [],
+          "hardcoded_comment_values": [],
+          "missing_output_keys": [],
+          "missing_dataflow_refs": [],
+          "script_changed": false,
+          "script_diff": ""
+        },
+        {
+          "asset_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e",
+          "step_id": "trace-d29cd8d5-d33c-4545-9baf-6e52f403a9a3",
+          "step_index": 2,
+          "step_intent": "点击 link(\"tinyhumansai / openhuman\") 并跳转页面",
+          "page_patterns": [],
+          "status": "passed",
+          "failure_category": "",
+          "hardcoded_values": [],
+          "hardcoded_executable_values": [],
+          "hardcoded_comment_values": [],
+          "missing_output_keys": [],
+          "missing_dataflow_refs": [],
+          "script_changed": false,
+          "script_diff": ""
+        },
+        {
+          "asset_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e",
+          "step_id": "trace-e11497a7f1b84fd4b229f2c8672cf4ad",
+          "step_index": 3,
+          "step_intent": "获取stars数",
+          "page_patterns": [],
+          "status": "passed",
+          "failure_category": "",
+          "hardcoded_values": [],
+          "hardcoded_executable_values": [],
+          "hardcoded_comment_values": [
+            "18.3k stars"
+          ],
+          "missing_output_keys": [],
+          "missing_dataflow_refs": [],
+          "script_changed": false,
+          "script_diff": ""
+        }
+      ]
+    },
+    "skill_replay": {
+      "schema_version": "rpa-harness-skill-replay-e2e-v0",
+      "summary": {
+        "status": "passed",
+        "eligible_capture_count": 2,
+        "total": 6,
+        "passed": 6,
+        "failed": 0,
+        "failure_categories": {}
+      },
+      "assets": [
+        {
+          "asset_id": "hcap-4be6265f43eb42dfa259182207aa64cc",
+          "step_id": "trace-ddeb5bda-096e-48e6-a5e0-211ab0defdd1",
+          "step_index": 1,
+          "step_intent": "导航到 https://github.com/trending",
+          "page_patterns": [
+            "multi-page",
+            "card-list"
+          ],
+          "status": "passed",
+          "failure_category": "",
+          "output_key": "",
+          "actual_output": null,
+          "missing_text": [],
+          "error": "",
+          "generated_skill_size": 12948
+        },
+        {
+          "asset_id": "hcap-4be6265f43eb42dfa259182207aa64cc",
+          "step_id": "trace-4dc4ac88-c666-4378-9f09-c2b0bd7e51ab",
+          "step_index": 2,
+          "step_intent": "点击 link(\"tinyhumansai / openhuman\") 并跳转页面",
+          "page_patterns": [
+            "card-list",
+            "semantic-selection",
+            "multi-page"
+          ],
+          "status": "passed",
+          "failure_category": "",
+          "output_key": "",
+          "actual_output": null,
+          "missing_text": [],
+          "error": "",
+          "generated_skill_size": 13034
+        },
+        {
+          "asset_id": "hcap-4be6265f43eb42dfa259182207aa64cc",
+          "step_id": "trace-132c87131a674c84b6f608fe21d5c8d6",
+          "step_index": 3,
+          "step_intent": "获取fork数",
+          "page_patterns": [
+            "detail-page",
+            "data-extraction"
+          ],
+          "status": "passed",
+          "failure_category": "",
+          "output_key": "fork_count",
+          "actual_output": "Fork 1.3k",
+          "missing_text": [],
+          "error": "",
+          "generated_skill_size": 13154
+        },
+        {
+          "asset_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e",
+          "step_id": "trace-cd0d9995-99ce-46a9-af23-42ba8fa15052",
+          "step_index": 1,
+          "step_intent": "导航到 https://github.com/trending",
+          "page_patterns": [],
+          "status": "passed",
+          "failure_category": "",
+          "output_key": "",
+          "actual_output": null,
+          "missing_text": [],
+          "error": "",
+          "generated_skill_size": 12948
+        },
+        {
+          "asset_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e",
+          "step_id": "trace-d29cd8d5-d33c-4545-9baf-6e52f403a9a3",
+          "step_index": 2,
+          "step_intent": "点击 link(\"tinyhumansai / openhuman\") 并跳转页面",
+          "page_patterns": [],
+          "status": "passed",
+          "failure_category": "",
+          "output_key": "",
+          "actual_output": null,
+          "missing_text": [],
+          "error": "",
+          "generated_skill_size": 13034
+        },
+        {
+          "asset_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e",
+          "step_id": "trace-e11497a7f1b84fd4b229f2c8672cf4ad",
+          "step_index": 3,
+          "step_intent": "获取stars数",
+          "page_patterns": [],
+          "status": "passed",
+          "failure_category": "",
+          "output_key": "star_count",
+          "actual_output": {
+            "star_count": "18.3k stars"
+          },
+          "missing_text": [],
+          "error": "",
+          "generated_skill_size": 13575
+        }
+      ]
+    },
+    "stateful_sop": {
+      "schema_version": "rpa-harness-stateful-sop-capture-to-skill-v0",
+      "summary": {
+        "status": "passed",
+        "eligible_capture_count": 2,
+        "total": 2,
+        "passed": 2,
+        "failed": 0,
+        "failure_categories": {}
+      },
+      "assets": [
+        {
+          "asset_id": "hcap-4be6265f43eb42dfa259182207aa64cc",
+          "status": "passed",
+          "failure_category": "",
+          "sop_intent": "Navigate GitHub Trending, open a repository, and extract fork count.",
+          "step_count": 3,
+          "accepted_trace_count": 3,
+          "runtime_result_keys": [
+            "fork_count"
+          ],
+          "generated_skill_size": 14576,
+          "steps": [
+            {
+              "step_index": 1,
+              "step_id": "trace-ddeb5bda-096e-48e6-a5e0-211ab0defdd1",
+              "step_intent": "导航到 https://github.com/trending",
+              "recording_mode": "manual",
+              "input_boundary": "manual_recording_adapter",
+              "status": "passed",
+              "failure_category": "",
+              "error": ""
+            },
+            {
+              "step_index": 2,
+              "step_id": "trace-4dc4ac88-c666-4378-9f09-c2b0bd7e51ab",
+              "step_intent": "点击 link(\"tinyhumansai / openhuman\") 并跳转页面",
+              "recording_mode": "manual",
+              "input_boundary": "manual_recording_adapter",
+              "status": "passed",
+              "failure_category": "",
+              "error": ""
+            },
+            {
+              "step_index": 3,
+              "step_id": "trace-132c87131a674c84b6f608fe21d5c8d6",
+              "step_intent": "获取fork数",
+              "recording_mode": "natural_language",
+              "input_boundary": "natural_language_runtime_result",
+              "status": "passed",
+              "failure_category": "",
+              "error": ""
+            }
+          ],
+          "replay": {
+            "status": "passed",
+            "failure_category": "",
+            "actual_output": {
+              "fork_count": "Fork 1.3k"
+            },
+            "missing_text": [],
+            "error": ""
+          }
+        },
+        {
+          "asset_id": "hcap-de463b7bb608482e9b5bcdd5b78a224e",
+          "status": "passed",
+          "failure_category": "",
+          "sop_intent": "",
+          "step_count": 3,
+          "accepted_trace_count": 3,
+          "runtime_result_keys": [
+            "star_count"
+          ],
+          "generated_skill_size": 14997,
+          "steps": [
+            {
+              "step_index": 1,
+              "step_id": "trace-cd0d9995-99ce-46a9-af23-42ba8fa15052",
+              "step_intent": "导航到 https://github.com/trending",
+              "recording_mode": "manual",
+              "input_boundary": "manual_recording_adapter",
+              "status": "passed",
+              "failure_category": "",
+              "error": ""
+            },
+            {
+              "step_index": 2,
+              "step_id": "trace-d29cd8d5-d33c-4545-9baf-6e52f403a9a3",
+              "step_intent": "点击 link(\"tinyhumansai / openhuman\") 并跳转页面",
+              "recording_mode": "manual",
+              "input_boundary": "manual_recording_adapter",
+              "status": "passed",
+              "failure_category": "",
+              "error": ""
+            },
+            {
+              "step_index": 3,
+              "step_id": "trace-e11497a7f1b84fd4b229f2c8672cf4ad",
+              "step_intent": "获取stars数",
+              "recording_mode": "natural_language",
+              "input_boundary": "natural_language_runtime_result",
+              "status": "passed",
+              "failure_category": "",
+              "error": ""
+            }
+          ],
+          "replay": {
+            "status": "passed",
+            "failure_category": "",
+            "actual_output": {
+              "star_count": {
+                "star_count": "18.3k stars"
+              }
+            },
+            "missing_text": [],
+            "error": ""
+          }
+        }
+      ]
+    },
+    "blast_radius": {
+      "schema_version": "rpa-harness-blast-radius-v0",
+      "summary": {
+        "status": "passed",
+        "checked_steps": 6,
+        "passed_steps": 6,
+        "failed_steps": 0,
+        "blocking_failed_steps": 0,
+        "warning_failed_steps": 0,
+        "affected_assets": [],
+        "blocking_affected_assets": [],
+        "warning_affected_assets": [],
+        "affected_page_patterns": [],
+        "affected_hosts": []
+      },
+      "affected_steps": [],
+      "failures_by_category": {},
+      "warnings": []
+    },
+    "observability": {
+      "schema_version": "rpa-harness-observability-v0",
+      "asset_qualification": {
+        "scanned_capture_count": 2,
+        "selected_capture_count": 2,
+        "excluded_capture_count": 0,
+        "selected_asset_ids": [
+          "hcap-4be6265f43eb42dfa259182207aa64cc",
+          "hcap-de463b7bb608482e9b5bcdd5b78a224e"
+        ],
+        "excluded_asset_ids": [],
+        "selected_promotion_status_counts": {
+          "candidate": 2
+        },
+        "excluded_reason_counts": {}
+      },
+      "coverage": {
+        "selected_step_count": 6,
+        "page_patterns": [
+          "card-list",
+          "data-extraction",
+          "detail-page",
+          "multi-page",
+          "semantic-selection"
+        ],
+        "core_chain_coverage": {
+          "html_to_raw_snapshot": 2,
+          "planner_action_selection": 2,
+          "raw_to_compact_snapshot": 2,
+          "skill_replay": 2,
+          "stateful_capture_to_skill": 2,
+          "trace_to_skill": 2
+        },
+        "recording_modes": {
+          "manual": 4,
+          "natural_language": 2
+        },
+        "runtime_statuses": {
+          "success": 6
+        },
+        "hosts": [
+          "github.com"
+        ],
+        "coverage_risks": []
+      },
+      "runner_signals": {
+        "validation_blocking_issue_count": 0,
+        "validation_issue_categories": {},
+        "snapshot_failed": 0,
+        "snapshot_failure_categories": {},
+        "snapshot_quality": {
+          "source": "production-dom-snapshot-v1",
+          "checked_steps": 6,
+          "raw_signal_present": 2,
+          "compact_signal_present": 2,
+          "raw_signal_missing": 0,
+          "compact_signal_missing": 0,
+          "average_compression_ratio": 0.3116
+        },
+        "compiler_failed": 0,
+        "compiler_failure_categories": {},
+        "skill_replay_checked": 6,
+        "skill_replay_failed": 0,
+        "skill_replay_failure_categories": {},
+        "stateful_sop_checked": 2,
+        "stateful_sop_failed": 0,
+        "stateful_sop_failure_categories": {}
+      },
+      "blast_radius": {
+        "status": "passed",
+        "blocking_failed_steps": 0,
+        "warning_failed_steps": 0,
+        "affected_assets": [],
+        "affected_page_patterns": [],
+        "affected_hosts": [],
+        "failures_by_category": {}
+      },
+      "confidence": {
+        "status": "passed",
+        "failure_category": "",
+        "risks": []
+      }
+    }
+  }
+}

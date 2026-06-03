@@ -1,0 +1,59 @@
+{
+  "step_index": 1,
+  "step_id": "trace-556572b0-b417-437e-beb0-111e0421a333",
+  "step_intent": "导航到 https://github.com/trending",
+  "recording_mode": "manual",
+  "page_patterns": [],
+  "captured_at": "2026-05-30T10:44:03.807426",
+  "before": {
+    "url": "about:blank",
+    "title": "",
+    "html_path": "steps/001/before.html",
+    "html_sha256": "a7fe83ec64bb23eb28090598db3d166ed98e52e39d1afbbfd74c579553f93e4e",
+    "same_as_before": false,
+    "capture_quality": {},
+    "screenshot_path": "",
+    "raw_snapshot_path": "",
+    "compact_snapshot_path": "",
+    "active_page_id": "",
+    "iframe_metadata": []
+  },
+  "action": {
+    "trace_events_path": "steps/001/trace_events.json",
+    "expected_action_type": "",
+    "target_evidence": {}
+  },
+  "after": {
+    "url": "https://github.com/trending",
+    "title": "Trending repositories on GitHub today · GitHub",
+    "html_path": "steps/001/after.html",
+    "html_sha256": "8330b3feda033094835bd066020bc51ab1af90fa77ce995093d63da2818a1f83",
+    "same_as_before": false,
+    "capture_quality": {
+      "status": "partial",
+      "reason": "timeout_before_stable",
+      "attempts": 10,
+      "settle_ms": 1800,
+      "url": "https://github.com/trending",
+      "html_bytes": 633974,
+      "body_text_chars": 21092,
+      "title_present": true,
+      "ready_state": "interactive",
+      "url_stable": true,
+      "title_stable": false,
+      "html_stable": false,
+      "shell_like": false
+    },
+    "screenshot_path": "",
+    "raw_snapshot_path": "",
+    "compact_snapshot_path": "",
+    "active_page_id": "",
+    "iframe_metadata": []
+  },
+  "runtime_result": {
+    "status": "success",
+    "error": null
+  },
+  "expected_path": "steps/001/expected.json",
+  "failure_path": ""
+}

@@ -1,0 +1,36 @@
+{
+  "snapshot_signals": {
+    "must_preserve_region_scope": {
+      "region_id": "region-328bc536343c4ee1983c1812f4e877f2",
+      "mode": "region_scoped_snapshot",
+      "inferred_kind": "text_region"
+    }
+  },
+  "action_signals": {
+    "expected_action_type": "ai_operation",
+    "step_intent": "获取项目About的内容",
+    "region_selection": {
+      "region_id": "region-328bc536343c4ee1983c1812f4e877f2",
+      "mode": "region_scoped_snapshot",
+      "inferred_kind": "text_region"
+    }
+  },
+  "compiler_signals": {
+    "must_preserve_region_context": {
+      "region_id": "region-328bc536343c4ee1983c1812f4e877f2",
+      "inferred_kind": "text_region"
+    },
+    "must_preserve_output_keys": [
+      "about_content"
+    ],
+    "must_not_hardcode_observed_values": [
+      "Public repository for Agent Skills"
+    ]
+  },
+  "state_signals": {
+    "output_key": "about_content",
+    "observed_output_shape": {
+      "type": "str"
+    }
+  }
+}

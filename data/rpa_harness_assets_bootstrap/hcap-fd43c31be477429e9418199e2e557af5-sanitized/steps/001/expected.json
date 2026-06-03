@@ -1,0 +1,70 @@
+{
+  "snapshot_signals": {},
+  "action_signals": {
+    "expected_action_type": "navigate"
+  },
+  "compiler_signals": {},
+  "state_signals": {
+    "observed_output_shape": {
+      "type": "null"
+    },
+    "sanitization_contract": {
+      "placeholders": [
+        {
+          "token": "<EMAIL_1>",
+          "category": "PII",
+          "semantic_type": "email",
+          "shape": "email"
+        },
+        {
+          "token": "<EMAIL_2>",
+          "category": "PII",
+          "semantic_type": "email",
+          "shape": "email"
+        },
+        {
+          "token": "<EMAIL_3>",
+          "category": "PII",
+          "semantic_type": "email",
+          "shape": "email"
+        },
+        {
+          "token": "<LOCAL_PATH_1>",
+          "category": "local-path",
+          "semantic_type": "local_path",
+          "shape": "path"
+        },
+        {
+          "token": "<LOCAL_PATH_2>",
+          "category": "local-path",
+          "semantic_type": "local_path",
+          "shape": "path"
+        },
+        {
+          "token": "<LOCAL_PATH_3>",
+          "category": "local-path",
+          "semantic_type": "local_path",
+          "shape": "path"
+        },
+        {
+          "token": "<SESSION_ID_1>",
+          "category": "auth/session",
+          "semantic_type": "session_identifier",
+          "shape": "identifier"
+        },
+        {
+          "token": "<SESSION_ID_2>",
+          "category": "auth/session",
+          "semantic_type": "session_identifier",
+          "shape": "identifier"
+        }
+      ],
+      "runtime_secret_refs": [],
+      "controlled_fixtures": [],
+      "replay_assertions": [
+        "sanitized asset preserves output shape and SOP replay evidence",
+        "raw sensitive values are replaced by semantic placeholders"
+      ]
+    }
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "step_index": 4,
+  "step_id": "trace-76b08399-dcf5-42f3-92db-32fdf683d380",
+  "step_intent": "点击 link(\"Pull requests\") 并跳转页面",
+  "recording_mode": "manual",
+  "page_patterns": [],
+  "captured_at": "2026-05-29T00:35:02.994812",
+  "before": {
+    "url": "https://github.com/anthropics/skills",
+    "title": "GitHub - anthropics/skills: Public repository for Agent Skills · GitHub",
+    "html_path": "steps/004/before.html",
+    "html_sha256": "bc707435b20598435f170eabce9dccaf09b69d481dd041ccd3478d939328d192",
+    "same_as_before": false,
+    "capture_quality": {},
+    "screenshot_path": "",
+    "raw_snapshot_path": "",
+    "compact_snapshot_path": "",
+    "active_page_id": "",
+    "iframe_metadata": []
+  },
+  "action": {
+    "trace_events_path": "steps/004/trace_events.json",
+    "expected_action_type": "",
+    "target_evidence": {}
+  },
+  "after": {
+    "url": "https://github.com/anthropics/skills/pulls",
+    "title": "Pull requests · anthropics/skills · GitHub",
+    "html_path": "steps/004/after.html",
+    "html_sha256": "b346f62cb37d073ec71c897f645f6be8fba691ad2b4387e3886261b7f95631b0",
+    "same_as_before": false,
+    "capture_quality": {
+      "status": "stable",
+      "reason": "",
+      "attempts": 4,
+      "settle_ms": 600,
+      "url": "https://github.com/anthropics/skills/pulls",
+      "html_bytes": 347525,
+      "body_text_chars": 25331,
+      "title_present": true,
+      "ready_state": "complete",
+      "url_stable": true,
+      "title_stable": true,
+      "html_stable": true,
+      "shell_like": false
+    },
+    "screenshot_path": "",
+    "raw_snapshot_path": "",
+    "compact_snapshot_path": "",
+    "active_page_id": "",
+    "iframe_metadata": []
+  },
+  "runtime_result": {
+    "status": "success",
+    "error": null
+  },
+  "expected_path": "steps/004/expected.json",
+  "failure_path": ""
+}

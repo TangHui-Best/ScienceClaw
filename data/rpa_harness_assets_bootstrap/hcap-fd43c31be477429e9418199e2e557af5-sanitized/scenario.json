@@ -1,0 +1,60 @@
+{
+  "schema_version": "rpa-harness-scenario-v0",
+  "asset_id": "hcap-fd43c31be477429e9418199e2e557af5-sanitized",
+  "capture_scope": "full_sop",
+  "sop_intent": "",
+  "source": {
+    "recording_id": "8ded3be8-475b-44d0-8662-4f3ded111e86",
+    "captured_at": "2026-05-30T10:43:39.044049",
+    "capture_mode": "harness",
+    "capture_trigger": "full_sop"
+  },
+  "environment": {
+    "sanitized_from_asset_id": "hcap-fd43c31be477429e9418199e2e557af5",
+    "sanitization_report_path": "sanitization_report.json"
+  },
+  "asset_status": "draft",
+  "sensitivity": "sanitized",
+  "page_patterns": [],
+  "governance": {
+    "promotion_status": "candidate-lite",
+    "runner_modes": [
+      "offline_core_chain",
+      "skill_replay_e2e",
+      "stateful_sop_capture_to_skill"
+    ],
+    "core_chain_coverage": [
+      "html_to_raw_snapshot",
+      "raw_to_compact_snapshot",
+      "planner_action_selection",
+      "trace_to_skill",
+      "skill_replay",
+      "stateful_capture_to_skill"
+    ],
+    "expected_signals_reviewed": false,
+    "sensitivity_reviewed": false,
+    "review_notes": "Sanitized copy derived from hcap-fd43c31be477429e9418199e2e557af5; human review required before candidate/golden promotion."
+  },
+  "step_checkpoints": [
+    {
+      "step_index": 1,
+      "checkpoint_path": "steps/001/checkpoint.json"
+    },
+    {
+      "step_index": 2,
+      "checkpoint_path": "steps/002/checkpoint.json"
+    },
+    {
+      "step_index": 3,
+      "checkpoint_path": "steps/003/checkpoint.json"
+    },
+    {
+      "step_index": 4,
+      "checkpoint_path": "steps/004/checkpoint.json"
+    },
+    {
+      "step_index": 5,
+      "checkpoint_path": "steps/005/checkpoint.json"
+    }
+  ]
+}
