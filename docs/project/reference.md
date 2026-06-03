@@ -6,6 +6,8 @@ This document holds project reference material that is useful but too verbose fo
 
 RpaClaw is a privacy-first personal research assistant powered by LangChain DeepAgents. It provides scientific tools, document generation, sandboxed code execution, and an RPA skill recording system. Data is intended to stay local.
 
+For internal agents that need a problem-location route before changing code, start with `docs/project/agent-architecture-onboarding.md`.
+
 ## Tech Stack
 
 - **Backend**: FastAPI, Python, Pydantic v2, Motor, LangGraph/DeepAgents.
