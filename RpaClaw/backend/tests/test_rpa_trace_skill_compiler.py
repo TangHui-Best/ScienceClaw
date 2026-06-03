@@ -24,6 +24,11 @@ def _execute_body(script: str) -> str:
     return script[start:]
 
 
+def _execute_prelude(script: str) -> str:
+    start = script.index("async def execute_skill")
+    return script[:start]
+
+
 def _load_execute_skill(script: str):
     end = script.index("\ndef _parse_cli_value")
     namespace = {"__name__": "compiled_skill_test"}
@@ -80,6 +85,27 @@ def test_compiler_renders_navigation_trace():
 
     assert "async def execute_skill" in script
     assert "https://github.com/trending" in script
+
+
+def test_navigation_script_only_includes_required_helper_prelude():
+    script = TraceSkillCompiler().generate_script(
+        [
+            RPAAcceptedTrace(
+                trace_type=RPATraceType.NAVIGATION,
+                after_page=RPAPageState(url="https://github.com/trending"),
+            )
+        ],
+        is_local=True,
+    )
+    prelude = _execute_prelude(script)
+
+    assert "_trace_start" in prelude
+    assert "_download_from_export_task" not in prelude
+    assert "_execute_runtime_ai_instruction" not in prelude
+    assert "_extract_display_field_value" not in prelude
+    assert "_extract_bounded_section_text" not in prelude
+    assert "_resolve_recorded_frame" not in prelude
+    assert "_validate_non_empty_records" not in prelude
 
 
 def test_navigation_traces_with_same_tab_id_stay_on_one_page():
@@ -764,7 +790,9 @@ def test_compiler_uses_source_ref_for_dataflow_fill():
     )
 
     script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    prelude = _execute_prelude(script)
 
+    assert "_resolve_result_ref" in prelude
     assert "customer_info.name" in script
     assert "await current_page.get_by_role('textbox', name='Customer Name', exact=True).fill(str(_value))" in script
     assert "Alice Zhang" not in _execute_body(script)
@@ -1377,8 +1405,10 @@ def test_ai_export_task_download_signal_compiles_to_export_task_helper():
     )
 
     script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    prelude = _execute_prelude(script)
     body = _execute_body(script)
 
+    assert "_download_from_export_task" in prelude
     assert "_download_from_export_task(" in body
     assert "table_heading='导出列表'" in body
     assert "action_selector='td[data-colid=\"col_25\"] a'" in body
@@ -2948,8 +2978,12 @@ def test_runtime_ai_instruction_uses_runtime_model_config_kwarg_without_embeddin
     )
 
     script = TraceSkillCompiler().generate_script([trace], is_local=True)
+    prelude = _execute_prelude(script)
     body = _execute_body(script)
 
+    assert "_execute_runtime_ai_instruction" in prelude
+    assert "_normalize_runtime_ai_payload" in prelude
+    assert "_runtime_ai_model_config" in prelude
     assert "RecordingRuntimeAgent(model_config=_runtime_ai_model_config(kwargs))" in script
     assert "sk-secret" not in script
     assert "_execute_runtime_ai_instruction(current_page, _results, kwargs," in body

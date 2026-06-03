@@ -3,7 +3,7 @@ id: F001
 doc_kind: feature
 status: active
 created: 2026-05-13
-updated: 2026-05-27
+updated: 2026-06-03
 ---
 
 # F001: RPA Trace Source Convergence
@@ -51,6 +51,7 @@ Active。公共 session 投影、trace/diagnostic 删除修复、生成/测试/�
 | F001.3 | 2026-05-25 | `2c8ec5f`, `77d7f59`, `909b11f` | iframe 场景会生成 `about:blank` 新页或等待录制期动态 iframe selector。 | compiler 把 frame-context 证据误当成新 tab 物化证据，又把动态精确 iframe `src` 误当成稳定 selector。 | `EV-001` 中 frame-context compiler focused tests 与 full compiler suite。 | landed |
 | F001.4 | 2026-05-26 | `c1628c9` | 新 tab opener 的 accepted trace 丢失 `signals.popup`，trace-only 编译无法生成 `expect_popup()`。 | popup 元数据异步补到旧 step 后，没有同步刷新 accepted trace。 | `EV-001` 中 popup signal sync manager tests 与相关 compiler regression。 | landed |
 | F001.5 | 2026-05-26 | `8373def` | Configure 能展示 `page.locator(...).filter(has_text=...)` 修复候选，但后端无法真正采用。 | recording normalizer、repair path 和 compiler 没有共享 `filter_has_text` 这一 locator 规范形态。 | `EV-001` 中 normalizer / manager / compiler focused tests。 | landed |
+| F001.6 | 2026-06-03 | pending | generated Skill 前缀无条件包含下载、runtime AI、字段抽取、iframe 等 helper，简单 SOP 脚本可读性差且混入历史遗留 `_validate_non_empty_records`。 | `TraceSkillCompiler._render_execute_skill()` 在生成具体 trace replay 前固定拼接完整 helper 区，没有按实际调用和依赖闭包注入。 | `EV-001` 中 helper prelude RED/GREEN、compiler suite、asset core-chain、Harness compiler regression。 | implemented |
 
 ## Patch Churn Review
 
