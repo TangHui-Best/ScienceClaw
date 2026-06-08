@@ -8,9 +8,11 @@ from playwright.async_api import async_playwright, Browser, Playwright
 
 from backend.config import settings
 from backend.rpa.playwright_security import get_chromium_launch_kwargs
+from backend.runtime.adapter_client import RuntimeAdapterClient
 from backend.runtime.session_runtime_manager import get_session_runtime_manager
 
 logger = logging.getLogger(__name__)
+READY_RUNTIME_STATUSES = {"ready"}
 
 
 class CDPConnector:
@@ -89,29 +91,35 @@ class CDPConnector:
         We replace the host:port with the one from SANDBOX_MCP_URL so
         the backend can reach it (works for both local dev and Docker).
         """
+        sandbox_base = self._sandbox_base_url
         if session_id:
             runtime = await get_session_runtime_manager().ensure_runtime(
                 session_id,
                 user_id or "system",
             )
-            url = f"{runtime.rest_base_url}/v1/browser/info"
-            sandbox_base = runtime.rest_base_url
+            if runtime.status not in READY_RUNTIME_STATUSES:
+                raise RuntimeError(
+                    "Runtime is not ready for CDP connection: "
+                    f"session_id={session_id}, status={runtime.status}"
+                )
+            data = await RuntimeAdapterClient(runtime).browser_info()
+            sandbox_base = runtime.route_base_url or runtime.rest_base_url
         else:
             url = f"{self._sandbox_base_url}/v1/browser/info"
-            sandbox_base = self._sandbox_base_url
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            data = resp.json()
-            cdp_url = data.get("data", {}).get("cdp_url", "")
-            if not cdp_url:
-                raise RuntimeError(f"No cdp_url in response from {url}: {data}")
-            # Rewrite host:port to match our sandbox base URL
-            from urllib.parse import urlparse
-            sandbox_parsed = urlparse(sandbox_base)
-            cdp_parsed = urlparse(cdp_url)
-            cdp_url = cdp_parsed._replace(netloc=sandbox_parsed.netloc).geturl()
-            return cdp_url
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(url)
+                resp.raise_for_status()
+                data = resp.json()
+
+        cdp_url = data.get("data", {}).get("cdp_url", "")
+        if not cdp_url:
+            raise RuntimeError(f"No cdp_url in browser info response: {data}")
+        # Rewrite host:port to match our reachable runtime/adapter route.
+        from urllib.parse import urlparse
+        sandbox_parsed = urlparse(sandbox_base)
+        cdp_parsed = urlparse(cdp_url)
+        cdp_url = cdp_parsed._replace(netloc=sandbox_parsed.netloc).geturl()
+        return cdp_url
 
     async def close(self):
         """Clean up connections."""

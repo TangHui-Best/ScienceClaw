@@ -28,6 +28,8 @@ class _FakeManager:
             pod_name="rpaclaw-sess-sess-1",
             service_name="rpaclaw-sess-sess-1-svc",
             rest_base_url="http://rpaclaw-sess-sess-1-svc:8080",
+            route_base_url="http://aio-route.local/session/sess-1",
+            runtime_token="runtime-token",
             status="ready",
         )
 
@@ -57,6 +59,21 @@ class _FakeAsyncClient:
     async def get(self, url):
         self.calls.append(url)
         return _FakeResponse()
+
+
+class _FakeRuntimeAdapterClient:
+    records = []
+
+    def __init__(self, runtime):
+        self.runtime = runtime
+        self.__class__.records.append(runtime)
+
+    async def browser_info(self):
+        return {
+            "data": {
+                "cdp_url": "ws://127.0.0.1:9222/devtools/browser/test-id",
+            }
+        }
 
 
 class _FakeChromium:
@@ -92,16 +109,44 @@ async def test_fetch_cdp_url_uses_runtime_endpoint_for_session(monkeypatch):
     sys.modules.pop("backend.rpa.cdp_connector", None)
     cdp_connector = importlib.import_module("backend.rpa.cdp_connector")
 
-    fake_client = _FakeAsyncClient()
     monkeypatch.setattr(cdp_connector, "get_session_runtime_manager", lambda: _FakeManager())
-    monkeypatch.setattr(cdp_connector.httpx, "AsyncClient", lambda *args, **kwargs: fake_client)
+    _FakeRuntimeAdapterClient.records = []
+    monkeypatch.setattr(cdp_connector, "RuntimeAdapterClient", _FakeRuntimeAdapterClient)
 
     connector = cdp_connector.CDPConnector()
 
     cdp_url = await connector._fetch_cdp_url(session_id="sess-1", user_id="user-1")
 
-    assert fake_client.calls == ["http://rpaclaw-sess-sess-1-svc:8080/v1/browser/info"]
-    assert cdp_url == "ws://rpaclaw-sess-sess-1-svc:8080/devtools/browser/test-id"
+    assert _FakeRuntimeAdapterClient.records[0].route_base_url == "http://aio-route.local/session/sess-1"
+    assert _FakeRuntimeAdapterClient.records[0].runtime_token == "runtime-token"
+    assert cdp_url == "ws://aio-route.local/devtools/browser/test-id"
+
+
+@pytest.mark.anyio
+async def test_fetch_cdp_url_rejects_non_ready_session_runtime(monkeypatch):
+    _install_fake_playwright_modules()
+    sys.modules.pop("backend.rpa.cdp_connector", None)
+    cdp_connector = importlib.import_module("backend.rpa.cdp_connector")
+
+    class _CreatingManager(_FakeManager):
+        async def ensure_runtime(self, session_id: str, user_id: str) -> SessionRuntimeRecord:
+            record = await super().ensure_runtime(session_id, user_id)
+            record.status = "creating"
+            record.metadata = {"runtime_token": "must-not-leak"}
+            return record
+
+    monkeypatch.setattr(cdp_connector, "get_session_runtime_manager", lambda: _CreatingManager())
+    _FakeRuntimeAdapterClient.records = []
+    monkeypatch.setattr(cdp_connector, "RuntimeAdapterClient", _FakeRuntimeAdapterClient)
+
+    connector = cdp_connector.CDPConnector()
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await connector._fetch_cdp_url(session_id="sess-1", user_id="user-1")
+
+    assert "Runtime is not ready for CDP connection" in str(exc_info.value)
+    assert "runtime-token" not in str(exc_info.value)
+    assert _FakeRuntimeAdapterClient.records == []
 
 
 @pytest.mark.anyio
