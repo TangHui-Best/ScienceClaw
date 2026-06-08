@@ -20,6 +20,10 @@ def build_runtime_provider(settings) -> RuntimeProvider:
         from backend.runtime.aio_runtime_provider import AioApiRuntimeProvider
 
         return AioApiRuntimeProvider(settings)
+    if runtime_mode == "aio_native":
+        from backend.runtime.aio_runtime_provider import AioNativeRuntimeProvider
+
+        return AioNativeRuntimeProvider(settings)
     if runtime_mode == "aio_fixed":
         from backend.runtime.aio_runtime_provider import AioRuntimeProvider
 

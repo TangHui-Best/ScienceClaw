@@ -172,3 +172,46 @@ async def test_local_launch_uses_relaxed_security_browser_args(monkeypatch):
             "args": list(RPA_RELAXED_CHROMIUM_ARGS),
         }
     ]
+
+
+def test_get_cdp_connector_prefers_explicit_runtime_mode_over_local_storage(monkeypatch):
+    _install_fake_playwright_modules()
+    sys.modules.pop("backend.rpa.cdp_connector", None)
+    cdp_connector = importlib.import_module("backend.rpa.cdp_connector")
+
+    monkeypatch.setattr(cdp_connector.settings, "storage_backend", "local")
+    monkeypatch.setattr(cdp_connector.settings, "runtime_mode", "aio_native")
+
+    assert cdp_connector.get_cdp_connector() is cdp_connector.cdp_connector
+
+
+@pytest.mark.anyio
+async def test_get_browser_for_aio_native_connects_in_current_event_loop(monkeypatch):
+    _install_fake_playwright_modules()
+    sys.modules.pop("backend.rpa.cdp_connector", None)
+    cdp_connector = importlib.import_module("backend.rpa.cdp_connector")
+
+    monkeypatch.setattr(cdp_connector.settings, "runtime_mode", "aio_native")
+    monkeypatch.setattr(cdp_connector, "get_session_runtime_manager", lambda: _FakeManager())
+    monkeypatch.setattr(cdp_connector, "RuntimeAdapterClient", _FakeRuntimeAdapterClient)
+
+    fake_playwright = _FakePlaywrightHandle()
+    monkeypatch.setattr(
+        cdp_connector,
+        "async_playwright",
+        lambda: _FakeAsyncPlaywrightFactory(fake_playwright),
+    )
+
+    connector = cdp_connector.CDPConnector()
+
+    async def fail_if_background_loop_used(_coro):
+        raise AssertionError("aio_native CDP connect should stay on the caller event loop")
+
+    monkeypatch.setattr(connector, "_run_in_pw_loop", fail_if_background_loop_used)
+
+    browser = await connector.get_browser(session_id="sess-1", user_id="user-1")
+
+    assert browser is not None
+    assert fake_playwright.chromium.connect_calls == [
+        "ws://aio-route.local/devtools/browser/test-id"
+    ]

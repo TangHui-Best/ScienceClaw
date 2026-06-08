@@ -3,7 +3,7 @@ from backend.runtime.docker_runtime_provider import DockerRuntimeProvider
 from backend.runtime.k8s_runtime_provider import K8sRuntimeProvider
 from backend.runtime.provider import build_runtime_provider
 from backend.runtime.shared_runtime_provider import SharedRuntimeProvider
-from backend.runtime.aio_runtime_provider import AioRuntimeProvider
+from backend.runtime.aio_runtime_provider import AioNativeRuntimeProvider, AioRuntimeProvider
 from backend.runtime.adapter_client import RuntimeAdapterClientError
 from backend.config import (
     _derive_sandbox_vnc_ws_url,
@@ -74,6 +74,246 @@ def test_provider_factory_returns_aio_provider_for_local_fixed_aio_mode():
 def test_provider_factory_returns_aio_api_provider_for_real_aio_mode():
     provider = build_runtime_provider(_Settings("aio"))
     assert provider.__class__.__name__ == "AioApiRuntimeProvider"
+
+
+def test_provider_factory_returns_aio_native_provider_for_native_aio_mode():
+    provider = build_runtime_provider(_Settings("aio_native"))
+    assert provider.__class__.__name__ == "AioNativeRuntimeProvider"
+
+
+@pytest.mark.asyncio
+async def test_aio_native_runtime_provider_uses_fixed_native_aio_browser_info():
+    class _AioNativeSettings(_Settings):
+        sandbox_base_url = "http://localhost:8080"
+        aio_native_base_url = "http://localhost:18090"
+        aio_runtime_sandbox_id = "native-aio-sandbox"
+
+    class _NativeAioResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "data": {
+                    "cdp_url": "ws://127.0.0.1:9222/devtools/browser/native",
+                    "vnc_url": "http://127.0.0.1:8080/vnc/index.html",
+                }
+            }
+
+    class _NativeAioClient:
+        calls = []
+
+        def __init__(self, *args, **kwargs):
+            self.kwargs = kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url):
+            self.calls.append(url)
+            return _NativeAioResponse()
+
+    _NativeAioClient.calls = []
+    provider = AioNativeRuntimeProvider(
+        _AioNativeSettings("aio_native"),
+        http_client_factory=_NativeAioClient,
+    )
+
+    runtime = await provider.create_runtime("sess-native", "user-1")
+    refreshed = await provider.refresh_runtime(runtime)
+
+    assert runtime.session_id == "sess-native"
+    assert runtime.user_id == "user-1"
+    assert runtime.namespace == "aio-native"
+    assert runtime.sandbox_id == "native-aio-sandbox"
+    assert runtime.rest_base_url == "http://localhost:18090"
+    assert runtime.route_base_url == "http://localhost:18090"
+    assert runtime.status == "ready"
+    assert refreshed.status == "ready"
+    assert refreshed.browser_view_url == "http://localhost:18090/vnc/index.html"
+    assert refreshed.metadata["browser_info_ok"] is True
+    assert refreshed.metadata["cdp_url_available"] is True
+    assert _NativeAioClient.calls == ["http://localhost:18090/v1/browser/info"]
+
+
+@pytest.mark.asyncio
+async def test_aio_native_runtime_provider_can_use_intranet_lifecycle_api():
+    class _AioNativeLifecycleSettings(_Settings):
+        sandbox_base_url = "http://localhost:8080"
+        aio_native_base_url = "http://browser-route.internal/{sandbox_id}"
+        aio_runtime_sandbox_id = ""
+        aio_native_api_base_url = "https://apig.internal"
+        aio_native_api_token = "aio-api-token"
+        aio_native_template_id = "lf-jsdklalfdan5sf1a1dd1"
+        aio_native_refresh_duration_seconds = 300
+
+    class _NativeLifecycleResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    class _NativeLifecycleClient:
+        calls = []
+        responses = []
+
+        def __init__(self, *args, **kwargs):
+            self.kwargs = kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def request(self, method, url, **kwargs):
+            self.calls.append({"method": method, "url": url, "kwargs": kwargs})
+            return _NativeLifecycleResponse(self.responses.pop(0))
+
+    _NativeLifecycleClient.calls = []
+    _NativeLifecycleClient.responses = [
+        {
+            "code": 200,
+            "message": "success",
+            "data": {
+                "templateId": "lf-jsdklalfdan5sf1a1dd1",
+                "sandboxId": "6v8s62vtbsxlvup8",
+                "cpu": 2000,
+                "memory": 4096,
+                "timeout": 300,
+                "status": "running",
+                "startAt": "2026-05-08T18:50:31.493441369",
+            },
+        },
+        {
+            "code": 200,
+            "message": "success",
+            "data": {
+                "templateId": "lf-jsdklalfdan5sf1a1dd1",
+                "sandboxId": "6v8s62vtbsxlvup8",
+                "cpu": 2000,
+                "memory": 4096,
+                "timeout": 1200,
+                "status": "running",
+                "startAt": "2026-05-08T18:50:31.493441369",
+            },
+        },
+        {"code": 200, "message": "success"},
+        {"code": 200, "message": "Delete sandbox success"},
+    ]
+    provider = AioNativeRuntimeProvider(
+        _AioNativeLifecycleSettings("aio_native"),
+        http_client_factory=_NativeLifecycleClient,
+    )
+
+    runtime = await provider.create_runtime("sess-native", "user-1")
+    refreshed = await provider.refresh_runtime(runtime)
+    await provider.keepalive_runtime(refreshed)
+    await provider.delete_runtime(refreshed)
+
+    assert runtime.status == "ready"
+    assert runtime.namespace == "aio-native"
+    assert runtime.sandbox_id == "6v8s62vtbsxlvup8"
+    assert runtime.rest_base_url == "http://browser-route.internal/6v8s62vtbsxlvup8"
+    assert runtime.route_base_url == "http://browser-route.internal/6v8s62vtbsxlvup8"
+    assert runtime.metadata["runtime_contract"] == "aio_native"
+    assert runtime.metadata["template_id"] == "lf-jsdklalfdan5sf1a1dd1"
+    assert runtime.metadata["aio_status"] == "running"
+    assert runtime.metadata["cpu"] == 2000
+    assert runtime.metadata["memory"] == 4096
+    assert runtime.metadata["timeout"] == 300
+    assert runtime.metadata["start_at"] == "2026-05-08T18:50:31.493441369"
+    assert refreshed.status == "ready"
+    assert refreshed.metadata["timeout"] == 1200
+
+    create_call, status_call, refresh_call, delete_call = _NativeLifecycleClient.calls
+    assert create_call == {
+        "method": "POST",
+        "url": "https://apig.internal/api/livefunction/sandboxes",
+        "kwargs": {
+            "headers": {"Authorization": "Bearer aio-api-token"},
+            "json": {"templateId": "lf-jsdklalfdan5sf1a1dd1"},
+        },
+    }
+    assert status_call["method"] == "GET"
+    assert status_call["url"] == "https://apig.internal/api/livefunction/sandboxes/6v8s62vtbsxlvup8"
+    assert status_call["kwargs"]["headers"] == {"Authorization": "Bearer aio-api-token"}
+    assert refresh_call == {
+        "method": "POST",
+        "url": "https://apig.internal/api/livefunction/sandboxes/refresh/6v8s62vtbsxlvup8",
+        "kwargs": {
+            "headers": {"Authorization": "Bearer aio-api-token"},
+            "json": {"duration": 300},
+        },
+    }
+    assert delete_call["method"] == "DELETE"
+    assert delete_call["url"] == "https://apig.internal/api/livefunction/sandboxes/6v8s62vtbsxlvup8"
+
+
+@pytest.mark.asyncio
+async def test_aio_native_runtime_provider_marks_stopped_sandbox_missing():
+    class _AioNativeLifecycleSettings(_Settings):
+        sandbox_base_url = "http://localhost:8080"
+        aio_native_base_url = "http://browser-route.internal/{sandbox_id}"
+        aio_native_api_base_url = "https://apig.internal"
+        aio_native_api_token = ""
+        aio_native_template_id = "lf-jsdklalfdan5sf1a1dd1"
+
+    class _NativeLifecycleResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "code": 200,
+                "message": "success",
+                "data": {
+                    "templateId": "lf-jsdklalfdan5sf1a1dd1",
+                    "sandboxId": "sb-stopped",
+                    "status": "stopped",
+                    "endAt": "2026-05-06T18:08:28.146305101",
+                },
+            }
+
+    class _NativeLifecycleClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def request(self, method, url, **kwargs):
+            return _NativeLifecycleResponse()
+
+    provider = AioNativeRuntimeProvider(
+        _AioNativeLifecycleSettings("aio_native"),
+        http_client_factory=lambda *args, **kwargs: _NativeLifecycleClient(),
+    )
+    runtime = SessionRuntimeRecord(
+        session_id="sess-native",
+        user_id="user-1",
+        namespace="aio-native",
+        pod_name="sb-stopped",
+        service_name="sb-stopped",
+        rest_base_url="http://browser-route.internal/sb-stopped",
+        route_base_url="http://browser-route.internal/sb-stopped",
+        sandbox_id="sb-stopped",
+        status="ready",
+    )
+
+    refreshed = await provider.refresh_runtime(runtime)
+
+    assert refreshed.status == "missing"
+    assert refreshed.metadata["runtime_status_reason"] == "aio_native_sandbox_stopped"
+    assert refreshed.metadata["aio_status"] == "stopped"
+    assert refreshed.metadata["end_at"] == "2026-05-06T18:08:28.146305101"
 
 
 @pytest.mark.asyncio

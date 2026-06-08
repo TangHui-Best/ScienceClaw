@@ -4,6 +4,7 @@ import argparse
 import json
 import time
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 import httpx
 
@@ -49,6 +50,29 @@ class AioRuntimeProviderError(RuntimeError):
         self.operation = operation
         self.reason = reason
         super().__init__(f"AIO runtime {operation} failed: {reason}")
+
+
+def _payload_data(payload: dict[str, Any]) -> dict[str, Any]:
+    data = payload.get("data")
+    return data if isinstance(data, dict) else payload
+
+
+def _rewrite_absolute_url_base(value: str, base_url: str) -> str:
+    value = str(value or "").strip()
+    if not value:
+        return ""
+    parsed_value = urlparse(value)
+    if not parsed_value.scheme or not parsed_value.netloc:
+        return f"{base_url.rstrip('/')}/{value.lstrip('/')}"
+    parsed_base = urlparse(base_url)
+    return parsed_value._replace(
+        scheme=parsed_base.scheme,
+        netloc=parsed_base.netloc,
+    ).geturl()
+
+
+def _native_aio_http_client(**kwargs):
+    return httpx.AsyncClient(trust_env=False, **kwargs)
 
 
 async def _adapter_health_contract_diagnostic(
@@ -210,6 +234,328 @@ class AioRuntimeProvider:
             runtime_record.status = "missing"
             return runtime_record
         runtime_record.status = "ready"
+        return runtime_record
+
+
+class AioNativeRuntimeProvider:
+    """Provider for a fixed native AIO sandbox without Runtime Adapter.
+
+    Local validation can point Host Backend at an already-running
+    agent-infra/sandbox instance. The Host still owns recorder injection,
+    navigation/download listeners, accepted trace construction, and Skill
+    compilation; AIO only supplies the browser/CDP/VNC execution surface.
+    """
+
+    def __init__(
+        self,
+        settings,
+        *,
+        http_client_factory: Callable[..., Any] | None = None,
+        timeout: float = 10.0,
+    ):
+        self.settings = settings
+        self.http_client_factory = http_client_factory or _native_aio_http_client
+        self.timeout = timeout
+
+    def _sandbox_id(self) -> str:
+        configured = (getattr(self.settings, "aio_runtime_sandbox_id", "") or "").strip()
+        return configured or "local-aio-native-sandbox"
+
+    def _lifecycle_enabled(self) -> bool:
+        return bool(self._api_base_url() and self._template_id())
+
+    def _api_base_url(self) -> str:
+        configured = (getattr(self.settings, "aio_native_api_base_url", "") or "").strip()
+        return configured.rstrip("/")
+
+    def _template_id(self) -> str:
+        return (getattr(self.settings, "aio_native_template_id", "") or "").strip()
+
+    def _refresh_duration_seconds(self) -> int:
+        return int(getattr(self.settings, "aio_native_refresh_duration_seconds", 300) or 300)
+
+    def _base_url(self) -> str:
+        configured = (getattr(self.settings, "aio_native_base_url", "") or "").strip()
+        fallback = (
+            getattr(self.settings, "aio_runtime_route_base_url", "")
+            or getattr(self.settings, "sandbox_base_url", "http://sandbox:8080")
+        )
+        return (configured or fallback).rstrip("/")
+
+    def _sandbox_base_url(self, sandbox_id: str) -> str:
+        base_url = self._base_url()
+        try:
+            return base_url.format(sandbox_id=sandbox_id).rstrip("/")
+        except Exception:
+            return base_url.rstrip("/")
+
+    def _path(self, value: str, **params) -> str:
+        path = (value or "").format(**params).strip() or "/"
+        return "/" + path.lstrip("/")
+
+    def _api_url(self, path: str) -> str:
+        return f"{self._api_base_url()}{self._path(path)}"
+
+    def _create_path(self) -> str:
+        return getattr(
+            self.settings,
+            "aio_native_create_path",
+            "/api/livefunction/sandboxes",
+        )
+
+    def _status_path(self, sandbox_id: str) -> str:
+        template = getattr(
+            self.settings,
+            "aio_native_status_path_template",
+            "/api/livefunction/sandboxes/{sandbox_id}",
+        )
+        return self._path(template, sandbox_id=sandbox_id)
+
+    def _delete_path(self, sandbox_id: str) -> str:
+        template = getattr(
+            self.settings,
+            "aio_native_delete_path_template",
+            "/api/livefunction/sandboxes/{sandbox_id}",
+        )
+        return self._path(template, sandbox_id=sandbox_id)
+
+    def _refresh_path(self, sandbox_id: str) -> str:
+        template = getattr(
+            self.settings,
+            "aio_native_refresh_path_template",
+            "/api/livefunction/sandboxes/refresh/{sandbox_id}",
+        )
+        return self._path(template, sandbox_id=sandbox_id)
+
+    def _headers(self) -> dict[str, str]:
+        token = (getattr(self.settings, "aio_native_api_token", "") or "").strip()
+        if not token:
+            return {}
+        return {"Authorization": f"Bearer {token}"}
+
+    async def _request_json(self, method: str, path: str, **kwargs) -> dict[str, Any]:
+        async with self.http_client_factory(timeout=self.timeout) as client:
+            response = await client.request(
+                method,
+                self._api_url(path),
+                headers=self._headers(),
+                **kwargs,
+            )
+        response.raise_for_status()
+        try:
+            payload = response.json()
+        except ValueError:
+            return {}
+        return payload if isinstance(payload, dict) else {"data": payload}
+
+    def _configured_browser_view_url(self) -> str | None:
+        configured = (getattr(self.settings, "aio_runtime_browser_view_url", "") or "").strip()
+        return configured.rstrip("/") if configured else None
+
+    async def _browser_info(self) -> dict[str, Any]:
+        async with self.http_client_factory(timeout=self.timeout) as client:
+            response = await client.get(f"{self._base_url()}/v1/browser/info")
+        response.raise_for_status()
+        payload = response.json()
+        return _payload_data(payload if isinstance(payload, dict) else {"data": payload})
+
+    def _browser_view_url_from_info(self, browser_info: dict[str, Any]) -> str | None:
+        configured = self._configured_browser_view_url()
+        if configured:
+            return configured
+        vnc_url = str(browser_info.get("vnc_url") or "").strip()
+        if not vnc_url:
+            return None
+        return _rewrite_absolute_url_base(vnc_url, self._base_url())
+
+    def _native_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return _payload_data(payload)
+
+    def _normalize_lifecycle_status(self, status: Any) -> str:
+        value = str(status or "").strip().lower()
+        if value in {"running", "ready", "ok"}:
+            return "ready"
+        if value in {"creating", "pending", "provisioning", "starting"}:
+            return "creating"
+        if value in {"stopped", "error", "failed", "missing", "deleted", "terminated"}:
+            return "missing"
+        return value or "creating"
+
+    def _record_from_lifecycle_payload(
+        self,
+        payload: dict[str, Any],
+        *,
+        session_id: str,
+        user_id: str,
+        existing: SessionRuntimeRecord | None = None,
+    ) -> SessionRuntimeRecord:
+        data = self._native_payload(payload)
+        sandbox_id = str(
+            data.get("sandboxId")
+            or data.get("sandbox_id")
+            or data.get("id")
+            or (existing.sandbox_id if existing else "")
+        ).strip()
+        if not sandbox_id:
+            raise RuntimeError("AIO native sandbox response missing sandboxId")
+        base_url = self._sandbox_base_url(sandbox_id)
+        now = int(time.time())
+        status = self._normalize_lifecycle_status(data.get("status") or (existing.status if existing else ""))
+        metadata = dict(getattr(existing, "metadata", None) or {})
+        metadata["runtime_contract"] = "aio_native"
+        field_map = {
+            "template_id": data.get("templateId") or data.get("template_id"),
+            "cpu": data.get("cpu"),
+            "memory": data.get("memory"),
+            "timeout": data.get("timeout"),
+            "aio_status": data.get("status"),
+            "start_at": data.get("startAt") or data.get("start_at"),
+            "end_at": data.get("endAt") or data.get("end_at"),
+        }
+        for key, value in field_map.items():
+            if value not in (None, ""):
+                metadata[key] = value
+        if status == "missing":
+            aio_status = str(data.get("status") or "missing").strip().lower() or "missing"
+            metadata["runtime_status_reason"] = f"aio_native_sandbox_{aio_status}"
+        else:
+            metadata.pop("runtime_status_reason", None)
+        return SessionRuntimeRecord(
+            session_id=session_id,
+            user_id=user_id,
+            namespace="aio-native",
+            pod_name=sandbox_id,
+            service_name=sandbox_id,
+            rest_base_url=base_url,
+            status=status,
+            sandbox_id=sandbox_id,
+            route_base_url=base_url,
+            browser_view_url=(
+                self._configured_browser_view_url()
+                or (existing.browser_view_url if existing else None)
+            ),
+            created_at=existing.created_at if existing else now,
+            last_used_at=now,
+            expires_at=getattr(existing, "expires_at", None) if existing else None,
+            metadata=metadata,
+        )
+
+    async def create_runtime(self, session_id: str, user_id: str) -> SessionRuntimeRecord:
+        if self._lifecycle_enabled():
+            try:
+                payload = await self._request_json(
+                    "POST",
+                    self._create_path(),
+                    json={"templateId": self._template_id()},
+                )
+            except Exception:
+                raise AioRuntimeProviderError("create", "aio_native_create_unavailable") from None
+            try:
+                return self._record_from_lifecycle_payload(
+                    payload,
+                    session_id=session_id,
+                    user_id=user_id,
+                )
+            except RuntimeError:
+                raise AioRuntimeProviderError("create", "aio_native_create_response_invalid") from None
+        now = int(time.time())
+        sandbox_id = self._sandbox_id()
+        base_url = self._base_url()
+        return SessionRuntimeRecord(
+            session_id=session_id,
+            user_id=user_id,
+            namespace="aio-native",
+            pod_name=sandbox_id,
+            service_name=sandbox_id,
+            rest_base_url=base_url,
+            status="ready",
+            sandbox_id=sandbox_id,
+            route_base_url=base_url,
+            browser_view_url=self._configured_browser_view_url(),
+            created_at=now,
+            last_used_at=now,
+            metadata={"runtime_contract": "aio_native"},
+        )
+
+    async def delete_runtime(self, runtime_record) -> None:
+        if self._lifecycle_enabled():
+            sandbox_id = getattr(runtime_record, "sandbox_id", None)
+            if not sandbox_id:
+                return None
+            try:
+                await self._request_json("DELETE", self._delete_path(str(sandbox_id)))
+            except httpx.HTTPStatusError as exc:
+                if exc.response is not None and exc.response.status_code == 404:
+                    return None
+                raise AioRuntimeProviderError("delete", "aio_native_delete_unavailable") from None
+            except Exception:
+                raise AioRuntimeProviderError("delete", "aio_native_delete_unavailable") from None
+        return None
+
+    async def keepalive_runtime(self, runtime_record):
+        if not self._lifecycle_enabled():
+            return runtime_record
+        sandbox_id = getattr(runtime_record, "sandbox_id", None)
+        if not sandbox_id:
+            return _mark_runtime_missing(runtime_record, "aio_native_sandbox_id_missing")
+        try:
+            await self._request_json(
+                "POST",
+                self._refresh_path(str(sandbox_id)),
+                json={"duration": self._refresh_duration_seconds()},
+            )
+        except Exception:
+            metadata = dict(getattr(runtime_record, "metadata", None) or {})
+            metadata["runtime_status_reason"] = "aio_native_refresh_unavailable"
+            runtime_record.metadata = metadata
+            return runtime_record
+        return runtime_record
+
+    async def refresh_runtime(self, runtime_record):
+        if self._lifecycle_enabled():
+            sandbox_id = getattr(runtime_record, "sandbox_id", None)
+            if not sandbox_id:
+                return _mark_runtime_missing(runtime_record, "aio_native_sandbox_id_missing")
+            try:
+                payload = await self._request_json("GET", self._status_path(str(sandbox_id)))
+            except httpx.HTTPStatusError as exc:
+                if exc.response is not None and exc.response.status_code == 404:
+                    return _mark_runtime_missing(runtime_record, "aio_native_sandbox_not_found")
+                return _mark_runtime_missing(runtime_record, "aio_native_status_unavailable")
+            except Exception:
+                return _mark_runtime_missing(runtime_record, "aio_native_status_unavailable")
+            return self._record_from_lifecycle_payload(
+                payload,
+                session_id=runtime_record.session_id,
+                user_id=runtime_record.user_id,
+                existing=runtime_record,
+            )
+        if not getattr(runtime_record, "sandbox_id", None):
+            runtime_record.sandbox_id = self._sandbox_id()
+        if not getattr(runtime_record, "route_base_url", None):
+            runtime_record.route_base_url = runtime_record.rest_base_url or self._base_url()
+        metadata = dict(getattr(runtime_record, "metadata", None) or {})
+        metadata["runtime_contract"] = "aio_native"
+        try:
+            browser_info = await self._browser_info()
+        except Exception:
+            metadata["runtime_status_reason"] = "aio_native_browser_info_unavailable"
+            metadata["browser_info_ok"] = False
+            runtime_record.metadata = metadata
+            runtime_record.status = "missing"
+            return runtime_record
+
+        browser_view_url = self._browser_view_url_from_info(browser_info)
+        if browser_view_url:
+            runtime_record.browser_view_url = browser_view_url
+        metadata["browser_info_ok"] = True
+        metadata["cdp_url_available"] = bool(str(browser_info.get("cdp_url") or "").strip())
+        metadata.pop("runtime_status_reason", None)
+        runtime_record.metadata = metadata
+        runtime_record.status = "ready" if metadata["cdp_url_available"] else "missing"
+        if runtime_record.status == "missing":
+            metadata["runtime_status_reason"] = "aio_native_cdp_url_missing"
+            runtime_record.metadata = metadata
         return runtime_record
 
 

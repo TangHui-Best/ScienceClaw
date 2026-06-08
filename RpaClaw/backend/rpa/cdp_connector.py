@@ -64,14 +64,21 @@ class CDPConnector:
             cdp_url = await self._fetch_cdp_url(session_id=session_id, user_id=user_id)
             logger.info(f"Connecting to browser via CDP: {cdp_url}")
 
-            # Start Playwright and connect in the dedicated thread/loop
-            playwright, browser = await self._run_in_pw_loop(
-                self._connect(cdp_url)
-            )
+            if self._should_connect_in_current_loop():
+                playwright, browser = await self._connect(cdp_url)
+            else:
+                # Start Playwright and connect in the dedicated thread/loop
+                playwright, browser = await self._run_in_pw_loop(
+                    self._connect(cdp_url)
+                )
             self._playwrights[session_key] = playwright
             self._browsers[session_key] = browser
             logger.info("CDP browser connection established")
             return browser
+
+    @staticmethod
+    def _should_connect_in_current_loop() -> bool:
+        return str(getattr(settings, "runtime_mode", "") or "").strip() == "aio_native"
 
     @staticmethod
     async def _connect(cdp_url: str):
@@ -233,6 +240,9 @@ local_cdp_connector = LocalCDPConnector()
 
 def get_cdp_connector():
     """Return the appropriate CDP connector based on storage_backend."""
+    runtime_mode = str(getattr(settings, "runtime_mode", "shared") or "shared").strip()
+    if runtime_mode in {"aio", "aio_fixed", "aio_native", "docker", "session_pod"}:
+        return cdp_connector
     if settings.storage_backend == "local":
         return local_cdp_connector
     return cdp_connector
