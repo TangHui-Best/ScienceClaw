@@ -367,18 +367,114 @@ CDP verification after the trace:
 
 This proves `element-bounds` / `region/analyze` can return region context, and a region-scoped natural-language operation can execute against the selected area on the AIO browser page while retaining region evidence in the accepted trace.
 
+## Session C: Frontend Recorder Fresh Smoke
+
+This smoke used a temporary, isolated local stack:
+
+- Host Backend: `http://127.0.0.1:8010`
+- Frontend: `http://127.0.0.1:5174`
+- Frontend env:
+  - `VITE_API_URL=http://127.0.0.1:8010`
+  - `BACKEND_URL=http://127.0.0.1:8010`
+- Backend env:
+  - `RUNTIME_MODE=aio_native`
+  - `AIO_BASE_URL=http://127.0.0.1:18090`
+  - `AIO_RUNTIME_SANDBOX_ID=aio-native-manual`
+
+The first attempt used only `BACKEND_URL` and hit the Vite default proxy target, producing dev-proxy `ECONNREFUSED` / 500 responses for `/api/v1/auth/status`. Restarting the frontend with `VITE_API_URL=http://127.0.0.1:8010` made the browser call the intended backend and all startup requests returned 200.
+
+### 1. Frontend Recording Entry
+
+Opening `http://127.0.0.1:5174/rpa/recorder` produced these frontend-observed API responses:
+
+- `GET /api/v1/client-config`: 200
+- `GET /api/v1/auth/status`: 200
+- `GET /api/v1/models`: 200
+- `GET /api/v1/rpa/harness/config`: 200
+- `POST /api/v1/rpa/session/start`: 200
+
+The recorder page entered the recording state:
+
+- UI text included `正在录制`
+- step timeline included `Environment ready`
+- browser address/tab showed `about:blank`
+- region selection button was enabled
+
+Captured `POST /rpa/session/start` response:
+
+- `session_id=dc96a60e-be71-4d7a-ab52-5493e833a8ce`
+- `start_status=200`
+- `start_sandbox_session_id=rpa-e1a9138a-291f-4b76-ab86-fb269b52eeba`
+- `active_tab_id=2154c9b2-093a-43a0-a2b1-093cd8c6bb23`
+
+Although the frontend-generated `sandbox_session_id` is a fresh `rpa-*` id, the backend process was running in `aio_native` mode with `AIO_RUNTIME_SANDBOX_ID=aio-native-manual`, so the browser execution surface was still the fixed local AIO sandbox.
+
+### 2. Frontend Browser Canvas
+
+The frontend rendered the CDP screencast canvas:
+
+```json
+{
+  "width": 1280,
+  "height": 937,
+  "clientWidth": 758,
+  "clientHeight": 830
+}
+```
+
+The address bar was filled through the frontend UI with a `data:text/html` page titled `AIO Frontend Region Smoke`, then submitted with Enter. The frontend observed:
+
+- `POST /api/v1/rpa/session/dc96a60e-be71-4d7a-ab52-5493e833a8ce/navigate`: 200
+- `navigate_result_status=success`
+- timeline displayed a second accepted navigation step
+- the browser tab label changed to `AIO Frontend Region Smoke`
+
+This proves the frontend recorder can create a session, render the AIO browser canvas, and navigate the AIO page through the normal UI path.
+
+### 3. Frontend Region Selection Entry
+
+After navigation, the frontend region selection button was present and enabled:
+
+```json
+{
+  "title": "点击元素或拖拽框选区域 · Esc 取消",
+  "aria": "选择页面区域",
+  "disabled": false
+}
+```
+
+Clicking the button in the frontend changed the canvas class to:
+
+```text
+w-full h-full object-contain cursor-crosshair
+```
+
+The page text included the selection hint `点击元素或拖拽框选区域 · Esc 取消`.
+
+While trying to automate the subsequent region selection with Playwright mouse events, the frontend did call:
+
+- `POST /api/v1/rpa/session/43992d7b-4260-4801-9322-bf9fc3c8c14d/region/element-bounds`: 200
+
+However, the automated mouse drag/click did not produce a corresponding frontend `POST /region/analyze` before timeout. This does not contradict the backend/API evidence in Session B, where `region/analyze` and region-scoped natural-language click passed. It does mean this evidence file should not be read as a fully automated frontend drag-select E2E proof. Treat the frontend region evidence as:
+
+- frontend entry and crosshair state: passed
+- frontend-to-backend `element-bounds`: passed
+- fully automated frontend drag/click to `region/analyze`: not proven by this smoke
+
+All temporary frontend smoke RPA sessions were stopped after the run, and the temporary 8010/5174 services were shut down.
+
 ## Checklist Status
 
 | Goal item | Status from local smoke | Evidence |
 | --- | --- | --- |
 | AIO execution surface | Passed for local fixed AIO sandbox | AIO container healthy; `/v1/browser/info`; `/session/start` success |
-| Recording skill starts | Passed at API level | `/session/start` returned session and active tab |
-| Browser view accessible | Partially proven | AIO `vnc_url` returned; frontend visual access was manually exercised by user earlier but not recaptured in this API/CDP smoke |
+| Recording skill starts | Passed at API and frontend entry level | `/session/start` returned session and active tab; frontend recorder reached `正在录制` |
+| Browser view accessible | Passed for frontend CDP canvas | AIO `vnc_url` returned; frontend canvas rendered with `1280x937` backing size and `758x830` client size |
 | Listener JS injection | Passed | CDP-driven fill/click produced accepted manual traces |
 | Manual click/input/navigation | Passed | accepted navigate/fill/click traces |
 | Multi tab | Passed | popup tab opened, `/tabs` attribution correct, switch trace and post-switch click trace recorded on main tab |
 | Natural language operations | Passed | accepted AI traces for read, fill, click, and navigate |
-| Region selection | Passed with one caveat | element bounds, region analyze, region-scoped click trace, `region_context` / `region_scope`, page state `choice=second`; Chinese prompt first produced extraction rather than click |
+| Region selection | Passed at backend/API level; frontend selection entry partially proven | API/CDP evidence: element bounds, region analyze, region-scoped click trace, `region_context` / `region_scope`, page state `choice=second`; frontend evidence: selection button/crosshair and `element-bounds` passed, automated frontend `region/analyze` not proven |
 | Trace -> script generation | Passed | `/generate` returned success |
 | Script execution in AIO runtime path | Passed via `/test` route | `/test` used runtime CDP browser and returned `SKILL_SUCCESS` |
 | Skill save | Passed | `/save` returned `skill_name=aio_native_smoke_skill` |
@@ -393,5 +489,5 @@ This proves `element-bounds` / `region/analyze` can return region context, and a
    - `POST /api/livefunction/sandboxes/refresh/{sandboxId}`
    - `DELETE /api/livefunction/sandboxes/{sandboxId}`
 2. Intranet EKS multi-instance deployment must verify runtime record persistence, idempotent lifecycle operations, and request routing behavior.
-3. Frontend visual recording flow was manually exercised by the user during this branch, but this evidence file only records API/CDP smoke. If treating this file alone as release evidence, run a fresh frontend smoke before final completion.
+3. Frontend visual recording flow now has fresh smoke evidence for session start, canvas rendering, navigation, region-selection entry, and `element-bounds`; fully automated frontend drag/click to `region/analyze` was not proven by this smoke.
 4. Download/file artifact round trip is only proven as non-blocking for a no-download scenario. A real download scenario can remain out of scope for first smoke unless the target internal flow depends on it.
