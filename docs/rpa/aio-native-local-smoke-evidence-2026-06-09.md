@@ -159,6 +159,7 @@ Result:
 - `status=success`
 - `skill_name=aio_native_smoke_skill`
 - local generated files were written under `Skills/aio_native_smoke_skill/`
+- the generated local Skill directory contained `SKILL.md`, `skill.py`, `params.json`, and `skill.meta.json`
 
 The generated Skill directory was observed during smoke and then cleaned up because it was local output, not a governed regression asset.
 
@@ -502,11 +503,13 @@ All temporary frontend smoke RPA sessions were stopped after the run, and the te
 | Region selection | Passed | API/CDP evidence: element bounds, region analyze, region-scoped click trace, `region_context` / `region_scope`, page state `choice=second`; frontend evidence: selection button/crosshair, `element-bounds`, and corrected drag-to-`region/analyze` passed |
 | Trace -> script generation | Passed | `/generate` returned success |
 | Script execution in AIO runtime path | Passed via `/test` route | `/test` used runtime CDP browser and returned `SKILL_SUCCESS` |
-| Skill save | Passed | `/save` returned `skill_name=aio_native_smoke_skill` |
+| Skill save | Passed | `/save` returned `skill_name=aio_native_smoke_skill`; generated `SKILL.md`, `skill.py`, `params.json`, and `skill.meta.json` were observed before cleanup |
 | Downloads/files not blocking | Passed for no-download scenario | no download generated; main chain did not fail |
 | Internal handoff | Documented | `docs/rpa/aio-native-internal-handoff.md` and `docs/rpa/aio-native-functional-smoke-checklist.md` |
 
-## Remaining Gaps Before Marking The Overall Goal Complete
+## Remaining Intranet Handoff Gaps
+
+The local/external-network smoke intentionally excludes the real intranet AIO control plane and EKS deployment because those services are only available after the code is synchronized internally. The remaining handoff items for the internal Agent are:
 
 1. Real intranet lifecycle remains to be adapted and smoked:
    - `POST /api/livefunction/sandboxes`
