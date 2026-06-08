@@ -451,15 +451,40 @@ w-full h-full object-contain cursor-crosshair
 
 The page text included the selection hint `点击元素或拖拽框选区域 · Esc 取消`.
 
-While trying to automate the subsequent region selection with Playwright mouse events, the frontend did call:
+An initial automated drag failed to produce `/region/analyze` because the Playwright coordinates were sent to the top letterbox area of the `object-contain` canvas, not to the rendered browser content. The canvas client box was `758x830`, while the screencast backing size was `1280x937`; the contained browser image therefore started about `138px` below the top of the canvas. After correcting the coordinate mapping from browser viewport coordinates to the contained canvas content rect, the frontend drag selection passed.
+
+Corrected frontend drag smoke:
+
+- `session_id=dd5efb43-0ba8-4c1d-a31d-2c583a361315`
+- canvas box: `x=341`, `y=153`, `width=758`, `height=830`
+- canvas backing size: `width=1280`, `height=937`
+- browser viewport region selected: approximately `x=24..430`, `y=76..180`
+- mapped client drag:
+  - start: `x=355.2125`, `y=335.5664`
+  - end: `x=595.6406`, `y=397.1539`
+
+The frontend observed:
 
 - `POST /api/v1/rpa/session/43992d7b-4260-4801-9322-bf9fc3c8c14d/region/element-bounds`: 200
+- `POST /api/v1/rpa/session/dd5efb43-0ba8-4c1d-a31d-2c583a361315/region/analyze`: 200
 
-However, the automated mouse drag/click did not produce a corresponding frontend `POST /region/analyze` before timeout. This does not contradict the backend/API evidence in Session B, where `region/analyze` and region-scoped natural-language click passed. It does mean this evidence file should not be read as a fully automated frontend drag-select E2E proof. Treat the frontend region evidence as:
+The frontend `region/analyze` response returned:
 
-- frontend entry and crosshair state: passed
-- frontend-to-backend `element-bounds`: passed
-- fully automated frontend drag/click to `region/analyze`: not proven by this smoke
+```json
+{
+  "region_id": "region-88d046bba2f84a26a0824486cdb2f4f3",
+  "inferred_kind": "list_region",
+  "title": "AIO Frontend Correct Region Smoke",
+  "local_text": [
+    "First projectSecond projectThird project",
+    "First project",
+    "Second project",
+    "Third project"
+  ]
+}
+```
+
+This proves the frontend can enter region selection mode, map user drag coordinates through the screencast canvas, and call the backend `region/analyze` endpoint against the AIO browser page. The temporary session was stopped after the run.
 
 All temporary frontend smoke RPA sessions were stopped after the run, and the temporary 8010/5174 services were shut down.
 
@@ -474,7 +499,7 @@ All temporary frontend smoke RPA sessions were stopped after the run, and the te
 | Manual click/input/navigation | Passed | accepted navigate/fill/click traces |
 | Multi tab | Passed | popup tab opened, `/tabs` attribution correct, switch trace and post-switch click trace recorded on main tab |
 | Natural language operations | Passed | accepted AI traces for read, fill, click, and navigate |
-| Region selection | Passed at backend/API level; frontend selection entry partially proven | API/CDP evidence: element bounds, region analyze, region-scoped click trace, `region_context` / `region_scope`, page state `choice=second`; frontend evidence: selection button/crosshair and `element-bounds` passed, automated frontend `region/analyze` not proven |
+| Region selection | Passed | API/CDP evidence: element bounds, region analyze, region-scoped click trace, `region_context` / `region_scope`, page state `choice=second`; frontend evidence: selection button/crosshair, `element-bounds`, and corrected drag-to-`region/analyze` passed |
 | Trace -> script generation | Passed | `/generate` returned success |
 | Script execution in AIO runtime path | Passed via `/test` route | `/test` used runtime CDP browser and returned `SKILL_SUCCESS` |
 | Skill save | Passed | `/save` returned `skill_name=aio_native_smoke_skill` |
@@ -489,5 +514,5 @@ All temporary frontend smoke RPA sessions were stopped after the run, and the te
    - `POST /api/livefunction/sandboxes/refresh/{sandboxId}`
    - `DELETE /api/livefunction/sandboxes/{sandboxId}`
 2. Intranet EKS multi-instance deployment must verify runtime record persistence, idempotent lifecycle operations, and request routing behavior.
-3. Frontend visual recording flow now has fresh smoke evidence for session start, canvas rendering, navigation, region-selection entry, and `element-bounds`; fully automated frontend drag/click to `region/analyze` was not proven by this smoke.
+3. Frontend visual recording flow now has fresh smoke evidence for session start, canvas rendering, navigation, region-selection entry, `element-bounds`, and corrected drag-to-`region/analyze`.
 4. Download/file artifact round trip is only proven as non-blocking for a no-download scenario. A real download scenario can remain out of scope for first smoke unless the target internal flow depends on it.
