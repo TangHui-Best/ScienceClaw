@@ -14,10 +14,11 @@ Runtime Adapter 暂缓，不作为第一阶段上线依赖。不要把本任务�
 
 1. `docs/decisions/ADR-006-aio-native-api-first-runtime-strategy.md`
 2. `docs/rpa/aio-native-runtime-provider.md`
-3. `docs/rpa/aio-session-sandbox-runtime-adapter-design.md`
-4. `docs/rpa/aio-runtime-adapter-internal-handoff.md`
+3. `docs/rpa/aio-native-functional-smoke-checklist.md`
+4. `docs/rpa/aio-session-sandbox-runtime-adapter-design.md`
+5. `docs/rpa/aio-runtime-adapter-internal-handoff.md`
 
-其中第 3、4 份文档包含早期 Runtime Adapter 路线的边界和验证沉淀。它们仍可作为备选路线参考，但第一阶段不要继续沿 adapter 作为默认路线扩展。
+其中第 4、5 份文档包含早期 Runtime Adapter 路线的边界和验证沉淀。它们仍可作为备选路线参考，但第一阶段不要继续沿 adapter 作为默认路线扩展。
 
 ## 2. 内网 AIO 生命周期接口
 
@@ -254,4 +255,3 @@ Runtime Adapter 只有在原生 API 明确无法覆盖时再恢复，例如：
 - Windows 本机后端使用 `uvicorn --reload` 时，Playwright 当前事件循环可能不支持 subprocess；本地 workaround 是不加 `--reload` 启动后端。内网 Linux/EKS 环境应重新验证。
 - AIO native + 区域选择 + 自然语言操作在一次 GitHub Trending 场景下出现过 planner 等待较慢，但本地模式不复现。该问题暂不阻塞 native AIO 路线，后续可通过 timing 日志定位 snapshot/planner/executor 耗时。
 - GitHub Trending 页面中的项目 504 问题已在不使用 `--reload` 后消失，本地验证不再视为 AIO 原生能力阻塞。
-
