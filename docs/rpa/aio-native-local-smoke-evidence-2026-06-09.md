@@ -1,6 +1,8 @@
 # AIO Native Local Smoke Evidence - 2026-06-09
 
-本文记录一次本机 AIO native partial smoke。它证明了 AIO 执行面接入、录制 session、listener 注入、手动 trace、脚本生成、AIO runtime 下脚本测试执行、Skill 保存的主链路；它不声明完整目标完成，因为自然语言、区域选择和多 tab 仍需要逐项留证。
+本文记录一次本机 AIO native smoke。它验证了 `RUNTIME_MODE=aio_native` 下 Host Backend 连接 AIO browser/CDP 执行面，并覆盖录制 session、listener 注入、手动 trace、多 tab、自然语言操作、区域选择、脚本生成、AIO runtime 路径脚本测试、Skill 保存和无下载场景不阻塞主链路。
+
+边界说明：本文是 API/CDP 级 smoke evidence，不声明真实内网 AIO `create/status/refresh/delete` 已完成，也不声明 EKS 多实例运行时状态持久化已在内网验收。Runtime Adapter 在当前路线中暂缓，不作为第一阶段上线依赖。
 
 ## 环境
 
@@ -16,7 +18,7 @@
   - `AIO_BASE_URL=http://127.0.0.1:18090`
   - `AIO_RUNTIME_SANDBOX_ID=aio-native-manual`
 
-## AIO browser info
+## AIO Browser Info
 
 `GET http://127.0.0.1:18090/v1/browser/info` returned:
 
@@ -36,9 +38,9 @@
 
 No token or sensitive header was required in this local fixed-sandbox smoke.
 
-## API smoke sequence
+## Session A: Core Recording, Generate, Test, Save
 
-### 1. Start RPA session
+### 1. Start RPA Session
 
 Request:
 
@@ -58,7 +60,7 @@ Result:
 
 This proves Host Backend could create a recording session by connecting to the AIO browser/CDP runtime.
 
-### 2. Navigate AIO page
+### 2. Navigate AIO Page
 
 Request:
 
@@ -81,7 +83,7 @@ Then the same session was navigated to a small `data:text/html` smoke page conta
 - button `Click Me`
 - link `Open Popup`
 
-### 3. Listener injection and manual event capture
+### 3. Listener Injection And Manual Event Capture
 
 Using Playwright connected to AIO CDP, the same AIO page was driven with:
 
@@ -89,7 +91,7 @@ Using Playwright connected to AIO CDP, the same AIO page was driven with:
 - `click('#go')`
 - `click('#popup')`
 
-`GET /api/v1/rpa/session/293f7e98-1feb-417a-a068-d68406783b50/timeline` then returned accepted traces including:
+`GET /api/v1/rpa/session/293f7e98-1feb-417a-a068-d68406783b50/timeline` returned accepted traces including:
 
 - `action=navigate`, `source=manual`, `signals.tab.tab_id=dcd8c4eb-5c1d-42ce-8769-cf8982b1e993`
 - `action=fill`, `value=aio-native-smoke`, locator `page.get_by_role("textbox", name="Name")`
@@ -98,7 +100,7 @@ Using Playwright connected to AIO CDP, the same AIO page was driven with:
 
 This proves the existing recorder listener JS was injected into the AIO browser page and that manual click/fill/navigation events entered the accepted timeline.
 
-### 4. Script generation
+### 4. Script Generation
 
 Request:
 
@@ -114,7 +116,7 @@ Result:
 - generated script contained `execute_skill(page, **kwargs)`
 - generated trace steps included navigate, fill, and click operations derived from accepted traces
 
-### 5. Script test execution
+### 5. Script Test Execution
 
 Request:
 
@@ -138,7 +140,7 @@ Result:
 
 Important detail: although the returned script string includes a standalone `main()` that can launch a browser when run as a local script, the `/test` route executed `execute_skill(page, ...)` through `get_cdp_connector().get_browser(session.sandbox_session_id)`, so this API smoke exercised the AIO runtime browser path.
 
-### 6. Skill save
+### 6. Skill Save
 
 Request:
 
@@ -160,7 +162,7 @@ Result:
 
 The generated Skill directory was observed during smoke and then cleaned up because it was local output, not a governed regression asset.
 
-### 7. Stop session
+### 7. Stop Session
 
 Request:
 
@@ -175,44 +177,221 @@ Result:
 - `trace_count=10`
 - `diagnostic_count=0`
 
-## Checklist status
+## Session B: Multi-Tab, Natural Language, Region Selection
 
-| Goal item | Status from this smoke | Evidence |
+Session:
+
+- `session.id=99ba22bc-9dc4-465b-9438-96b899bbde65`
+- `session.sandbox_session_id=aio-native-manual`
+- main tab: `da8eb037-7764-49a9-a017-d18d52b7feb7`
+- popup tab: `070764dc-a6ab-49ba-bb55-0ca0a38a161e`
+
+### 1. Multi-Tab
+
+The main tab was navigated to `AIO Multi Tab Smoke`, a `data:text/html` page with:
+
+- link `Open Example`, `target=_blank`, `href=https://example.com/`
+- button `First Tab Button`
+
+Playwright connected to AIO CDP clicked `#open-example`.
+
+External CDP observation:
+
+```json
+{
+  "before_pages": 3,
+  "after_pages": 4,
+  "urls": ["...", "https://example.com/"],
+  "titles": ["...", "Example Domain"]
+}
+```
+
+Backend `/tabs` after the click returned:
+
+- main tab `da8eb037-7764-49a9-a017-d18d52b7feb7`, title `AIO Multi Tab Smoke`, active `false`
+- new tab `070764dc-a6ab-49ba-bb55-0ca0a38a161e`, title `Example Domain`, url `https://example.com/`, opener tab `da8eb037-7764-49a9-a017-d18d52b7feb7`, active `true`
+
+Timeline evidence:
+
+- `trace-a762e2ce-cc80-4d24-a1bf-0bb0771e94ac`: manual click trace for link `Open Example`
+- `signals.popup.source_tab_id=da8eb037-7764-49a9-a017-d18d52b7feb7`
+- `signals.popup.target_tab_id=070764dc-a6ab-49ba-bb55-0ca0a38a161e`
+
+Then the first tab was activated:
+
+```http
+POST /api/v1/rpa/session/99ba22bc-9dc4-465b-9438-96b899bbde65/tabs/da8eb037-7764-49a9-a017-d18d52b7feb7/activate
+```
+
+Timeline evidence:
+
+- `trace-545fb263-bda5-459d-aab6-eb6cc5a48f48`: `action=switch_tab`
+- source tab `070764dc-a6ab-49ba-bb55-0ca0a38a161e`
+- target tab `da8eb037-7764-49a9-a017-d18d52b7feb7`
+
+After switching back to the main tab, Playwright clicked `#first`. Timeline evidence:
+
+- `trace-85ab7c30-7598-472b-94ae-17b56b4c13c3`: manual click trace for `First Tab Button`
+- `signals.tab.tab_id=da8eb037-7764-49a9-a017-d18d52b7feb7`
+
+This proves opening a new tab, switching tabs, URL/title/page attribution, and avoiding stale-tab attribution.
+
+### 2. Natural Language Operations
+
+Natural language commands were sent through:
+
+```powershell
+'{"message":"...","mode":"chat"}' |
+  curl.exe -N -s -X POST "http://127.0.0.1:8010/api/v1/rpa/session/99ba22bc-9dc4-465b-9438-96b899bbde65/chat" `
+    -H "Content-Type: application/json" --data-binary "@-"
+```
+
+Read page information:
+
+- user message: `读取当前页面标题`
+- trace id: `trace-f15379507b2647129cd52da484c728b8`
+- source: `ai`
+- accepted: `true`
+- output included `page_title=AIO Multi Tab Smoke`, `button_label=First Tab Button`, `link_label=Open Example`
+
+Fill:
+
+- user message: `Fill the Name textbox with aio native nl`
+- trace id: `trace-6e7e50ca05604b1d8c21d85ead07b03c`
+- description: `Fill the Name textbox with 'aio native nl'`
+- output: `{"action_performed": true, "action_type": "fill", "filled_value": "aio native nl"}`
+- source: `ai`
+- accepted: `true`
+
+Click:
+
+- user message: `Click the Submit Name button`
+- trace id: `trace-0b8146673b1a4ecc81c2ab88c172774b`
+- description: `Click Submit Name button`
+- output: `{"action_performed": true, "action_type": "click"}`
+- source: `ai`
+- accepted: `true`
+
+Navigate:
+
+- user message: `Navigate to https://example.com/`
+- trace id: `trace-6dad5e9e689a488eb1162185802252fc`
+- after page URL: `https://example.com/`
+- after page title: `Example Domain`
+- output: `{"action_performed": true, "action_type": "navigate", "url": "https://example.com/"}`
+- output key: `navigation_result`
+- source: `ai`
+- accepted: `true`
+
+This proves natural language read/fill/click/navigate can operate on the AIO page and emit accepted traces.
+
+### 3. Region Selection
+
+The main tab was navigated to `AIO Region Smoke`, a `data:text/html` page with a list:
+
+- `First project`
+- `Second project`
+- `Third project`
+
+CDP-computed geometry:
+
+```json
+{
+  "rect": {"x": 28, "y": 79.875, "width": 382, "height": 85},
+  "second": {"x": 39, "y": 111.875, "width": 104.921875, "height": 21},
+  "viewport": {"width": 1280, "height": 1024}
+}
+```
+
+`POST /region/element-bounds` at the center of the second button returned:
+
+```json
+{
+  "rect": {"x": 39.0, "y": 111.875, "width": 104.921875, "height": 21.0},
+  "tag": "button",
+  "role": "",
+  "name": "Second project",
+  "text": "Second project",
+  "warnings": []
+}
+```
+
+`POST /region/analyze` for the list rect returned:
+
+- `region_id=region-29dd1fc3382d4f5c92219282d11bc180`
+- `inferred_kind=list_region`
+- page title `AIO Region Smoke`
+- dominant container `ul`
+- local text included `First project`, `Second project`, `Third project`
+
+An initial Chinese command `点击选中区域里的第二个项目` with that region id produced an accepted trace but interpreted the action as extraction rather than a click:
+
+- trace id: `trace-7326a5e4ca3340a8a015b4804407bbf8`
+- output: `["First project", "Second project", "Third project"]`
+- trace contained non-empty `region_context` and `region_scope`
+
+Because successful region commands clear the pending context by design, the same region id was unavailable for a second command. The list region was re-analyzed, returning:
+
+- `region_id=region-49015dadf18a4fc28319f75c87977037`
+- `inferred_kind=list_region`
+
+Then this command was sent:
+
+```json
+{
+  "message": "Click the Second project button inside the selected region",
+  "mode": "chat",
+  "region_id": "region-49015dadf18a4fc28319f75c87977037"
+}
+```
+
+Result:
+
+- SSE emitted `event: region_context`
+- `trace_added` id: `trace-e24ca45bff3d4fcfb288c75faaef4c05`
+- description: `Click the Second project button`
+- output: `{"action_performed": true, "action_type": "click", "target": "Second project"}`
+- trace contained non-empty `signals.region_selection`
+- trace contained non-empty `region_context`
+- trace contained non-empty `region_scope`
+- accepted: `true`
+
+CDP verification after the trace:
+
+```json
+{
+  "choice": "second",
+  "title": "AIO Region Smoke"
+}
+```
+
+This proves `element-bounds` / `region/analyze` can return region context, and a region-scoped natural-language operation can execute against the selected area on the AIO browser page while retaining region evidence in the accepted trace.
+
+## Checklist Status
+
+| Goal item | Status from local smoke | Evidence |
 | --- | --- | --- |
 | AIO execution surface | Passed for local fixed AIO sandbox | AIO container healthy; `/v1/browser/info`; `/session/start` success |
 | Recording skill starts | Passed at API level | `/session/start` returned session and active tab |
-| Browser view accessible | Partially proven | AIO `vnc_url` returned; frontend visual access not rechecked in this smoke |
+| Browser view accessible | Partially proven | AIO `vnc_url` returned; frontend visual access was manually exercised by user earlier but not recaptured in this API/CDP smoke |
 | Listener JS injection | Passed | CDP-driven fill/click produced accepted manual traces |
 | Manual click/input/navigation | Passed | accepted navigate/fill/click traces |
-| Multi tab | Not proven in this smoke | popup attempt did not produce a second registered tab |
-| Natural language operations | Not run in this smoke | user had previously observed NL click/script execution; no fresh command evidence here |
-| Region selection | Not run in this smoke | user had previously observed region selection eventually worked; no fresh command evidence here |
+| Multi tab | Passed | popup tab opened, `/tabs` attribution correct, switch trace and post-switch click trace recorded on main tab |
+| Natural language operations | Passed | accepted AI traces for read, fill, click, and navigate |
+| Region selection | Passed with one caveat | element bounds, region analyze, region-scoped click trace, `region_context` / `region_scope`, page state `choice=second`; Chinese prompt first produced extraction rather than click |
 | Trace -> script generation | Passed | `/generate` returned success |
 | Script execution in AIO runtime path | Passed via `/test` route | `/test` used runtime CDP browser and returned `SKILL_SUCCESS` |
 | Skill save | Passed | `/save` returned `skill_name=aio_native_smoke_skill` |
 | Downloads/files not blocking | Passed for no-download scenario | no download generated; main chain did not fail |
-| Internal handoff | Already documented | `docs/rpa/aio-native-internal-handoff.md` and `docs/rpa/aio-native-functional-smoke-checklist.md` |
+| Internal handoff | Documented | `docs/rpa/aio-native-internal-handoff.md` and `docs/rpa/aio-native-functional-smoke-checklist.md` |
 
-## Remaining gaps before marking the overall goal complete
+## Remaining Gaps Before Marking The Overall Goal Complete
 
-1. Run and record natural-language operations in the same evidence style:
-   - click
-   - fill
-   - navigate
-   - read page information
-   - accepted trace after each successful operation
-2. Run and record region selection:
-   - frontend selection or equivalent `region/analyze`
-   - region-scoped natural-language action
-   - trace containing `region_context` / `region_scope`
-3. Run and record multi-tab:
-   - open second tab
-   - switch active tab
-   - URL/title/page attribution
-   - accepted events not assigned to stale tab
-4. In intranet, replace fixed sandbox with real APIG lifecycle:
+1. Real intranet lifecycle remains to be adapted and smoked:
    - `POST /api/livefunction/sandboxes`
    - `GET /api/livefunction/sandboxes/{sandboxId}`
    - `POST /api/livefunction/sandboxes/refresh/{sandboxId}`
    - `DELETE /api/livefunction/sandboxes/{sandboxId}`
-   - EKS multi-instance runtime record persistence and idempotent create
+2. Intranet EKS multi-instance deployment must verify runtime record persistence, idempotent lifecycle operations, and request routing behavior.
+3. Frontend visual recording flow was manually exercised by the user during this branch, but this evidence file only records API/CDP smoke. If treating this file alone as release evidence, run a fresh frontend smoke before final completion.
+4. Download/file artifact round trip is only proven as non-blocking for a no-download scenario. A real download scenario can remain out of scope for first smoke unless the target internal flow depends on it.
