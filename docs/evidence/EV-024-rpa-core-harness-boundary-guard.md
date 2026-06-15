@@ -214,6 +214,37 @@ $env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw\backend\tests\test_rpa_trace
 $env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw\backend\tests\test_rpa_trace_e2e.py
 ```
 
+F024.9 late explicit-navigation redirect folding:
+
+Commands:
+
+```powershell
+$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw\backend\tests\test_rpa_manager.py::RPASessionManagerTabTests::test_navigate_active_tab_folds_late_redirect_into_explicit_navigation_trace -q
+```
+
+```powershell
+$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw\backend\tests\test_rpa_manager.py::RPASessionManagerTabTests::test_navigate_active_tab_records_core_trace_without_harness_capture RpaClaw\backend\tests\test_rpa_manager.py::RPASessionManagerTabTests::test_navigate_active_tab_suppresses_redirect_navigation_event RpaClaw\backend\tests\test_rpa_manager.py::RPASessionManagerTabTests::test_navigate_active_tab_folds_late_redirect_into_explicit_navigation_trace RpaClaw\backend\tests\test_rpa_manager.py::RPASessionManagerTabTests::test_navigate_active_tab_does_not_record_trace_when_session_paused -q
+```
+
+```powershell
+$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw\backend\tests\test_rpa_manager.py -q
+```
+
+```powershell
+$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw\backend\tests\test_rpa_trace_skill_compiler.py -q
+```
+
+```powershell
+$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw\backend\tests\test_rpa_trace_e2e.py -q
+```
+
+Results:
+
+- RED late redirect folding regression: `1 failed` as expected. A post-`navigate_active_tab()` same-tab `framenavigated` event was recorded as one standalone manual navigation step.
+- GREEN focused regression: `1 passed`. Late same-tab redirects after explicit address-bar navigation now update the existing explicit navigation trace instead of adding a separate navigation step.
+- Focused navigation regression: `4 passed`. Core explicit navigation still records without Harness capture, synchronous redirects remain suppressed, late redirects fold into the explicit trace, and paused sessions still skip explicit navigation facts.
+- Core SOP->Skill regression: manager `109 passed`; trace compiler `111 passed`; trace e2e `11 passed`.
+
 ## Harness Validation
 
 `knowledge_check.py --strict`: `Scanned 260 markdown file(s). Checked 54 knowledge artifact(s). Errors: 0. Warnings: 0.`
