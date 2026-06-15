@@ -3397,6 +3397,14 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(trace.before_page.url, "about:blank")
         self.assertEqual(trace.after_page.url, "https://example.com")
         self.assertEqual(trace.value, "https://example.com")
+        self.assertEqual(
+            trace.signals["navigation"],
+            {
+                "target_url": "https://example.com",
+                "observed_url": "https://example.com",
+                "redirected": False,
+            },
+        )
 
     async def test_navigate_active_tab_suppresses_redirect_navigation_event(self):
         class _RedirectingPage(_FakePage):
@@ -3421,6 +3429,14 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(trace.before_page.url, "about:blank")
         self.assertEqual(trace.after_page.url, "https://example.com/final")
         self.assertEqual(trace.value, "https://example.com")
+        self.assertEqual(
+            trace.signals["navigation"],
+            {
+                "target_url": "https://example.com",
+                "observed_url": "https://example.com/final",
+                "redirected": True,
+            },
+        )
 
     async def test_navigate_active_tab_does_not_record_trace_when_session_paused(self):
         page = _FakePage("about:blank", "Blank")

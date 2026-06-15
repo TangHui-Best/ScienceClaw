@@ -715,7 +715,14 @@ class RPASessionManager:
                 else after_page
             ),
             value=normalized_url,
-            signals={"tab": {"tab_id": session.active_tab_id}},
+            signals={
+                "tab": {"tab_id": session.active_tab_id},
+                "navigation": {
+                    "target_url": normalized_url,
+                    "observed_url": after_page.url,
+                    "redirected": not self._navigation_urls_match(after_page.url, normalized_url),
+                },
+            },
         )
         await self.append_trace(session_id, trace)
         if harness_before_state is not None and after_state is not None:
