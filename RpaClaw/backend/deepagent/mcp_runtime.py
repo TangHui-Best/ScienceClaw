@@ -1,0 +1,226 @@
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
+
+import httpx
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.sse import sse_client
+from mcp.client.stdio import stdio_client
+from mcp.client.streamable_http import streamable_http_client
+
+from backend.config import settings
+from backend.mcp.models import McpServerDefinition
+
+
+@dataclass(frozen=True)
+class McpToolDefinition:
+    name: str
+    description: str = ""
+    input_schema: dict[str, Any] = field(default_factory=dict)
+
+
+@runtime_checkable
+class McpRuntime(Protocol):
+    async def list_tools(self) -> Sequence[McpToolDefinition | Mapping[str, Any]]: ...
+
+    async def call_tool(self, tool_name: str, arguments: Mapping[str, Any]) -> Any: ...
+
+
+class McpRuntimeFactory(Protocol):
+    def create_runtime(self, server: McpServerDefinition) -> McpRuntime: ...
+
+
+class UnsupportedMcpRuntimeFactory:
+    def create_runtime(self, server: McpServerDefinition) -> McpRuntime:
+        raise RuntimeError(
+            f"No MCP runtime factory is configured for server '{server.id}' "
+            f"(transport={server.transport})"
+        )
+
+
+def _is_local_storage_backend() -> bool:
+    return (settings.storage_backend or "").strip().lower() == "local"
+
+
+def _timeout_seconds(server: McpServerDefinition) -> float:
+    return max(server.timeout_ms / 1000.0, 0.001)
+
+
+def _sse_read_timeout_seconds() -> float:
+    return 60.0 * 5.0
+
+
+def _normalize_server_headers(headers: Mapping[str, str] | None) -> dict[str, str] | None:
+    if not headers:
+        return None
+    return dict(headers)
+
+
+def _normalize_mcp_result(result: Any) -> Any:
+    if hasattr(result, "model_dump"):
+        return result.model_dump(mode="python", exclude_none=True)
+    if isinstance(result, Mapping):
+        return dict(result)
+
+    payload: dict[str, Any] = {}
+    if hasattr(result, "content"):
+        payload["content"] = list(getattr(result, "content") or [])
+    if hasattr(result, "structuredContent"):
+        structured = getattr(result, "structuredContent")
+        if structured is not None:
+            payload["structuredContent"] = structured
+    if hasattr(result, "isError"):
+        payload["isError"] = bool(getattr(result, "isError"))
+    return payload or result
+
+
+def _normalize_tool(tool: Any) -> McpToolDefinition:
+    if isinstance(tool, McpToolDefinition):
+        return tool
+
+    if isinstance(tool, Mapping):
+        name = str(tool.get("name", "")).strip()
+        description = str(tool.get("description", "") or "")
+        input_schema = tool.get("input_schema") or tool.get("inputSchema") or {}
+    else:
+        name = str(getattr(tool, "name", "")).strip()
+        description = str(getattr(tool, "description", "") or "")
+        input_schema = getattr(tool, "inputSchema", {}) or {}
+
+    if not isinstance(input_schema, dict):
+        input_schema = {}
+
+    return McpToolDefinition(name=name, description=description, input_schema=input_schema)
+
+
+def _page_tools(page: Any) -> Sequence[Any]:
+    if isinstance(page, Mapping):
+        tools = page.get("tools") or []
+    else:
+        tools = getattr(page, "tools", []) or []
+    return list(tools)
+
+
+def _page_next_cursor(page: Any) -> str | None:
+    if isinstance(page, Mapping):
+        cursor = page.get("nextCursor")
+    else:
+        cursor = getattr(page, "nextCursor", None)
+    if cursor is None:
+        return None
+    cursor_text = str(cursor).strip()
+    return cursor_text or None
+
+
+class McpSdkRuntime:
+    def __init__(self, server: McpServerDefinition) -> None:
+        self._server = server
+
+    def _validate(self) -> None:
+        if self._server.transport == "stdio" and not _is_local_storage_backend():
+            raise ValueError("stdio MCP is only allowed in local mode")
+
+    def _stdio_server_parameters(self) -> StdioServerParameters:
+        if not self._server.command.strip():
+            raise ValueError(f"stdio MCP server '{self._server.id}' requires a command")
+
+        return StdioServerParameters(
+            command=self._server.command,
+            args=list(self._server.args),
+            env=dict(self._server.env) if self._server.env else None,
+            cwd=self._server.cwd or None,
+        )
+
+    @asynccontextmanager
+    async def _open_transport(self):
+        self._validate()
+        timeout = _timeout_seconds(self._server)
+
+        if self._server.transport == "stdio":
+            params = self._stdio_server_parameters()
+            async with stdio_client(params) as streams:
+                yield streams
+            return
+
+        if self._server.transport == "sse":
+            async with sse_client(
+                self._server.url,
+                headers=_normalize_server_headers(self._server.headers),
+                timeout=timeout,
+                sse_read_timeout=_sse_read_timeout_seconds(),
+            ) as streams:
+                yield streams
+            return
+
+        if self._server.transport == "streamable_http":
+            http_client_kwargs: dict[str, Any] = {"timeout": timeout}
+            normalized_headers = _normalize_server_headers(self._server.headers)
+            if normalized_headers:
+                http_client_kwargs["headers"] = normalized_headers
+            async with httpx.AsyncClient(**http_client_kwargs) as http_client:
+                async with streamable_http_client(
+                    self._server.url,
+                    http_client=http_client,
+                ) as streams:
+                    yield streams
+            return
+
+        raise ValueError(f"Unsupported MCP transport: {self._server.transport}")
+
+    @asynccontextmanager
+    async def _session(self):
+        async with self._open_transport() as streams:
+            read_stream, write_stream = streams[:2]
+            async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
+                yield session
+
+    async def list_tools(self) -> Sequence[McpToolDefinition | Mapping[str, Any]]:
+        discovered_tools: list[McpToolDefinition] = []
+        cursor: str | None = None
+
+        async with self._session() as session:
+            while True:
+                page = await session.list_tools(cursor=cursor)
+                discovered_tools.extend(_normalize_tool(tool) for tool in _page_tools(page))
+                cursor = _page_next_cursor(page)
+                if cursor is None:
+                    break
+
+        return discovered_tools
+
+    async def call_tool(self, tool_name: str, arguments: Mapping[str, Any]) -> Any:
+        async with self._session() as session:
+            result = await session.call_tool(tool_name, arguments=dict(arguments))
+        return _normalize_mcp_result(result)
+
+
+class McpSdkRuntimeFactory:
+    def create_runtime(self, server: McpServerDefinition) -> McpRuntime:
+        if server.transport == "stdio" and not _is_local_storage_backend():
+            raise ValueError("stdio MCP is only allowed in local mode")
+        return McpSdkRuntime(server)
+
+
+def coerce_mcp_tool_definition(tool: McpToolDefinition | Mapping[str, Any]) -> McpToolDefinition:
+    if isinstance(tool, McpToolDefinition):
+        return tool
+
+    if isinstance(tool, Mapping):
+        name = str(tool.get("name", "")).strip()
+        description = str(tool.get("description", "") or "")
+        input_schema = tool.get("input_schema") or tool.get("inputSchema") or {}
+    else:
+        name = str(getattr(tool, "name", "")).strip()
+        description = str(getattr(tool, "description", "") or "")
+        input_schema = getattr(tool, "inputSchema", {}) or {}
+    if not isinstance(input_schema, dict):
+        input_schema = {}
+
+    return McpToolDefinition(
+        name=name,
+        description=description,
+        input_schema=input_schema,
+    )

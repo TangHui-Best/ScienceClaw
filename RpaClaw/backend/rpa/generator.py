@@ -3,6 +3,8 @@ import logging
 import re
 from typing import List, Dict, Any, Optional
 
+from backend.rpa.playwright_security import get_chromium_launch_kwargs, get_context_kwargs
+
 logger = logging.getLogger(__name__)
 
 RPA_PLAYWRIGHT_TIMEOUT_MS = 60000
@@ -37,17 +39,26 @@ async def _get_cdp_url() -> str:
 {execute_skill_func}
 
 
+def _parse_cli_value(key, value):
+    if key in {{"_runtime_context", "_model_config"}}:
+        try:
+            return _json.loads(value)
+        except Exception:
+            return value
+    return value
+
+
 async def main():
     kwargs = {{}}
     for arg in sys.argv[1:]:
         if arg.startswith("--") and "=" in arg:
             k, v = arg[2:].split("=", 1)
-            kwargs[k] = v
+            kwargs[k] = _parse_cli_value(k, v)
 
     cdp_url = await _get_cdp_url()
     pw = await async_playwright().start()
     browser = await pw.chromium.connect_over_cdp(cdp_url)
-    context = await browser.new_context(no_viewport=True, accept_downloads=True)
+    context = await browser.new_context(**{context_kwargs})
     page = await context.new_page()
     page.set_default_timeout({default_timeout_ms})
     page.set_default_navigation_timeout({navigation_timeout_ms})
@@ -79,16 +90,25 @@ from playwright.async_api import async_playwright
 {execute_skill_func}
 
 
+def _parse_cli_value(key, value):
+    if key in {{"_runtime_context", "_model_config"}}:
+        try:
+            return _json.loads(value)
+        except Exception:
+            return value
+    return value
+
+
 async def main():
     kwargs = {{}}
     for arg in sys.argv[1:]:
         if arg.startswith("--") and "=" in arg:
             k, v = arg[2:].split("=", 1)
-            kwargs[k] = v
+            kwargs[k] = _parse_cli_value(k, v)
 
     pw = await async_playwright().start()
-    browser = await pw.chromium.launch(headless=False)
-    context = await browser.new_context(no_viewport=True, accept_downloads=True)
+    browser = await pw.chromium.launch(**{launch_kwargs})
+    context = await browser.new_context(**{context_kwargs})
     page = await context.new_page()
     page.set_default_timeout({default_timeout_ms})
     page.set_default_navigation_timeout({navigation_timeout_ms})
@@ -334,6 +354,8 @@ class StepExecutionError(Exception):
             execute_skill_func=execute_skill_func,
             default_timeout_ms=RPA_PLAYWRIGHT_TIMEOUT_MS,
             navigation_timeout_ms=RPA_NAVIGATION_TIMEOUT_MS,
+            launch_kwargs=repr(get_chromium_launch_kwargs(headless=False)),
+            context_kwargs=repr(get_context_kwargs()),
         )
 
     @staticmethod
@@ -727,7 +749,11 @@ class StepExecutionError(Exception):
                 if param_info.get("sensitive"):
                     # No default value for sensitive params
                     return f"kwargs['{param_name}']"
-                return f"kwargs.get('{param_name}', '{value}')"
+                default_value = param_info.get("default_value")
+                if default_value in (None, ""):
+                    default_value = value
+                safe_default = str(default_value).replace("'", "\\'")
+                return f"kwargs.get('{param_name}', '{safe_default}')"
         safe = value.replace("'", "\\'")
         return f"'{safe}'"
 

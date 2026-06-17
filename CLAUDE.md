@@ -77,7 +77,7 @@ npm install
 npm run dev
 ```
 
-Default login: `admin` / `admin123`
+Default local/desktop mode opens as the bootstrap admin without login. Set `AUTH_PROVIDER=local` to enable login; the bootstrap admin is `admin` / `admin123` unless overridden.
 
 ## Backend API
 
@@ -188,6 +188,7 @@ WEBSEARCH_BASE_URL=http://localhost:8068
 # Skills (local dev — Docker uses /app/Skills and /app/builtin_skills)
 EXTERNAL_SKILLS_DIR=C:\Users\...\external_skills
 BUILTIN_SKILLS_DIR=D:\code\...\backend\builtin_skills
+TOOLS_DIR=C:\Users\...\tools
 
 # Workspace
 WORKSPACE_DIR=C:\Users\...\workspace
@@ -211,5 +212,6 @@ WORKSPACE_DIR=C:\Users\...\workspace
 - **VNC access**: Docker mode only. Use port 18080 (nginx-served noVNC page), not 16080 (raw websocat). URL: `http://{host}:18080/vnc/index.html?autoconnect=true&resize=scale`
 - **Sandbox script execution**: `sandbox_execute_bash` kills the process tree when the MCP call returns. For long-running scripts, use `nohup` + sentinel file polling.
 - **Skills not appearing**: `SKILL.md` must have YAML front-matter. The `EXTERNAL_SKILLS_DIR` env var must point to the correct directory for your environment (Docker vs local).
+- **Desktop tools**: In Windows desktop local mode, the permanent tool library lives under `TOOLS_DIR` on the host. `/app/Tools` remains the sandbox-visible mount path for sandbox execution, not the desktop host save path.
 - **Local mode RPA**: Set `STORAGE_BACKEND=local` in `.env`. Frontend detects mode via `/client-config` endpoint. Local mode uses CDP screencast (WebSocket at `/rpa/screencast`), not VNC.
 - **CDP screencast performance**: Backend uses JPEG quality=40 for lower latency. Frontend throttles mousemove events and syncs canvas size with image naturalSize for accurate coordinate mapping.

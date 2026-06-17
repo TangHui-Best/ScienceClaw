@@ -38,6 +38,11 @@
         "filter": ["**/*"]
       },
       {
+        "from": "../build/node",
+        "to": "node",
+        "filter": ["**/*"]
+      },
+      {
         "from": "../build/staging/backend",
         "to": "backend",
         "filter": ["**/*"]

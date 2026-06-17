@@ -19,6 +19,7 @@ import json
 import os
 import re
 import time
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set
 
@@ -48,10 +49,10 @@ from backend.deepagent.sessions import (
 )
 from backend.runtime.session_runtime_manager import get_session_runtime_manager
 from backend.user.dependencies import get_current_user, require_user, User
-from backend.models import get_model_config
+from backend.models import get_model_config, resolve_default_model_config
 from backend.config import settings
 from backend.browser_preview import browser_preview_registry
-from backend.rpa.screencast import ScreencastService
+from backend.rpa.screencast import SessionScreencastController
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -109,7 +110,7 @@ class GetSessionData(BaseModel):
 class ChatRequest(BaseModel):
     message: str = Field(default="", description="User message content")
     timestamp: Optional[int] = Field(default=None, description="Message timestamp")
-    event_id: Optional[str] = Field(default=None, description="Event ID")
+    event_id: Optional[str] = Field(default=None, description="SSE reconnection cursor event ID")
     attachments: Optional[List[str]] = Field(default=None, description="Attachment path list")
     language: Optional[str] = Field(default=None, description="User interface language (e.g. 'zh', 'en')")
     model_config_id: Optional[str] = Field(default=None, description="Model config ID to use (overrides session default)")
@@ -195,6 +196,20 @@ def _append_session_event(session: Any, event: Dict[str, Any]) -> None:
             setattr(session, "latest_message_at", int(data.get("timestamp") or _now_ts()))
 
 
+def _create_user_message_event(
+    message: str,
+    attachments: List[str],
+    timestamp: Optional[int] = None,
+) -> Dict[str, Any]:
+    return _wrap_event("message", {
+        "event_id": _new_event_id(),
+        "timestamp": timestamp or _now_ts(),
+        "content": message,
+        "role": "user",
+        "attachments": attachments,
+    })
+
+
 def _count_user_messages(events: List[Dict[str, Any]]) -> int:
     """Count message events with role=user."""
     if not events:
@@ -205,7 +220,7 @@ def _count_user_messages(events: List[Dict[str, Any]]) -> int:
     )
 
 
-async def _generate_session_title(first_message: str) -> str:
+async def _generate_session_title(first_message: str, model_config: Optional[Dict[str, Any]] = None) -> str:
     """
     Use LLM to generate a short, descriptive chat title from the first user message.
     Returns a fallback if generation fails.
@@ -222,7 +237,7 @@ async def _generate_session_title(first_message: str) -> str:
         "Output only the title, no quotes, no explanation, no prefix."
     )
     try:
-        llm = get_llm_model(config=None, max_tokens_override=60, streaming=False)
+        llm = get_llm_model(config=model_config, max_tokens_override=60, streaming=False)
         response = await llm.ainvoke([
             SystemMessage(content=system),
             HumanMessage(content=prompt),
@@ -373,6 +388,9 @@ def _extract_tool_meta(data: Dict[str, Any]) -> Dict[str, Any]:
     }
     if meta.get("sandbox"):
         result["sandbox"] = True
+    mcp_meta = meta.get("mcp")
+    if isinstance(mcp_meta, dict):
+        result["mcp"] = deepcopy(mcp_meta)
     return result
 
 
@@ -689,6 +707,8 @@ async def create_session(
                 if not mc.is_system and mc.user_id != current_user.id:
                     raise HTTPException(status_code=403, detail="Cannot use this model")
                 model_config_dict = mc.model_dump()
+        if model_config_dict is None:
+            model_config_dict = await resolve_default_model_config(current_user.id)
 
         session = await async_create_science_session(
             mode=body.mode,
@@ -758,8 +778,185 @@ def _list_skill_dirs(base_dir: str, builtin: bool = False) -> List[Dict[str, Any
     return skills
 
 
+def _read_recorded_skill_meta(skill_dir: _Path) -> Dict[str, Any] | None:
+    meta_path = skill_dir / "skill.meta.json"
+    if not meta_path.is_file():
+        return None
+    try:
+        payload = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if payload.get("kind") != "rpa-recording":
+        return None
+    return payload
+
+
+def _validate_skill_identifier(name: str) -> str:
+    normalized = name.strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="Skill name cannot be empty")
+    if normalized in {".", ".."} or "/" in normalized or "\\" in normalized or "\x00" in normalized:
+        raise HTTPException(
+            status_code=400,
+            detail="Skill name cannot contain path separators",
+        )
+    return normalized
+
+
+def _build_skill_input_schema(params: Dict[str, Any]) -> Dict[str, Any]:
+    schema: Dict[str, Any] = {
+        "type": "object",
+        "properties": {},
+        "required": [],
+    }
+    for param_name, param_info in params.items():
+        if not isinstance(param_info, dict):
+            continue
+        if param_info.get("sensitive") and param_info.get("credential_id"):
+            continue
+        prop: Dict[str, Any] = {
+            "type": param_info.get("type", "string"),
+            "description": param_info.get("description", ""),
+        }
+        original = param_info.get("original_value", "")
+        if original not in ("", None, "{{credential}}"):
+            prop["default"] = original
+        schema["properties"][param_name] = prop
+        if param_info.get("required", False) and original in ("", None):
+            schema["required"].append(param_name)
+    return schema
+
+
+def _replace_skill_md_body_overview(body: str, name: str, description: str) -> str:
+    lines = body.splitlines()
+    heading_index = next(
+        (index for index, line in enumerate(lines) if line.startswith("# ")),
+        -1,
+    )
+    if heading_index == -1:
+        lines = [f"# {name}", "", description, ""] + lines
+        return "\n".join(lines).strip() + "\n"
+
+    lines[heading_index] = f"# {name}"
+    start = heading_index + 1
+    while start < len(lines) and not lines[start].strip():
+        start += 1
+    end = start
+    if end < len(lines) and not lines[end].startswith("#") and not lines[end].startswith("```"):
+        while end < len(lines) and lines[end].strip():
+            end += 1
+    replacement = ["", description, ""]
+    return "\n".join(lines[: heading_index + 1] + replacement + lines[end:]).strip() + "\n"
+
+
+def _sync_skill_md_overview(
+    existing: str,
+    name: str,
+    description: str,
+    params: Dict[str, Any],
+) -> str:
+    match = re.match(r"^---\s*\n(.*?)\n---\s*\n?", existing, re.DOTALL)
+    body = existing[match.end():] if match else existing
+    frontmatter = _yaml.safe_dump(
+        {"name": name, "description": description},
+        allow_unicode=True,
+        sort_keys=False,
+    ).strip()
+    body = _replace_skill_md_body_overview(body, name, description)
+    input_schema = _build_skill_input_schema(params)
+    schema_block = (
+        "## Input Schema\n\n"
+        "```json\n"
+        f"{json.dumps(input_schema, ensure_ascii=False, indent=2)}\n"
+        "```"
+    )
+    schema_pattern = r"## Input Schema\s*\n\s*```json\n[\s\S]*?\n```"
+    if re.search(schema_pattern, body):
+        body = re.sub(schema_pattern, schema_block, body, count=1)
+    else:
+        body = body.rstrip() + "\n\n" + schema_block + "\n"
+    return f"---\n{frontmatter}\n---\n\n{body.rstrip()}\n"
+
+
+def _write_text_atomic(path: _Path, content: str) -> None:
+    tmp_path = path.with_name(f".{path.name}.tmp")
+    tmp_path.write_text(content, encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def _write_text_group_atomic(files: Dict[_Path, str]) -> None:
+    original_content: Dict[_Path, str | None] = {}
+    written: List[_Path] = []
+    for path in files:
+        original_content[path] = path.read_text(encoding="utf-8") if path.exists() else None
+    try:
+        for path, content in files.items():
+            _write_text_atomic(path, content)
+            written.append(path)
+    except Exception:
+        for path in reversed(written):
+            previous = original_content[path]
+            try:
+                if previous is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    _write_text_atomic(path, previous)
+            except Exception as rollback_exc:
+                logger.warning("rollback failed for %s: %s", path, rollback_exc)
+        raise
+
+
+def _is_path_within(path: _Path, root: _Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+async def _get_skill_files_payload(skill_name: str, current_user: User) -> List[Dict[str, str]]:
+    if settings.storage_backend == "local":
+        skill_dir = _Path(settings.external_skills_dir) / skill_name
+        if not skill_dir.is_dir():
+            raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+        items = []
+        for file_path in sorted(skill_dir.rglob("*")):
+            if should_skip_file(file_path):
+                continue
+            if file_path.is_file():
+                rel_path = str(file_path.relative_to(skill_dir))
+                items.append({
+                    "name": file_path.name,
+                    "path": rel_path,
+                    "type": "file",
+                })
+        return items
+
+    col = _get_repo("skills")
+    doc = await col.find_one(
+        {"user_id": current_user.id, "name": skill_name},
+        projection={"files": 1}
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+    return [
+        {
+            "name": fname,
+            "path": fname,
+            "type": "file",
+        }
+        for fname in sorted(doc.get("files", {}).keys())
+    ]
+
+
 class SkillBlockRequest(BaseModel):
     blocked: bool = Field(default=True)
+
+
+class UpdateSkillOverviewRequest(BaseModel):
+    name: str = Field(..., description="New skill identifier")
+    description: str = Field(default="", description="Skill description")
+    params: dict = Field(default_factory=dict, description="Skill parameters")
 
 
 @router.get("/skills", response_model=ApiResponse)
@@ -986,45 +1183,167 @@ async def list_skill_files(
 ) -> ApiResponse:
     """列出某个外置 skill 内部的文件结构。"""
     try:
-        if settings.storage_backend == "local":
-            # List from filesystem
-            skill_dir = _Path(settings.external_skills_dir) / skill_name
-            if not skill_dir.is_dir():
-                raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
-            items = []
-            for file_path in sorted(skill_dir.rglob("*")):
-                # 跳过不需要展示的文件
-                if should_skip_file(file_path):
-                    continue
-                if file_path.is_file():
-                    rel_path = str(file_path.relative_to(skill_dir))
-                    items.append({
-                        "name": file_path.name,
-                        "path": rel_path,
-                        "type": "file",
-                    })
-            return ApiResponse(data=items)
-        else:
-            # List from MongoDB
-            col = _get_repo("skills")
-            doc = await col.find_one(
-                {"user_id": current_user.id, "name": skill_name},
-                projection={"files": 1}
-            )
-            if not doc:
-                raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
-            items = []
-            for fname in sorted(doc.get("files", {}).keys()):
-                items.append({
-                    "name": fname,
-                    "path": fname,
-                    "type": "file",
-                })
-            return ApiResponse(data=items)
+        return ApiResponse(data=await _get_skill_files_payload(skill_name, current_user))
     except HTTPException:
         raise
     except Exception as exc:
         logger.exception("list_skill_files failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/skills/{skill_name}/detail", response_model=ApiResponse)
+async def get_skill_detail(
+    skill_name: str,
+    current_user: User = Depends(require_user),
+) -> ApiResponse:
+    """Return overview data for recorded RPA skills when metadata is available."""
+    try:
+        if settings.storage_backend != "local":
+            return ApiResponse(data={"can_use_overview": False, "mode": "files"})
+
+        skill_dir = _Path(settings.external_skills_dir) / skill_name
+        if not skill_dir.is_dir():
+            raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+
+        meta = _read_recorded_skill_meta(skill_dir)
+        if not meta:
+            return ApiResponse(data={"can_use_overview": False, "mode": "files"})
+
+        return ApiResponse(data={
+            "kind": "skill",
+            "mode": "recorded-overview",
+            "can_use_overview": True,
+            "name": meta.get("name") or skill_name,
+            "description": meta.get("description") or "",
+            "entry_script": meta.get("entry_script") or "skill.py",
+            "generated_at": meta.get("generated_at") or "",
+            "params": meta.get("params") or {},
+            "steps": meta.get("steps") or [],
+            "artifacts": meta.get("artifacts") or [],
+            "files": await _get_skill_files_payload(skill_name, current_user),
+        })
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("get_skill_detail failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.put("/skills/{skill_name}/overview", response_model=ApiResponse)
+async def update_skill_overview(
+    skill_name: str,
+    body: UpdateSkillOverviewRequest,
+    current_user: User = Depends(require_user),
+) -> ApiResponse:
+    """Update a recorded skill's identifier, description, and params together."""
+    try:
+        new_name = _validate_skill_identifier(body.name)
+        old_name = _validate_skill_identifier(skill_name)
+        description = body.description.strip()
+        params = body.params or {}
+
+        if settings.storage_backend == "local":
+            builtin_dir = _Path(settings.builtin_skills_dir).resolve()
+            if (builtin_dir / old_name).is_dir():
+                raise HTTPException(status_code=403, detail="Built-in skills cannot be edited")
+
+            external_dir = _Path(settings.external_skills_dir)
+            skill_dir = (external_dir / old_name).resolve()
+            external_root = external_dir.resolve()
+            if not _is_path_within(skill_dir, external_root) or not skill_dir.is_dir():
+                raise HTTPException(status_code=404, detail=f"Skill '{old_name}' not found")
+
+            target_dir = (external_dir / new_name).resolve()
+            if not _is_path_within(target_dir, external_root):
+                raise HTTPException(status_code=403, detail="Invalid skill name")
+            if new_name != old_name and target_dir.exists():
+                raise HTTPException(status_code=409, detail=f"Skill '{new_name}' already exists")
+
+            meta = _read_recorded_skill_meta(skill_dir)
+            if not meta:
+                raise HTTPException(status_code=400, detail="Recorded skill metadata not found")
+
+            skill_md_path = skill_dir / "SKILL.md"
+            skill_md = skill_md_path.read_text(encoding="utf-8") if skill_md_path.is_file() else ""
+            original_files = {
+                skill_dir / "skill.meta.json": (skill_dir / "skill.meta.json").read_text(encoding="utf-8"),
+                skill_dir / "params.json": (skill_dir / "params.json").read_text(encoding="utf-8") if (skill_dir / "params.json").exists() else "{}",
+                skill_md_path: skill_md,
+            }
+            meta["name"] = new_name
+            meta["description"] = description
+            meta["params"] = params
+            updated_files = {
+                skill_dir / "skill.meta.json": json.dumps(meta, ensure_ascii=False, indent=2),
+                skill_dir / "params.json": json.dumps(params, ensure_ascii=False, indent=2),
+                skill_md_path: _sync_skill_md_overview(skill_md, new_name, description, params),
+            }
+
+            files_written = False
+            try:
+                _write_text_group_atomic(updated_files)
+                files_written = True
+                if new_name != old_name:
+                    skill_dir.rename(target_dir)
+            except Exception:
+                if files_written and skill_dir.exists():
+                    _write_text_group_atomic(original_files)
+                raise
+
+            return ApiResponse(data={"skill_name": new_name, "renamed": new_name != old_name})
+
+        col = _get_repo("skills")
+        doc = await col.find_one(
+            {"user_id": current_user.id, "name": old_name},
+            projection={"_id": 1, "files": 1, "params": 1},
+        )
+        if not doc:
+            raise HTTPException(status_code=404, detail=f"Skill '{old_name}' not found")
+        if new_name != old_name:
+            existing = await col.find_one(
+                {"user_id": current_user.id, "name": new_name},
+                projection={"_id": 1},
+            )
+            if existing:
+                raise HTTPException(status_code=409, detail=f"Skill '{new_name}' already exists")
+
+        files = dict(doc.get("files") or {})
+        try:
+            meta = json.loads(files.get("skill.meta.json", "{}"))
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail="Invalid recorded skill metadata") from exc
+        if meta.get("kind") != "rpa-recording":
+            raise HTTPException(status_code=400, detail="Recorded skill metadata not found")
+
+        meta["name"] = new_name
+        meta["description"] = description
+        meta["params"] = params
+        files["skill.meta.json"] = json.dumps(meta, ensure_ascii=False, indent=2)
+        files["params.json"] = json.dumps(params, ensure_ascii=False, indent=2)
+        files["SKILL.md"] = _sync_skill_md_overview(
+            files.get("SKILL.md", ""),
+            new_name,
+            description,
+            params,
+        )
+
+        await col.update_one(
+            {"_id": doc["_id"]},
+            {
+                "$set": {
+                    "name": new_name,
+                    "description": description,
+                    "params": params,
+                    "files": files,
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            },
+        )
+        return ApiResponse(data={"skill_name": new_name, "renamed": new_name != old_name})
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("update_skill_overview failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
@@ -1130,7 +1449,12 @@ async def write_skill_file(
 # 外置 Tools 管理（必须放在 /{session_id} 路由之前）
 # ═══════════════════════════════════════════════════════════════════
 
-_TOOLS_DIR = os.environ.get("TOOLS_DIR", "/app/Tools")
+def _tools_dir_path() -> _Path:
+    return _Path(settings.tools_dir)
+
+
+def _tool_file_path(tool_name: str) -> _Path:
+    return _tools_dir_path() / f"{tool_name}.py"
 
 
 def _extract_tool_description(py_file: _Path) -> str:
@@ -1147,7 +1471,7 @@ def _extract_tool_description(py_file: _Path) -> str:
 
 def _list_external_tools() -> List[Dict[str, Any]]:
     """列出 Tools 目录中所有外置工具（排除 __init__.py）。"""
-    base = _Path(_TOOLS_DIR)
+    base = _tools_dir_path()
     if not base.is_dir():
         return []
     tools: List[Dict[str, Any]] = []
@@ -1213,11 +1537,11 @@ async def delete_tool(
 ) -> ApiResponse:
     """彻底删除一个外置 tool 文件。"""
     try:
-        tool_path = _Path(_TOOLS_DIR) / f"{tool_name}.py"
+        tool_path = _tool_file_path(tool_name)
         if not tool_path.is_file():
             raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found")
         resolved = tool_path.resolve()
-        base_resolved = _Path(_TOOLS_DIR).resolve()
+        base_resolved = _tools_dir_path().resolve()
         if not str(resolved).startswith(str(base_resolved)):
             raise HTTPException(status_code=403, detail="Invalid tool path")
         resolved.unlink()
@@ -1238,7 +1562,7 @@ async def read_tool_file(
 ) -> ApiResponse:
     """读取一个外置 tool 的源码内容。"""
     try:
-        tool_path = _Path(_TOOLS_DIR) / f"{tool_name}.py"
+        tool_path = _tool_file_path(tool_name)
         if not tool_path.is_file():
             raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found")
         content = tool_path.read_text(encoding="utf-8", errors="replace")
@@ -1285,12 +1609,13 @@ async def save_tool_from_session(
                 detail="File does not contain a @tool decorated function",
             )
 
-        dst = _Path(_TOOLS_DIR) / f"{tool_name}.py"
+        dst = _tool_file_path(tool_name)
+        dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
 
         replaces = (body.replaces or "").strip()
         if replaces and replaces != tool_name:
-            old_file = _Path(_TOOLS_DIR) / f"{replaces}.py"
+            old_file = _tool_file_path(replaces)
             if old_file.is_file():
                 old_file.unlink()
                 logger.info(f"[Tools] Removed old tool '{replaces}.py' (replaced by '{tool_name}')")
@@ -1647,7 +1972,6 @@ async def _agent_background_worker(
     session_id: str,
     message: str,
     attachments: List[str],
-    event_id: Optional[str] = None,
     timestamp: Optional[int] = None,
     language: Optional[str] = None,
 ) -> None:
@@ -1656,13 +1980,7 @@ async def _agent_background_worker(
     user_attachments = attachments or []
 
     if message.strip():
-        user_event = _wrap_event("message", {
-            "event_id": event_id or _new_event_id(),
-            "timestamp": timestamp or _now_ts(),
-            "content": message,
-            "role": "user",
-            "attachments": user_attachments,
-        })
+        user_event = _create_user_message_event(message, user_attachments, timestamp)
         _append_session_event(session, user_event)
         await session.save()
 
@@ -1684,7 +2002,7 @@ async def _agent_background_worker(
         events = getattr(session, "events", []) or []
         if _count_user_messages(events) <= 1:
             try:
-                gen_title = await _generate_session_title(message)
+                gen_title = await _generate_session_title(message, getattr(session, "model_config", None))
                 if gen_title:
                     setattr(session, "title", gen_title)
                     await session.save()
@@ -1794,9 +2112,9 @@ async def _agent_background_worker(
             staging_dir = _Path(_WORKSPACE_DIR) / session_id / "tools_staging"
             if staging_dir.is_dir():
                 saved_tools = {
-                    f.stem for f in _Path(_TOOLS_DIR).glob("*.py")
+                    f.stem for f in _tools_dir_path().glob("*.py")
                     if f.name != "__init__.py"
-                } if _Path(_TOOLS_DIR).is_dir() else set()
+                } if _tools_dir_path().is_dir() else set()
                 for child in sorted(staging_dir.glob("*.py")):
                     tool_name = child.stem
                     if tool_name not in saved_tools and "@tool" in child.read_text(encoding="utf-8", errors="replace"):
@@ -1909,7 +2227,7 @@ async def chat_with_session(
             _agent_background_worker(
                 session, session_id,
                 body.message or "", body.attachments or [],
-                event_id=body.event_id, timestamp=body.timestamp,
+                timestamp=body.timestamp,
                 language=body.language,
             )
         )
@@ -2108,9 +2426,56 @@ async def download_sandbox_file(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@router.post("/{session_id}/browser/tabs/{tab_id}/activate", response_model=ApiResponse)
+async def activate_session_browser_tab(
+    session_id: str,
+    tab_id: str,
+    current_user: User = Depends(require_user),
+) -> ApiResponse:
+    if settings.storage_backend != "local":
+        raise HTTPException(status_code=400, detail="Local mode only")
+
+    try:
+        session = await async_get_science_session(session_id)
+        if session.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied")
+    except ScienceSessionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    try:
+        result = await browser_preview_registry.activate_tab(session_id, tab_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return ApiResponse(data={
+        "result": result,
+        "tabs": browser_preview_registry.list_tabs(session_id),
+    })
+
+
+@router.get("/{session_id}/browser/tabs", response_model=ApiResponse)
+async def list_session_browser_tabs(
+    session_id: str,
+    current_user: User = Depends(require_user),
+) -> ApiResponse:
+    if settings.storage_backend != "local":
+        raise HTTPException(status_code=400, detail="Local mode only")
+
+    try:
+        session = await async_get_science_session(session_id)
+        if session.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied")
+    except ScienceSessionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return ApiResponse(data={
+        "tabs": browser_preview_registry.list_tabs(session_id),
+    })
+
+
 @router.websocket("/{session_id}/browser/screencast")
 async def session_browser_screencast(websocket: WebSocket, session_id: str):
-    """Stream a local-mode chat browser page via CDP screencast."""
+    """Stream a local-mode chat browser page via CDP screencast with tab switching."""
     await websocket.accept()
 
     if settings.storage_backend != "local":
@@ -2128,14 +2493,10 @@ async def session_browser_screencast(websocket: WebSocket, session_id: str):
         await websocket.close(code=1008, reason="No active browser page")
         return
 
-    try:
-        cdp_session = await page.context.new_cdp_session(page)
-    except Exception as exc:
-        logger.error(f"Failed to create chat preview CDP session: {exc}")
-        await websocket.close(code=1011, reason="CDP session failed")
-        return
-
-    screencast = ScreencastService(cdp_session)
+    screencast = SessionScreencastController(
+        page_provider=lambda: browser_preview_registry.get_active_page(session_id),
+        tabs_provider=lambda: browser_preview_registry.list_tabs(session_id),
+    )
     try:
         await screencast.start(websocket)
     except WebSocketDisconnect:
@@ -2144,7 +2505,3 @@ async def session_browser_screencast(websocket: WebSocket, session_id: str):
         logger.error(f"Chat browser screencast error: {exc}")
     finally:
         await screencast.stop()
-        try:
-            await cdp_session.detach()
-        except Exception:
-            pass

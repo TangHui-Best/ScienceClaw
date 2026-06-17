@@ -4,7 +4,6 @@ import asyncio
 import importlib.util
 import json
 import logging
-import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -16,6 +15,7 @@ from deepagents.backends.protocol import ExecuteResponse
 from backend.browser_preview import browser_preview_registry
 from backend.rpa.cdp_connector import get_cdp_connector
 from backend.config import settings
+from backend.deepagent.skill_command import parse_skill_command, resolve_local_skill_script
 
 logger = logging.getLogger(__name__)
 RPA_PAGE_TIMEOUT_MS = 60000
@@ -31,6 +31,7 @@ class LocalPreviewShellBackend(LocalShellBackend):
     """Intercept local RPA skill execution so chat preview can stream the browser."""
 
     def __init__(self, session_id: str, *args, user_id: str = "", **kwargs) -> None:
+        self._session_model_config = kwargs.pop("session_model_config", None)
         super().__init__(*args, **kwargs)
         self._session_id = session_id
         self._user_id = user_id
@@ -48,38 +49,15 @@ class LocalPreviewShellBackend(LocalShellBackend):
         return await self._run_skill_command(parsed, timeout=timeout)
 
     def _parse_skill_command(self, command: str) -> Optional[ParsedSkillCommand]:
-        try:
-            tokens = shlex.split(command, posix=True)
-        except ValueError:
+        parsed = parse_skill_command(command)
+        if parsed is None:
             return None
 
-        cwd = Path(self.cwd)
-        run_tokens = tokens
-        if len(tokens) >= 4 and tokens[0] == "cd" and "&&" in tokens:
-            and_idx = tokens.index("&&")
-            if and_idx >= 2:
-                cwd = Path(tokens[1]).expanduser()
-                run_tokens = tokens[and_idx + 1 :]
-
-        if len(run_tokens) < 2 or run_tokens[0] not in {"python", "python3"}:
-            return None
-
-        script_path = Path(run_tokens[1])
-        if script_path.name != "skill.py":
-            return None
-        if not script_path.is_absolute():
-            script_path = cwd / script_path
-        script_path = script_path.resolve()
+        script_path = resolve_local_skill_script(parsed, self.cwd)
         if not script_path.is_file():
             return None
 
-        kwargs: Dict[str, str] = {}
-        for arg in run_tokens[2:]:
-            if arg.startswith("--") and "=" in arg:
-                key, value = arg[2:].split("=", 1)
-                kwargs[key] = value
-
-        return ParsedSkillCommand(script_path=script_path, kwargs=kwargs)
+        return ParsedSkillCommand(script_path=script_path, kwargs=parsed.kwargs)
 
     async def _run_skill_command(
         self,
@@ -103,6 +81,14 @@ class LocalPreviewShellBackend(LocalShellBackend):
         skill_kwargs = dict(parsed.kwargs)
         if self._user_id:
             skill_kwargs = await self._inject_credentials(parsed.script_path, skill_kwargs)
+            from backend.rpa.runtime_context import inject_runtime_context_kwargs, should_inject_runtime_ai_context
+
+            if should_inject_runtime_ai_context(self._read_skill_meta(parsed.script_path)):
+                skill_kwargs = await inject_runtime_context_kwargs(
+                    self._user_id,
+                    skill_kwargs,
+                    session_model_config=self._session_model_config,
+                )
         skill_kwargs.setdefault("_downloads_dir", str(Path(settings.workspace_dir) / self._session_id / "downloads"))
 
         connector = get_cdp_connector()
@@ -198,3 +184,15 @@ class LocalPreviewShellBackend(LocalShellBackend):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module
+
+    @staticmethod
+    def _read_skill_meta(script_path: Path) -> Dict[str, object]:
+        meta_path = script_path.parent / "skill.meta.json"
+        if not meta_path.is_file():
+            return {}
+        try:
+            data = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning(f"[LocalPreview] Failed to read skill metadata: {exc}")
+            return {}
+        return data if isinstance(data, dict) else {}

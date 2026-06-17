@@ -11,6 +11,13 @@ def _resolve_home() -> str:
     return os.environ.get("RPA_CLAW_HOME", "")
 
 
+def _resolve_home_env_path() -> Path | None:
+    home = (_resolve_home() or "").strip()
+    if not home:
+        return None
+    return Path(home) / ".env"
+
+
 def _resolve_sandbox_home() -> str:
     """Return SANDBOX_RPA_CLAW_HOME, falling back to /home/rpaclaw."""
     return os.environ.get("SANDBOX_RPA_CLAW_HOME", "/home/rpaclaw")
@@ -29,6 +36,13 @@ def _sub(env_key: str, home: str, sub_dir: str, fallback: str) -> str:
 def _env_or_default(env_key: str, default: str) -> str:
     explicit = (os.environ.get(env_key) or "").strip()
     return explicit or default
+
+
+def _resolve_auth_provider() -> str:
+    explicit = (os.environ.get("AUTH_PROVIDER") or "").strip()
+    if explicit:
+        return explicit
+    return "none" if os.environ.get("STORAGE_BACKEND") == "local" else "local"
 
 
 def _resolve_sandbox_base_url() -> str:
@@ -55,6 +69,19 @@ def _resolve_sandbox_mcp_url() -> str:
         "SANDBOX_MCP_URL",
         f"{_resolve_sandbox_base_url()}/mcp",
     ).rstrip("/")
+
+
+def _resolve_tools_dir() -> str:
+    return _sub("TOOLS_DIR", _resolve_home(), "tools", "/app/Tools")
+
+
+def _resolve_sandbox_tools_dir() -> str:
+    return _env_or_default("SANDBOX_TOOLS_DIR", "/app/Tools").rstrip("/")
+
+
+def _resolve_system_mcp_config_path() -> str:
+    repo_root = Path(__file__).resolve().parents[2]
+    return _env_or_default("SYSTEM_MCP_CONFIG_PATH", str(repo_root / "mcp_servers.yaml"))
 
 
 def _derive_sandbox_vnc_ws_url(base_url: str) -> str:
@@ -98,6 +125,9 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "local")
     if ENVIRONMENT == "local":
         load_dotenv(".env")
+    _home_env_path = _resolve_home_env_path()
+    if _home_env_path and _home_env_path.exists():
+        load_dotenv(_home_env_path)
 
     model_ds_name: str = os.environ.get("DS_MODEL") or "deepseek-chat"
     model_ds_api_key: str = os.environ.get("DS_API_KEY") or ""
@@ -109,7 +139,7 @@ class Settings(BaseSettings):
     session_cookie: str = os.environ.get("SESSION_COOKIE") or "zdtc-agent-session"
     session_max_age: int = int(os.environ.get("SESSION_MAX_AGE", str(3600 * 24 * 7)))
 
-    auth_provider: str = os.environ.get("AUTH_PROVIDER", "local")
+    auth_provider: str = _resolve_auth_provider()
 
     bootstrap_admin_enabled: bool = os.environ.get("BOOTSTRAP_ADMIN_ENABLED", "true").lower() == "true"
     bootstrap_admin_username: str = os.environ.get("BOOTSTRAP_ADMIN_USERNAME", "admin")
@@ -126,6 +156,8 @@ class Settings(BaseSettings):
 
     # Storage backend: "mongo" (cloud) or "local" (edge)
     storage_backend: str = os.environ.get("STORAGE_BACKEND", "mongo")
+    local_path_style: str = os.environ.get("LOCAL_PATH_STYLE", "windows").strip().lower() or "windows"
+    rpa_recording_debug_snapshot_dir: str = os.environ.get("RPA_RECORDING_DEBUG_SNAPSHOT_DIR", "")
 
     # ── RPA_CLAW_HOME: 统一根目录，子目录自动派生 ──
     # 本地后端使用 RPA_CLAW_HOME，沙箱内使用 SANDBOX_RPA_CLAW_HOME（默认 /home/rpaclaw）
@@ -137,6 +169,9 @@ class Settings(BaseSettings):
     external_skills_dir: str = _sub("EXTERNAL_SKILLS_DIR", _resolve_home(), "external_skills", "./Skills")
     builtin_skills_dir: str = _sub("BUILTIN_SKILLS_DIR", _resolve_home(), "builtin_skills", "./builtin_skills")
     local_data_dir: str = _sub("LOCAL_DATA_DIR", _resolve_home(), "data", "./data")
+    tools_dir: str = _resolve_tools_dir()
+    sandbox_tools_dir: str = _resolve_sandbox_tools_dir()
+    system_mcp_config_path: str = _resolve_system_mcp_config_path()
 
     # 沙箱内 workspace 路径（与后端共享卷）
     sandbox_workspace_dir: str = _sub("SANDBOX_WORKSPACE_DIR", _resolve_sandbox_home(), "workspace", "/home/rpaclaw")
@@ -160,6 +195,8 @@ class Settings(BaseSettings):
     # 任务调度服务调用聊天接口时的 API Key（可选）
     task_service_api_key: str = os.environ.get("TASK_SERVICE_API_KEY", "")
     credential_key: str = os.environ.get("CREDENTIAL_KEY", "")
+    rpa_mcp_semantic_inference: bool = os.environ.get("RPA_MCP_SEMANTIC_INFERENCE", "true").lower() == "true"
+    rpa_mcp_semantic_timeout_seconds: int = int(os.environ.get("RPA_MCP_SEMANTIC_TIMEOUT_SECONDS", "20"))
     runtime_mode: str = os.environ.get("RUNTIME_MODE", "shared")
     runtime_idle_ttl_seconds: int = int(os.environ.get("RUNTIME_IDLE_TTL_SECONDS", "3600"))
     runtime_image: str = os.environ.get("SESSION_SANDBOX_IMAGE", "rpaclaw-sandbox:local")
@@ -196,3 +233,8 @@ class Settings(BaseSettings):
 
 # 全局配置实例
 settings = Settings()
+
+if settings.local_path_style not in {"windows", "posix"}:
+    raise ValueError(
+        f"Invalid LOCAL_PATH_STYLE: {settings.local_path_style}. Expected 'windows' or 'posix'."
+    )

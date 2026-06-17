@@ -24,7 +24,7 @@ client.interceptors.request.use((config) => {
 export interface Webhook {
   id: string;
   name: string;
-  type: 'feishu' | 'dingtalk' | 'wecom';
+  type: string;
   url: string;
   created_at?: string;
   updated_at?: string;

@@ -177,7 +177,7 @@
                       </div>
                       <LoadingSpinnerIcon v-if="item.tool.status === 'calling' && item.tool.tool_meta?.icon" class="w-3 h-3 animate-spin text-blue-500 flex-shrink-0" />
                       <div class="flex items-center gap-1.5 min-w-0 flex-1 text-[11px] font-mono">
-                        <span class="text-[var(--text-secondary)] font-semibold flex-shrink-0">{{ item.tool.function || item.tool.name }}</span>
+                        <span class="text-[var(--text-secondary)] font-semibold flex-shrink-0">{{ getToolDisplayName(item.tool) }}</span>
                         <span v-if="getToolArg(item.tool) && !expandedToolIds.has(item.id)" class="text-[var(--text-tertiary)] truncate max-w-[180px]">{{ getToolArg(item.tool) }}</span>
                       </div>
                       <span v-if="item.tool.duration_ms != null && item.tool.status === 'called'"
@@ -221,7 +221,7 @@
           </div>
         </template>
 
-        <!-- ═══ Sandbox Preview Section ═══ -->
+        <!-- ═══ Sandbox Terminal Section ═══ -->
         <SandboxPreview
           ref="sandboxPreviewRef"
           :mode="activeSandboxMode"
@@ -245,12 +245,16 @@ const { t } = useI18n();
 import LoadingSpinnerIcon from './icons/LoadingSpinnerIcon.vue';
 import SandboxPreview from './SandboxPreview.vue';
 import type { ToolContent } from '../types/message';
-import type { PlanEventData, StepEventData } from '../types/event';
+import type { PlanEventData } from '../types/event';
 import type { SandboxPreviewMode } from '../utils/sandbox';
-import { getPreviewMode } from '../utils/sandbox';
+import {
+  buildActivitySandboxTerminalHistory,
+  type ActivitySandboxExecEntry,
+} from '../utils/activitySandboxTerminal';
 import { useResizeObserver } from '../composables/useResizeObserver';
 import { eventBus } from '../utils/eventBus';
 import { EVENT_SHOW_FILE_PANEL, EVENT_SHOW_TOOL_PANEL, EVENT_SHOW_ACTIVITY_PANEL } from '../constants/event';
+import { formatMcpToolDisplayName, isMcpToolMeta } from '../utils/mcpUi';
 
 export interface ActivityItem {
   id: string;
@@ -281,7 +285,6 @@ const toolsContentRef = ref<HTMLElement>();
 const sandboxPreviewRef = ref<InstanceType<typeof SandboxPreview>>();
 const isShow = ref(false);
 const visible = ref(true);
-
 const activeSandboxMode = ref<SandboxPreviewMode>('none');
 const isSandboxLive = computed(() => {
   if (!props.isLoading) return false;
@@ -397,13 +400,20 @@ const getToolArg = (tool: ToolContent): string => {
   return '';
 };
 
+const getToolDisplayName = (tool: ToolContent): string => {
+  if (isMcpToolMeta(tool.tool_meta)) {
+    return formatMcpToolDisplayName({
+      functionName: tool.function,
+      fallbackName: tool.name,
+      meta: tool.tool_meta,
+    });
+  }
+  return tool.function || tool.name || '';
+};
+
 const formatDuration = (ms: number): string => {
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
-};
-
-const handleToolClick = (tool: ToolContent) => {
-  emit('toolClick', tool);
 };
 
 const handleClose = () => {
@@ -432,77 +442,24 @@ watch(aggregatedThinkingContent, scrollThoughtsToBottom);
 watch(() => toolItems.value.length, scrollToolsToBottom);
 watch(() => props.plan, () => {}, { deep: true });
 
-/**
- * Extract a display-friendly command string from tool args.
- */
-function extractCommand(tool: ToolContent): string {
-  const args = tool.args;
-  if (!args || typeof args !== 'object') return '';
-  return args.command || args.code || args.script || args.path || args.file || args.url || args.action || '';
-}
+const sandboxHistory = ref<ActivitySandboxExecEntry[]>([]);
 
-/**
- * Extract output text from tool result content.
- */
-function extractOutput(tool: ToolContent): string {
-  const c = tool.content;
-  if (!c) return '';
-  if (typeof c === 'string') {
-    try {
-      const parsed = JSON.parse(c);
-      return parsed.stdout || parsed.output || parsed.text || c;
-    } catch {
-      return c;
+function syncSandboxTools() {
+  const nextHistory = buildActivitySandboxTerminalHistory(props.items);
+
+  sandboxHistory.value = nextHistory;
+
+  if (nextHistory.length === 0) {
+    if (!props.isLoading) {
+      activeSandboxMode.value = 'none';
     }
+    return;
   }
-  if (typeof c === 'object') {
-    return (c as any).stdout || (c as any).output || (c as any).text || JSON.stringify(c);
-  }
-  return String(c);
+
+  activeSandboxMode.value = 'terminal';
 }
 
-// Track which tool calls we've already written to terminal
-const writtenToolCalls = new Set<string>();
-
-export interface SandboxExecEntry {
-  toolName: string;
-  command: string;
-  output?: string;
-  status: string;
-}
-
-const sandboxHistory = ref<SandboxExecEntry[]>([]);
-
-function scanSandboxTools() {
-  for (const item of props.items) {
-    if (item.type !== 'tool' || !item.tool) continue;
-    const fn = item.tool.function || item.tool.name || '';
-    const isSandboxProxy = !!item.tool.tool_meta?.sandbox;
-    const mode = getPreviewMode(fn, isSandboxProxy);
-    if (mode === 'none') continue;
-
-    const callId = item.tool.tool_call_id || item.id;
-
-    if (item.tool.status === 'calling' && !writtenToolCalls.has(callId + ':calling')) {
-      activeSandboxMode.value = mode;
-      writtenToolCalls.add(callId + ':calling');
-      sandboxHistory.value.push({ toolName: fn, command: extractCommand(item.tool!), status: 'calling' });
-    }
-
-    if (item.tool.status === 'called' && !writtenToolCalls.has(callId + ':called')) {
-      activeSandboxMode.value = mode;
-      if (!writtenToolCalls.has(callId + ':calling')) {
-        writtenToolCalls.add(callId + ':calling');
-        sandboxHistory.value.push({ toolName: fn, command: extractCommand(item.tool!), status: 'calling' });
-      }
-      writtenToolCalls.add(callId + ':called');
-      sandboxHistory.value.push({ toolName: fn, command: extractCommand(item.tool!), output: extractOutput(item.tool!), status: 'called' });
-    }
-  }
-}
-
-// Watch both new items AND status changes on existing items
-watch(() => props.items.map(i => `${i.id}:${i.tool?.status}`).join(','), scanSandboxTools);
+watch(() => props.items, syncSandboxTools, { deep: true, immediate: true });
 
 const show = () => {
   eventBus.emit(EVENT_SHOW_ACTIVITY_PANEL);

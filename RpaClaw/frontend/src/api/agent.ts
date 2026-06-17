@@ -1,6 +1,6 @@
 import { apiClient, ApiResponse, createSSEConnection, SSECallbacks } from './client';
 import type { FileInfo } from './file';
-import { ListSessionItem, SessionStatus, GetSessionResponse, SkillItem, ExternalSkillItem, ExternalToolItem } from '../types/response';
+import type { ListSessionItem, GetSessionResponse, ExternalSkillItem, ExternalToolItem } from '../types/response';
 
 // Re-export or alias if needed for backward compatibility, 
 // but prefer using types from response.ts to ensure consistency.
@@ -90,6 +90,20 @@ export async function getVNCUrl(sessionId: string): Promise<string> {
   return `${proto}//${window.location.host}/api/v1/runtime/session/${sessionId}/http/websockify`;
 }
 
+export interface BrowserPreviewTab {
+  tab_id: string;
+  title: string;
+  url: string;
+  opener_tab_id: string | null;
+  status: string;
+  active: boolean;
+}
+
+export async function getSessionBrowserTabs(sessionId: string): Promise<BrowserPreviewTab[]> {
+  const response = await apiClient.get<ApiResponse<{ tabs: BrowserPreviewTab[] }>>(`/sessions/${sessionId}/browser/tabs`);
+  return response.data.data.tabs;
+}
+
 export const getSessionFiles = async (session_id: string): Promise<FileInfo[]> => {
   const response = await apiClient.get<ApiResponse<FileInfo[]>>(`/sessions/${session_id}/files`);
   return response.data.data;
@@ -112,6 +126,42 @@ export async function deleteSkill(skillName: string): Promise<{skill_name: strin
 
 export async function getSkillFiles(skillName: string, path: string = ""): Promise<any[]> {
   const response = await apiClient.get<ApiResponse<any[]>>(`/sessions/skills/${skillName}/files`, { params: { path } });
+  return response.data.data;
+}
+
+export interface RecordedSkillDetail {
+  kind: 'skill';
+  mode: 'recorded-overview' | 'files';
+  can_use_overview: boolean;
+  name: string;
+  description: string;
+  entry_script: string;
+  generated_at: string;
+  params: Record<string, unknown>;
+  steps: Array<Record<string, unknown>>;
+  artifacts: string[];
+  files: Array<{ name: string; path: string; type: string }>;
+}
+
+export async function getSkillDetail(skillName: string): Promise<RecordedSkillDetail> {
+  const response = await apiClient.get<ApiResponse<RecordedSkillDetail>>(`/sessions/skills/${encodeURIComponent(skillName)}/detail`);
+  return response.data.data;
+}
+
+export interface UpdateSkillOverviewPayload {
+  name: string;
+  description: string;
+  params: Record<string, unknown>;
+}
+
+export async function updateSkillOverview(
+  skillName: string,
+  payload: UpdateSkillOverviewPayload,
+): Promise<{skill_name: string, renamed: boolean}> {
+  const response = await apiClient.put<ApiResponse<{skill_name: string, renamed: boolean}>>(
+    `/sessions/skills/${encodeURIComponent(skillName)}/overview`,
+    payload,
+  );
   return response.data.data;
 }
 

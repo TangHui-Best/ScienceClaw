@@ -1,10 +1,13 @@
 import importlib.util
+import json
 import unittest
 import tempfile
 import shutil
 from pathlib import Path
 from pathlib import Path as _Path
-from unittest.mock import MagicMock
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 
 # Load sessions module directly to avoid import issues
@@ -13,6 +16,8 @@ SPEC = importlib.util.spec_from_file_location("sessions_module", SESSIONS_PATH)
 SESSIONS_MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC is not None and SPEC.loader is not None
 SPEC.loader.exec_module(SESSIONS_MODULE)
+SESSIONS_MODULE.Any = Any
+SESSIONS_MODULE.ApiResponse.model_rebuild(_types_namespace={"Any": Any})
 
 
 class TestShouldSkipFile(unittest.TestCase):
@@ -119,6 +124,38 @@ class TestShouldSkipFile(unittest.TestCase):
         should_skip_file = SESSIONS_MODULE.should_skip_file
         path = Path("/some/skill/utils")
         self.assertFalse(should_skip_file(path))
+
+    def test_extract_tool_meta_preserves_nested_mcp_metadata(self):
+        """Should keep nested MCP metadata alongside the base tool fields."""
+        extract_tool_meta = SESSIONS_MODULE._extract_tool_meta
+        payload = {
+            "tool_meta": {
+                "icon": "🔧",
+                "category": "execution",
+                "description": "PubMed search",
+                "sandbox": True,
+                "mcp": {
+                    "source": "mcp",
+                    "server_id": "pubmed",
+                    "nested": {"tool": "search"},
+                },
+            }
+        }
+
+        self.assertEqual(
+            extract_tool_meta(payload),
+            {
+                "icon": "🔧",
+                "category": "execution",
+                "description": "PubMed search",
+                "sandbox": True,
+                "mcp": {
+                    "source": "mcp",
+                    "server_id": "pubmed",
+                    "nested": {"tool": "search"},
+                },
+            },
+        )
 
 
 class TestListSkillFilesFiltering(unittest.TestCase):
@@ -236,6 +273,314 @@ description: Test skill
         # Verify filtered files are NOT in the list
         self.assertNotIn("skill.cpython-313.pyc", file_names)
         self.assertNotIn("module.pyc", file_names)
+
+
+class TestSaveToolFromSession(unittest.IsolatedAsyncioTestCase):
+    """Regression coverage for configured tools_dir writes."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.workspace_root = _Path(self.temp_dir) / "workspace"
+        self.tools_root = _Path(self.temp_dir) / "configured-tools"
+        self.session_id = "session-123"
+        self.tool_name = "demo_tool"
+        staging_dir = self.workspace_root / self.session_id / "tools_staging"
+        staging_dir.mkdir(parents=True)
+        (staging_dir / f"{self.tool_name}.py").write_text(
+            '@tool\ndef demo_tool():\n    """demo"""\n    return "ok"\n',
+            encoding="utf-8",
+        )
+
+        self.original_workspace_dir = getattr(SESSIONS_MODULE, "_WORKSPACE_DIR", None)
+        self.original_tools_dir = SESSIONS_MODULE.settings.tools_dir
+        self.original_get_session = SESSIONS_MODULE.async_get_science_session
+
+        SESSIONS_MODULE._WORKSPACE_DIR = str(self.workspace_root)
+        SESSIONS_MODULE.settings.tools_dir = str(self.tools_root)
+        SESSIONS_MODULE.async_get_science_session = AsyncMock(
+            return_value=SimpleNamespace(user_id="user-1")
+        )
+
+    def tearDown(self):
+        SESSIONS_MODULE.async_get_science_session = self.original_get_session
+        SESSIONS_MODULE.settings.tools_dir = self.original_tools_dir
+        if self.original_workspace_dir is not None:
+            SESSIONS_MODULE._WORKSPACE_DIR = self.original_workspace_dir
+        shutil.rmtree(self.temp_dir)
+
+    async def test_save_tool_from_session_creates_configured_tools_dir(self):
+        body = SESSIONS_MODULE.SaveToolRequest(tool_name=self.tool_name, replaces="")
+        current_user = SimpleNamespace(id="user-1")
+
+        response = await SESSIONS_MODULE.save_tool_from_session(
+            self.session_id,
+            body,
+            current_user,
+        )
+
+        saved_tool = self.tools_root / f"{self.tool_name}.py"
+        self.assertTrue(self.tools_root.is_dir())
+        self.assertTrue(saved_tool.is_file())
+        self.assertIn("@tool", saved_tool.read_text(encoding="utf-8"))
+        self.assertEqual(response.data["tool_name"], self.tool_name)
+        self.assertTrue(response.data["saved"])
+
+
+class TestRecordedSkillDetail(unittest.IsolatedAsyncioTestCase):
+    async def test_update_recorded_skill_overview_preserves_generated_unicode_name(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            skill_name = "台账自动化"
+            skill_dir = _Path(temp_dir) / skill_name
+            skill_dir.mkdir()
+            (skill_dir / "skill.meta.json").write_text(
+                json.dumps({
+                    "version": 2,
+                    "kind": "rpa-recording",
+                    "name": skill_name,
+                    "description": "Recorded flow",
+                    "entry_script": "skill.py",
+                    "generated_at": "2026-04-29T12:00:00+08:00",
+                    "params": {},
+                    "steps": [],
+                    "artifacts": ["SKILL.md", "skill.py", "params.json"],
+                }, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (skill_dir / "SKILL.md").write_text(
+                "---\nname: 台账自动化\ndescription: Recorded flow\n---\n\n# 台账自动化\n",
+                encoding="utf-8",
+            )
+            (skill_dir / "params.json").write_text("{}", encoding="utf-8")
+            (skill_dir / "skill.py").write_text("print('ok')\n", encoding="utf-8")
+
+            original_backend = SESSIONS_MODULE.settings.storage_backend
+            original_dir = SESSIONS_MODULE.settings.external_skills_dir
+            SESSIONS_MODULE.settings.storage_backend = "local"
+            SESSIONS_MODULE.settings.external_skills_dir = temp_dir
+            try:
+                body = SESSIONS_MODULE.UpdateSkillOverviewRequest(
+                    name=skill_name,
+                    description="Updated flow",
+                    params={"username": {"type": "string", "original_value": "admin"}},
+                )
+                response = await SESSIONS_MODULE.update_skill_overview(
+                    skill_name,
+                    body,
+                    SimpleNamespace(id="user-1"),
+                )
+            finally:
+                SESSIONS_MODULE.settings.storage_backend = original_backend
+                SESSIONS_MODULE.settings.external_skills_dir = original_dir
+
+            self.assertEqual(response.data["skill_name"], skill_name)
+            self.assertFalse(response.data["renamed"])
+            self.assertTrue(skill_dir.is_dir())
+            meta = json.loads((skill_dir / "skill.meta.json").read_text(encoding="utf-8"))
+            self.assertEqual(meta["name"], skill_name)
+            self.assertEqual(meta["description"], "Updated flow")
+            self.assertIn("username", meta["params"])
+
+    async def test_update_recorded_skill_overview_renames_identifier_and_syncs_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            skill_dir = _Path(temp_dir) / "recorded_skill"
+            skill_dir.mkdir()
+            (skill_dir / "skill.meta.json").write_text(
+                json.dumps({
+                    "version": 2,
+                    "kind": "rpa-recording",
+                    "name": "recorded_skill",
+                    "description": "Recorded flow",
+                    "entry_script": "skill.py",
+                    "generated_at": "2026-04-24T12:00:00+08:00",
+                    "params": {
+                        "query": {
+                            "type": "string",
+                            "description": "Old query",
+                            "required": True,
+                            "original_value": "",
+                            "sensitive": False,
+                        }
+                    },
+                    "steps": [{"id": "step_1", "action": "goto"}],
+                    "artifacts": ["SKILL.md", "skill.py", "params.json"],
+                }),
+                encoding="utf-8",
+            )
+            (skill_dir / "SKILL.md").write_text(
+                """---
+name: recorded_skill
+description: Recorded flow
+---
+
+# recorded_skill
+
+Recorded flow
+
+## Usage
+
+Run the skill.
+
+## Input Schema
+
+```json
+{}
+```
+""",
+                encoding="utf-8",
+            )
+            (skill_dir / "params.json").write_text(
+                json.dumps({"query": {"type": "string", "description": "Old query"}}),
+                encoding="utf-8",
+            )
+            (skill_dir / "skill.py").write_text("print('ok')\n", encoding="utf-8")
+
+            original_backend = SESSIONS_MODULE.settings.storage_backend
+            original_dir = SESSIONS_MODULE.settings.external_skills_dir
+            SESSIONS_MODULE.settings.storage_backend = "local"
+            SESSIONS_MODULE.settings.external_skills_dir = temp_dir
+            try:
+                body = SESSIONS_MODULE.UpdateSkillOverviewRequest(
+                    name="renamed_skill",
+                    description="Updated flow",
+                    params={
+                        "keyword": {
+                            "type": "string",
+                            "description": "Search keyword",
+                            "required": True,
+                            "original_value": "cancer",
+                            "sensitive": False,
+                        }
+                    },
+                )
+                response = await SESSIONS_MODULE.update_skill_overview(
+                    "recorded_skill",
+                    body,
+                    SimpleNamespace(id="user-1"),
+                )
+            finally:
+                SESSIONS_MODULE.settings.storage_backend = original_backend
+                SESSIONS_MODULE.settings.external_skills_dir = original_dir
+
+            self.assertEqual(response.data["skill_name"], "renamed_skill")
+            self.assertFalse(skill_dir.exists())
+            renamed_dir = _Path(temp_dir) / "renamed_skill"
+            self.assertTrue(renamed_dir.is_dir())
+
+            meta = json.loads((renamed_dir / "skill.meta.json").read_text(encoding="utf-8"))
+            params = json.loads((renamed_dir / "params.json").read_text(encoding="utf-8"))
+            skill_md = (renamed_dir / "SKILL.md").read_text(encoding="utf-8")
+
+            self.assertEqual(meta["name"], "renamed_skill")
+            self.assertEqual(meta["description"], "Updated flow")
+            self.assertEqual(meta["params"], params)
+            self.assertEqual(params["keyword"]["original_value"], "cancer")
+            self.assertIn("name: renamed_skill", skill_md)
+            self.assertIn("description: Updated flow", skill_md)
+            self.assertIn("# renamed_skill", skill_md)
+            self.assertIn('"keyword"', skill_md)
+
+    async def test_update_recorded_skill_overview_rolls_back_when_file_sync_fails(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            skill_dir = _Path(temp_dir) / "recorded_skill"
+            skill_dir.mkdir()
+            original_meta = {
+                "version": 2,
+                "kind": "rpa-recording",
+                "name": "recorded_skill",
+                "description": "Recorded flow",
+                "entry_script": "skill.py",
+                "generated_at": "2026-04-24T12:00:00+08:00",
+                "params": {"query": {"type": "string", "original_value": "old"}},
+                "steps": [],
+                "artifacts": ["SKILL.md", "skill.py", "params.json"],
+            }
+            original_skill_md = "---\nname: recorded_skill\ndescription: Recorded flow\n---\n\n# recorded_skill\n"
+            original_params = {"query": {"type": "string", "original_value": "old"}}
+            (skill_dir / "skill.meta.json").write_text(json.dumps(original_meta), encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text(original_skill_md, encoding="utf-8")
+            (skill_dir / "params.json").write_text(json.dumps(original_params), encoding="utf-8")
+            (skill_dir / "skill.py").write_text("print('ok')\n", encoding="utf-8")
+
+            original_backend = SESSIONS_MODULE.settings.storage_backend
+            original_dir = SESSIONS_MODULE.settings.external_skills_dir
+            original_write = SESSIONS_MODULE._write_text_atomic
+            SESSIONS_MODULE.settings.storage_backend = "local"
+            SESSIONS_MODULE.settings.external_skills_dir = temp_dir
+
+            def fail_on_skill_md(path, content):
+                if path.name == "SKILL.md":
+                    raise OSError("simulated write failure")
+                original_write(path, content)
+
+            SESSIONS_MODULE._write_text_atomic = fail_on_skill_md
+            try:
+                body = SESSIONS_MODULE.UpdateSkillOverviewRequest(
+                    name="recorded_skill",
+                    description="Updated flow",
+                    params={"keyword": {"type": "string", "original_value": "new"}},
+                )
+                with self.assertRaises(SESSIONS_MODULE.HTTPException):
+                    await SESSIONS_MODULE.update_skill_overview(
+                        "recorded_skill",
+                        body,
+                        SimpleNamespace(id="user-1"),
+                    )
+            finally:
+                SESSIONS_MODULE._write_text_atomic = original_write
+                SESSIONS_MODULE.settings.storage_backend = original_backend
+                SESSIONS_MODULE.settings.external_skills_dir = original_dir
+
+            self.assertEqual(
+                json.loads((skill_dir / "skill.meta.json").read_text(encoding="utf-8")),
+                original_meta,
+            )
+            self.assertEqual(
+                json.loads((skill_dir / "params.json").read_text(encoding="utf-8")),
+                original_params,
+            )
+            self.assertEqual((skill_dir / "SKILL.md").read_text(encoding="utf-8"), original_skill_md)
+
+    async def test_recorded_skill_detail_reads_skill_meta_json(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            skill_dir = _Path(temp_dir) / "recorded_skill"
+            skill_dir.mkdir()
+            (skill_dir / "skill.meta.json").write_text(
+                json.dumps({
+                    "version": 1,
+                    "kind": "rpa-recording",
+                    "name": "recorded_skill",
+                    "description": "Recorded flow",
+                    "entry_script": "skill.py",
+                    "generated_at": "2026-04-24T12:00:00+08:00",
+                    "params": {},
+                    "steps": [{"id": "step_1", "action": "goto"}],
+                    "artifacts": ["SKILL.md", "skill.py", "params.json"],
+                }),
+                encoding="utf-8",
+            )
+            (skill_dir / "SKILL.md").write_text(
+                "---\nname: recorded_skill\ndescription: Recorded flow\n---",
+                encoding="utf-8",
+            )
+            (skill_dir / "skill.py").write_text("print('ok')\n", encoding="utf-8")
+
+            original_backend = SESSIONS_MODULE.settings.storage_backend
+            original_dir = SESSIONS_MODULE.settings.external_skills_dir
+            SESSIONS_MODULE.settings.storage_backend = "local"
+            SESSIONS_MODULE.settings.external_skills_dir = temp_dir
+            try:
+                response = await SESSIONS_MODULE.get_skill_detail(
+                    "recorded_skill",
+                    SimpleNamespace(id="user-1"),
+                )
+            finally:
+                SESSIONS_MODULE.settings.storage_backend = original_backend
+                SESSIONS_MODULE.settings.external_skills_dir = original_dir
+
+            self.assertEqual(response.data["mode"], "recorded-overview")
+            self.assertEqual(response.data["name"], "recorded_skill")
+            self.assertEqual(response.data["steps"][0]["action"], "goto")
+            self.assertTrue(response.data["can_use_overview"])
 
 
 if __name__ == "__main__":

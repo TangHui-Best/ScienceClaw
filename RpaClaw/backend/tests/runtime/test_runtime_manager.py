@@ -7,7 +7,9 @@ from backend.config import (
     _derive_sandbox_vnc_ws_url,
     _resolve_sandbox_base_url,
     _resolve_sandbox_mcp_url,
+    _resolve_sandbox_tools_dir,
     _resolve_sandbox_vnc_ws_url,
+    _resolve_tools_dir,
 )
 from backend.runtime.session_runtime_manager import (
     SessionRuntimeManager,
@@ -15,6 +17,8 @@ from backend.runtime.session_runtime_manager import (
     reset_session_runtime_manager,
 )
 import hashlib
+import tempfile
+from pathlib import Path
 import pytest
 
 
@@ -78,6 +82,21 @@ def test_sandbox_optional_overrides_take_precedence(monkeypatch):
     assert _resolve_sandbox_base_url() == "http://sandbox:8080"
     assert _resolve_sandbox_mcp_url() == "http://sandbox-mcp:8080/mcp"
     assert _resolve_sandbox_vnc_ws_url() == "wss://sandbox-vnc.example.com/socket"
+
+
+def test_tools_dir_defaults_to_home_subdirectory(monkeypatch):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        home_dir = Path(temp_dir) / "rpaclaw-home"
+        monkeypatch.delenv("TOOLS_DIR", raising=False)
+        monkeypatch.setenv("RPA_CLAW_HOME", str(home_dir))
+
+        assert _resolve_tools_dir() == str(home_dir / "tools")
+
+
+def test_sandbox_tools_dir_uses_trimmed_override(monkeypatch):
+    monkeypatch.setenv("SANDBOX_TOOLS_DIR", "/custom/tools///")
+
+    assert _resolve_sandbox_tools_dir() == "/custom/tools"
 
 
 def test_sandbox_base_url_falls_back_to_mcp(monkeypatch):

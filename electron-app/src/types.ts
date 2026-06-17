@@ -13,6 +13,7 @@ export interface BackendEnv {
   STORAGE_BACKEND: string;
   RPA_CLAW_HOME: string;
   WORKSPACE_DIR: string;
+  TOOLS_DIR: string;
   EXTERNAL_SKILLS_DIR: string;
   LOCAL_DATA_DIR: string;
   BUILTIN_SKILLS_DIR: string;

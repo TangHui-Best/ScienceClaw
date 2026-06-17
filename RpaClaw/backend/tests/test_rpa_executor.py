@@ -68,8 +68,10 @@ class _FakeContext:
 class _FakeBrowser:
     def __init__(self):
         self.contexts = []
+        self.new_context_calls = []
 
-    async def new_context(self, **_kwargs):
+    async def new_context(self, **kwargs):
+        self.new_context_calls.append(kwargs)
         context = _FakeContext()
         self.contexts.append(context)
         return context
@@ -80,6 +82,7 @@ class _FakeSessionManager:
         self.attached = []
         self.registered = []
         self.context_pages = []
+        self.activated = []
         self.detached = []
 
     def attach_context(self, session_id, context):
@@ -93,11 +96,34 @@ class _FakeSessionManager:
         self.context_pages.append((session_id, page, make_active))
         return "popup-tab"
 
+    async def activate_page(self, session_id, page, tab_id=None):
+        self.activated.append((session_id, page, tab_id))
+        return "activated-tab"
+
     def detach_context(self, session_id, context=None):
         self.detached.append((session_id, context))
 
 
 class ScriptExecutorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_execute_reports_active_trace_index_when_script_times_out(self):
+        executor = EXECUTOR_MODULE.ScriptExecutor()
+        script = '''
+import asyncio
+
+async def execute_skill(page, **kwargs):
+    kwargs["_on_log"]("TRACE_START 1: runtime semantic repository selection | url=https://github.com/trending")
+    await asyncio.sleep(1)
+    return {"ok": True}
+'''
+        logs = []
+        browser = _FakeBrowser()
+
+        result = await executor.execute(browser, script, on_log=logs.append, timeout=0.01)
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["failed_step_index"], 1)
+        self.assertTrue(any(log.startswith("TRACE_START 1: runtime semantic repository selection") for log in logs))
+
     async def test_execute_registers_popup_pages_with_session_manager(self):
         browser = _FakeBrowser()
         session_manager = _FakeSessionManager()
@@ -121,6 +147,16 @@ async def execute_skill(page, **kwargs):
 
         self.assertTrue(result["success"])
         self.assertEqual(len(browser.contexts), 1)
+        self.assertEqual(
+            browser.new_context_calls,
+            [
+                {
+                    "no_viewport": True,
+                    "accept_downloads": True,
+                    "ignore_https_errors": True,
+                }
+            ],
+        )
         self.assertEqual(len(session_manager.attached), 1)
         self.assertEqual(len(session_manager.registered), 1)
         self.assertEqual(len(session_manager.context_pages), 1)
@@ -129,6 +165,29 @@ async def execute_skill(page, **kwargs):
         self.assertEqual(session_manager.detached, [("session-1", browser.contexts[0])])
         self.assertEqual(page_registry, {})
         self.assertTrue(browser.contexts[0].closed)
+
+    async def test_execute_injects_activate_recorded_page_hook_for_preview_switching(self):
+        browser = _FakeBrowser()
+        session_manager = _FakeSessionManager()
+        script = """
+async def execute_skill(page, **kwargs):
+    new_page = await page.context.new_page()
+    await kwargs["_activate_recorded_page"](new_page, "tab-second")
+    return {"ok": True}
+"""
+
+        result = await EXECUTOR_MODULE.ScriptExecutor().execute(
+            browser,
+            script,
+            session_id="session-1",
+            session_manager=session_manager,
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(len(session_manager.activated), 1)
+        self.assertEqual(session_manager.activated[0][0], "session-1")
+        self.assertEqual(session_manager.activated[0][2], "tab-second")
+        self.assertIs(session_manager.activated[0][1], browser.contexts[0].pages[1])
 
 
 class StepExecutionErrorTests(unittest.IsolatedAsyncioTestCase):

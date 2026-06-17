@@ -19,9 +19,8 @@
         <template v-if="editingId !== wh.id">
           <div class="flex items-center justify-between gap-3">
             <div class="flex items-center gap-2.5 min-w-0 flex-1">
-              <component :is="typeIcon(wh.type)" :size="16" class="flex-shrink-0" :class="typeColor(wh.type)" />
+              <MessageSquare :size="16" class="flex-shrink-0 text-blue-500" />
               <span class="font-medium text-[var(--text-primary)] truncate">{{ wh.name }}</span>
-              <span class="text-xs px-2 py-0.5 rounded-full bg-gray-200 dark:bg-gray-700 text-[var(--text-tertiary)]">{{ typeLabel(wh.type) }}</span>
             </div>
             <div class="flex items-center gap-1.5 flex-shrink-0">
               <button @click="handleTest(wh)" :disabled="testingId === wh.id"
@@ -42,16 +41,8 @@
         <!-- Edit mode -->
         <template v-else>
           <div class="space-y-3">
-            <div class="flex gap-2">
-              <input v-model="editForm.name" type="text" :placeholder="t('Webhook name')"
-                class="flex-1 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#1e1e1e] text-sm text-[var(--text-primary)] focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500" />
-              <select v-model="editForm.type"
-                class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#1e1e1e] text-sm text-[var(--text-primary)] focus:ring-2 focus:ring-blue-500/30">
-                <option value="feishu">{{ t('Feishu') }}</option>
-                <option value="dingtalk">{{ t('DingTalk') }}</option>
-                <option value="wecom">{{ t('WeCom') }}</option>
-              </select>
-            </div>
+            <input v-model="editForm.name" type="text" :placeholder="t('Webhook name')"
+              class="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#1e1e1e] text-sm text-[var(--text-primary)] focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500" />
             <input v-model="editForm.url" type="url" :placeholder="t('Webhook URL')"
               class="w-full px-3 py-2 rounded-lg border text-sm text-[var(--text-primary)] focus:ring-2 focus:ring-blue-500/30"
               :class="editUrlError ? 'border-red-400 dark:border-red-500 bg-red-50/50 dark:bg-red-900/10' : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-[#1e1e1e] focus:border-blue-500'"
@@ -81,16 +72,8 @@
       <!-- Create form -->
       <div v-if="showCreateForm" class="w-full rounded-xl border-2 border-dashed border-blue-300 dark:border-blue-700 bg-blue-50/50 dark:bg-blue-900/10 p-4 space-y-3">
         <p class="text-sm font-medium text-[var(--text-primary)]">{{ t('New webhook') }}</p>
-        <div class="flex gap-2">
-          <input v-model="createForm.name" type="text" :placeholder="t('Webhook name')"
-            class="flex-1 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#1e1e1e] text-sm text-[var(--text-primary)] focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500" />
-          <select v-model="createForm.type"
-            class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#1e1e1e] text-sm text-[var(--text-primary)] focus:ring-2 focus:ring-blue-500/30">
-            <option value="feishu">{{ t('Feishu') }}</option>
-            <option value="dingtalk">{{ t('DingTalk') }}</option>
-            <option value="wecom">{{ t('WeCom') }}</option>
-          </select>
-        </div>
+        <input v-model="createForm.name" type="text" :placeholder="t('Webhook name')"
+          class="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#1e1e1e] text-sm text-[var(--text-primary)] focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500" />
         <input v-model="createForm.url" type="url" :placeholder="t('Webhook URL')"
           class="w-full px-3 py-2 rounded-lg border text-sm text-[var(--text-primary)] focus:ring-2 focus:ring-blue-500/30"
           :class="createUrlError ? 'border-red-400 dark:border-red-500 bg-red-50/50 dark:bg-red-900/10' : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-[#1e1e1e] focus:border-blue-500'"
@@ -136,36 +119,12 @@ const editingId = ref<string | null>(null);
 const savingEdit = ref(false);
 const testingId = ref<string | null>(null);
 
-const createForm = ref({ name: '', type: 'feishu', url: '' });
-const editForm = ref({ name: '', type: 'feishu', url: '' });
+const createForm = ref({ name: '', url: '' });
+const editForm = ref({ name: '', url: '' });
 const createUrlError = ref('');
 const editUrlError = ref('');
 
-function detectTypeFromUrl(url: string): string | null {
-  if (!url) return null;
-  try {
-    const host = new URL(url).hostname;
-    if (host.includes('feishu.cn') || host.includes('larksuite.com')) return 'feishu';
-    if (host.includes('dingtalk.com') || host.includes('dingtalk.cn')) return 'dingtalk';
-    if (host.includes('weixin.qq.com') || host.includes('qyapi.weixin.qq.com')) return 'wecom';
-  } catch { /* invalid URL */ }
-  return null;
-}
 
-const TYPE_NAMES: Record<string, string> = { feishu: '飞书', dingtalk: '钉钉', wecom: '企微' };
-
-function validateUrlType(url: string, selectedType: string): string {
-  const detected = detectTypeFromUrl(url);
-  if (detected && detected !== selectedType) {
-    return t('URL type mismatch', { detected: TYPE_NAMES[detected] || detected, selected: TYPE_NAMES[selectedType] || selectedType });
-  }
-  return '';
-}
-
-const TYPE_LABELS: Record<string, string> = { feishu: '飞书', dingtalk: '钉钉', wecom: '企微' };
-const typeLabel = (t: string) => TYPE_LABELS[t] || t;
-const typeColor = (t: string) => t === 'feishu' ? 'text-blue-500' : t === 'dingtalk' ? 'text-sky-500' : 'text-green-500';
-const typeIcon = (_t: string) => markRaw(MessageSquare);
 
 async function loadWebhooks() {
   loading.value = true;
@@ -176,13 +135,11 @@ async function loadWebhooks() {
 }
 
 async function handleCreate() {
-  createUrlError.value = validateUrlType(createForm.value.url, createForm.value.type);
-  if (createUrlError.value) return;
   creating.value = true;
   try {
-    await createWebhook(createForm.value);
+    await createWebhook({ ...createForm.value, type: 'generic' });
     showCreateForm.value = false;
-    createForm.value = { name: '', type: 'feishu', url: '' };
+    createForm.value = { name: '', url: '' };
     createUrlError.value = '';
     await loadWebhooks();
     showSuccessToast(t('Webhook created'));
@@ -193,7 +150,7 @@ async function handleCreate() {
 
 function startEdit(wh: Webhook) {
   editingId.value = wh.id;
-  editForm.value = { name: wh.name, type: wh.type, url: wh.url };
+  editForm.value = { name: wh.name, url: wh.url };
 }
 
 function cancelEdit() {
@@ -202,11 +159,9 @@ function cancelEdit() {
 
 async function saveEdit() {
   if (!editingId.value) return;
-  editUrlError.value = validateUrlType(editForm.value.url, editForm.value.type);
-  if (editUrlError.value) return;
   savingEdit.value = true;
   try {
-    await updateWebhook(editingId.value, editForm.value);
+    await updateWebhook(editingId.value, { ...editForm.value, type: 'generic' });
     editingId.value = null;
     editUrlError.value = '';
     await loadWebhooks();

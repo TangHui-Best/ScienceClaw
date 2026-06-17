@@ -59,7 +59,34 @@ class _FakeAsyncClient:
         return _FakeResponse()
 
 
-@pytest.mark.asyncio
+class _FakeChromium:
+    def __init__(self):
+        self.connect_calls = []
+        self.launch_calls = []
+
+    async def connect_over_cdp(self, cdp_url):
+        self.connect_calls.append(cdp_url)
+        return object()
+
+    async def launch(self, **kwargs):
+        self.launch_calls.append(kwargs)
+        return object()
+
+
+class _FakePlaywrightHandle:
+    def __init__(self):
+        self.chromium = _FakeChromium()
+
+
+class _FakeAsyncPlaywrightFactory:
+    def __init__(self, handle):
+        self.handle = handle
+
+    async def start(self):
+        return self.handle
+
+
+@pytest.mark.anyio
 async def test_fetch_cdp_url_uses_runtime_endpoint_for_session(monkeypatch):
     _install_fake_playwright_modules()
     sys.modules.pop("backend.rpa.cdp_connector", None)
@@ -75,3 +102,32 @@ async def test_fetch_cdp_url_uses_runtime_endpoint_for_session(monkeypatch):
 
     assert fake_client.calls == ["http://rpaclaw-sess-sess-1-svc:8080/v1/browser/info"]
     assert cdp_url == "ws://rpaclaw-sess-sess-1-svc:8080/devtools/browser/test-id"
+
+
+@pytest.mark.anyio
+async def test_local_launch_uses_relaxed_security_browser_args(monkeypatch):
+    _install_fake_playwright_modules()
+    sys.modules.pop("backend.rpa.cdp_connector", None)
+    cdp_connector = importlib.import_module("backend.rpa.cdp_connector")
+
+    fake_playwright = _FakePlaywrightHandle()
+    monkeypatch.setattr(
+        cdp_connector,
+        "async_playwright",
+        lambda: _FakeAsyncPlaywrightFactory(fake_playwright),
+    )
+
+    _pw, _browser = await cdp_connector.LocalCDPConnector._launch()
+
+    assert fake_playwright.chromium.launch_calls == [
+        {
+            "headless": False,
+            "args": [
+                "--ignore-certificate-errors",
+                "--allow-insecure-localhost",
+                "--allow-running-insecure-content",
+                "--test-type",
+                "--disable-notifications",
+            ],
+        }
+    ]

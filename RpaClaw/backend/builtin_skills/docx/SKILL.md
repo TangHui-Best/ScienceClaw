@@ -199,7 +199,7 @@ python3 /builtin-skills/docx/scripts/office/unpack.py document.docx unpacked/
 
 ```bash
 python3 /builtin-skills/docx/scripts/office/soffice.py --headless --convert-to pdf document.docx
-pdftoppm -jpeg -r 150 document.pdf page
+python3 /builtin-skills/pdf/scripts/convert_pdf_to_images.py document.pdf page_images
 ```
 
 ### Accepting Tracked Changes
@@ -214,7 +214,7 @@ python3 /builtin-skills/docx/scripts/accept_changes.py input.docx output.docx
 
 ## Creating New Documents
 
-Generate .docx files with JavaScript, then validate. Install: `npm install -g docx`
+Generate `.docx` files with JavaScript, then validate. This workflow requires the `docx` Node module.
 
 ### Setup
 ```javascript
@@ -744,6 +744,5 @@ After running `comment.py` (see Step 2), add markers to document.xml. For replie
 ## Dependencies
 
 - **pandoc**: Text extraction
-- **docx**: `npm install -g docx` (new documents)
-- **LibreOffice**: PDF conversion (auto-configured for sandboxed environments via `/builtin-skills/docx/scripts/office/soffice.py`)
-- **Poppler**: `pdftoppm` for images
+- **docx**: Node module for creating new documents
+- **LibreOffice**: `.doc` conversion, PDF conversion, tracked-change acceptance (auto-configured for sandboxed environments via `/builtin-skills/docx/scripts/office/soffice.py`)
