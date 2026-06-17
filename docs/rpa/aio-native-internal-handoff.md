@@ -30,10 +30,13 @@ API 遵从 AIO 沙箱官网接口形态：https://sandbox.agent-infra.com/api/
 
 ```http
 POST https://{APIG-Endpoint}/api/livefunction/sandboxes
+X-HW-ID: <configured-id>
+X-HW-APPKEY: <configured-appkey>
 Content-Type: application/json
 
 {
-  "templateId": "lf-jsdklalfdan5sf1a1dd1"
+  "templateId": "lf-jsdklalfdan5sf1a1dd1",
+  "timeout": 600
 }
 ```
 
@@ -61,6 +64,8 @@ Content-Type: application/json
 
 ```http
 GET https://{APIG-Endpoint}/api/livefunction/sandboxes/{sandboxId}
+X-HW-ID: <configured-id>
+X-HW-APPKEY: <configured-appkey>
 ```
 
 状态码 `404` 表示实例不存在。
@@ -95,6 +100,8 @@ GET https://{APIG-Endpoint}/api/livefunction/sandboxes/{sandboxId}
 
 ```http
 DELETE https://{APIG-Endpoint}/api/livefunction/sandboxes/{sandboxId}
+X-HW-ID: <configured-id>
+X-HW-APPKEY: <configured-appkey>
 ```
 
 响应示例：
@@ -110,6 +117,8 @@ DELETE https://{APIG-Endpoint}/api/livefunction/sandboxes/{sandboxId}
 
 ```http
 POST https://{APIG-Endpoint}/api/livefunction/sandboxes/refresh/{sandboxId}
+X-HW-ID: <configured-id>
+X-HW-APPKEY: <configured-appkey>
 Content-Type: application/json
 
 {
@@ -184,13 +193,19 @@ Content-Type: application/json
 
 ```powershell
 $env:RUNTIME_MODE = "aio_native"
-$env:AIO_NATIVE_API_BASE_URL = "https://{APIG-Endpoint}"
-$env:AIO_NATIVE_TEMPLATE_ID = "lf-jsdklalfdan5sf1a1dd1"
+$env:AIO_NATIVE_CREATE_URL = "http://apigw-beta.huawei.com/api/livefunction/sandboxes"
+$env:AIO_NATIVE_STATUS_URL_TEMPLATE = "http://apigw-beta.huawei.com/api/livefunction/sandboxes/{sandbox_id}"
+$env:AIO_NATIVE_DELETE_URL_TEMPLATE = "http://apigw-beta.huawei.com/api/livefunction/sandboxes/{sandbox_id}"
+$env:AIO_NATIVE_REFRESH_URL_TEMPLATE = "http://apigw-beta.huawei.com/api/livefunction/sandboxes/refresh/{sandbox_id}"
+$env:AIO_NATIVE_HW_ID = "com.huawei.pass.roma.event"
+$env:AIO_NATIVE_APPKEY = "<configured-appkey>"
+$env:AIO_NATIVE_TEMPLATE_ID = "lf-6eff9409b0d85f3d3e079501e975e28c"
+$env:AIO_NATIVE_CREATE_TIMEOUT_SECONDS = "600"
 $env:AIO_NATIVE_REFRESH_DURATION_SECONDS = "300"
-$env:AIO_NATIVE_API_TOKEN = "<host-to-aio-token-if-needed>"
+$env:AIO_BASE_URL = "http://apigw-beta.huawei.com/api/rpa-sandbox"
 ```
 
-如果内网鉴权通过 APIG header 完成，应只在 provider HTTP client 层注入，不要进入 RPA trace、frontend payload 或 runtime metadata。
+`AIO_NATIVE_API_BASE_URL` + path/template 形式仍可用；如果配置完整 URL，完整 URL 优先。生命周期 API 会注入 `X-HW-ID` / `X-HW-APPKEY`；沙箱内部 API 会在这两个 header 外额外注入 `x-livefunction-sandbox-id={sandboxId}`。鉴权 header 只在 provider / runtime client 层注入，不进入 RPA trace、frontend payload 或 runtime metadata。
 
 ### 5.2 Browser/CDP 接入
 

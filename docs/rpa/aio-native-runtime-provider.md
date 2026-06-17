@@ -42,11 +42,16 @@ $env:AIO_RUNTIME_SANDBOX_ID = "aio-native-manual"
 
 ```powershell
 $env:RUNTIME_MODE = "aio_native"
-$env:AIO_NATIVE_API_BASE_URL = "https://{APIG-Endpoint}"
-$env:AIO_NATIVE_API_TOKEN = "<host-to-aio-token-if-needed>"
-$env:AIO_NATIVE_TEMPLATE_ID = "lf-jsdklalfdan5sf1a1dd1"
+$env:AIO_NATIVE_CREATE_URL = "http://apigw-beta.huawei.com/api/livefunction/sandboxes"
+$env:AIO_NATIVE_STATUS_URL_TEMPLATE = "http://apigw-beta.huawei.com/api/livefunction/sandboxes/{sandbox_id}"
+$env:AIO_NATIVE_DELETE_URL_TEMPLATE = "http://apigw-beta.huawei.com/api/livefunction/sandboxes/{sandbox_id}"
+$env:AIO_NATIVE_REFRESH_URL_TEMPLATE = "http://apigw-beta.huawei.com/api/livefunction/sandboxes/refresh/{sandbox_id}"
+$env:AIO_NATIVE_HW_ID = "com.huawei.pass.roma.event"
+$env:AIO_NATIVE_APPKEY = "<configured-appkey>"
+$env:AIO_NATIVE_TEMPLATE_ID = "lf-6eff9409b0d85f3d3e079501e975e28c"
+$env:AIO_NATIVE_CREATE_TIMEOUT_SECONDS = "600"
 $env:AIO_NATIVE_REFRESH_DURATION_SECONDS = "300"
-$env:AIO_NATIVE_BASE_URL = "https://{host-reachable-browser-route}/{sandbox_id}"
+$env:AIO_BASE_URL = "http://apigw-beta.huawei.com/api/rpa-sandbox"
 ```
 
 默认生命周期路径为：
@@ -56,15 +61,19 @@ $env:AIO_NATIVE_BASE_URL = "https://{host-reachable-browser-route}/{sandbox_id}"
 - refresh: `POST /api/livefunction/sandboxes/refresh/{sandbox_id}`
 - delete: `DELETE /api/livefunction/sandboxes/{sandbox_id}`
 
-真实 lifecycle 模式下，create payload 只包含 AIO 模板字段：
+也可以继续使用 `AIO_NATIVE_API_BASE_URL` + path/template 形式；如果配置了 `AIO_NATIVE_CREATE_URL` 等完整 URL，provider 会优先使用完整 URL。
+
+真实 lifecycle 模式下，create payload 包含 AIO 模板和沙箱超时时间：
 
 ```json
-{"templateId": "lf-jsdklalfdan5sf1a1dd1"}
+{"templateId": "lf-6eff9409b0d85f3d3e079501e975e28c", "timeout": 600}
 ```
 
 Host 会把 AIO 返回的 `data.sandboxId`、`data.templateId`、`data.status`、`data.cpu`、`data.memory`、`data.timeout`、`data.startAt`、`data.endAt` 映射到 `SessionRuntimeRecord` 和脱敏 metadata。`running` 映射为 `ready`，`stopped/error/404` 映射为 `missing`。
 
-`AIO_NATIVE_BASE_URL` 可以包含 `{sandbox_id}` 占位符，用于把内网 APIG 或 browser/CDP 路由模板归一成 Host 可访问的 `rest_base_url` / `route_base_url`。低层 URL 拼接应留在 provider/CDP connector 层，不要散落到 RPA recorder、Skill compiler 或前端。
+生命周期 API 会发送 `X-HW-ID` / `X-HW-APPKEY`。沙箱内部 API 会继续发送这两个 header，并额外发送 `x-livefunction-sandbox-id={sandboxId}`；该 `sandboxId` 来自 create/status 响应，只保存非敏感 ID，不把 `X-HW-APPKEY` 写入 runtime metadata。
+
+`AIO_BASE_URL` / `AIO_NATIVE_BASE_URL` 指向沙箱内部 API 前缀，例如 `http://apigw-beta.huawei.com/api/rpa-sandbox`。如果内网后续暴露的是包含 `{sandbox_id}` 的 route 模板，也可以把 `{sandbox_id}` 写入该 URL。低层 URL 拼接应留在 provider/CDP connector 层，不要散落到 RPA recorder、Skill compiler 或前端。
 
 ## 待产品级验证
 

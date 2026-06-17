@@ -98,6 +98,44 @@ def _sanitize_command_for_log(command: str) -> str:
         command,
     )
 
+
+def _normalize_sandbox_path(path: str) -> str:
+    value = (path or "").strip().replace("\\", "/")
+    value = re.sub(r"^[A-Za-z]:", "", value)
+    value = re.sub(r"/+", "/", value)
+    if not value:
+        return "/"
+    if not value.startswith("/"):
+        value = f"/{value}"
+    return value.rstrip("/") or "/"
+
+
+def _join_sandbox_path(base: str, *parts: str) -> str:
+    current = _normalize_sandbox_path(base)
+    for part in parts:
+        clean = str(part).replace("\\", "/").strip("/")
+        if clean:
+            current = f"{current.rstrip('/')}/{clean}"
+    return current
+
+
+def _extract_runtime_home_dir(context: dict) -> str | None:
+    candidates: list[Any] = [context.get("home_dir")]
+    data = context.get("data")
+    if isinstance(data, dict):
+        candidates.append(data.get("home_dir"))
+    detail = context.get("detail")
+    if isinstance(detail, dict):
+        system = detail.get("system")
+        if isinstance(system, dict):
+            candidates.append(system.get("home_dir"))
+
+    for candidate in candidates:
+        if isinstance(candidate, str) and candidate.strip():
+            return _normalize_sandbox_path(candidate)
+    return None
+
+
 class FullSandboxBackend(SandboxBackendProtocol):
     """全沙盒后端：完全依赖远程 API 进行计算和存储。"""
 
@@ -112,21 +150,35 @@ class FullSandboxBackend(SandboxBackendProtocol):
         max_output_chars: int = _MAX_OUTPUT_CHARS,
         session_model_config: dict | None = None,
         runtime_token: str | None = None,
+        runtime_headers: dict[str, str] | None = None,
+        use_runtime_home_workspace: bool = False,
+        runtime_home_dir: str | None = None,
     ) -> None:
         self._session_id = session_id
         self._user_id = user_id
         self._sandbox_url = sandbox_url.rstrip("/")
         self._base_dir = base_dir
+        self._sandbox_base_dir = _normalize_sandbox_path(sandbox_base_dir)
         # _remote_workspace 是沙箱内的路径，用于 exec_dir / system prompt 等
         # 当 backend 与 sandbox 不共享文件系统时，这个路径与 base_dir 不同
-        self._remote_workspace = f"{sandbox_base_dir}/{session_id}"
+        self._remote_workspace = _join_sandbox_path(self._sandbox_base_dir, session_id)
         self._execute_timeout = execute_timeout
         self._max_output_chars = max_output_chars
         self._session_model_config = session_model_config
         self._runtime_token = (runtime_token or "").strip() or None
+        self._runtime_headers = {
+            str(key): str(value)
+            for key, value in (runtime_headers or {}).items()
+            if str(key).strip() and str(value).strip()
+        }
+        self._use_runtime_home_workspace = use_runtime_home_workspace
+        self._remote_home_dir: str | None = None
+        if self._use_runtime_home_workspace and runtime_home_dir:
+            self._apply_runtime_home_workspace(runtime_home_dir)
         self._shell_session_id: Optional[str] = None
         self._env_context: Optional[dict] = None
         self._client: Optional[httpx.AsyncClient] = None
+        self._shell_exec_lock = asyncio.Lock()
         self._consecutive_sandbox_errors = 0
         self._circuit_open_until = 0.0
 
@@ -138,15 +190,14 @@ class FullSandboxBackend(SandboxBackendProtocol):
     def _get_client(self) -> httpx.AsyncClient:
         """获取或创建共享的 httpx 异步客户端（不设客户端级别超时，由各请求自行控制）。"""
         if self._client is None or self._client.is_closed:
-            headers = (
-                {"Authorization": f"Bearer {self._runtime_token}"}
-                if self._runtime_token
-                else None
-            )
+            headers = dict(self._runtime_headers)
+            if self._runtime_token and "Authorization" not in headers:
+                headers["Authorization"] = f"Bearer {self._runtime_token}"
             self._client = httpx.AsyncClient(
                 base_url=self._sandbox_url,
                 timeout=httpx.Timeout(30),
-                headers=headers,
+                headers=headers or None,
+                trust_env=False,
             )
         return self._client
 
@@ -169,15 +220,98 @@ class FullSandboxBackend(SandboxBackendProtocol):
         if self._env_context:
             return self._env_context
 
-        try:
-            client = self._get_client()
-            resp = await client.get("/v1/sandbox", timeout=10)
-            resp.raise_for_status()
-            self._env_context = resp.json()
-            return self._env_context
-        except Exception as exc:
-            logger.error(f"[FullSandbox] Failed to fetch sandbox context: {exc}")
-            return {"success": False, "message": str(exc)}
+        last_exc: Exception | None = None
+        for attempt in range(3):
+            try:
+                client = self._get_client()
+                resp = await client.get("/v1/sandbox", timeout=10)
+                resp.raise_for_status()
+                self._env_context = resp.json()
+                self._maybe_rebase_workspace_from_context(self._env_context)
+                return self._env_context
+            except Exception as exc:
+                last_exc = exc
+                if attempt < 2:
+                    await asyncio.sleep(0.3 * (attempt + 1))
+                    continue
+
+        logger.error(f"[FullSandbox] Failed to fetch sandbox context: {last_exc}")
+        return {"success": False, "message": str(last_exc)}
+
+    def _apply_runtime_home_workspace(self, home_dir: str) -> None:
+        normalized_home = _normalize_sandbox_path(home_dir)
+        self._remote_home_dir = normalized_home
+        self._remote_workspace = _join_sandbox_path(
+            normalized_home,
+            "workspace",
+            self._session_id,
+        )
+
+    def _maybe_rebase_workspace_from_context(self, context: dict) -> None:
+        if not self._use_runtime_home_workspace:
+            return
+
+        home_dir = _extract_runtime_home_dir(context)
+        if not home_dir:
+            return
+
+        runtime_workspace = _join_sandbox_path(home_dir, "workspace", self._session_id)
+        if runtime_workspace == self._remote_workspace:
+            return
+
+        logger.info(
+            "[FullSandbox] Rebasing workspace from runtime context: "
+            f"old={self._remote_workspace}, new={runtime_workspace}"
+        )
+        self._apply_runtime_home_workspace(home_dir)
+        self._shell_session_id = None
+
+    def _legacy_workspace_prefixes(self) -> list[str]:
+        prefixes = [
+            _join_sandbox_path(self._sandbox_base_dir, self._session_id),
+            _join_sandbox_path("/home/rpaclaw/workspace", self._session_id),
+        ]
+        seen: set[str] = set()
+        result: list[str] = []
+        for prefix in prefixes:
+            normalized = _normalize_sandbox_path(prefix)
+            if normalized == self._remote_workspace or normalized in seen:
+                continue
+            seen.add(normalized)
+            result.append(normalized)
+        return sorted(result, key=len, reverse=True)
+
+    def _rewrite_runtime_workspace_path(self, path: str) -> str:
+        if not self._use_runtime_home_workspace:
+            return path
+
+        normalized = _normalize_sandbox_path(path)
+        for legacy_prefix in self._legacy_workspace_prefixes():
+            if normalized == legacy_prefix:
+                return self._remote_workspace
+            if normalized.startswith(f"{legacy_prefix}/"):
+                return f"{self._remote_workspace}{normalized[len(legacy_prefix):]}"
+        return path
+
+    def _rewrite_runtime_workspace_paths_in_text(self, text: str) -> str:
+        if not self._use_runtime_home_workspace:
+            return text
+
+        rewritten = text
+        for legacy_prefix in self._legacy_workspace_prefixes():
+            rewritten = rewritten.replace(legacy_prefix, self._remote_workspace)
+            rewritten = rewritten.replace(
+                legacy_prefix.replace("/", "\\"),
+                self._remote_workspace,
+            )
+        skills_root = f"{self._remote_workspace}/.skills"
+        rewritten = re.sub(r"(?<![\w:/.-])/skills(?=/|$)", skills_root, rewritten)
+        rewritten = re.sub(
+            r"(?<![\w:/.-])\\skills(?=\\|$)",
+            skills_root,
+            rewritten,
+        )
+        return rewritten
 
     async def _aensure_session(self, force_new: bool = False) -> str:
         if self._shell_session_id and not force_new:
@@ -372,6 +506,14 @@ class FullSandboxBackend(SandboxBackendProtocol):
     ) -> ExecuteResponse:
         # Inject credentials for skill.py commands
         command = await self._maybe_inject_credentials(command)
+        command = self._rewrite_runtime_workspace_paths_in_text(command)
+
+        async with self._shell_exec_lock:
+            return await self._aexecute_locked(command, timeout=timeout)
+
+    async def _aexecute_locked(
+        self, command: str, *, timeout: int | None = None
+    ) -> ExecuteResponse:
 
         effective_timeout = timeout or self._execute_timeout
         debug_run_id = f"{self._session_id}-{int(time.time() * 1000)}"
@@ -435,6 +577,7 @@ class FullSandboxBackend(SandboxBackendProtocol):
     # ── 文件操作 (File Operations) ─────────────────────────────
 
     async def als_info(self, path: str) -> list[FileInfo]:
+        path = self._rewrite_runtime_workspace_path(path)
         try:
             client = self._get_client()
             resp = await client.post("/v1/file/list", json={"path": path, "recursive": False})
@@ -458,6 +601,7 @@ class FullSandboxBackend(SandboxBackendProtocol):
         return _run_sync(self.als_info(path))
 
     async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> str:
+        file_path = self._rewrite_runtime_workspace_path(file_path)
         try:
             client = self._get_client()
             resp = await client.post(
@@ -475,6 +619,7 @@ class FullSandboxBackend(SandboxBackendProtocol):
         return _run_sync(self.aread(file_path, offset, limit))
 
     async def awrite(self, file_path: str, content: str) -> WriteResult:
+        file_path = self._rewrite_runtime_workspace_path(file_path)
         try:
             client = self._get_client()
             resp = await client.post(
@@ -491,6 +636,7 @@ class FullSandboxBackend(SandboxBackendProtocol):
     async def aedit(
         self, file_path: str, old_string: str, new_string: str, replace_all: bool = False
     ) -> EditResult:
+        file_path = self._rewrite_runtime_workspace_path(file_path)
         try:
             client = self._get_client()
             resp = await client.post(
@@ -515,7 +661,7 @@ class FullSandboxBackend(SandboxBackendProtocol):
     async def agrep_raw(
         self, pattern: str, path: str | None = None, glob: str | None = None
     ) -> list[GrepMatch] | str:
-        target = path or self._remote_workspace
+        target = self._rewrite_runtime_workspace_path(path) if path else self._remote_workspace
         try:
             client = self._get_client()
             resp = await client.post(
@@ -560,6 +706,7 @@ class FullSandboxBackend(SandboxBackendProtocol):
         """通过 shell grep 命令实现搜索，作为 /v1/file/search 不支持目录时的回退方案。"""
         import shlex
         glob_flag = f"--include={shlex.quote(glob)} " if glob else ""
+        path = self._rewrite_runtime_workspace_path(path)
         cmd = f"grep -rn {glob_flag}{shlex.quote(pattern)} {shlex.quote(path)} 2>/dev/null || true"
         exec_result = await self.aexecute(cmd, timeout=30)
         results: list[GrepMatch] = []
@@ -583,6 +730,7 @@ class FullSandboxBackend(SandboxBackendProtocol):
         return _run_sync(self.agrep_raw(pattern, path, glob))
 
     async def aglob_info(self, pattern: str, path: str = "/") -> list[FileInfo]:
+        path = self._rewrite_runtime_workspace_path(path)
         try:
             client = self._get_client()
             resp = await client.post(

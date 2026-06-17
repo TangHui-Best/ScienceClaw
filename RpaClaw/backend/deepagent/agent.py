@@ -24,6 +24,7 @@ Skills 架构：
 from __future__ import annotations
 
 import os
+import hashlib
 from copy import deepcopy
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -47,13 +48,14 @@ from backend.deepagent.offload_middleware import ToolResultOffloadMiddleware
 from backend.deepagent.diagnostic import DIAGNOSTIC_ENABLED, DiagnosticLogger
 from backend.deepagent.tool_execution import LocalToolExecutor, SandboxToolExecutor
 from backend.config import settings
+from backend.runtime.aio_native_headers import aio_native_sandbox_headers
 from backend.runtime.session_runtime_manager import get_session_runtime_manager
 
 # ───────────────────────────────────────────────────────────────────
 # 外部扩展工具（Tools 目录自动扫描，支持热加载）
 # ───────────────────────────────────────────────────────────────────
 _EXTERNAL_TOOLS_LOADER: ExternalToolsLoader | None = None
-_EXTERNAL_TOOLS_LOADER_KEY: tuple[str, str, str] | None = None
+_EXTERNAL_TOOLS_LOADER_KEY: tuple[str, ...] | None = None
 
 
 def _runtime_mode_uses_session_runtime() -> bool:
@@ -61,22 +63,52 @@ def _runtime_mode_uses_session_runtime() -> bool:
     return runtime_mode in {"aio", "aio_fixed", "aio_native", "docker", "session_pod"}
 
 
-def _build_external_tool_executor(sandbox_base_url: str | None = None):
+def _runtime_home_dir(runtime: Any) -> str | None:
+    metadata = getattr(runtime, "metadata", None)
+    if not isinstance(metadata, dict):
+        return None
+    home_dir = metadata.get("home_dir")
+    if not isinstance(home_dir, str) or not home_dir.strip():
+        return None
+    return home_dir.strip()
+
+
+def _runtime_request_headers(runtime: Any | None) -> dict[str, str] | None:
+    if not runtime or getattr(runtime, "namespace", None) != "aio-native":
+        return None
+    headers = aio_native_sandbox_headers(settings, getattr(runtime, "sandbox_id", None))
+    return headers or None
+
+
+def _headers_cache_fingerprint(headers: dict[str, str] | None) -> str:
+    if not headers:
+        return ""
+    rendered = "\n".join(f"{key}={value}" for key, value in sorted(headers.items()))
+    return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+
+
+def _build_external_tool_executor(
+    sandbox_base_url: str | None = None,
+    sandbox_headers: dict[str, str] | None = None,
+):
     if sandbox_base_url:
         return SandboxToolExecutor(
             sandbox_base_url=sandbox_base_url,
             sandbox_tools_dir=settings.sandbox_tools_dir,
+            sandbox_headers=sandbox_headers,
         )
     if settings.storage_backend == "local":
         return LocalToolExecutor()
     return SandboxToolExecutor(
         sandbox_base_url=sandbox_base_url,
         sandbox_tools_dir=settings.sandbox_tools_dir,
+        sandbox_headers=sandbox_headers,
     )
 
 
 def _get_external_tools_loader(
     sandbox_base_url: str | None = None,
+    sandbox_headers: dict[str, str] | None = None,
     loader_cache_key: str | None = None,
 ) -> ExternalToolsLoader:
     global _EXTERNAL_TOOLS_LOADER, _EXTERNAL_TOOLS_LOADER_KEY
@@ -86,6 +118,7 @@ def _get_external_tools_loader(
         str(settings.tools_dir),
         str(settings.sandbox_tools_dir),
         sandbox_base_url or "",
+        _headers_cache_fingerprint(sandbox_headers),
         loader_cache_key or "",
     )
     if _EXTERNAL_TOOLS_LOADER is not None and _EXTERNAL_TOOLS_LOADER_KEY == loader_key:
@@ -93,7 +126,10 @@ def _get_external_tools_loader(
 
     _EXTERNAL_TOOLS_LOADER = ExternalToolsLoader(
         tools_dir=settings.tools_dir,
-        executor=_build_external_tool_executor(sandbox_base_url=sandbox_base_url),
+        executor=_build_external_tool_executor(
+            sandbox_base_url=sandbox_base_url,
+            sandbox_headers=sandbox_headers,
+        ),
     )
     _EXTERNAL_TOOLS_LOADER_KEY = loader_key
     return _EXTERNAL_TOOLS_LOADER
@@ -182,10 +218,12 @@ async def _load_mcp_tools_for_session(
 def reload_external_tools(
     force: bool = False,
     sandbox_base_url: str | None = None,
+    sandbox_headers: dict[str, str] | None = None,
     loader_cache_key: str | None = None,
 ):
     tools = _get_external_tools_loader(
         sandbox_base_url=sandbox_base_url,
+        sandbox_headers=sandbox_headers,
         loader_cache_key=loader_cache_key,
     ).reload(force=force)
     _register_external_tools_in_sse(tools)
@@ -324,9 +362,17 @@ async def _inject_local_skills_to_sandbox(
                         content = handle.read()
                     result = await sandbox.awrite(remote_path, content)
                     if hasattr(result, "error") and result.error:
-                        logger.warning(f"[Skills] Local skill injection failed {remote_path}: {result.error}")
+                        logger.warning(
+                            "[Skills] Local skill injection disabled for this request "
+                            f"after {remote_path} failed: {result.error}"
+                        )
+                        return injected
                 except Exception as exc:
-                    logger.warning(f"[Skills] Local skill injection failed {remote_path}: {exc}")
+                    logger.warning(
+                        "[Skills] Local skill injection disabled for this request "
+                        f"after {remote_path} failed: {exc}"
+                    )
+                    return injected
         injected += 1
 
     if injected:
@@ -471,6 +517,7 @@ _STATIC_TOOLS = [
 def _collect_tools(
     blocked_tools: Set[str] | None = None,
     sandbox_base_url: str | None = None,
+    sandbox_headers: dict[str, str] | None = None,
     loader_cache_key: str | None = None,
     mcp_tools: list | None = None,
 ) -> List:
@@ -488,6 +535,7 @@ def _collect_tools(
         try:
             ext_tools = reload_external_tools(
                 sandbox_base_url=sandbox_base_url,
+                sandbox_headers=sandbox_headers,
                 loader_cache_key=loader_cache_key,
             )
         except Exception:
@@ -602,6 +650,7 @@ async def deep_agent(
             user_id or "default_user",
         )
         runtime_sandbox_base_url = runtime.rest_base_url
+        runtime_headers = _runtime_request_headers(runtime)
         sandbox = FullSandboxBackend(
             session_id=session_id,
             user_id=user_id or "default_user",
@@ -612,11 +661,14 @@ async def deep_agent(
             max_output_chars=ts.max_output_chars,
             session_model_config=model_config,
             runtime_token=runtime.runtime_token,
+            runtime_headers=runtime_headers,
+            use_runtime_home_workspace=(runtime.namespace == "aio-native"),
+            runtime_home_dir=_runtime_home_dir(runtime),
         )
         # sandbox_workspace: 沙箱内路径（如 /home/rpaclaw/{sid}），用于 system prompt、exec_dir
         # local_workspace:   backend 本地路径（如 D:\...\workspace\{sid}），用于本地文件 I/O
-        sandbox_workspace = sandbox.workspace
         ctx = await sandbox.get_context()
+        sandbox_workspace = sandbox.workspace
         if ctx.get("success"):
             sandbox_info = ctx.get("data")
 
@@ -624,6 +676,7 @@ async def deep_agent(
     tools = _collect_tools(
         blocked_tools=blocked_tools,
         sandbox_base_url=runtime_sandbox_base_url,
+        sandbox_headers=runtime_headers if runtime_sandbox_base_url else None,
         loader_cache_key=session_id,
         mcp_tools=mcp_tools,
     )
@@ -769,8 +822,11 @@ async def deep_agent(
         except Exception:
             _mem_files_to_use.append(_mf)
 
-    agent_kwargs["memory"] = _mem_files_to_use
-    logger.info(f"[Memory] 已启用记忆: {[os.path.basename(f) for f in _mem_files_to_use]}")
+    if is_local:
+        agent_kwargs["memory"] = _mem_files_to_use
+        logger.info(f"[Memory] 已启用记忆: {[os.path.basename(f) for f in _mem_files_to_use]}")
+    else:
+        logger.info("[Memory] 远程 runtime 执行面暂不启用本地 memory 文件，避免 host 路径泄漏到 sandbox")
 
     # 将主 agent 的关键策略注入到 general-purpose 子 agent 的 system_prompt，
     # 使子 agent 在处理 skill/tool 相关任务时遵循相同的工作流。
@@ -854,16 +910,28 @@ async def deep_agent_eval(
         )
         sandbox_workspace = local_workspace.replace("\\", "/")
     else:
+        runtime = None
+        if _runtime_mode_uses_session_runtime():
+            runtime = await get_session_runtime_manager().ensure_runtime(
+                session_id,
+                "eval_runner",
+            )
+        runtime_headers = _runtime_request_headers(runtime)
         sandbox = FullSandboxBackend(
             session_id=session_id,
             user_id="eval_runner",
+            sandbox_url=runtime.rest_base_url if runtime else settings.sandbox_base_url,
             base_dir=_WORKSPACE_DIR,
             sandbox_base_dir=_SANDBOX_WORKSPACE_DIR,
             execute_timeout=ts.sandbox_exec_timeout,
             max_output_chars=ts.max_output_chars,
+            runtime_token=runtime.runtime_token if runtime else None,
+            runtime_headers=runtime_headers,
+            use_runtime_home_workspace=(runtime.namespace == "aio-native") if runtime else False,
+            runtime_home_dir=_runtime_home_dir(runtime) if runtime else None,
         )
-        sandbox_workspace = sandbox.workspace
         ctx = await sandbox.get_context()
+        sandbox_workspace = sandbox.workspace
         if ctx.get("success"):
             sandbox_info = ctx.get("data")
 

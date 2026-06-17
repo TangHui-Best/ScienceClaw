@@ -647,6 +647,76 @@ class TestSessionRuntimeSandboxFiles(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_sandbox_file_read_uses_aio_native_gateway_headers(self):
+        calls = []
+
+        class FakeRuntimeManager:
+            async def get_runtime(self, session_id: str, refresh: bool = False):
+                return SimpleNamespace(
+                    namespace="aio-native",
+                    status="ready",
+                    sandbox_id="sb-123",
+                    rest_base_url="http://apig.internal/api/rpa-sandbox",
+                    route_base_url="http://apig.internal/api/rpa-sandbox",
+                    runtime_token=None,
+                )
+
+        class FakeResponse:
+            status_code = 200
+
+            def json(self):
+                return {"data": {"content": "from aio runtime"}}
+
+        class FakeAsyncClient:
+            def __init__(self, timeout, headers=None):
+                self.timeout = timeout
+                self.headers = headers
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, url, json):
+                calls.append({"url": url, "json": json, "headers": self.headers})
+                return FakeResponse()
+
+        original_manager = SESSIONS_MODULE.get_session_runtime_manager
+        original_client = SESSIONS_MODULE.httpx.AsyncClient
+        original_hw_id = getattr(SESSIONS_MODULE.settings, "aio_native_hw_id", "")
+        original_appkey = getattr(SESSIONS_MODULE.settings, "aio_native_appkey", "")
+        SESSIONS_MODULE.get_session_runtime_manager = lambda: FakeRuntimeManager()
+        SESSIONS_MODULE.httpx.AsyncClient = FakeAsyncClient
+        SESSIONS_MODULE.settings.aio_native_hw_id = "com.huawei.pass.roma.event"
+        SESSIONS_MODULE.settings.aio_native_appkey = "configured-appkey"
+        try:
+            content = await SESSIONS_MODULE._sandbox_file_read(
+                "/home/gem/workspace/chat-1/report.txt",
+                session_id="chat-1",
+            )
+        finally:
+            SESSIONS_MODULE.get_session_runtime_manager = original_manager
+            SESSIONS_MODULE.httpx.AsyncClient = original_client
+            SESSIONS_MODULE.settings.aio_native_hw_id = original_hw_id
+            SESSIONS_MODULE.settings.aio_native_appkey = original_appkey
+
+        self.assertEqual(content, "from aio runtime")
+        self.assertEqual(
+            calls,
+            [
+                {
+                    "url": "http://apig.internal/api/rpa-sandbox/v1/file/read",
+                    "json": {"file": "/home/gem/workspace/chat-1/report.txt"},
+                    "headers": {
+                        "X-HW-ID": "com.huawei.pass.roma.event",
+                        "X-HW-APPKEY": "configured-appkey",
+                        "x-livefunction-sandbox-id": "sb-123",
+                    },
+                }
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -89,16 +89,14 @@ async def test_aio_native_runtime_provider_uses_fixed_native_aio_browser_info():
         aio_runtime_sandbox_id = "native-aio-sandbox"
 
     class _NativeAioResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
         def raise_for_status(self):
             return None
 
         def json(self):
-            return {
-                "data": {
-                    "cdp_url": "ws://127.0.0.1:9222/devtools/browser/native",
-                    "vnc_url": "http://127.0.0.1:8080/vnc/index.html",
-                }
-            }
+            return self.payload
 
     class _NativeAioClient:
         calls = []
@@ -112,9 +110,20 @@ async def test_aio_native_runtime_provider_uses_fixed_native_aio_browser_info():
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        async def get(self, url):
-            self.calls.append(url)
-            return _NativeAioResponse()
+        async def get(self, url, **kwargs):
+            self.calls.append({"url": url, "kwargs": kwargs})
+            if url.endswith("/v1/browser/info"):
+                return _NativeAioResponse(
+                    {
+                        "data": {
+                            "cdp_url": "ws://127.0.0.1:9222/devtools/browser/native",
+                            "vnc_url": "http://127.0.0.1:8080/vnc/index.html",
+                        }
+                    }
+                )
+            if url.endswith("/v1/sandbox"):
+                return _NativeAioResponse({"success": True, "home_dir": "/home/gem"})
+            raise AssertionError(f"unexpected url: {url}")
 
     _NativeAioClient.calls = []
     provider = AioNativeRuntimeProvider(
@@ -132,11 +141,26 @@ async def test_aio_native_runtime_provider_uses_fixed_native_aio_browser_info():
     assert runtime.rest_base_url == "http://localhost:18090"
     assert runtime.route_base_url == "http://localhost:18090"
     assert runtime.status == "ready"
+    assert runtime.metadata["home_dir"] == "/home/gem"
     assert refreshed.status == "ready"
     assert refreshed.browser_view_url == "http://localhost:18090/vnc/index.html"
     assert refreshed.metadata["browser_info_ok"] is True
     assert refreshed.metadata["cdp_url_available"] is True
-    assert _NativeAioClient.calls == ["http://localhost:18090/v1/browser/info"]
+    assert refreshed.metadata["home_dir"] == "/home/gem"
+    assert _NativeAioClient.calls == [
+        {
+            "url": "http://localhost:18090/v1/sandbox",
+            "kwargs": {"headers": {"x-livefunction-sandbox-id": "native-aio-sandbox"}},
+        },
+        {
+            "url": "http://localhost:18090/v1/browser/info",
+            "kwargs": {"headers": {"x-livefunction-sandbox-id": "native-aio-sandbox"}},
+        },
+        {
+            "url": "http://localhost:18090/v1/sandbox",
+            "kwargs": {"headers": {"x-livefunction-sandbox-id": "native-aio-sandbox"}},
+        },
+    ]
 
 
 @pytest.mark.asyncio
@@ -145,9 +169,16 @@ async def test_aio_native_runtime_provider_can_use_intranet_lifecycle_api():
         sandbox_base_url = "http://localhost:8080"
         aio_native_base_url = "http://browser-route.internal/{sandbox_id}"
         aio_runtime_sandbox_id = ""
-        aio_native_api_base_url = "https://apig.internal"
-        aio_native_api_token = "aio-api-token"
+        aio_native_api_base_url = ""
+        aio_native_create_url = "https://apig.internal/api/livefunction/sandboxes"
+        aio_native_status_url_template = "https://apig.internal/api/livefunction/sandboxes/{sandbox_id}"
+        aio_native_delete_url_template = "https://apig.internal/api/livefunction/sandboxes/{sandbox_id}"
+        aio_native_refresh_url_template = "https://apig.internal/api/livefunction/sandboxes/refresh/{sandbox_id}"
+        aio_native_api_token = ""
+        aio_native_hw_id = "com.huawei.pass.roma.event"
+        aio_native_appkey = "configured-appkey"
         aio_native_template_id = "lf-jsdklalfdan5sf1a1dd1"
+        aio_native_create_timeout_seconds = 600
         aio_native_refresh_duration_seconds = 300
 
     class _NativeLifecycleResponse:
@@ -238,23 +269,36 @@ async def test_aio_native_runtime_provider_can_use_intranet_lifecycle_api():
         "method": "POST",
         "url": "https://apig.internal/api/livefunction/sandboxes",
         "kwargs": {
-            "headers": {"Authorization": "Bearer aio-api-token"},
-            "json": {"templateId": "lf-jsdklalfdan5sf1a1dd1"},
+            "headers": {
+                "X-HW-ID": "com.huawei.pass.roma.event",
+                "X-HW-APPKEY": "configured-appkey",
+            },
+            "json": {"templateId": "lf-jsdklalfdan5sf1a1dd1", "timeout": 600},
         },
     }
     assert status_call["method"] == "GET"
     assert status_call["url"] == "https://apig.internal/api/livefunction/sandboxes/6v8s62vtbsxlvup8"
-    assert status_call["kwargs"]["headers"] == {"Authorization": "Bearer aio-api-token"}
+    assert status_call["kwargs"]["headers"] == {
+        "X-HW-ID": "com.huawei.pass.roma.event",
+        "X-HW-APPKEY": "configured-appkey",
+    }
     assert refresh_call == {
         "method": "POST",
         "url": "https://apig.internal/api/livefunction/sandboxes/refresh/6v8s62vtbsxlvup8",
         "kwargs": {
-            "headers": {"Authorization": "Bearer aio-api-token"},
+            "headers": {
+                "X-HW-ID": "com.huawei.pass.roma.event",
+                "X-HW-APPKEY": "configured-appkey",
+            },
             "json": {"duration": 300},
         },
     }
     assert delete_call["method"] == "DELETE"
     assert delete_call["url"] == "https://apig.internal/api/livefunction/sandboxes/6v8s62vtbsxlvup8"
+    assert delete_call["kwargs"]["headers"] == {
+        "X-HW-ID": "com.huawei.pass.roma.event",
+        "X-HW-APPKEY": "configured-appkey",
+    }
 
 
 @pytest.mark.asyncio

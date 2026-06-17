@@ -217,10 +217,23 @@ class Settings(BaseSettings):
     )
     aio_native_api_base_url: str = os.environ.get("AIO_NATIVE_API_BASE_URL", "")
     aio_native_api_token: str = os.environ.get("AIO_NATIVE_API_TOKEN", "")
+    aio_native_hw_id: str = os.environ.get("AIO_NATIVE_HW_ID", "")
+    aio_native_appkey: str = os.environ.get("AIO_NATIVE_APPKEY", "")
+    aio_native_sandbox_header_name: str = os.environ.get(
+        "AIO_NATIVE_SANDBOX_HEADER_NAME",
+        "x-livefunction-sandbox-id",
+    )
     aio_native_template_id: str = os.environ.get("AIO_NATIVE_TEMPLATE_ID", "")
+    aio_native_create_timeout_seconds: int = int(
+        os.environ.get("AIO_NATIVE_CREATE_TIMEOUT_SECONDS", "600")
+    )
     aio_native_refresh_duration_seconds: int = int(
         os.environ.get("AIO_NATIVE_REFRESH_DURATION_SECONDS", "300")
     )
+    aio_native_create_url: str = os.environ.get("AIO_NATIVE_CREATE_URL", "")
+    aio_native_status_url_template: str = os.environ.get("AIO_NATIVE_STATUS_URL_TEMPLATE", "")
+    aio_native_delete_url_template: str = os.environ.get("AIO_NATIVE_DELETE_URL_TEMPLATE", "")
+    aio_native_refresh_url_template: str = os.environ.get("AIO_NATIVE_REFRESH_URL_TEMPLATE", "")
     aio_native_create_path: str = os.environ.get(
         "AIO_NATIVE_CREATE_PATH",
         "/api/livefunction/sandboxes",

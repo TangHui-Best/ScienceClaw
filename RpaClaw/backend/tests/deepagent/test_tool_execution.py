@@ -210,12 +210,67 @@ def test_agent_uses_runtime_scoped_sandbox_executor(
         "executor": "sandbox",
         "sandbox_base_url": "http://shared-runtime",
         "sandbox_tools_dir": "/configured/sandbox-tools",
+        "sandbox_headers": None,
     }
     assert calls[2] == {
         "executor": "sandbox",
         "sandbox_base_url": "http://shared-runtime",
         "sandbox_tools_dir": "/configured/sandbox-tools",
+        "sandbox_headers": None,
     }
+
+
+def test_sandbox_tool_executor_sends_gateway_headers(monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.deepagent.tool_execution import SandboxToolExecutor
+
+    calls: list[dict[str, object]] = []
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return self._payload
+
+    def fake_post(url, json, headers=None, timeout=None):
+        calls.append({"url": url, "json": json, "headers": headers, "timeout": timeout})
+        if url.endswith("/v1/shell/sessions/create"):
+            return FakeResponse({"data": {"session_id": "shell-1"}})
+        return FakeResponse(
+            {
+                "data": {
+                    "output": ">>>TOOL_RESULT_JSON>>>\n{\"ok\": true}\n<<<TOOL_RESULT_JSON<<<\n"
+                }
+            }
+        )
+
+    monkeypatch.setattr("backend.deepagent.tool_execution.httpx.post", fake_post)
+
+    executor = SandboxToolExecutor(
+        sandbox_base_url="http://apig.internal/api/rpa-sandbox",
+        sandbox_headers={
+            "X-HW-ID": "com.huawei.pass.roma.event",
+            "X-HW-APPKEY": "configured-appkey",
+            "x-livefunction-sandbox-id": "sb-123",
+        },
+    )
+
+    result = executor.execute(
+        tool_path="E:/tools/demo.py",
+        function_name="demo",
+        arguments={},
+    )
+
+    assert result["result"] == {"ok": True}
+    assert calls[0]["headers"] == {
+        "X-HW-ID": "com.huawei.pass.roma.event",
+        "X-HW-APPKEY": "configured-appkey",
+        "x-livefunction-sandbox-id": "sb-123",
+    }
+    assert calls[1]["headers"] == calls[0]["headers"]
 
 
 def test_dir_watcher_logs_resolved_directory_details(tmp_path: Path) -> None:

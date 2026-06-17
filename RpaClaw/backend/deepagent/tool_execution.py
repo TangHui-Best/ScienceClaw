@@ -169,12 +169,18 @@ class SandboxToolExecutor:
         sandbox_tools_dir: str | None = None,
         tool_runner_path: str = DEFAULT_TOOL_RUNNER_PATH,
         execute_timeout: int = DEFAULT_EXECUTE_TIMEOUT,
+        sandbox_headers: dict[str, str] | None = None,
         command_runner: Callable[[str, int], str] | None = None,
     ) -> None:
         self._sandbox_base_url = (sandbox_base_url or settings.sandbox_base_url).rstrip("/")
         self._sandbox_tools_dir = (sandbox_tools_dir or settings.sandbox_tools_dir).rstrip("/")
         self._tool_runner_path = tool_runner_path
         self._execute_timeout = execute_timeout
+        self._sandbox_headers = {
+            str(key): str(value)
+            for key, value in (sandbox_headers or {}).items()
+            if str(key).strip() and str(value).strip()
+        }
         self._command_runner = command_runner
         self._sandbox_session_id: str | None = None
 
@@ -185,6 +191,7 @@ class SandboxToolExecutor:
         response = httpx.post(
             f"{self._sandbox_base_url}/v1/shell/sessions/create",
             json={"exec_dir": "/"},
+            headers=self._sandbox_headers or None,
             timeout=10,
         )
         response.raise_for_status()
@@ -197,6 +204,7 @@ class SandboxToolExecutor:
             response = httpx.post(
                 f"{self._sandbox_base_url}/v1/shell/exec",
                 json={"id": session_id, "command": command, "async_mode": False},
+                headers=self._sandbox_headers or None,
                 timeout=timeout + 5,
             )
             response.raise_for_status()

@@ -51,6 +51,7 @@ from backend.runtime.session_runtime_manager import get_session_runtime_manager
 from backend.user.dependencies import get_current_user, require_user, User
 from backend.models import get_model_config, resolve_default_model_config
 from backend.config import settings
+from backend.runtime.aio_native_headers import aio_native_sandbox_headers
 from backend.browser_preview import browser_preview_registry
 from backend.rpa.screencast import SessionScreencastController
 
@@ -435,8 +436,17 @@ async def _get_session_sandbox_rest_context(session_id: str | None = None) -> tu
             )
             if base:
                 token = str(getattr(runtime, "runtime_token", "") or "").strip()
-                headers = {"Authorization": f"Bearer {token}"} if token else None
-                return str(base).rstrip("/"), headers
+                headers: dict[str, str] = {}
+                if getattr(runtime, "namespace", None) == "aio-native":
+                    headers.update(
+                        aio_native_sandbox_headers(
+                            settings,
+                            getattr(runtime, "sandbox_id", None),
+                        )
+                    )
+                if token and "Authorization" not in headers:
+                    headers["Authorization"] = f"Bearer {token}"
+                return str(base).rstrip("/"), headers or None
     return _get_sandbox_rest_base(), None
 
 
