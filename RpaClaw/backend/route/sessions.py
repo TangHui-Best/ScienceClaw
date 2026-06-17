@@ -419,6 +419,33 @@ def _get_sandbox_rest_base() -> str:
     return settings.sandbox_base_url.rstrip("/")
 
 
+async def _get_session_sandbox_rest_context(session_id: str | None = None) -> tuple[str, dict[str, str] | None]:
+    """Return the session runtime base URL and auth headers when available."""
+    if session_id:
+        try:
+            runtime = await get_session_runtime_manager().get_runtime(session_id, refresh=False)
+        except Exception as exc:
+            logger.warning(f"Failed to resolve runtime for session {session_id}: {exc}")
+            runtime = None
+        if runtime and getattr(runtime, "status", None) == "ready":
+            base = (
+                getattr(runtime, "route_base_url", None)
+                or getattr(runtime, "rest_base_url", None)
+                or ""
+            )
+            if base:
+                token = str(getattr(runtime, "runtime_token", "") or "").strip()
+                headers = {"Authorization": f"Bearer {token}"} if token else None
+                return str(base).rstrip("/"), headers
+    return _get_sandbox_rest_base(), None
+
+
+async def _get_session_sandbox_rest_base(session_id: str | None = None) -> str:
+    """Return the session runtime base URL when available, else the global sandbox."""
+    base, _headers = await _get_session_sandbox_rest_context(session_id)
+    return base
+
+
 def _extract_sandbox_file_paths(events: List[Dict[str, Any]]) -> Set[str]:
     """Scan session events and extract file paths touched by sandbox tools."""
     paths: Set[str] = set()
@@ -511,10 +538,13 @@ def _diff_workspace_files(
     return changed
 
 
-async def _sandbox_file_list(directory: str) -> List[Dict[str, Any]]:
+async def _sandbox_file_list(directory: str, session_id: str | None = None) -> List[Dict[str, Any]]:
     """Call sandbox REST API to list files in a directory."""
-    base = _get_sandbox_rest_base()
-    async with httpx.AsyncClient(timeout=10) as client:
+    base, headers = await _get_session_sandbox_rest_context(session_id)
+    client_kwargs: dict[str, Any] = {"timeout": 10}
+    if headers:
+        client_kwargs["headers"] = headers
+    async with httpx.AsyncClient(**client_kwargs) as client:
         resp = await client.post(f"{base}/v1/file/list", json={"path": directory})
         if resp.status_code != 200:
             return []
@@ -525,10 +555,13 @@ async def _sandbox_file_list(directory: str) -> List[Dict[str, Any]]:
         return data if isinstance(data, list) else []
 
 
-async def _sandbox_file_read(file_path: str) -> Optional[str]:
+async def _sandbox_file_read(file_path: str, session_id: str | None = None) -> Optional[str]:
     """Call sandbox REST API to read a file."""
-    base = _get_sandbox_rest_base()
-    async with httpx.AsyncClient(timeout=10) as client:
+    base, headers = await _get_session_sandbox_rest_context(session_id)
+    client_kwargs: dict[str, Any] = {"timeout": 10}
+    if headers:
+        client_kwargs["headers"] = headers
+    async with httpx.AsyncClient(**client_kwargs) as client:
         resp = await client.post(f"{base}/v1/file/read", json={"file": file_path})
         if resp.status_code != 200:
             return None
@@ -2362,7 +2395,7 @@ async def read_sandbox_file(
             except Exception:
                 pass
 
-        content = await _sandbox_file_read(path)
+        content = await _sandbox_file_read(path, session_id=session_id)
         if content is None:
             raise HTTPException(status_code=404, detail="File not found")
 
@@ -2400,7 +2433,7 @@ async def download_sandbox_file(
                 media_type="application/octet-stream",
             )
 
-        content = await _sandbox_file_read(path)
+        content = await _sandbox_file_read(path, session_id=session_id)
         if content is None:
             raise HTTPException(status_code=404, detail="File not found")
 

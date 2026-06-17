@@ -56,7 +56,17 @@ _EXTERNAL_TOOLS_LOADER: ExternalToolsLoader | None = None
 _EXTERNAL_TOOLS_LOADER_KEY: tuple[str, str, str] | None = None
 
 
+def _runtime_mode_uses_session_runtime() -> bool:
+    runtime_mode = str(getattr(settings, "runtime_mode", "shared") or "shared").strip()
+    return runtime_mode in {"aio", "aio_fixed", "aio_native", "docker", "session_pod"}
+
+
 def _build_external_tool_executor(sandbox_base_url: str | None = None):
+    if sandbox_base_url:
+        return SandboxToolExecutor(
+            sandbox_base_url=sandbox_base_url,
+            sandbox_tools_dir=settings.sandbox_tools_dir,
+        )
     if settings.storage_backend == "local":
         return LocalToolExecutor()
     return SandboxToolExecutor(
@@ -272,6 +282,55 @@ async def _inject_skills_to_sandbox(
 
     if injected:
         logger.info(f"[Skills] 已注入 {injected} 个技能到沙箱 {skills_dir}/")
+    return injected
+
+
+async def _inject_local_skills_to_sandbox(
+    sandbox: FullSandboxBackend,
+    workspace: str,
+    skills_root: str,
+    blocked_skills: Set[str],
+) -> int:
+    """Copy local skill files into the remote session workspace for execution."""
+    root = os.path.abspath(skills_root)
+    if not os.path.isdir(root):
+        return 0
+
+    injected = 0
+    skills_dir = f"{workspace}/{_SKILLS_SUBDIR}"
+    for entry in sorted(os.scandir(root), key=lambda item: item.name):
+        if not entry.is_dir() or entry.name in blocked_skills:
+            continue
+        skill_md = os.path.join(entry.path, "SKILL.md")
+        if not os.path.isfile(skill_md):
+            continue
+        for current_dir, dirs, files in os.walk(entry.path):
+            dirs[:] = [
+                item for item in dirs
+                if item not in {"__pycache__", ".git", ".svn", ".vscode", ".idea", ".vs"}
+            ]
+            for filename in files:
+                if filename.endswith((".pyc", ".pyo", ".pyd")) or filename in {
+                    ".DS_Store",
+                    "Thumbs.db",
+                    "desktop.ini",
+                }:
+                    continue
+                local_file = os.path.join(current_dir, filename)
+                rel_path = os.path.relpath(local_file, entry.path).replace("\\", "/")
+                remote_path = f"{skills_dir}/{entry.name}/{rel_path}"
+                try:
+                    with open(local_file, "r", encoding="utf-8", errors="replace") as handle:
+                        content = handle.read()
+                    result = await sandbox.awrite(remote_path, content)
+                    if hasattr(result, "error") and result.error:
+                        logger.warning(f"[Skills] Local skill injection failed {remote_path}: {result.error}")
+                except Exception as exc:
+                    logger.warning(f"[Skills] Local skill injection failed {remote_path}: {exc}")
+        injected += 1
+
+    if injected:
+        logger.info(f"[Skills] Injected {injected} local skills into sandbox {skills_dir}/")
     return injected
 
 
@@ -517,13 +576,14 @@ async def deep_agent(
     mcp_tools = await _load_mcp_tools_for_session(session_id, user_id)
 
     # 1. 实例化后端：local 模式用 LocalShellBackend，云端用 FullSandboxBackend
-    is_local = settings.storage_backend == "local"
+    local_storage = settings.storage_backend == "local"
+    is_local = local_storage and not _runtime_mode_uses_session_runtime()
     runtime_sandbox_base_url: str | None = None
 
     sandbox_info = None
+    local_workspace = os.path.join(_WORKSPACE_DIR, session_id)
+    os.makedirs(local_workspace, exist_ok=True)
     if is_local:
-        local_workspace = os.path.join(_WORKSPACE_DIR, session_id)
-        os.makedirs(local_workspace, exist_ok=True)
         sandbox = LocalPathBackend(
             LocalPreviewShellBackend(
                 session_id=session_id,
@@ -551,11 +611,11 @@ async def deep_agent(
             execute_timeout=ts.sandbox_exec_timeout,
             max_output_chars=ts.max_output_chars,
             session_model_config=model_config,
+            runtime_token=runtime.runtime_token,
         )
         # sandbox_workspace: 沙箱内路径（如 /home/rpaclaw/{sid}），用于 system prompt、exec_dir
         # local_workspace:   backend 本地路径（如 D:\...\workspace\{sid}），用于本地文件 I/O
         sandbox_workspace = sandbox.workspace
-        local_workspace = os.path.join(_WORKSPACE_DIR, session_id)
         ctx = await sandbox.get_context()
         if ctx.get("success"):
             sandbox_info = ctx.get("data")
@@ -585,9 +645,17 @@ async def deep_agent(
     # 1.5 将用户技能文件注入沙箱（仅云端模式）
     if not is_local and user_id:
         try:
-            await _inject_skills_to_sandbox(
-                sandbox, sandbox_workspace, user_id, blocked_skills,
-            )
+            if local_storage:
+                await _inject_local_skills_to_sandbox(
+                    sandbox,
+                    sandbox_workspace,
+                    settings.external_skills_dir,
+                    blocked_skills,
+                )
+            else:
+                await _inject_skills_to_sandbox(
+                    sandbox, sandbox_workspace, user_id, blocked_skills,
+                )
         except Exception as exc:
             logger.warning(f"[Skills] 技能注入沙箱失败: {exc}")
 
@@ -768,7 +836,7 @@ async def deep_agent_eval(
         verbose=False,
     )
 
-    is_local = settings.storage_backend == "local"
+    is_local = settings.storage_backend == "local" and not _runtime_mode_uses_session_runtime()
 
     sandbox_info = None
     if is_local:

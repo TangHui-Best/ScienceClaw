@@ -111,6 +111,7 @@ class FullSandboxBackend(SandboxBackendProtocol):
         execute_timeout: int = _EXECUTE_TIMEOUT,
         max_output_chars: int = _MAX_OUTPUT_CHARS,
         session_model_config: dict | None = None,
+        runtime_token: str | None = None,
     ) -> None:
         self._session_id = session_id
         self._user_id = user_id
@@ -122,6 +123,7 @@ class FullSandboxBackend(SandboxBackendProtocol):
         self._execute_timeout = execute_timeout
         self._max_output_chars = max_output_chars
         self._session_model_config = session_model_config
+        self._runtime_token = (runtime_token or "").strip() or None
         self._shell_session_id: Optional[str] = None
         self._env_context: Optional[dict] = None
         self._client: Optional[httpx.AsyncClient] = None
@@ -136,9 +138,15 @@ class FullSandboxBackend(SandboxBackendProtocol):
     def _get_client(self) -> httpx.AsyncClient:
         """获取或创建共享的 httpx 异步客户端（不设客户端级别超时，由各请求自行控制）。"""
         if self._client is None or self._client.is_closed:
+            headers = (
+                {"Authorization": f"Bearer {self._runtime_token}"}
+                if self._runtime_token
+                else None
+            )
             self._client = httpx.AsyncClient(
                 base_url=self._sandbox_url,
                 timeout=httpx.Timeout(30),
+                headers=headers,
             )
         return self._client
 

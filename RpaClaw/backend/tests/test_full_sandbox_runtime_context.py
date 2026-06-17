@@ -120,3 +120,30 @@ def test_full_sandbox_runtime_context_log_sanitizer_redacts_secret_args():
 
     assert "sk-secret" not in sanitized
     assert sanitized.count("<redacted>") == 2
+
+
+def test_full_sandbox_client_injects_runtime_token_header(monkeypatch):
+    calls = []
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+            self.is_closed = False
+
+    monkeypatch.setattr("backend.deepagent.full_sandbox_backend.httpx.AsyncClient", FakeAsyncClient)
+
+    backend = FullSandboxBackend(
+        session_id="session-1",
+        user_id="user-1",
+        sandbox_url="http://aio-runtime.local",
+        runtime_token="runtime-secret",
+    )
+
+    assert backend._get_client() is backend._client
+    assert calls == [
+        {
+            "base_url": "http://aio-runtime.local",
+            "timeout": calls[0]["timeout"],
+            "headers": {"Authorization": "Bearer runtime-secret"},
+        }
+    ]

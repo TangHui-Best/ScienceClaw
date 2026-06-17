@@ -583,5 +583,70 @@ Run the skill.
             self.assertTrue(response.data["can_use_overview"])
 
 
+class TestSessionRuntimeSandboxFiles(unittest.IsolatedAsyncioTestCase):
+    async def test_sandbox_file_read_uses_session_runtime_base_when_available(self):
+        calls = []
+
+        class FakeRuntimeManager:
+            async def get_runtime(self, session_id: str, refresh: bool = False):
+                self.session_id = session_id
+                self.refresh = refresh
+                return SimpleNamespace(
+                    status="ready",
+                    rest_base_url="http://aio-runtime.local",
+                    route_base_url="http://aio-route.local",
+                    runtime_token="runtime-secret",
+                )
+
+        class FakeResponse:
+            status_code = 200
+
+            def json(self):
+                return {"data": {"content": "from aio runtime"}}
+
+        class FakeAsyncClient:
+            def __init__(self, timeout, headers=None):
+                self.timeout = timeout
+                self.headers = headers
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, url, json):
+                calls.append({"url": url, "json": json, "headers": self.headers})
+                return FakeResponse()
+
+        original_manager = SESSIONS_MODULE.get_session_runtime_manager
+        original_client = SESSIONS_MODULE.httpx.AsyncClient
+        original_base_url = SESSIONS_MODULE.settings.sandbox_base_url
+        SESSIONS_MODULE.get_session_runtime_manager = lambda: FakeRuntimeManager()
+        SESSIONS_MODULE.httpx.AsyncClient = FakeAsyncClient
+        SESSIONS_MODULE.settings.sandbox_base_url = "http://global-sandbox.local"
+        try:
+            content = await SESSIONS_MODULE._sandbox_file_read(
+                "/home/rpaclaw/chat-1/report.txt",
+                session_id="chat-1",
+            )
+        finally:
+            SESSIONS_MODULE.get_session_runtime_manager = original_manager
+            SESSIONS_MODULE.httpx.AsyncClient = original_client
+            SESSIONS_MODULE.settings.sandbox_base_url = original_base_url
+
+        self.assertEqual(content, "from aio runtime")
+        self.assertEqual(
+            calls,
+            [
+                {
+                    "url": "http://aio-route.local/v1/file/read",
+                    "json": {"file": "/home/rpaclaw/chat-1/report.txt"},
+                    "headers": {"Authorization": "Bearer runtime-secret"},
+                }
+            ],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
