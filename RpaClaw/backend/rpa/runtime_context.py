@@ -69,9 +69,13 @@ def should_inject_runtime_ai_context(skill_meta: Any) -> bool:
 
 def runtime_requirements_from_traces(traces: Any) -> Dict[str, bool]:
     """Build runtime requirement metadata from accepted RPA traces."""
-    from backend.rpa.trace_skill_compiler import traces_require_runtime_ai_replay
+    trace_list = list(traces or [])
+    from backend.rpa.trace_skill_compiler import _trace_uses_browser_use, traces_require_runtime_ai_replay
 
-    return {"runtime_ai": traces_require_runtime_ai_replay(traces or [])}
+    return {
+        "runtime_ai": traces_require_runtime_ai_replay(trace_list),
+        "browser_use": any(_trace_uses_browser_use(trace) for trace in trace_list),
+    }
 
 
 async def resolve_runtime_ai_model_config(
@@ -93,7 +97,10 @@ async def resolve_runtime_ai_model_config(
             return model_config.model_dump(), "explicit_model_config"
         return None, "explicit_model_config_forbidden"
 
-    default_config = await resolve_default_model_config(user_id)
+    try:
+        default_config = await resolve_default_model_config(user_id)
+    except RuntimeError:
+        default_config = None
     if default_config:
         source = (
             "system_default_model"
@@ -111,6 +118,7 @@ async def inject_runtime_context_kwargs(
     *,
     session_model_config: Optional[Dict[str, Any]] = None,
     explicit_model_config_id: str | None = None,
+    browser_use_cdp_url: str | None = None,
 ) -> Dict[str, Any]:
     """Add runtime-only execution context while preserving normal skill kwargs."""
     merged: Dict[str, Any] = dict(kwargs or {})
@@ -124,6 +132,10 @@ async def inject_runtime_context_kwargs(
         "model_config": deepcopy(model_config) if model_config else None,
         "source": source,
     }
+    if browser_use_cdp_url:
+        browser_use_context = dict(runtime_context.get("browser_use") or {})
+        browser_use_context["cdp_url"] = browser_use_cdp_url
+        runtime_context["browser_use"] = browser_use_context
     merged["_runtime_context"] = runtime_context
     if model_config:
         merged["_model_config"] = deepcopy(model_config)

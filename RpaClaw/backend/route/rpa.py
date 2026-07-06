@@ -1,6 +1,7 @@
 import json
 import logging
 import asyncio
+import os
 from pathlib import Path
 from urllib.parse import urlparse
 from typing import Dict, Any, Literal
@@ -16,6 +17,7 @@ from backend.rpa.manager import rpa_manager, RPASkillConfigDraft
 from backend.rpa.executor import ScriptExecutor
 from backend.rpa.skill_exporter import SkillExporter
 from backend.rpa.assistant import RPAAssistant, RPAReActAgent, _active_agents
+from backend.rpa.browser_use_recording_operator import BrowserUseRecordingOperator
 from backend.rpa.recording_runtime_agent import RecordingRuntimeAgent, RecordingAgentResult
 from backend.rpa.trace_models import RPAAcceptedTrace
 from backend.rpa.trace_ordering import order_traces_by_recording_time
@@ -48,7 +50,19 @@ from backend.rpa.region_context import (
 
 logger = logging.getLogger(__name__)
 
-RPA_TEST_TIMEOUT_S = 180.0
+
+def _env_float(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        logger.warning("Ignoring invalid float value for %s: %r", name, value)
+        return default
+
+
+RPA_TEST_TIMEOUT_S = _env_float("RPA_TEST_TIMEOUT_S", 180.0)
 RPA_PAGE_TIMEOUT_MS = 60000
 
 router = APIRouter(tags=["RPA"])
@@ -120,6 +134,15 @@ def _session_model_config(session) -> dict | None:
     return model_config if isinstance(model_config, dict) and model_config else None
 
 
+def _build_recording_operator(model_config: dict | None):
+    if getattr(settings, "rpa_recording_operator", "native") == "browser_use":
+        return BrowserUseRecordingOperator(
+            model_config=model_config,
+            max_steps=getattr(settings, "browser_use_max_steps", 12),
+        )
+    return RecordingRuntimeAgent(model_config=model_config)
+
+
 def _model_dump_json(value: Any) -> Any:
     if hasattr(value, "model_dump"):
         return value.model_dump(mode="json")
@@ -169,6 +192,10 @@ def _build_session_recording_meta(session) -> Dict[str, Any]:
 
 def _session_requires_runtime_ai(session) -> bool:
     return runtime_requirements_from_traces(_session_traces_for_compile(session)).get("runtime_ai") is True
+
+
+def _session_requires_browser_use(session) -> bool:
+    return runtime_requirements_from_traces(_session_traces_for_compile(session)).get("browser_use") is True
 
 
 def _ensure_has_compile_traces(session) -> None:
@@ -411,13 +438,27 @@ async def _resolve_user_model_config(user_id: str, model_config_id: str | None =
             raise HTTPException(status_code=403, detail="Cannot use this model")
         return model_config.model_dump()
 
-    model_config = await resolve_default_model_config(user_id)
+    try:
+        model_config = await resolve_default_model_config(user_id)
+    except RuntimeError:
+        model_config = None
     if model_config:
         return model_config
     # Fall back to env defaults
     if (getattr(settings, "model_ds_api_key", None) or "").strip():
         return None  # get_llm_model(config=None) uses env defaults
     return None
+
+
+async def _resolve_browser_use_cdp_url(session, user_id: str) -> str | None:
+    if not _session_requires_browser_use(session):
+        return None
+    connector = get_cdp_connector()
+    fetcher = getattr(connector, "_fetch_cdp_url", None)
+    if not callable(fetcher):
+        return None
+    sandbox_session_id = getattr(session, "sandbox_session_id", None)
+    return await fetcher(session_id=sandbox_session_id or None, user_id=user_id)
 
 
 @router.post("/session/start")
@@ -884,6 +925,7 @@ async def test_script(
     if settings.storage_backend == "local":
         test_kwargs: Dict[str, Any] = {"_downloads_dir": downloads_dir}
         model_config = _session_model_config(session)
+        browser_use_cdp_url = await _resolve_browser_use_cdp_url(session, str(current_user.id))
         if request.params:
             test_kwargs.update(await inject_credentials(str(current_user.id), request.params, {}))
         if _session_requires_runtime_ai(session):
@@ -891,6 +933,7 @@ async def test_script(
                 str(current_user.id),
                 test_kwargs,
                 session_model_config=model_config,
+                browser_use_cdp_url=browser_use_cdp_url,
             )
         result = await executor.execute(
             browser,
@@ -908,6 +951,7 @@ async def test_script(
         # Docker 模式：使用原有逻辑
         docker_kwargs: Dict[str, Any] = {}
         model_config = _session_model_config(session)
+        browser_use_cdp_url = await _resolve_browser_use_cdp_url(session, str(current_user.id))
         if request.params:
             docker_kwargs = await inject_credentials(
                 str(current_user.id), request.params, {}
@@ -917,6 +961,7 @@ async def test_script(
                 str(current_user.id),
                 docker_kwargs,
                 session_model_config=model_config,
+                browser_use_cdp_url=browser_use_cdp_url,
             )
         result = await executor.execute(
             browser,
@@ -1072,12 +1117,16 @@ async def chat_with_assistant(
                     "event": "agent_thought",
                     "data": json.dumps({"text": "Planning one trace-first recording command."}, ensure_ascii=False),
                 }
-                agent = RecordingRuntimeAgent(model_config=model_config)
+                agent = _build_recording_operator(model_config)
                 result = await agent.run(
                     page=page,
                     instruction=request.message,
                     runtime_results=session.runtime_results.values,
-                    debug_context={"session_id": session_id},
+                    debug_context={
+                        "session_id": session.sandbox_session_id or session_id,
+                        "recording_session_id": session_id,
+                        "user_id": str(current_user.id),
+                    },
                     region_context=region_context,
                 )
                 await _apply_recording_agent_result(session_id, result)

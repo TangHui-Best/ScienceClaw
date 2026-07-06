@@ -1492,6 +1492,18 @@ async def test_test_script_passes_route_timeout_to_executor(monkeypatch):
         manager.sessions.pop(session.id, None)
 
 
+def test_env_float_uses_default_for_invalid_value(monkeypatch):
+    monkeypatch.setenv("SCIENCECLAW_BAD_FLOAT", "not-a-number")
+
+    assert ROUTE_MODULE._env_float("SCIENCECLAW_BAD_FLOAT", 12.5) == 12.5
+
+
+def test_env_float_uses_environment_value(monkeypatch):
+    monkeypatch.setenv("SCIENCECLAW_TEST_FLOAT", "1200")
+
+    assert ROUTE_MODULE._env_float("SCIENCECLAW_TEST_FLOAT", 12.5) == 1200.0
+
+
 @pytest.mark.asyncio
 async def test_test_script_passes_session_model_config_to_executor(monkeypatch):
     manager = ROUTE_MODULE.rpa_manager

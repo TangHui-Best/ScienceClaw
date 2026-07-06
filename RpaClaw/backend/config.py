@@ -158,6 +158,9 @@ class Settings(BaseSettings):
     storage_backend: str = os.environ.get("STORAGE_BACKEND", "mongo")
     local_path_style: str = os.environ.get("LOCAL_PATH_STYLE", "windows").strip().lower() or "windows"
     rpa_recording_debug_snapshot_dir: str = os.environ.get("RPA_RECORDING_DEBUG_SNAPSHOT_DIR", "")
+    rpa_recording_operator: str = os.environ.get("RPA_RECORDING_OPERATOR", "native").strip().lower() or "native"
+    browser_use_repo_path: str = os.environ.get("BROWSER_USE_REPO_PATH", "")
+    browser_use_max_steps: int = int(os.environ.get("BROWSER_USE_MAX_STEPS", "12"))
     rpa_harness_capture_enabled: bool = os.environ.get("RPA_HARNESS_CAPTURE_ENABLED", "false").strip().lower() == "true"
     rpa_harness_assets_dir: str = _sub(
         "RPA_HARNESS_ASSETS_DIR",

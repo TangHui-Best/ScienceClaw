@@ -636,8 +636,8 @@ class RecordingRuntimeAgent:
             streaming=False,
         )
         messages = [
-            SystemMessage(content=RECORDING_RUNTIME_SYSTEM_PROMPT),
-            HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str)),
+            _build_llm_message(SystemMessage, RECORDING_RUNTIME_SYSTEM_PROMPT),
+            _build_llm_message(HumanMessage, json.dumps(payload, ensure_ascii=False, default=str)),
         ]
         llm_request = _build_planner_llm_request_summary(
             model=model,
@@ -1141,6 +1141,15 @@ def _model_config_summary(model_config: Optional[Dict[str, Any]]) -> Dict[str, A
         if value not in (None, ""):
             summary[key] = value
     return summary
+
+
+def _build_llm_message(message_cls: Any, content: str) -> Any:
+    try:
+        return message_cls(content=content)
+    except TypeError:
+        message = message_cls()
+        setattr(message, "content", content)
+        return message
 
 
 def _build_planner_llm_request_summary(

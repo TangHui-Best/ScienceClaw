@@ -907,7 +907,7 @@ class RPASessionManager:
             except Exception as e:
                 logger.error(f"[RPA] binding emit error: {e}")
 
-        await context.expose_binding("__rpa_emit", rpa_emit, handle=False)
+        await context.expose_binding("__rpa_emit", rpa_emit)
         await context.add_init_script(path=str(PLAYWRIGHT_RECORDER_RUNTIME_PATH))
         await context.add_init_script(path=str(PLAYWRIGHT_RECORDER_ACTIONS_PATH))
         await context.add_init_script(script=CAPTURE_JS)

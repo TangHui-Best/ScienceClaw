@@ -3034,7 +3034,86 @@ def test_runtime_ai_preserve_signal_overrides_embedded_code():
     body = _execute_body(script)
 
     assert "_execute_runtime_ai_instruction(" in body
+
+
+def test_browser_use_runtime_trace_compiles_to_browser_use_executor():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        source="browser_use",
+        user_instruction="Open the matching invoice row",
+        description="Open the matching invoice row",
+        before_page=RPAPageState(url="https://example.test/list", title="List"),
+        after_page=RPAPageState(url="https://example.test/detail", title="Detail"),
+        signals={
+            "runtime_ai": {"preserve": True, "reason": "browser_use_recording"},
+            "browser_use": {"actions": [{"click_element_by_index": {"index": 2}}]},
+        },
+        ai_execution=RPAAIExecution(language="browser_use", code="", output={"action_count": 1}),
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=False)
+    prelude = _execute_prelude(script)
+    body = _execute_body(script)
+
+    assert "BrowserUseRecordingOperator" in prelude
+    assert "_execute_browser_use_instruction" in prelude
+    assert "_execute_browser_use_instruction(current_page, _results, kwargs" in body
+    assert "runtime_results={}" in prelude
+    assert "runtime_results=results" not in prelude
+    assert trace_requires_runtime_ai_replay(trace) is True
     assert "page.locator('a.project').nth(0).click()" not in body
+
+
+def test_browser_use_trace_with_recorded_action_evidence_replays_without_llm():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        source="browser_use",
+        user_instruction="Approve the request",
+        description="Approve the request",
+        signals={
+            "runtime_ai": {"preserve": True, "reason": "browser_use_recording"},
+            "browser_use": {
+                "actions": [
+                    {
+                        "click": {"index": 23},
+                        "interacted_element": {
+                            "attributes": {"id": "open-modal"},
+                            "x_path": "html/body/main/section/button",
+                        },
+                    },
+                    {
+                        "input": {"index": 15, "text": "agree", "clear": True},
+                        "interacted_element": {"attributes": {"id": "approval-comment"}},
+                    },
+                    {
+                        "click": {"index": 37},
+                        "interacted_element": {"attributes": {"id": "approve-button"}},
+                    },
+                    {"done": {"text": "approved", "success": True}},
+                ],
+                "action_results": [
+                    {"extracted_content": 'Clicked button "打开审批弹窗" id=open-modal'},
+                    {"extracted_content": "Typed 'agree'"},
+                    {"extracted_content": 'Clicked button "同意审批" id=approve-button'},
+                    {"is_done": True, "success": True},
+                ],
+            },
+        },
+        ai_execution=RPAAIExecution(language="browser_use", code="", output={"action_count": 3}),
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=False)
+    prelude = _execute_prelude(script)
+    body = _execute_body(script)
+
+    assert "_browser_use_first_locator" in prelude
+    assert "_execute_browser_use_instruction(" not in body
+    assert "[id=\"open-modal\"]" in body
+    assert "[id=\"approval-comment\"]" in body
+    assert "await _loc.fill('agree')" in body
+    assert "[id=\"approve-button\"]" in body
+    assert "browser-use recorded action replay" in body
+    assert trace_requires_runtime_ai_replay(trace) is False
 
 
 def test_runtime_ai_preserve_signal_with_table_region_requires_runtime_context():

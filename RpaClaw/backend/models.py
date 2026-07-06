@@ -65,14 +65,16 @@ async def init_system_models():
         logger.info("DS_API_KEY not set, skipping system model creation")
         return
 
+    model_name = settings.model_ds_name
+    is_qwen = model_name.lower().startswith("qwen")
     system_definitions = [
         {
             "_id": "system-default",
-            "name": "DeepSeek V3.2",
-            "provider": "deepseek",
+            "name": model_name if is_qwen else "DeepSeek V3.2",
+            "provider": "qwen" if is_qwen else "deepseek",
             "base_url": settings.model_ds_base_url,
             "api_key": settings.model_ds_api_key,
-            "model_name": settings.model_ds_name,
+            "model_name": model_name,
             "context_window": settings.context_window,
             "is_system": True,
             "is_active": True,

@@ -1,0 +1,593 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RPA Live E2E Matrix</title>
+  <style>
+    :root {
+      font-family: Inter, "Microsoft YaHei", Arial, sans-serif;
+      color: #17202a;
+      background: #f5f7fb;
+    }
+    body {
+      margin: 0;
+    }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      background: #ffffff;
+      border-bottom: 1px solid #d8dee9;
+      padding: 14px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+    }
+    h1 {
+      font-size: 20px;
+      margin: 0;
+    }
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 20px 24px 80px;
+      display: grid;
+      gap: 16px;
+    }
+    section {
+      background: #ffffff;
+      border: 1px solid #d8dee9;
+      border-radius: 8px;
+      padding: 16px;
+    }
+    h2 {
+      margin: 0 0 12px;
+      font-size: 16px;
+    }
+    label {
+      display: grid;
+      gap: 6px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    input, select, textarea, button {
+      font: inherit;
+    }
+    input, select, textarea {
+      border: 1px solid #b8c2d1;
+      border-radius: 6px;
+      padding: 8px 10px;
+      min-height: 20px;
+      background: #fff;
+    }
+    button {
+      border: 1px solid #2f6fed;
+      background: #2f6fed;
+      color: #fff;
+      border-radius: 6px;
+      padding: 8px 12px;
+      cursor: pointer;
+    }
+    button.secondary {
+      background: #fff;
+      color: #2f6fed;
+    }
+    button.danger {
+      background: #c0392b;
+      border-color: #c0392b;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      font-size: 13px;
+    }
+    th, td {
+      border: 1px solid #d8dee9;
+      padding: 8px;
+      text-align: left;
+    }
+    th {
+      background: #eef3fb;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .status-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .badge {
+      border-radius: 999px;
+      padding: 5px 10px;
+      font-size: 12px;
+      background: #edf0f5;
+      color: #526071;
+    }
+    .badge.pass {
+      background: #d9f7e8;
+      color: #166534;
+      font-weight: 700;
+    }
+    .row {
+      display: flex;
+      gap: 10px;
+      align-items: end;
+      flex-wrap: wrap;
+    }
+    .iframe-box {
+      width: 100%;
+      min-height: 170px;
+      border: 1px solid #9fb0c8;
+      border-radius: 6px;
+    }
+    .modal, .drawer {
+      position: fixed;
+      z-index: 10;
+      display: none;
+      background: #fff;
+      border: 1px solid #8ea1bd;
+      box-shadow: 0 20px 60px rgba(15, 23, 42, .18);
+    }
+    .modal.open, .drawer.open {
+      display: block;
+    }
+    .modal {
+      top: 26%;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 460px;
+      border-radius: 8px;
+      padding: 18px;
+    }
+    .drawer {
+      top: 0;
+      right: 0;
+      width: 380px;
+      height: 100vh;
+      padding: 18px;
+    }
+    .tree ul {
+      margin: 6px 0 6px 18px;
+      padding: 0;
+    }
+    .tab-panel {
+      border: 1px dashed #9fb0c8;
+      padding: 12px;
+      border-radius: 6px;
+      min-height: 44px;
+    }
+    .editor {
+      min-height: 90px;
+      border: 1px solid #b8c2d1;
+      border-radius: 6px;
+      padding: 10px;
+      background: #fff;
+    }
+    .combo-options {
+      margin-top: 6px;
+      display: none;
+      border: 1px solid #b8c2d1;
+      border-radius: 6px;
+      padding: 6px;
+      width: 260px;
+      background: #fff;
+    }
+    .combo-options.open {
+      display: grid;
+      gap: 4px;
+    }
+    .summary {
+      font-weight: 700;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>RPA Live E2E Matrix</h1>
+      <div id="auth-state">未登录</div>
+    </div>
+    <div class="status-grid" id="status-grid"></div>
+  </header>
+
+  <main id="main-page" hidden>
+    <section>
+      <h2>登录后页面操作</h2>
+      <div class="row">
+        <button id="post-login-action">刷新工作台指标</button>
+        <span id="post-login-result">等待操作</span>
+      </div>
+    </section>
+
+    <section>
+      <h2>iframe 内操作</h2>
+      <iframe id="embedded-frame" class="iframe-box" title="供应商 iframe"></iframe>
+    </section>
+
+    <section>
+      <h2>表格搜索/筛选/点击行内按钮</h2>
+      <div class="row">
+        <label>搜索
+          <input id="table-search" placeholder="输入供应商或编号" />
+        </label>
+        <label>状态
+          <select id="table-filter">
+            <option value="">全部</option>
+            <option value="active">有效</option>
+            <option value="pending">待补充</option>
+          </select>
+        </label>
+        <button id="table-apply">应用筛选</button>
+      </div>
+      <table aria-label="供应商表格">
+        <thead>
+          <tr><th>编号</th><th>供应商</th><th>状态</th><th>操作</th></tr>
+        </thead>
+        <tbody id="table-body"></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>弹窗 / 抽屉 / 下拉树</h2>
+      <div class="row">
+        <button id="open-modal">打开审批弹窗</button>
+        <button id="open-drawer">打开分类抽屉</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>文件上传 / 下载</h2>
+      <div class="row">
+        <label>上传文件
+          <input id="file-upload" type="file" />
+        </label>
+        <button id="download-report">下载验收报表</button>
+        <span id="file-result">未上传/未下载</span>
+      </div>
+    </section>
+
+    <section>
+      <h2>分页数据提取</h2>
+      <div id="pagination-list"></div>
+      <div class="row">
+        <button id="prev-page" class="secondary">上一页</button>
+        <button id="next-page" class="secondary">下一页</button>
+        <button id="extract-page">提取当前页关键数据</button>
+        <span id="pagination-result">等待提取</span>
+      </div>
+    </section>
+
+    <section>
+      <h2>多标签页</h2>
+      <a id="open-new-tab" href="?tab=secondary" target="_blank">打开二级验收标签页</a>
+      <span id="tab-result">等待新标签页操作</span>
+    </section>
+
+    <section>
+      <h2>日期控件</h2>
+      <div class="row">
+        <label>交付日期
+          <input id="delivery-date" type="date" />
+        </label>
+        <button id="confirm-date">确认日期</button>
+        <span id="date-result">未确认</span>
+      </div>
+    </section>
+
+    <section>
+      <h2>富文本 / 复杂组件</h2>
+      <div class="row">
+        <button id="bold-button" class="secondary">加粗</button>
+        <button id="combo-button" class="secondary" aria-expanded="false">选择复杂组件选项</button>
+      </div>
+      <div id="combo-options" class="combo-options">
+        <button class="secondary" data-combo="normal_approval">普通审批 / Normal Approval</button>
+        <button class="secondary" data-combo="smart_acceptance">智能验收流程 / Smart Acceptance</button>
+        <button class="secondary" data-combo="archive_flow">归档流程 / Archive Flow</button>
+      </div>
+      <div id="rich-editor" class="editor" contenteditable="true" role="textbox" aria-label="富文本编辑器"></div>
+      <button id="save-rich">保存富文本</button>
+      <span id="rich-result">未保存</span>
+    </section>
+
+    <section>
+      <h2>最终验收</h2>
+      <button id="final-verify">检查全部 PASS</button>
+      <div id="final-summary" class="summary">等待验收</div>
+    </section>
+  </main>
+
+  <main id="login-page">
+    <section>
+      <h2>测试系统登录</h2>
+      <div class="grid">
+        <label>用户名
+          <input id="username" autocomplete="username" />
+        </label>
+        <label>密码
+          <input id="password" type="password" autocomplete="current-password" />
+        </label>
+        <button id="login-button">登录</button>
+      </div>
+      <p>测试账号：用户名 <code>buyer</code>，密码 <code>rpa-2026</code></p>
+    </section>
+  </main>
+
+  <div id="approval-modal" class="modal" role="dialog" aria-label="审批弹窗">
+    <h2>审批弹窗</h2>
+    <label>审批意见
+      <textarea id="approval-comment"></textarea>
+    </label>
+    <div class="row">
+      <button id="approve-button">同意审批</button>
+      <button class="secondary" id="close-modal">关闭</button>
+    </div>
+  </div>
+
+  <div id="category-drawer" class="drawer" role="dialog" aria-label="分类抽屉">
+    <h2>分类抽屉</h2>
+    <div class="tree" id="category-tree">
+      <ul>
+        <li>采购
+          <ul>
+            <li><button class="secondary" data-tree="office_equipment">办公设备 / Office Equipment</button></li>
+            <li><button class="secondary" data-tree="software_services">软件服务 / Software Services</button></li>
+          </ul>
+        </li>
+        <li>财务
+          <ul>
+            <li><button class="secondary" data-tree="budget_archive">预算归档 / Budget Archive</button></li>
+          </ul>
+        </li>
+      </ul>
+    </div>
+    <button id="close-drawer" class="secondary">关闭抽屉</button>
+  </div>
+
+  <script>
+    const keys = [
+      ["login", "登录"],
+      ["postLogin", "登录后页面"],
+      ["iframe", "iframe"],
+      ["table", "表格"],
+      ["modal", "弹窗"],
+      ["drawerTree", "抽屉树"],
+      ["upload", "上传"],
+      ["download", "下载"],
+      ["pagination", "分页提取"],
+      ["newTab", "多标签页"],
+      ["date", "日期"],
+      ["rich", "富文本"],
+      ["complex", "复杂组件"],
+    ];
+    const state = Object.fromEntries(keys.map(([key]) => [key, false]));
+    const suppliers = [
+      { number: "SUP-2026-001", name: "华东数智供应商", status: "active" },
+      { number: "SUP-2026-002", name: "星河软件服务", status: "pending" },
+      { number: "SUP-2026-003", name: "北辰办公设备", status: "active" },
+    ];
+    const pages = [
+      ["PR-001 智能办公采购", "PR-002 软件服务续费"],
+      ["PR-003 区域网络升级", "PR-004 数据归档服务"],
+    ];
+    let pageIndex = 0;
+    let boldNext = false;
+
+    function mark(key) {
+      state[key] = true;
+      renderStatus();
+    }
+
+    function renderStatus() {
+      const grid = document.getElementById("status-grid");
+      grid.innerHTML = keys.map(([key, label]) => {
+        const cls = state[key] ? "badge pass" : "badge";
+        const text = state[key] ? `${label}: PASS` : `${label}: pending`;
+        return `<span class="${cls}" data-status="${key}">${text}</span>`;
+      }).join("");
+      const passed = keys.filter(([key]) => state[key]).length;
+      document.title = `RPA Live E2E Matrix ${passed}/${keys.length}`;
+    }
+
+    function renderTable(rows = suppliers) {
+      document.getElementById("table-body").innerHTML = rows.map(row => `
+        <tr>
+          <td>${row.number}</td>
+          <td>${row.name}</td>
+          <td>${row.status === "active" ? "有效" : "待补充"}</td>
+          <td><button data-row-action="${row.number}">查看行内详情</button></td>
+        </tr>
+      `).join("");
+    }
+
+    function renderPage() {
+      document.getElementById("pagination-list").innerHTML = pages[pageIndex]
+        .map(item => `<div>${item}</div>`)
+        .join("");
+    }
+
+    function showApp() {
+      document.getElementById("login-page").hidden = true;
+      document.getElementById("main-page").hidden = false;
+      document.getElementById("auth-state").textContent = "已登录：buyer";
+      mark("login");
+    }
+
+    function secondaryTab() {
+      document.body.innerHTML = `
+        <main style="max-width:720px;margin:40px auto;font-family:Inter,Microsoft YaHei,Arial,sans-serif">
+          <section style="background:#fff;border:1px solid #d8dee9;border-radius:8px;padding:20px">
+            <h1>二级验收标签页</h1>
+            <p>点击按钮写入跨标签页验收状态。</p>
+            <button id="secondary-done">完成多标签页验收</button>
+            <p id="secondary-result">等待操作</p>
+          </section>
+        </main>`;
+      document.getElementById("secondary-done").addEventListener("click", () => {
+        localStorage.setItem("rpa-live-new-tab", "pass");
+        document.getElementById("secondary-result").textContent = "多标签页 PASS";
+      });
+    }
+
+    if (new URL(location.href).searchParams.get("tab") === "secondary") {
+      secondaryTab();
+    } else {
+      document.getElementById("embedded-frame").srcdoc = `
+        <!doctype html><html><body style="font-family:Arial;padding:16px">
+          <h3>iframe 供应商确认</h3>
+          <input id="iframe-input" placeholder="输入 iframe 验收码" />
+          <button id="iframe-button">确认 iframe 操作</button>
+          <p id="iframe-result">等待 iframe 操作</p>
+          <script>
+            document.getElementById('iframe-button').onclick = () => {
+              const value = document.getElementById('iframe-input').value;
+              if (value.includes('IFRAME-OK')) {
+                parent.postMessage({ type: 'rpa-live-e2e', key: 'iframe' }, '*');
+                document.getElementById('iframe-result').textContent = 'iframe PASS';
+              }
+            };
+          <\/script>
+        </body></html>`;
+      document.getElementById("login-button").addEventListener("click", () => {
+        if (document.getElementById("username").value === "buyer" && document.getElementById("password").value === "rpa-2026") {
+          showApp();
+        }
+      });
+      document.getElementById("post-login-action").addEventListener("click", () => {
+        document.getElementById("post-login-result").textContent = "工作台指标已刷新 PASS";
+        mark("postLogin");
+      });
+      document.getElementById("table-apply").addEventListener("click", () => {
+        const keyword = document.getElementById("table-search").value.trim();
+        const status = document.getElementById("table-filter").value;
+        const rows = suppliers.filter(row => (!keyword || `${row.number} ${row.name}`.includes(keyword)) && (!status || row.status === status));
+        renderTable(rows);
+      });
+      document.getElementById("table-body").addEventListener("click", event => {
+        const button = event.target.closest("[data-row-action]");
+        if (button && button.dataset.rowAction === "SUP-2026-002") {
+          mark("table");
+          button.textContent = "已查看 SUP-2026-002";
+        }
+      });
+      document.getElementById("open-modal").addEventListener("click", () => document.getElementById("approval-modal").classList.add("open"));
+      document.getElementById("close-modal").addEventListener("click", () => document.getElementById("approval-modal").classList.remove("open"));
+      document.getElementById("approve-button").addEventListener("click", () => {
+        const comment = document.getElementById("approval-comment").value.toLowerCase();
+        if (comment.includes("同意") || comment.includes("agree")) {
+          mark("modal");
+          document.getElementById("approval-modal").classList.remove("open");
+        }
+      });
+      document.getElementById("open-drawer").addEventListener("click", () => document.getElementById("category-drawer").classList.add("open"));
+      document.getElementById("close-drawer").addEventListener("click", () => document.getElementById("category-drawer").classList.remove("open"));
+      document.getElementById("category-tree").addEventListener("click", event => {
+        const button = event.target.closest("[data-tree]");
+        if (button && button.dataset.tree === "software_services") {
+          mark("drawerTree");
+          document.getElementById("category-drawer").classList.remove("open");
+        }
+      });
+      document.getElementById("file-upload").addEventListener("change", event => {
+        const file = event.target.files[0];
+        if (file && file.name.includes("rpa-live-upload")) {
+          document.getElementById("file-result").textContent = `已上传 ${file.name}`;
+          mark("upload");
+        }
+      });
+      document.getElementById("download-report").addEventListener("click", () => {
+        const blob = new Blob(["RPA live e2e report PASS"], { type: "text/plain" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "rpa-live-e2e-report.txt";
+        link.click();
+        URL.revokeObjectURL(url);
+        mark("download");
+        document.getElementById("file-result").textContent += "；已下载验收报表";
+      });
+      document.getElementById("prev-page").addEventListener("click", () => {
+        pageIndex = Math.max(0, pageIndex - 1);
+        renderPage();
+      });
+      document.getElementById("next-page").addEventListener("click", () => {
+        pageIndex = Math.min(pages.length - 1, pageIndex + 1);
+        renderPage();
+      });
+      document.getElementById("extract-page").addEventListener("click", () => {
+        if (pageIndex === 1 && document.getElementById("pagination-list").textContent.includes("数据归档服务")) {
+          document.getElementById("pagination-result").textContent = "已提取第二页：数据归档服务 PASS";
+          mark("pagination");
+        }
+      });
+      window.addEventListener("storage", event => {
+        if (event.key === "rpa-live-new-tab" && event.newValue === "pass") {
+          document.getElementById("tab-result").textContent = "多标签页 PASS";
+          mark("newTab");
+        }
+      });
+      window.addEventListener("focus", () => {
+        if (localStorage.getItem("rpa-live-new-tab") === "pass") {
+          document.getElementById("tab-result").textContent = "多标签页 PASS";
+          mark("newTab");
+        }
+      });
+      document.getElementById("confirm-date").addEventListener("click", () => {
+        if (document.getElementById("delivery-date").value === "2026-07-20") {
+          document.getElementById("date-result").textContent = "日期 PASS";
+          mark("date");
+        }
+      });
+      document.getElementById("bold-button").addEventListener("click", () => {
+        boldNext = true;
+        document.getElementById("rich-editor").focus();
+      });
+      document.getElementById("combo-button").addEventListener("click", () => {
+        const options = document.getElementById("combo-options");
+        options.classList.toggle("open");
+        document.getElementById("combo-button").setAttribute("aria-expanded", options.classList.contains("open") ? "true" : "false");
+      });
+      document.getElementById("combo-options").addEventListener("click", event => {
+        const button = event.target.closest("[data-combo]");
+        if (button && button.dataset.combo === "smart_acceptance") {
+          mark("complex");
+          document.getElementById("combo-button").textContent = "智能验收流程 / Smart Acceptance";
+          document.getElementById("combo-options").classList.remove("open");
+        }
+      });
+      document.getElementById("rich-editor").addEventListener("input", () => {
+        if (boldNext) {
+          document.getElementById("rich-editor").innerHTML = `<strong>${document.getElementById("rich-editor").textContent}</strong>`;
+          boldNext = false;
+        }
+      });
+      document.getElementById("save-rich").addEventListener("click", () => {
+        const html = document.getElementById("rich-editor").innerHTML;
+        if (html.includes("<strong>") && (html.includes("RPA 验收备注") || html.includes("RPA note"))) {
+          document.getElementById("rich-result").textContent = "富文本 PASS";
+          mark("rich");
+        }
+      });
+      document.getElementById("final-verify").addEventListener("click", () => {
+        const missing = keys.filter(([key]) => !state[key]).map(([, label]) => label);
+        document.getElementById("final-summary").textContent = missing.length
+          ? `未通过：${missing.join("、")}`
+          : "ALL_SCENARIOS_PASS";
+      });
+      window.addEventListener("message", event => {
+        if (event.data && event.data.type === "rpa-live-e2e") {
+          mark(event.data.key);
+        }
+      });
+      renderStatus();
+      renderTable();
+      renderPage();
+    }
+  </script>
+</body>
+</html>

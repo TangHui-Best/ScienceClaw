@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import socket
 import threading
 from typing import Optional
 
@@ -143,6 +144,8 @@ class LocalCDPConnector:
     def __init__(self):
         self._playwright: Optional[Playwright] = None
         self._browser: Optional[Browser] = None
+        self._cdp_port: Optional[int] = None
+        self._cdp_url: Optional[str] = None
         self._lock = asyncio.Lock()
         # Dedicated event loop + thread for Playwright (Windows compat)
         self._pw_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -178,18 +181,50 @@ class LocalCDPConnector:
                 return self._browser
 
             logger.info("Launching local Playwright Chromium (headful)")
+            self._cdp_port = _find_free_local_port()
             self._playwright, self._browser = await self._run_in_pw_loop(
-                self._launch()
+                self._launch(self._cdp_port)
             )
+            self._cdp_url = await _fetch_local_cdp_url(self._cdp_port)
             logger.info("Local browser launched")
             return self._browser
 
     @staticmethod
-    async def _launch():
+    async def _launch(cdp_port: Optional[int] = None):
         """Start Playwright and launch a local headful Chromium browser."""
         pw = await async_playwright().start()
-        browser = await pw.chromium.launch(**get_chromium_launch_kwargs(headless=False))
+        launch_kwargs = get_chromium_launch_kwargs(headless=False)
+        if cdp_port:
+            launch_kwargs["args"] = list(launch_kwargs.get("args") or []) + [
+                f"--remote-debugging-port={cdp_port}",
+            ]
+        browser = await pw.chromium.launch(**launch_kwargs)
         return pw, browser
+
+    async def _fetch_cdp_url(
+        self,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> str:
+        """Return the CDP endpoint for the local recording browser.
+
+        browser-use connects over CDP, so local mode must expose the same
+        browser that ScienceClaw launched for recording instead of starting
+        an unrelated browser.
+        """
+        async with self._lock:
+            if not (self._browser and self._browser.is_connected()):
+                self._cdp_port = _find_free_local_port()
+                self._playwright, self._browser = await self._run_in_pw_loop(
+                    self._launch(self._cdp_port)
+                )
+                self._cdp_url = await _fetch_local_cdp_url(self._cdp_port)
+            if self._cdp_url:
+                return self._cdp_url
+            if not self._cdp_port:
+                raise RuntimeError("Local browser CDP port is unavailable.")
+            self._cdp_url = await _fetch_local_cdp_url(self._cdp_port)
+            return self._cdp_url
 
     async def close(self):
         """Clean up browser and playwright."""
@@ -201,6 +236,8 @@ class LocalCDPConnector:
                     )
                     future.result(timeout=5)
                 self._browser = None
+                self._cdp_url = None
+                self._cdp_port = None
             except Exception:
                 pass
         if self._playwright:
@@ -216,6 +253,30 @@ class LocalCDPConnector:
         if self._pw_loop:
             self._pw_loop.call_soon_threadsafe(self._pw_loop.stop)
             self._pw_loop = None
+
+
+def _find_free_local_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+async def _fetch_local_cdp_url(port: int) -> str:
+    url = f"http://127.0.0.1:{port}/json/version"
+    last_error: Exception | None = None
+    async with httpx.AsyncClient(timeout=1.0, trust_env=False) as client:
+        for _ in range(50):
+            try:
+                resp = await client.get(url)
+                resp.raise_for_status()
+                data = resp.json()
+                cdp_url = str(data.get("webSocketDebuggerUrl") or "").strip()
+                if cdp_url:
+                    return cdp_url
+            except Exception as exc:
+                last_error = exc
+            await asyncio.sleep(0.1)
+    raise RuntimeError(f"Local browser CDP endpoint did not become ready at {url}: {last_error}")
 
 
 # Global singletons

@@ -268,6 +268,11 @@ class TraceSkillCompiler:
                 "_normalize_runtime_ai_payload",
                 "_runtime_ai_model_config",
             ],
+            "_execute_browser_use_instruction": [
+                "_normalize_runtime_ai_payload",
+                "_runtime_ai_model_config",
+            ],
+            "_browser_use_select_dropdown": ["_browser_use_first_locator"],
             "_ensure_recorded_tab": ["_activate_recorded_page"],
         }
 
@@ -287,6 +292,10 @@ class TraceSkillCompiler:
             "_extract_bounded_section_text",
             "_runtime_ai_model_config",
             "_execute_runtime_ai_instruction",
+            "_execute_browser_use_instruction",
+            "_browser_use_first_locator",
+            "_browser_use_select_dropdown",
+            "_browser_use_evaluate",
             "_activate_recorded_page",
             "_ensure_recorded_tab",
             "_resolve_recorded_frame",
@@ -540,6 +549,58 @@ class TraceSkillCompiler:
                 "    if output_key:",
                 "        results[output_key] = payload",
                 "    return payload",
+            ],
+            "_execute_browser_use_instruction": [
+                "async def _execute_browser_use_instruction(page, results, kwargs, instruction, output_key):",
+                "    from backend.rpa.browser_use_recording_operator import BrowserUseRecordingOperator",
+                "    runtime_context = kwargs.get('_runtime_context') if isinstance(kwargs, dict) else None",
+                "    browser_use_context = runtime_context.get('browser_use') if isinstance(runtime_context, dict) else None",
+                "    cdp_url = browser_use_context.get('cdp_url') if isinstance(browser_use_context, dict) else ''",
+                "    agent = BrowserUseRecordingOperator(",
+                "        model_config=_runtime_ai_model_config(kwargs),",
+                "        cdp_url_resolver=lambda _page, _debug_context: cdp_url,",
+                "    )",
+                "    # Browser-use replay should be driven by the current page and current step.",
+                "    # Prior extracted outputs are noisy and can destabilize short UI actions.",
+                "    outcome = await agent.run(page=page, instruction=instruction, runtime_results={})",
+                "    if not outcome.success:",
+                "        detail = '; '.join(str(item.message) for item in outcome.diagnostics) or outcome.message",
+                "        raise RuntimeError(f'browser-use runtime instruction failed: {detail}')",
+                "    payload = _normalize_runtime_ai_payload(outcome.output, getattr(page, 'url', ''))",
+                "    if output_key:",
+                "        results[output_key] = payload",
+                "    return payload",
+            ],
+            "_browser_use_first_locator": [
+                "async def _browser_use_first_locator(page, selectors):",
+                "    last_error = None",
+                "    for selector in selectors:",
+                "        if not selector:",
+                "            continue",
+                "        for frame in page.frames:",
+                "            try:",
+                "                locator = frame.locator(selector).first",
+                "                if await locator.count():",
+                "                    return locator",
+                "            except Exception as exc:",
+                "                last_error = exc",
+                "                continue",
+                "    raise RuntimeError(f'Unable to locate browser-use replay target from selectors: {selectors}') from last_error",
+            ],
+            "_browser_use_select_dropdown": [
+                "async def _browser_use_select_dropdown(page, selectors, text):",
+                "    locator = await _browser_use_first_locator(page, selectors)",
+                "    try:",
+                "        await locator.select_option(label=str(text))",
+                "    except Exception:",
+                "        await locator.select_option(value=str(text))",
+            ],
+            "_browser_use_evaluate": [
+                "async def _browser_use_evaluate(page, code):",
+                "    try:",
+                "        return await page.evaluate(code)",
+                "    except Exception:",
+                "        return None",
             ],
             "_activate_recorded_page": [
                 "async def _activate_recorded_page(page, kwargs, tab_id=''):",
@@ -989,6 +1050,8 @@ class TraceSkillCompiler:
             return self._render_heading_scoped_text_extract_trace(index, trace, used_output_keys)
         if _is_region_scoped_free_text_extract(trace):
             return self._render_runtime_ai_instruction_trace(index, trace, used_output_keys)
+        if _trace_uses_browser_use(trace):
+            return self._render_browser_use_instruction_trace(index, trace, used_output_keys)
         if _should_preserve_runtime_ai_instruction(trace):
             return self._render_runtime_ai_instruction_trace(index, trace, used_output_keys)
         if _trace_has_side_effect_evidence(trace):
@@ -1146,6 +1209,115 @@ class TraceSkillCompiler:
             f"    # trace {index}: runtime semantic instruction",
             f"    _result = await _execute_runtime_ai_instruction(current_page, _results, kwargs, {instruction!r}, {key!r})",
         ]
+
+    def _render_browser_use_instruction_trace(
+        self,
+        index: int,
+        trace: RPAAcceptedTrace,
+        used_output_keys: Dict[str, int],
+    ) -> List[str]:
+        replay_lines = self._render_browser_use_action_replay_trace(index, trace, used_output_keys)
+        if replay_lines:
+            return replay_lines
+        key = self._allocate_output_key(trace, trace.output_key or f"browser_use_result_{index}", used_output_keys)
+        instruction = str(trace.user_instruction or trace.description or "").strip()
+        return [
+            "",
+            f"    # trace {index}: browser-use semantic instruction",
+            f"    _result = await _execute_browser_use_instruction(current_page, _results, kwargs, {instruction!r}, {key!r})",
+        ]
+
+    def _render_browser_use_action_replay_trace(
+        self,
+        index: int,
+        trace: RPAAcceptedTrace,
+        used_output_keys: Dict[str, int],
+    ) -> List[str]:
+        actions = _browser_use_trace_actions(trace)
+        if not actions:
+            return []
+        results = _browser_use_trace_action_results(trace)
+        executable_lines: List[str] = []
+        executable_count = 0
+        for action_index, action in enumerate(actions):
+            result = results[action_index] if action_index < len(results) else {}
+            action_lines = self._render_browser_use_replay_action(action, result)
+            if not action_lines:
+                continue
+            executable_count += 1
+            executable_lines.extend([f"    # browser-use replay action {action_index}"])
+            executable_lines.extend(action_lines)
+        if executable_count == 0:
+            return []
+        key = self._allocate_output_key(trace, trace.output_key or f"browser_use_result_{index}", used_output_keys)
+        lines = ["", f"    # trace {index}: browser-use recorded action replay"]
+        lines.extend(executable_lines)
+        done_text = _browser_use_done_text(actions)
+        payload = {
+            "replayed": True,
+            "action_count": executable_count,
+            "extracted_content": done_text,
+        }
+        lines.append(f"    _result = {payload!r}")
+        lines.append(f"    _results[{key!r}] = _result")
+        return lines
+
+    def _render_browser_use_replay_action(self, action: Dict[str, Any], result: Dict[str, Any]) -> List[str]:
+        if not isinstance(action, dict):
+            return []
+        if isinstance(action.get("evaluate"), dict):
+            code = str(action["evaluate"].get("code") or "").strip()
+            return [f"    await _browser_use_evaluate(current_page, {code!r})"] if code else []
+        if action.get("done") is not None or action.get("search_page") is not None:
+            return []
+        if isinstance(action.get("switch"), dict):
+            return [
+                "    _pages = current_page.context.pages",
+                "    if _pages:",
+                "        current_page = _pages[0]",
+                "        await current_page.bring_to_front()",
+                "        await current_page.wait_for_timeout(300)",
+            ]
+        selectors = _browser_use_selector_candidates(action, result)
+        if not selectors:
+            return []
+        if isinstance(action.get("click"), dict):
+            result_text = _browser_use_result_text(result)
+            if "Automatically switched to new tab" in result_text:
+                return [
+                    "    async with current_page.context.expect_page() as _new_page_info:",
+                    f"        await (await _browser_use_first_locator(current_page, {selectors!r})).click()",
+                    "    current_page = await _new_page_info.value",
+                    "    await current_page.wait_for_load_state('domcontentloaded')",
+                    "    await current_page.wait_for_timeout(500)",
+                ]
+            return [
+                f"    await (await _browser_use_first_locator(current_page, {selectors!r})).click()",
+                "    await current_page.wait_for_timeout(300)",
+            ]
+        if isinstance(action.get("input"), dict):
+            payload = action["input"]
+            text = str(payload.get("text") or "")
+            lines = [f"    _loc = await _browser_use_first_locator(current_page, {selectors!r})"]
+            if payload.get("clear") is False:
+                lines.append(f"    await _loc.type({text!r})")
+            else:
+                lines.append(f"    await _loc.fill({text!r})")
+            lines.append("    await current_page.wait_for_timeout(200)")
+            return lines
+        if isinstance(action.get("select_dropdown"), dict):
+            text = str(action["select_dropdown"].get("text") or "")
+            return [
+                f"    await _browser_use_select_dropdown(current_page, {selectors!r}, {text!r})",
+                "    await current_page.wait_for_timeout(300)",
+            ]
+        if isinstance(action.get("upload_file"), dict):
+            path = str(action["upload_file"].get("path") or "")
+            return [
+                f"    await (await _browser_use_first_locator(current_page, {selectors!r})).set_input_files({path!r})",
+                "    await current_page.wait_for_timeout(300)",
+            ] if path else []
+        return []
 
     def _render_snapshot_extract_trace(
         self,
@@ -2043,8 +2215,101 @@ def _should_preserve_runtime_ai_instruction(trace: RPAAcceptedTrace) -> bool:
     return isinstance(output, dict) and bool(output.get("url") or output.get("value"))
 
 
+def _trace_uses_browser_use(trace: RPAAcceptedTrace) -> bool:
+    if trace.trace_type != RPATraceType.AI_OPERATION:
+        return False
+    if str(trace.source or "") == "browser_use":
+        return True
+    if trace.ai_execution and str(trace.ai_execution.language or "") == "browser_use":
+        return True
+    return bool(_trace_signal(trace, "browser_use"))
+
+
+def _browser_use_trace_actions(trace: RPAAcceptedTrace) -> List[Dict[str, Any]]:
+    signal = _trace_signal(trace, "browser_use")
+    actions = signal.get("actions") if isinstance(signal, dict) else None
+    return [item for item in actions if isinstance(item, dict)] if isinstance(actions, list) else []
+
+
+def _browser_use_trace_action_results(trace: RPAAcceptedTrace) -> List[Dict[str, Any]]:
+    signal = _trace_signal(trace, "browser_use")
+    results = signal.get("action_results") if isinstance(signal, dict) else None
+    return [item for item in results if isinstance(item, dict)] if isinstance(results, list) else []
+
+
+def _browser_use_trace_has_replayable_actions(trace: RPAAcceptedTrace) -> bool:
+    for index, action in enumerate(_browser_use_trace_actions(trace)):
+        if action.get("done") is not None or action.get("search_page") is not None:
+            continue
+        if action.get("evaluate") is not None or action.get("switch") is not None:
+            return True
+        results = _browser_use_trace_action_results(trace)
+        result = results[index] if index < len(results) else {}
+        if _browser_use_selector_candidates(action, result):
+            return True
+    return False
+
+
+def _browser_use_selector_candidates(action: Dict[str, Any], result: Dict[str, Any]) -> List[str]:
+    element = action.get("interacted_element")
+    element = element if isinstance(element, dict) else {}
+    attrs = element.get("attributes") if isinstance(element.get("attributes"), dict) else {}
+    selectors: List[str] = []
+    stable_attrs = ["id", "data-row-action", "data-tree", "data-combo", "name", "placeholder", "aria-label"]
+    for name in stable_attrs:
+        value = str(attrs.get(name) or "").strip()
+        if value:
+            selectors.append(_css_attr_selector(name, value))
+    result_id = _browser_use_result_id(result)
+    if result_id:
+        selectors.append(_css_attr_selector("id", result_id))
+    xpath = str(element.get("x_path") or "").strip()
+    if xpath:
+        if not xpath.startswith("/"):
+            xpath = "/" + xpath
+        selectors.append("xpath=" + xpath)
+    unique: List[str] = []
+    for selector in selectors:
+        if selector and selector not in unique:
+            unique.append(selector)
+    return unique
+
+
+def _browser_use_result_text(result: Dict[str, Any]) -> str:
+    if not isinstance(result, dict):
+        return ""
+    return " ".join(
+        str(result.get(key) or "")
+        for key in ("extracted_content", "long_term_memory", "error")
+        if result.get(key) is not None
+    )
+
+
+def _browser_use_result_id(result: Dict[str, Any]) -> str:
+    match = re.search(r"\bid=([A-Za-z0-9_-]+)", _browser_use_result_text(result))
+    return match.group(1) if match else ""
+
+
+def _browser_use_done_text(actions: List[Dict[str, Any]]) -> str:
+    for action in reversed(actions):
+        done = action.get("done")
+        if isinstance(done, dict):
+            text = str(done.get("text") or "").strip()
+            if text:
+                return text
+    return ""
+
+
+def _css_attr_selector(name: str, value: str) -> str:
+    escaped_name = re.sub(r"[^a-zA-Z0-9_-]", "", str(name or ""))
+    escaped_value = str(value or "").replace("\\", "\\\\").replace('"', '\\"')
+    return f'[{escaped_name}="{escaped_value}"]' if escaped_name else ""
+
+
 def trace_requires_runtime_ai_replay(trace: RPAAcceptedTrace) -> bool:
     if trace.trace_type != RPATraceType.AI_OPERATION:
+        return False
+    if _trace_uses_browser_use(trace) and _browser_use_trace_has_replayable_actions(trace):
         return False
     if _has_selected_region_text_extract(trace):
         return False
@@ -2195,6 +2460,15 @@ async def main():
             k, v = arg[2:].split("=", 1)
             kwargs[k] = _parse_cli_value(k, v)
     cdp_url = await _get_cdp_url()
+    runtime_context = kwargs.get("_runtime_context")
+    if not isinstance(runtime_context, dict):
+        runtime_context = {{}}
+    browser_use_context = runtime_context.get("browser_use")
+    if not isinstance(browser_use_context, dict):
+        browser_use_context = {{}}
+    browser_use_context.setdefault("cdp_url", cdp_url)
+    runtime_context["browser_use"] = browser_use_context
+    kwargs["_runtime_context"] = runtime_context
     pw = await async_playwright().start()
     browser = await pw.chromium.connect_over_cdp(cdp_url)
     context = await browser.new_context(**{context_kwargs})

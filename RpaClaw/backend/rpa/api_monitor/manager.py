@@ -3208,7 +3208,7 @@ class ApiMonitorSessionManager:
             await self._handle_user_action(session_id, event_json)
 
         try:
-            await context.expose_binding("__apiMonitorAction", on_user_action, handle=False)
+            await context.expose_binding("__apiMonitorAction", on_user_action)
             await context.add_init_script(_USER_ACTION_CAPTURE_JS)
         except Exception as exc:
             logger.debug("[ApiMonitor] User action capture install failed: %s", exc)
