@@ -556,13 +556,15 @@ class TraceSkillCompiler:
                 "    runtime_context = kwargs.get('_runtime_context') if isinstance(kwargs, dict) else None",
                 "    browser_use_context = runtime_context.get('browser_use') if isinstance(runtime_context, dict) else None",
                 "    cdp_url = browser_use_context.get('cdp_url') if isinstance(browser_use_context, dict) else ''",
+                "    cdp_target_id = browser_use_context.get('cdp_target_id') if isinstance(browser_use_context, dict) else ''",
                 "    agent = BrowserUseRecordingOperator(",
                 "        model_config=_runtime_ai_model_config(kwargs),",
                 "        cdp_url_resolver=lambda _page, _debug_context: cdp_url,",
                 "    )",
                 "    # Browser-use replay should be driven by the current page and current step.",
                 "    # Prior extracted outputs are noisy and can destabilize short UI actions.",
-                "    outcome = await agent.run(page=page, instruction=instruction, runtime_results={})",
+                "    debug_context = {'cdp_target_id': cdp_target_id} if cdp_target_id else None",
+                "    outcome = await agent.run(page=page, instruction=instruction, runtime_results={}, debug_context=debug_context)",
                 "    if not outcome.success:",
                 "        detail = '; '.join(str(item.message) for item in outcome.diagnostics) or outcome.message",
                 "        raise RuntimeError(f'browser-use runtime instruction failed: {detail}')",
@@ -2405,6 +2407,15 @@ async def main():
     browser = await pw.chromium.launch(**{launch_kwargs})
     context = await browser.new_context(**{context_kwargs})
     page = await context.new_page()
+    try:
+        cdp_session = await context.new_cdp_session(page)
+        target_info_response = await cdp_session.send("Target.getTargetInfo")
+        target_info = target_info_response.get("targetInfo") if isinstance(target_info_response, dict) else None
+        cdp_target_id = target_info.get("targetId") if isinstance(target_info, dict) else ""
+        if cdp_target_id:
+            browser_use_context["cdp_target_id"] = cdp_target_id
+    except Exception:
+        pass
     page.set_default_timeout(60000)
     page.set_default_navigation_timeout(60000)
     try:

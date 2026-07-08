@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 import os
 import sys
 import time
@@ -14,6 +15,7 @@ from .trace_models import RPAAcceptedTrace, RPAAIExecution, RPATraceDiagnostic, 
 
 BrowserUseRunner = Callable[..., Awaitable[Any]]
 CdpUrlResolver = Callable[[Any, Optional[Dict[str, Any]]], Awaitable[str] | str]
+logger = logging.getLogger(__name__)
 
 
 class BrowserUseTaskFailure(RuntimeError):
@@ -62,6 +64,7 @@ class BrowserUseRecordingOperator:
             history = await self.browser_use_runner(
                 instruction=instruction,
                 cdp_url=str(cdp_url),
+                cdp_target_id=_debug_cdp_target_id(debug_context),
                 model_config=self.model_config,
                 runtime_results=runtime_results or {},
                 region_context=region_context or {},
@@ -93,6 +96,9 @@ class BrowserUseRecordingOperator:
                         "provider": "browser_use",
                     },
                     "browser_use": {
+                        "cdp_target_id": _debug_cdp_target_id(debug_context),
+                        "scienceclaw_page": before.model_dump(mode="json"),
+                        "focus_diagnostics": _history_focus_diagnostics(history),
                         "actions": actions,
                         "action_results": action_results,
                         "extracted_content": extracted_content,
@@ -137,12 +143,19 @@ async def _execute_browser_use_runtime_instruction(
     runtime_context = kwargs.get("_runtime_context") if isinstance(kwargs, dict) else {}
     browser_use_context = runtime_context.get("browser_use") if isinstance(runtime_context, dict) else {}
     cdp_url = browser_use_context.get("cdp_url") if isinstance(browser_use_context, dict) else None
+    cdp_target_id = browser_use_context.get("cdp_target_id") if isinstance(browser_use_context, dict) else None
     model_config = _runtime_model_config(kwargs)
     operator = BrowserUseRecordingOperator(
         model_config=model_config,
         cdp_url_resolver=lambda _page, _debug_context: cdp_url or "",
     )
-    outcome = await operator.run(page=page, instruction=instruction, runtime_results=results)
+    debug_context = {"cdp_target_id": cdp_target_id} if cdp_target_id else None
+    outcome = await operator.run(
+        page=page,
+        instruction=instruction,
+        runtime_results=results,
+        debug_context=debug_context,
+    )
     if not outcome.success:
         detail = "; ".join(str(item.message) for item in outcome.diagnostics) or outcome.message
         raise RuntimeError(f"browser-use runtime instruction failed: {detail}")
@@ -182,6 +195,7 @@ async def _run_browser_use_agent(
     region_context: Dict[str, Any],
     max_steps: int,
     current_url: str = "",
+    cdp_target_id: str = "",
 ) -> Any:
     _configure_browser_use_runtime_env()
     _ensure_browser_use_import_path()
@@ -198,6 +212,11 @@ async def _run_browser_use_agent(
     )
     session = BrowserSession(cdp_url=cdp_url, keep_alive=False)
     _disable_browser_use_screenshots_if_configured(session)
+    focus_diagnostics = await _focus_browser_use_target(
+        session,
+        target_id=cdp_target_id,
+        expected_url=current_url,
+    )
     task = _build_browser_use_task(instruction, runtime_results, region_context)
     agent = Agent(
         task=task,
@@ -209,7 +228,88 @@ async def _run_browser_use_agent(
         use_vision=os.environ.get("BROWSER_USE_USE_VISION", "false").strip().lower() == "true",
     )
     _ensure_browser_use_agent_timing(agent)
-    return await agent.run(max_steps=max_steps)
+    history = await agent.run(max_steps=max_steps)
+    try:
+        setattr(history, "_scienceclaw_focus_diagnostics", focus_diagnostics)
+    except Exception:
+        pass
+    return history
+
+
+async def _focus_browser_use_target(session: Any, *, target_id: str = "", expected_url: str = "") -> Dict[str, Any]:
+    requested_target_id = str(target_id or "").strip()
+    diagnostics: Dict[str, Any] = {
+        "requested_target_id": requested_target_id,
+        "expected_url": str(expected_url or ""),
+        "focused_target_id": "",
+        "focused_page": {},
+        "tabs": [],
+    }
+    await session.start()
+    if requested_target_id:
+        try:
+            await session.get_or_create_cdp_session(target_id=requested_target_id, focus=True)
+        except Exception as exc:
+            diagnostics["error"] = str(exc)
+            diagnostics["tabs"] = await _browser_use_tabs_snapshot(session)
+            logger.warning("Failed to focus browser-use target %s: %s", requested_target_id, exc)
+            raise RuntimeError(
+                f"browser-use could not focus ScienceClaw CDP target {requested_target_id}; "
+                f"expected_url={expected_url}; tabs={diagnostics['tabs']}"
+            ) from exc
+    diagnostics["focused_target_id"] = str(getattr(session, "agent_focus_target_id", "") or "")
+    diagnostics["focused_page"] = await _browser_use_focused_page_snapshot(session)
+    diagnostics["tabs"] = await _browser_use_tabs_snapshot(session)
+    logger.info(
+        "browser-use focus diagnostics: requested_target_id=%s focused_target_id=%s expected_url=%s focused_url=%s",
+        diagnostics["requested_target_id"],
+        diagnostics["focused_target_id"],
+        diagnostics["expected_url"],
+        diagnostics["focused_page"].get("url", ""),
+    )
+    return diagnostics
+
+
+async def _browser_use_focused_page_snapshot(session: Any) -> Dict[str, str]:
+    return {
+        "url": await _call_str(session, "get_current_page_url"),
+        "title": await _call_str(session, "get_current_page_title"),
+    }
+
+
+async def _browser_use_tabs_snapshot(session: Any) -> list[Dict[str, str]]:
+    get_tabs = getattr(session, "get_tabs", None)
+    if not callable(get_tabs):
+        return []
+    try:
+        tabs = await get_tabs()
+    except Exception as exc:
+        return [{"error": str(exc)}]
+    return [_browser_use_tab_snapshot(tab) for tab in tabs or []]
+
+
+def _browser_use_tab_snapshot(tab: Any) -> Dict[str, str]:
+    if isinstance(tab, dict):
+        return {
+            "target_id": str(tab.get("target_id") or tab.get("targetId") or ""),
+            "url": str(tab.get("url") or ""),
+            "title": str(tab.get("title") or ""),
+        }
+    return {
+        "target_id": str(getattr(tab, "target_id", "") or getattr(tab, "targetId", "") or ""),
+        "url": str(getattr(tab, "url", "") or ""),
+        "title": str(getattr(tab, "title", "") or ""),
+    }
+
+
+async def _call_str(obj: Any, method_name: str) -> str:
+    method = getattr(obj, method_name, None)
+    if not callable(method):
+        return ""
+    try:
+        return str(await _maybe_await(method()) or "")
+    except Exception as exc:
+        return f"<error: {exc}>"
 
 
 def _configure_browser_use_runtime_env() -> None:
@@ -325,6 +425,18 @@ def _model_base_url(model_config: Dict[str, Any]) -> str:
     from backend.config import settings
 
     return str(model_config.get("base_url") or settings.model_ds_base_url)
+
+
+def _debug_cdp_target_id(debug_context: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(debug_context, dict):
+        return ""
+    return str(debug_context.get("cdp_target_id") or "").strip()
+
+
+def _history_focus_diagnostics(history: Any) -> Dict[str, Any]:
+    value = getattr(history, "_scienceclaw_focus_diagnostics", None)
+    normalized = _json_safe_browser_use_value(value)
+    return normalized if isinstance(normalized, dict) else {}
 
 
 def _history_model_actions(history: Any) -> list[Dict[str, Any]]:

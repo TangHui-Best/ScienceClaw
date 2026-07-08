@@ -1126,6 +1126,7 @@ async def chat_with_assistant(
                         "session_id": session.sandbox_session_id or session_id,
                         "recording_session_id": session_id,
                         "user_id": str(current_user.id),
+                        "cdp_target_id": rpa_manager.get_active_tab_cdp_target_id(session_id),
                     },
                     region_context=region_context,
                 )

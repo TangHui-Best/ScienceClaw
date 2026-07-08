@@ -8,6 +8,7 @@ import pytest
 from backend.rpa.browser_use_recording_operator import (
     BrowserUseRecordingOperator,
     _build_browser_use_task,
+    _focus_browser_use_target,
     _history_model_actions,
     _initial_browser_use_actions,
 )
@@ -58,6 +59,34 @@ class _FakeDOMInteractedElement:
     highlight_index = 7
 
 
+class _FakeBrowserUseSession:
+    def __init__(self):
+        self.start_calls = 0
+        self.focus_calls = []
+        self.agent_focus_target_id = None
+
+    async def start(self):
+        self.start_calls += 1
+
+    async def get_or_create_cdp_session(self, target_id=None, focus=True):
+        self.focus_calls.append({"target_id": target_id, "focus": focus})
+        if focus:
+            self.agent_focus_target_id = target_id
+        return SimpleNamespace(target_id=target_id)
+
+    async def get_current_page_url(self):
+        return "https://example.test/list"
+
+    async def get_current_page_title(self):
+        return "Example List"
+
+    async def get_tabs(self):
+        return [
+            SimpleNamespace(target_id="target-other", url="about:blank", title="Blank"),
+            SimpleNamespace(target_id="target-123", url="https://example.test/list", title="Example List"),
+        ]
+
+
 def test_browser_use_model_actions_are_json_safe_when_interacted_element_is_runtime_object():
     class RuntimeObjectHistory:
         def model_actions(self):
@@ -73,6 +102,24 @@ def test_browser_use_model_actions_are_json_safe_when_interacted_element_is_runt
     assert actions[0]["interacted_element"]["attributes"]["id"] == "save-skill"
     assert actions[0]["interacted_element"]["x_path"] == "/html/body/button[1]"
     json.dumps(actions, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_focus_browser_use_target_starts_session_and_focuses_recorded_target():
+    session = _FakeBrowserUseSession()
+
+    diagnostics = await _focus_browser_use_target(
+        session,
+        target_id="target-123",
+        expected_url="https://example.test/list",
+    )
+
+    assert session.start_calls == 1
+    assert session.focus_calls == [{"target_id": "target-123", "focus": True}]
+    assert diagnostics["requested_target_id"] == "target-123"
+    assert diagnostics["focused_target_id"] == "target-123"
+    assert diagnostics["focused_page"]["url"] == "https://example.test/list"
+    assert diagnostics["tabs"][1]["target_id"] == "target-123"
 
 
 @pytest.mark.asyncio
@@ -106,6 +153,33 @@ async def test_browser_use_operator_records_semantic_runtime_trace_with_action_h
     assert result.trace.signals["browser_use"]["actions"][0]["click_element_by_index"]["index"] == 3
     assert result.trace.signals["browser_use"]["extracted_content"] == ["2 rows"]
     assert result.output == {"extracted_content": ["2 rows"], "action_count": 2}
+
+
+@pytest.mark.asyncio
+async def test_browser_use_operator_passes_recorded_cdp_target_id_to_runner_and_trace():
+    async def fake_runner(**kwargs):
+        assert kwargs["cdp_target_id"] == "target-123"
+        assert kwargs["current_url"] == "https://example.test/list"
+        return _FakeBrowserUseHistory()
+
+    operator = BrowserUseRecordingOperator(
+        model_config={"model_name": "test-model"},
+        cdp_url_resolver=lambda _page, _debug_context: "ws://127.0.0.1:9222/devtools/browser/test",
+        browser_use_runner=fake_runner,
+    )
+
+    result = await operator.run(
+        page=_FakePage(),
+        instruction="Fill the visible input",
+        runtime_results={},
+        debug_context={"cdp_target_id": "target-123"},
+    )
+
+    assert result.success is True
+    assert result.trace is not None
+    browser_use_signal = result.trace.signals["browser_use"]
+    assert browser_use_signal["cdp_target_id"] == "target-123"
+    assert browser_use_signal["scienceclaw_page"]["url"] == "https://example.test/list"
 
 
 @pytest.mark.asyncio

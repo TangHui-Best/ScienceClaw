@@ -95,6 +95,7 @@ class RPATab(BaseModel):
     tab_id: str
     title: str = ""
     url: str = ""
+    cdp_target_id: str = ""
     opener_tab_id: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.now)
     last_seen_at: datetime = Field(default_factory=datetime.now)
@@ -474,12 +475,14 @@ class RPASessionManager:
             return existing_tab_id
 
         tab_id = str(uuid.uuid4())
+        cdp_target_id = await self._resolve_page_cdp_target_id(page)
         self._tabs.setdefault(session_id, {})[tab_id] = page
         self._page_tab_ids.setdefault(session_id, {})[id(page)] = tab_id
         self._tab_meta.setdefault(session_id, {})[tab_id] = RPATab(
             tab_id=tab_id,
             title=await self._safe_page_title(page),
             url=getattr(page, "url", "") or "",
+            cdp_target_id=cdp_target_id,
             opener_tab_id=opener_tab_id,
         )
 
@@ -503,6 +506,22 @@ class RPASessionManager:
                 logger.debug("[RPA] Failed to set harness capture page flag: %s", exc)
 
         return tab_id
+
+    @staticmethod
+    async def _resolve_page_cdp_target_id(page: Page) -> str:
+        context = getattr(page, "context", None)
+        new_cdp_session = getattr(context, "new_cdp_session", None)
+        if not callable(new_cdp_session):
+            return ""
+        try:
+            cdp_session = await new_cdp_session(page)
+            response = await cdp_session.send("Target.getTargetInfo")
+        except Exception as exc:
+            logger.debug("[RPA] Failed to resolve CDP target id for page: %s", exc)
+            return ""
+        target_info = response.get("targetInfo") if isinstance(response, dict) else None
+        target_id = target_info.get("targetId") if isinstance(target_info, dict) else ""
+        return str(target_id or "")
 
     async def register_context_page(self, session_id: str, page: Page, make_active: bool = True) -> str:
         session = self.sessions.get(session_id)
@@ -853,12 +872,20 @@ class RPASessionManager:
                 "tab_id": tab.tab_id,
                 "title": tab.title,
                 "url": tab.url,
+                "cdp_target_id": tab.cdp_target_id,
                 "opener_tab_id": tab.opener_tab_id,
                 "status": tab.status,
                 "active": tab.tab_id == active_tab_id,
             }
             for tab in self._tab_meta.get(session_id, {}).values()
         ]
+
+    def get_active_tab_cdp_target_id(self, session_id: str) -> str:
+        active_tab_id = self.sessions.get(session_id).active_tab_id if session_id in self.sessions else None
+        if not active_tab_id:
+            return ""
+        tab = self._tab_meta.get(session_id, {}).get(active_tab_id)
+        return str(tab.cdp_target_id or "") if tab else ""
 
     def get_active_page(self, session_id: str) -> Optional[Page]:
         active_tab_id = self.sessions.get(session_id).active_tab_id if session_id in self.sessions else None

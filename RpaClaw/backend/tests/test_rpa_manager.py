@@ -19,12 +19,13 @@ TRACE_MODELS_MODULE = importlib.import_module("backend.rpa.trace_models")
 
 
 class _FakeContext:
-    def __init__(self):
+    def __init__(self, cdp_target_id: str = ""):
         self.handlers = {}
         self.exposed_bindings = []
         self.init_scripts = []
         self.pages = []
         self.closed = False
+        self.cdp_target_id = cdp_target_id
 
     def on(self, event_name, handler):
         self.handlers[event_name] = handler
@@ -34,6 +35,11 @@ class _FakeContext:
 
     async def add_init_script(self, script=None, path=None):
         self.init_scripts.append({"script": script, "path": path})
+
+    async def new_cdp_session(self, _page):
+        if not self.cdp_target_id:
+            raise RuntimeError("No fake CDP target id configured")
+        return _FakeCDPSession(self.cdp_target_id)
 
     async def new_page(self):
         page = _FakePage("about:blank", "Blank", context=self)
@@ -54,6 +60,18 @@ class _FakeBrowser:
         context = _FakeContext()
         self.contexts.append(context)
         return context
+
+
+class _FakeCDPSession:
+    def __init__(self, target_id: str):
+        self.target_id = target_id
+        self.sent = []
+
+    async def send(self, method, params=None):
+        self.sent.append({"method": method, "params": params or {}})
+        if method == "Target.getTargetInfo":
+            return {"targetInfo": {"targetId": self.target_id}}
+        raise AssertionError(f"Unexpected CDP method: {method}")
 
 
 class _FakePage:
@@ -675,6 +693,17 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(page.bring_to_front_calls, 1)
         self.assertEqual(len(page.add_init_script_calls), 1)
         self.assertIn(tab_id, page.add_init_script_calls[0]["script"])
+
+    async def test_register_page_records_cdp_target_id_for_active_tab(self):
+        context = _FakeContext(cdp_target_id="target-123")
+        page = _FakePage("https://example.com", "Example", context=context)
+
+        tab_id = await self.manager.register_page(self.session.id, page, make_active=True)
+        tabs = self.manager.list_tabs(self.session.id)
+
+        self.assertEqual(tabs[0]["tab_id"], tab_id)
+        self.assertEqual(tabs[0]["cdp_target_id"], "target-123")
+        self.assertEqual(self.manager.get_active_tab_cdp_target_id(self.session.id), "target-123")
 
     async def test_register_page_is_idempotent_for_same_page(self):
         page = _FakePage("https://example.com", "Example")
