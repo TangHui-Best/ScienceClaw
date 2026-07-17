@@ -1,13 +1,14 @@
 ---
 id: ADR-005
 doc_kind: adr
-status: proposed
+status: superseded
 scope: feature
 feature_refs:
   - docs/features/F025-browser-use-recording-operator-poc.md
 decision_area: rpa-recording-browser-agent
 created: 2026-07-05
-updated: 2026-07-05
+updated: 2026-07-17
+superseded_by: ADR-006
 ---
 
 # ADR-005: Browser-use Recording Operator Integration Boundary
