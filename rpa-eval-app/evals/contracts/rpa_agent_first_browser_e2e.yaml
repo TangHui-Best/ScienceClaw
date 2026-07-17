@@ -1,0 +1,102 @@
+id: rpa_agent_first_browser_e2e
+name: 跨系统采购订单验收登记
+runner_boundary: contract_only_not_loaded_by_legacy_runner
+start_path: /system-a/orders
+auth_user: buyer
+
+profiles:
+  case_a:
+    reset_profile: case_a
+    non_business_frame_count: 1
+    business_frame_ordinal: 1
+    query:
+      business_type: 设备采购
+      date_from: "2026-05-01"
+      date_to: "2026-05-31"
+      supplier_name: 华东精密设备有限公司
+      order_no: null
+    target_result_position: 1
+    target_order:
+      order_no: PO-2026-05017
+      supplier_name: 华东精密设备有限公司
+      contract_no: CT-2026-0088
+      amount: "128600.50"
+      currency: CNY
+      order_date: "2026-05-16"
+  case_b:
+    reset_profile: case_b
+    non_business_frame_count: 2
+    business_frame_ordinal: 2
+    query:
+      business_type: 服务采购
+      date_from: "2026-06-01"
+      date_to: "2026-06-30"
+      supplier_name: 北辰数字技术有限公司
+      order_no: null
+    target_result_position: 3
+    target_order:
+      order_no: PO-2026-06042
+      supplier_name: 北辰数字技术有限公司
+      contract_no: CT-2026-0116
+      amount: "10150.75"
+      currency: USD
+      order_date: "2026-06-08"
+
+selection_contract:
+  target_key: order_no
+  button_visible_name: 发起验收
+  forbidden:
+    - fixed_row_index
+    - fixed_button_index
+    - recorded_task_url
+    - fixed_frame_index
+  note: 宽查询刻意保留至少三个同供应商结果；订单编号输入框的精确后端过滤由独立契约测试覆盖。
+
+expected_save:
+  source: selected_target_order
+  note: 自动创建
+  confirmed: true
+  duplicate_policy: reject_with_http_409
+
+oracle:
+  method: GET
+  path: /api/eval/oracle/acceptance
+  query:
+    task_id: runtime_task_id
+  required_header: X-RPA-Eval-Reset-Token
+  assertions:
+    - task_id
+    - order_no
+    - supplier_name
+    - contract_no
+    - amount
+    - currency
+    - order_date
+    - note
+    - confirmed
+
+page_capabilities:
+  system_a:
+    path: /system-a/orders
+    custom_business_type_select: true
+    date_range_picker: true
+    supplier_input: true
+    order_no_input: true
+    icon_query_button_accessible_name: 查询
+    adjacent_icon_reset_button_accessible_name: 重置
+    backend_filtering: true
+    same_named_row_buttons_minimum: 3
+  system_b_host:
+    runtime_url_pattern: /system-b/acceptance/{random_task_id}?token={random_token}
+    same_origin: true
+    non_business_iframe_present: true
+    business_iframe_ordinal_varies_by_profile: true
+    business_iframe_delayed: true
+    business_iframe_title: 验收登记表单
+    business_iframe_name: acceptance-form
+  system_b_form:
+    path_pattern: /system-b/acceptance-frame/{random_task_id}?token={random_token}
+    searchable_supplier_select: true
+    custom_currency_select: true
+    dom_confirmation_dialog: true
+    persists_to_backend: true

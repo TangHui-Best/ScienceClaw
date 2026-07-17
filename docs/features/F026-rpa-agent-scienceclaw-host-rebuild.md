@@ -80,7 +80,7 @@ updated: 2026-07-17
 - [ ] Skill 输入参数、共享变量和 CoreTrace `data_binding` 最小契约已确认。
 - [ ] Page Registry、Frame Scope、新 Page Effect 和变量引用的编译契约已确认。
 - [ ] CoreTrace -> Playwright 浏览器段 -> Skill 的产物链路已确认。
-- [ ] eval-app 可重置两组测试数据，并提供随机任务 URL、iframe 表单和不可见 Oracle。
+- [x] eval-app 可重置两组测试数据，并提供随机任务 URL、iframe 表单和受保护 Oracle。
 - [ ] `RpaClaw/backend/rpa_agent/` 随首个纵向切片建立，且自动化护栏禁止导入旧领域模型和 Compiler。
 - [ ] Route 和新链路离线回归不会因本地 Browser-use 配置意外调用真实 LLM。
 - [ ] 创建态可解释展示人工动作、Browser-use 多 Action、新标签页 Effect、iframe Scope 和变量绑定。
@@ -89,7 +89,7 @@ updated: 2026-07-17
 
 ## Current Status
 
-In Progress。宿主重构设计、隔离分支和首个阶段一 E2E 验收场景已经确认；业务实现尚未开始。下一步是用该场景反推共享变量与 CoreTrace 编译链路，不执行脱离业务验收的“增量 0”。
+In Progress。宿主重构设计、隔离分支和首个阶段一 E2E 验收场景已经确认；首个 E2E 所需的 eval-app 测评环境已经准备好。CoreTrace、录制/对话采集、编译、SKILL 生成和回放链路仍未实现，下一步仍需用该场景反推并交付这些能力。
 
 ## Links
 
@@ -97,6 +97,7 @@ In Progress。宿主重构设计、隔离分支和首个阶段一 E2E 验收场�
 
 - [EV-025 Browser-use Live UI E2E](../evidence/EV-025-browser-use-live-ui-e2e.md)（历史技术穿刺证据）
 - [EV-026 Browser-use 真实业务矩阵 Live UI E2E](../evidence/EV-026-browser-use-live-ui-business-matrix.md)（历史技术穿刺证据）
+- [EV-027 首个 RPA Agent 浏览器 E2E 的 eval-app 测评环境](../evidence/EV-027-rpa-eval-app-first-browser-e2e-environment.md)
 
 ### Decisions / ADRs
 
@@ -128,6 +129,7 @@ In Progress。宿主重构设计、隔离分支和首个阶段一 E2E 验收场�
 | Claim | Acceptance | Evidence | Status |
 | --- | --- | --- | --- |
 | 首个业务验收锚点稳定 | 场景、非目标、两组 fixtures、硬编码防护和 Oracle 有明确规格 | 首个阶段一 E2E 验收场景设计基线 | pass |
+| eval-app 测评环境可用 | 两套 Profile、后端过滤、随机任务 URL、多 iframe、真实保存和受保护 Oracle 可独立验证 | EV-027 | pass |
 | 新领域与旧核心隔离 | 首个纵向切片中的新代码通过架构测试阻止旧领域 import | 待生成 Evidence | pending |
 | 离线验证不依赖真实 LLM | 强制 Browser-use 配置时离线单测仍由替身执行 | 待生成 Evidence | pending |
 | CoreTrace 可形成可回放 Skill | 同一 Skill 完成 Replay A、Replay B 和后端 Oracle | 待生成 E2E Evidence | pending |
@@ -139,6 +141,7 @@ In Progress。宿主重构设计、隔离分支和首个阶段一 E2E 验收场�
 | --- | --- | --- | --- | --- |
 | 2026-07-17 | active | 用户确认宿主重构设计并授权下一步 | ADR-006、宿主重构设计基线 | 进入增量 0，尚未开始业务实现 |
 | 2026-07-17 | active / acceptance revised | 用户指出工程底座先行缺少业务验收锚点 | 首个阶段一 E2E 验收场景设计基线 | 停止执行旧增量 0，改为场景反推契约与纵向实现 |
+| 2026-07-17 | active / eval environment ready | 完成首个 E2E 的 eval-app 独立测评底座 | EV-027 | 只证明测评环境就绪，不证明完整 RPA Agent E2E 通过 |
 
 ## Patch History
 
@@ -147,15 +150,16 @@ None yet.
 ## Recovery Snapshot
 
 - Read first: ADR-006，然后阅读本 Feature、首个阶段一 E2E 验收场景和宿主重构设计基线。
-- Current capability state: 已有隔离 worktree 和通过的局部技术穿刺回归；新 `backend/rpa_agent` 尚未创建。
-- Known risks: 共享变量和 `data_binding` 尚未从场景反推；Page/Frame/Effect 编译契约和 Skill 产物结构尚未确认；旧计划仍可能误导执行者从空工程底座开始。
-- Next safe action: 设计首个 E2E 所需的 Skill 输入参数、共享变量和 CoreTrace 编译链路，再设计 eval-app 测评集与实施计划。
-- Unblock condition: 上述契约通过用户评审后，才能开始首个纵向切片开发。
+- Current capability state: eval-app 已提供两套 Profile、系统 A/B 页面、随机任务 URL、真实保存和受保护 Oracle；新 `backend/rpa_agent` 尚未创建。
+- Known risks: 共享变量和 `data_binding` 尚未从场景反推；Page/Frame/Effect 编译契约和 Skill 产物结构尚未确认；完整 E2E 仍缺少录制、编译和回放链路。
+- Next safe action: 以 `rpa-eval-app/evals/contracts/rpa_agent_first_browser_e2e.yaml` 为输入，设计 Skill 参数、共享变量和 CoreTrace 编译链路。
+- Unblock condition: 上述契约通过用户评审后，再实现首个 RPA Agent 纵向切片；eval-app 不再是阻塞项。
 
 ## Evidence
 
 - EV-025 与 EV-026 只证明旧 ScienceClaw 技术穿刺路线可行，并暴露整轮 History 压缩、运行时 LLM 回放和测试配置泄漏等风险。
 - 当前新增材料只证明验收边界已明确，不证明 CoreTrace 新链路已经实现；首个产品能力 Evidence 必须来自双用例 E2E 回放和后端 Oracle。
+- EV-027 证明 eval-app 测评环境可独立运行和断言，但不证明完整 RPA Agent E2E 已通过。
 
 ## Next Step
 

@@ -1,4 +1,5 @@
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from os import getenv
 from pathlib import Path
 from secrets import token_urlsafe
@@ -9,6 +10,7 @@ from sqlalchemy.orm import Session
 from auth import hash_password
 from database import DOWNLOADS_DIR
 from models import (
+    AcceptanceSourceOrder,
     ApprovalTask,
     Contract,
     PurchaseOrder,
@@ -19,13 +21,16 @@ from models import (
 )
 
 
+FIXTURE_PROFILES = {"case_a", "case_b"}
+
+
 def reset_downloads_dir() -> None:
     if DOWNLOADS_DIR.exists():
         rmtree(DOWNLOADS_DIR)
     DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def load_fixtures(db: Session) -> None:
+def load_fixtures(db: Session, profile: str | None = None) -> None:
     def fixture_password(username: str) -> str:
         env_key = f"RPA_EVAL_{username.upper()}_PASSWORD"
         return getenv(env_key) or token_urlsafe(24)
@@ -187,7 +192,53 @@ def load_fixtures(db: Session) -> None:
             updated_at=datetime(2026, 1, 9, 10, 5, 0),
         )
     )
+    if profile:
+        load_acceptance_profile(db, profile)
+
     db.commit()
+
+
+def load_acceptance_profile(db: Session, profile: str) -> None:
+    if profile not in FIXTURE_PROFILES:
+        raise ValueError(f"Unknown fixture profile: {profile}")
+
+    profile_rows = {
+        "case_a": [
+            (1, "设备采购", "PO-2026-05017", "华东精密设备有限公司", "CT-2026-0088", "128600.50", "CNY", "2026-05-16"),
+            (2, "设备采购", "PO-2026-05031", "华东精密设备有限公司", "CT-2026-0092", "86000.00", "CNY", "2026-05-20"),
+            (3, "设备采购", "PO-2026-05056", "华东精密设备有限公司", "CT-2026-0097", "156400.00", "CNY", "2026-05-27"),
+        ],
+        "case_b": [
+            (1, "服务采购", "PO-2026-06011", "北辰数字技术有限公司", "CT-2026-0108", "8000.00", "USD", "2026-06-02"),
+            (2, "服务采购", "PO-2026-06027", "北辰数字技术有限公司", "CT-2026-0112", "9500.00", "USD", "2026-06-05"),
+            (3, "服务采购", "PO-2026-06042", "北辰数字技术有限公司", "CT-2026-0116", "10150.75", "USD", "2026-06-08"),
+        ],
+    }
+    db.add_all(
+        [
+            AcceptanceSourceOrder(
+                profile=profile,
+                fixture_position=position,
+                business_type=business_type,
+                order_no=order_no,
+                supplier_name=supplier_name,
+                contract_no=contract_no,
+                amount=Decimal(amount),
+                currency=currency,
+                order_date=date.fromisoformat(order_date),
+            )
+            for (
+                position,
+                business_type,
+                order_no,
+                supplier_name,
+                contract_no,
+                amount,
+                currency,
+                order_date,
+            ) in profile_rows[profile]
+        ]
+    )
 
 
 def write_placeholder_download(filename: str) -> Path:

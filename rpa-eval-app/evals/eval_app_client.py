@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from typing import Any
-from urllib import error, request
+from urllib import error, parse, request
 
 
 class EvalAppError(RuntimeError):
@@ -22,10 +22,13 @@ class EvalAppClient:
         self.base_url = base_url.rstrip("/")
         self.timeout_s = timeout_s
 
-    def reset(self, reset_token: str) -> dict[str, Any]:
+    def reset(self, reset_token: str, profile: str | None = None) -> dict[str, Any]:
+        path = "/api/eval/reset"
+        if profile:
+            path = f"{path}?{parse.urlencode({'profile': profile})}"
         return self._request(
             "POST",
-            "/api/eval/reset",
+            path,
             headers={"X-RPA-Eval-Reset-Token": reset_token},
         )
 

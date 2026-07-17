@@ -13,6 +13,10 @@ rpa-eval-app/
 └── evals/          # YAML 黄金用例、RpaClaw 调用客户端、报告生成器
 ```
 
+首个 RPA Agent 浏览器 E2E 所需的可控业务环境说明见
+[`IMPLEMENTATION_FIRST_BROWSER_E2E.md`](IMPLEMENTATION_FIRST_BROWSER_E2E.md)，独立场景契约位于
+`evals/contracts/rpa_agent_first_browser_e2e.yaml`。该契约不会进入旧 Runner 的 `--all`。
+
 ## 环境要求
 
 - Python 3.11+，建议与 RpaClaw 本地开发环境隔离。
@@ -111,6 +115,15 @@ Invoke-WebRequest `
   -Uri http://localhost:8085/api/eval/reset `
   -Headers @{ "X-RPA-Eval-Reset-Token" = $env:RPA_EVAL_RESET_TOKEN }
 ```
+
+首个浏览器 E2E 的两套 Profile 可显式选择：
+
+```powershell
+Invoke-WebRequest -Method POST -Uri "http://localhost:8085/api/eval/reset?profile=case_a" -Headers @{ "X-RPA-Eval-Reset-Token" = $env:RPA_EVAL_RESET_TOKEN }
+Invoke-WebRequest -Method POST -Uri "http://localhost:8085/api/eval/reset?profile=case_b" -Headers @{ "X-RPA-Eval-Reset-Token" = $env:RPA_EVAL_RESET_TOKEN }
+```
+
+不传 `profile` 时仍执行原有默认重置。
 
 重置 token 必须通过环境变量提供，并在后端和 runner 中保持一致。通常在启动后端前已经设置过；如果这是新的终端，请重新设置：
 

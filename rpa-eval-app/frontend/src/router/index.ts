@@ -18,10 +18,29 @@ const router = createRouter({
         { path: 'purchase-requests', name: 'purchase-requests', component: () => import('@/views/PurchaseRequests.vue') },
         { path: 'purchase-requests/new', name: 'purchase-request-form', component: () => import('@/views/PurchaseRequestForm.vue') },
         { path: 'purchase-orders', name: 'purchase-orders', component: () => import('@/views/PurchaseOrders.vue') },
+        { path: 'system-a/orders', name: 'system-a-orders', component: () => import('@/views/SystemAOrders.vue') },
         { path: 'approvals', name: 'approvals', component: () => import('@/views/Approvals.vue') },
         { path: 'reports', name: 'reports', component: () => import('@/views/Reports.vue') },
         { path: 'section-texts', name: 'section-texts', component: () => import('@/views/SectionTexts.vue') }
       ]
+    },
+    {
+      path: '/system-b/acceptance-launch',
+      name: 'acceptance-launch',
+      component: () => import('@/views/AcceptanceLaunch.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/system-b/acceptance/:taskId',
+      name: 'acceptance-host',
+      component: () => import('@/views/AcceptanceHost.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/system-b/acceptance-frame/:taskId',
+      name: 'acceptance-form',
+      component: () => import('@/views/AcceptanceForm.vue'),
+      meta: { requiresAuth: true }
     }
   ]
 })

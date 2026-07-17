@@ -86,6 +86,39 @@ export interface ReportJob {
   completed_at?: string | null
 }
 
+export interface AcceptanceOrder {
+  business_type: string
+  order_no: string
+  supplier_name: string
+  contract_no: string
+  amount: string
+  currency: string
+  order_date: string
+}
+
+export interface AcceptanceTaskCreated {
+  task_id: string
+  token: string
+  url: string
+}
+
+export interface AcceptanceTask {
+  task_id: string
+  non_business_frame_count: number
+  order: AcceptanceOrder
+}
+
+export interface AcceptanceRecordInput {
+  order_no: string
+  supplier_name: string
+  contract_no: string
+  amount: string
+  currency: string
+  order_date: string
+  note: string
+  confirmed: boolean
+}
+
 export const apiClient = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
   timeout: 15000

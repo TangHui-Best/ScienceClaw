@@ -11,6 +11,7 @@
         <el-menu-item index="/suppliers">供应商台账</el-menu-item>
         <el-menu-item index="/purchase-requests">采购申请</el-menu-item>
         <el-menu-item index="/purchase-orders">采购订单</el-menu-item>
+        <el-menu-item index="/system-a/orders">采购订单查询</el-menu-item>
         <el-menu-item index="/approvals">审批待办</el-menu-item>
         <el-menu-item index="/reports">报表中心</el-menu-item>
         <el-menu-item index="/section-texts">区块文本</el-menu-item>
@@ -49,6 +50,7 @@ const titles: Record<string, string> = {
   '/suppliers': '供应商台账',
   '/purchase-requests': '采购申请',
   '/purchase-orders': '采购订单',
+  '/system-a/orders': '采购订单综合查询',
   '/approvals': '审批待办',
   '/reports': '报表中心',
   '/section-texts': '区块文本'

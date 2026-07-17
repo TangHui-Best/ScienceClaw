@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -6,9 +6,9 @@ from sqlalchemy.orm import Session
 from auth import create_access_token, verify_reset_token
 from database import SessionLocal
 from database import ensure_app_dirs, recreate_database
-from fixtures import load_fixtures, reset_downloads_dir
+from fixtures import FIXTURE_PROFILES, load_fixtures, reset_downloads_dir
 from models import User
-from routes import approvals, auth, contracts, purchase_orders, purchase_requests, reports, suppliers
+from routes import acceptance, approvals, auth, contracts, purchase_orders, purchase_requests, reports, suppliers
 from schemas import EvalTokenRequest, EvalTokenResponse, UserOut
 
 
@@ -40,15 +40,22 @@ def health() -> dict[str, str]:
 
 
 @app.post("/api/eval/reset", dependencies=[Depends(verify_reset_token)])
-def reset_eval() -> dict[str, str]:
+def reset_eval(profile: str | None = Query(default=None)) -> dict[str, str]:
+    if profile is not None and profile not in FIXTURE_PROFILES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown fixture profile")
     recreate_database()
     reset_downloads_dir()
     db = SessionLocal()
     try:
-        load_fixtures(db)
+        load_fixtures(db, profile)
     finally:
         db.close()
-    return {"status": "reset", "database": "reloaded", "downloads": "cleared"}
+    return {
+        "status": "reset",
+        "profile": profile or "default",
+        "database": "reloaded",
+        "downloads": "cleared",
+    }
 
 
 @app.post(
@@ -85,3 +92,13 @@ app.include_router(
 )
 app.include_router(approvals.router, prefix="/api/approvals", tags=["approvals"])
 app.include_router(reports.router, prefix="/api/reports", tags=["reports"])
+app.include_router(
+    acceptance.business_router,
+    prefix="/api/acceptance",
+    tags=["acceptance"],
+)
+app.include_router(
+    acceptance.oracle_router,
+    prefix="/api/eval/oracle",
+    tags=["eval oracle"],
+)

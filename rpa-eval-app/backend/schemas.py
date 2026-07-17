@@ -1,4 +1,5 @@
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
@@ -137,6 +138,48 @@ class ReportJobOut(BaseModel):
 class DownloadEventOut(BaseModel):
     filename: str
     source: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class AcceptanceOrderOut(BaseModel):
+    business_type: str
+    order_no: str
+    supplier_name: str
+    contract_no: str
+    amount: Decimal
+    currency: str
+    order_date: date
+
+    model_config = {"from_attributes": True}
+
+
+class AcceptanceTaskCreated(BaseModel):
+    task_id: str
+    token: str
+    url: str
+
+
+class AcceptanceTaskOut(BaseModel):
+    task_id: str
+    non_business_frame_count: int
+    order: AcceptanceOrderOut
+
+
+class AcceptanceRecordCreate(BaseModel):
+    order_no: str
+    supplier_name: str
+    contract_no: str
+    amount: Decimal = Field(ge=0)
+    currency: str
+    order_date: date
+    note: str
+    confirmed: bool
+
+
+class AcceptanceRecordOut(AcceptanceRecordCreate):
+    task_id: str
     created_at: datetime
 
     model_config = {"from_attributes": True}
