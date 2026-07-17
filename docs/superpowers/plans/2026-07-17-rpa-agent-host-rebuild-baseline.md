@@ -1,6 +1,12 @@
-# RPA Agent ScienceClaw 宿主重构基线 Implementation Plan
+# [已失效] RPA Agent ScienceClaw 宿主重构基线 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> 文档状态：已失效，禁止执行（2026-07-17）。
+>
+> 替代入口：[首个阶段一 E2E 验收场景设计基线](../specs/2026-07-17-RPA-Agent首个阶段一E2E验收场景设计基线.md)。
+>
+> 失效原因：本计划先从空领域目录、契约搬运和测试护栏出发，没有先用真实业务 E2E 反推共享变量、编译链路和工程边界。用户评审后确定改为“验收场景 -> 最小契约 -> 编译链路 -> eval 测评设计 -> 实施计划”。本文保留为历史记录，其中的测试隔离和依赖护栏任务可被未来场景驱动计划重新吸收，但不能按原顺序执行。
+
+> 以下正文保留原计划内容，仅用于审计当时的任务拆分和被否决顺序，不构成执行指令。
 
 **Goal:** 完成 F026 的增量 0，在不实现 CoreTrace 业务逻辑的前提下，建立新领域目录、正式契约入口、离线测试隔离、旧领域依赖护栏和可重复验证证据。
 

@@ -301,15 +301,15 @@ codex/rpa-agent-v1-coretrace
 
 ## 12. 开工前基线门槛
 
-创建新分支后，不立即铺开业务代码，先完成：
+创建新分支后，不立即铺开业务代码。工程底座必须由已确认的首个 E2E 场景反推，而不是先创建空目录或搬运全部契约。开始开发前完成：
 
-1. 把本项目已确认的总纲、CoreTrace、三个上游模型及 JSON Schema 纳入 ScienceClaw 分支内的权威设计目录；
-2. 创建新的宿主重构 ADR；
-3. 建立新模块 Feature/验收入口；
-4. 修复现有路由测试在 Browser-use 环境下意外调用真实模型的问题；
-5. 将 CoreTrace 和上游模型的 32 个正反契约案例接入分支测试；
-6. 固定首个可执行能力增量与受控测试页面；
-7. 明确旧录制代码的只读约束和生产依赖扫描规则。
+1. 创建宿主重构 ADR 和 Feature 验收入口；
+2. 固定首个阶段一 E2E 场景、两组 fixtures、硬编码防护和后端 Oracle；
+3. 根据场景确认 Skill 输入参数、共享变量和 CoreTrace `data_binding` 的最小契约；
+4. 根据新标签页和 iframe 场景确认 Page Registry、Frame Scope 与 Page Effect 的编译契约；
+5. 设计 CoreTrace -> Playwright 浏览器段 -> Skill 的产物链路；
+6. 将场景实际需要的 CoreTrace 和上游模型契约纳入 ScienceClaw 分支测试；
+7. 在第一条纵向实现中同时建立离线测试隔离、旧领域依赖扫描和新目录边界。
 
 现有回归事实：
 
@@ -322,25 +322,23 @@ Browser-use Operator + Runtime Context + Compiler 专项：125 passed
 
 ## 13. 推荐能力增量
 
-不以“完成多少文件”评估进度，而以可执行、可断言、可复现的纵向能力增量评估。
+不以“完成多少文件”评估进度，而以可执行、可断言、可复现的业务闭环评估。
 
-### 增量 0：宿主重构基线
-
-- 新分支、worktree、权威文档和 ADR；
-- 新目录与依赖守卫；
-- 契约测试和完全离线的测试入口。
-
-### 增量 1：HUMAN 最小闭环
+### 增量 1：首个阶段一 E2E
 
 ```text
-人工 click/fill
-→ TraceCandidate / BrowserFact
-→ SettlementResult / CoreTrace
-→ 新 Compiler
-→ Playwright 回放
+系统 A 复杂查询与目标行取值
+→ 共享变量
+→ 同名行按钮与新标签页
+→ 系统 B iframe 填写
+→ CoreTrace 编译
+→ 同一个 Skill 使用两组数据回放
+→ 后端 Oracle
 ```
 
-### 增量 2：下载副作用闭环
+该增量内按失败可归因原则分层实现人工通道、Browser-use 通道、结算、编译和回放，不再把“单一 click/fill”当作独立的产品验收终点。
+
+### 增量 2：下载副作用与 DataAsset 闭环
 
 ```text
 人工点击导出
@@ -350,25 +348,14 @@ Browser-use Operator + Runtime Context + Compiler 专项：125 passed
 → expect_download 回放
 ```
 
-### 增量 3：Browser-use 多 Action 闭环
-
-```text
-自然语言指令
-→ 多次实际 Tools.act
-→ 多个独立 Candidate
-→ 共享事实观察与结算
-→ 多条 CoreTrace
-→ 确定性回放
-```
-
-### 增量 4：V1 浏览器取数闭环
+### 增量 3：V1 浏览器取数闭环
 
 - 多页面条件搜索；
 - 有下载按钮时下载 Excel/CSV；
 - 无下载按钮时分页提取指定列；
 - 输出可被阶段二消费的 DataAsset。
 
-### 增量 5：阶段二最小闭环
+### 增量 4：阶段二最小闭环
 
 - 自然语言数据处理指令；
 - 输入 DataAsset、源文件或结果模板；
@@ -426,35 +413,39 @@ Browser-use Operator + Runtime Context + Compiler 专项：125 passed
 - 不建立新旧双写或长期双轨；
 - 旧录制核心达到能力退出门槛后再删除或归档；
 - 整个 `backend/rpa` 不能机械删除，必须按能力分类处置。
+- 首个 E2E 是“系统 A 复杂查询与取值 -> 新标签页 -> 系统 B iframe 填写”；
+- 首个 E2E 仅使用共享标量变量，不前置设计 DataAsset；
+- 同一个 Skill 必须通过两组不同数据和后端 Oracle，以暴露行号、URL、frame 和字段值硬编码。
 
 ### 后续设计
 
-- 首个可执行能力增量和验收样例的字段级定义；
-- DataAsset v0.1；
-- SkillCreationContext、Page Registry、Variable/DataAsset Registry 接口；
-- Semantic Validator 与 CoreTrace Compiler 能力矩阵；
-- 新分支 ADR、Feature 和实施计划；
+- Skill 输入参数与共享变量最小契约；
+- Page Registry、Frame Scope、Page Effect 和变量绑定的编译契约；
+- CoreTrace -> Playwright 浏览器段 -> Skill 的产物链路；
+- 首个 E2E 的 eval-app 测评设计和分层实施计划；
+- DataAsset v0.1，推迟到第二个下载/分页提取场景前；
 - 团队模块拆分、依赖顺序和验收责任。
 
 ## 18. 下一步
 
-本文经用户审阅确认后：
+当前分支、worktree、ADR 和 Feature 已建立。下一步按首个 E2E 场景继续：
 
-1. 刷新 ScienceClaw 远端引用并审计目标基线；
-2. 创建独立 worktree 和 `codex/rpa-agent-v1-coretrace` 分支；
-3. 在分支内建立正式 ADR 和 Feature 入口；
-4. 纳入当前权威规格与机器契约；
-5. 制定“增量 0：宿主重构基线”的实施计划；
-6. 完成基线后再进入 DataAsset 和第一个纵向能力增量。
+1. 设计 Skill 输入参数和共享变量最小契约；
+2. 设计 Page/Frame/Effect 与变量绑定的编译契约；
+3. 设计 CoreTrace 到最终 Skill 的产物链路；
+4. 设计 eval-app fixture、随机任务 URL 和后端 Oracle；
+5. 制定首个 E2E 的分层实施计划；
+6. 完成双用例回放后，再进入 DataAsset 场景。
 
 ## 19. 相关材料
 
+- [首个阶段一 E2E 验收场景设计基线](./2026-07-17-RPA-Agent首个阶段一E2E验收场景设计基线.md)
 - [F026：RPA Agent ScienceClaw 宿主重构](<../../features/F026-rpa-agent-scienceclaw-host-rebuild.md>)
 - [ADR-006：RPA Agent 在 ScienceClaw 内绿地重建领域核心](<../../decisions/ADR-006-rpa-agent-scienceclaw-host-greenfield-core.md>)
 - [ScienceClaw RPA 架构接手导航](<../../project/agent-architecture-onboarding.md>)
 - [ScienceClaw RPA Harness 入口](<../../rpa/harness/README.md>)
 
-CoreTrace、TraceCandidate、BrowserFact、SettlementResult 及其 JSON Schema 的字段级权威材料将在增量 0 中纳入本仓库；纳入前不允许开始新领域模型的实现。
+CoreTrace、TraceCandidate、BrowserFact、SettlementResult 及其 JSON Schema 应在首个 E2E 分层实现前按实际消费范围纳入本仓库。不得在验收场景和编译契约尚未确定时先铺开领域模型代码。
 
 ## 20. 维护规则
 

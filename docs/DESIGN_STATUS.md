@@ -9,6 +9,19 @@ Use this order of authority:
 3. This status file and status blocks at the top of individual design docs.
 4. Historical specs/plans under `docs/superpowers`.
 
+## Current RPA Agent Rebuild
+
+- `docs/decisions/ADR-006-rpa-agent-scienceclaw-host-greenfield-core.md`
+  - 当前项目级决策：复用 ScienceClaw 宿主，在 `backend/rpa_agent` 绿地重建新领域核心，不兼容旧录制数据链路。
+- `docs/features/F026-rpa-agent-scienceclaw-host-rebuild.md`
+  - 当前 Feature、验收映射和恢复入口。
+- `docs/superpowers/specs/2026-07-17-RPA-Agent首个阶段一E2E验收场景设计基线.md`
+  - 当前第一产品验收锚点：系统 A 复杂查询与取值、新标签页、系统 B iframe 填写、双用例回放和后端 Oracle。
+- `docs/superpowers/specs/2026-07-17-rpa-agent-scienceclaw-host-rebuild-design.md`
+  - 当前宿主复用、领域隔离和旧链路退出边界。
+
+`docs/superpowers/plans/2026-07-17-rpa-agent-host-rebuild-baseline.md` 已失效，禁止按原顺序执行。新实施计划必须由首个 E2E、共享变量契约和编译链路反推。
+
 ## Current Or Implemented
 
 These designs match important parts of the current codebase, though details should still be checked against code:

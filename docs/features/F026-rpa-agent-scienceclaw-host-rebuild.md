@@ -26,8 +26,8 @@ updated: 2026-07-17
 - User pain point: 如果继续围绕旧模型演进，业务人员看到的步骤、实际浏览器事实和最终脚本会难以保持一致，后续每次扩展都会增加兼容和推理成本。
 - Capability promise: 在同一仓库内绿地建立新领域核心，先用 Harness 固定边界和可验收能力，再逐步替换旧录制链路。
 - Non-goals: 不迁移旧资产，不创建转换器，不一次性删除整个 `backend/rpa`，不以代码量作为进度。
-- Acceptance source: ADR-006、宿主重构设计基线、正式数据模型 Schema 与测试向量、增量证据。
-- Open questions: DataAsset 的最小 v0.1 契约及第一个纵向业务切片将在增量 0 通过后单独设计和确认。
+- Acceptance source: ADR-006、宿主重构设计基线、首个阶段一 E2E 验收场景、正式数据模型 Schema、双用例回放和后端 Oracle。
+- Open questions: Skill 输入参数与共享变量最小契约、Page/Frame/Effect 编译契约、CoreTrace 到 Skill 的产物结构和首个 E2E 的分层实施计划仍需确认；DataAsset 推迟到第二个验收场景。
 
 ## Capability Contract
 
@@ -38,6 +38,7 @@ updated: 2026-07-17
 - 页面中的业务可读步骤是 CoreTrace 的投影；下载等副作用可独立展示，但不伪造成第二个动作 Trace。
 - 自动化测试默认离线运行，不得因本地模型配置而真实调用 LLM。
 - 旧录制核心只在新链路达到能力覆盖、回放、数据与依赖退出门槛后删除或归档。
+- 首个产品验收以“系统 A 复杂查询与取值 -> 新标签页 -> 系统 B iframe 填写”为闭环；同一 Skill 必须通过两组字段值和目标行位置不同的数据。
 
 ## Decision Context
 
@@ -59,34 +60,36 @@ updated: 2026-07-17
 
 ## Delivery Increments
 
-### 增量 0：宿主重构基线
+### 增量 1：首个阶段一 E2E
 
-建立隔离分支、ADR/Feature/规格入口、正式契约的仓库副本、`backend/rpa_agent` 最小包、旧领域依赖护栏、离线测试隔离和可重复基线命令。该增量不实现 CoreTrace 业务逻辑。
+以已确认的跨系统采购订单验收登记场景为唯一产品验收锚点，先设计共享变量与编译契约，再按可归因层次实现 eval fixture、人工通道、Browser-use 多 Action、结算、CoreTrace、编译、回放和后端 Oracle。新目录、离线测试隔离和旧领域依赖护栏作为该纵向切片的工程前置一起交付，不再作为脱离业务场景的独立增量。
 
-### 增量 1：首个动作纵向切片
+### 增量 2：下载/分页提取与 DataAsset
 
-从一个可控页面的单一人工动作开始，贯通 TraceCandidate、BrowserFact、SettlementResult、CoreTrace、步骤投影、Compiler 与 Playwright 回放。
+首个 E2E 通过后，定义第二个验收场景和 DataAsset v0.1，覆盖浏览器下载文件与分页提取表格数据。
 
 ### 后续增量
 
-按可验证能力依次扩展自然语言通道、下载/弹窗/多页/iframe、副作用与 DataAsset，随后连接阶段二自然语言数据处理和可选通知配置。每个增量单独定义验收矩阵。
+再连接阶段二自然语言数据处理、结果文件写入和可选通知配置。每个增量都先固定业务场景、fixtures 和 Oracle。
 
 ## Acceptance Criteria
 
 - [x] 用户确认在 ScienceClaw 宿主内新建 `backend/rpa_agent`，旧 `backend/rpa` 仅作只读参考。
 - [x] 已创建隔离分支与独立 worktree，未修改原 ScienceClaw 工作目录中的本地数据。
-- [ ] ADR-006、Feature、设计规格和实施计划通过仓库知识校验。
-- [ ] 已确认的数据模型文档、JSON Schema 和契约测试向量进入 ScienceClaw 仓库，外部设计目录不再是执行计划的隐式依赖。
-- [ ] `RpaClaw/backend/rpa_agent/` 最小领域包存在，并有自动化依赖护栏禁止导入旧领域模型和 Compiler。
-- [ ] Route 离线回归不受 `RPA_RECORDING_OPERATOR` 等本地配置影响，不会意外调用真实 LLM。
-- [ ] 增量 0 的验证命令、结果和未覆盖范围记录为 Evidence。
-- [ ] 首个纵向切片可从浏览器动作形成 CoreTrace，并编译、回放和验证。
-- [ ] Browser-use 多动作执行可按实际动作形成多个 CoreTrace，且与 BrowserFact 的结算关系可验证。
-- [ ] 下载、弹窗、新标签页、iframe、分页提取和 DataAsset 在业务矩阵中通过回放验收。
+- [x] 首个阶段一 E2E 场景、非目标、两组 fixtures、硬编码防护和后端 Oracle 已确认。
+- [ ] Skill 输入参数、共享变量和 CoreTrace `data_binding` 最小契约已确认。
+- [ ] Page Registry、Frame Scope、新 Page Effect 和变量引用的编译契约已确认。
+- [ ] CoreTrace -> Playwright 浏览器段 -> Skill 的产物链路已确认。
+- [ ] eval-app 可重置两组测试数据，并提供随机任务 URL、iframe 表单和不可见 Oracle。
+- [ ] `RpaClaw/backend/rpa_agent/` 随首个纵向切片建立，且自动化护栏禁止导入旧领域模型和 Compiler。
+- [ ] Route 和新链路离线回归不会因本地 Browser-use 配置意外调用真实 LLM。
+- [ ] 创建态可解释展示人工动作、Browser-use 多 Action、新标签页 Effect、iframe Scope 和变量绑定。
+- [ ] 同一个生成 Skill 在 Replay A 与 Replay B 中均通过编译产物检查和后端 Oracle。
+- [ ] 首个 E2E 通过后，再设计 DataAsset、下载与分页提取场景。
 
 ## Current Status
 
-In Progress。宿主重构设计和隔离分支已建立；业务实现尚未开始。下一步是执行增量 0，先建立正式契约入口、领域边界、离线测试隔离和依赖护栏。
+In Progress。宿主重构设计、隔离分支和首个阶段一 E2E 验收场景已经确认；业务实现尚未开始。下一步是用该场景反推共享变量与 CoreTrace 编译链路，不执行脱离业务验收的“增量 0”。
 
 ## Links
 
@@ -109,7 +112,8 @@ In Progress。宿主重构设计和隔离分支已建立；业务实现尚未开
 ### Specs / Plans
 
 - [RPA Agent 基于 ScienceClaw 宿主重构设计基线](../superpowers/specs/2026-07-17-rpa-agent-scienceclaw-host-rebuild-design.md)
-- [增量 0 实施计划](../superpowers/plans/2026-07-17-rpa-agent-host-rebuild-baseline.md)
+- [首个阶段一 E2E 验收场景设计基线](../superpowers/specs/2026-07-17-RPA-Agent首个阶段一E2E验收场景设计基线.md)
+- [已失效：宿主重构基线实施计划](../superpowers/plans/2026-07-17-rpa-agent-host-rebuild-baseline.md)
 
 ### Related Features
 
@@ -117,23 +121,24 @@ In Progress。宿主重构设计和隔离分支已建立；业务实现尚未开
 
 ### External Context
 
-- 已确认的外部设计工作区：`E:\RPA-Agent\docs\design`。增量 0 将正式契约复制进本仓库，后续执行不得隐式依赖该外部目录。
+- 已确认的外部设计工作区：`E:\RPA-Agent\docs\design`。首个 E2E 的仓库内副本已建立；后续实现必须链接仓库内规格，不得只依赖对话历史。
 
 ## Acceptance Map
 
 | Claim | Acceptance | Evidence | Status |
 | --- | --- | --- | --- |
-| 新领域与旧核心隔离 | 新代码目录存在，架构测试阻止旧领域 import | 增量 0 待生成 Evidence | pending |
-| 离线验证不依赖真实 LLM | 强制 Browser-use 配置时 Route 单测仍由替身执行 | 增量 0 待生成 Evidence | pending |
-| 已确认契约可在仓库内校验 | Schema 正反例与文档链接校验通过 | 增量 0 待生成 Evidence | pending |
-| CoreTrace 可形成可回放 Skill | 首个纵向切片完成采集、结算、编译和回放 | 增量 1 待生成 Evidence | pending |
-| 双通道可收敛为同一时间线 | 人工录制与 Browser-use 动作通过同一 Settlement/CoreTrace 契约 | 后续纵向切片待生成 Evidence | pending |
+| 首个业务验收锚点稳定 | 场景、非目标、两组 fixtures、硬编码防护和 Oracle 有明确规格 | 首个阶段一 E2E 验收场景设计基线 | pass |
+| 新领域与旧核心隔离 | 首个纵向切片中的新代码通过架构测试阻止旧领域 import | 待生成 Evidence | pending |
+| 离线验证不依赖真实 LLM | 强制 Browser-use 配置时离线单测仍由替身执行 | 待生成 Evidence | pending |
+| CoreTrace 可形成可回放 Skill | 同一 Skill 完成 Replay A、Replay B 和后端 Oracle | 待生成 E2E Evidence | pending |
+| 双通道共享浏览器和变量 | 人工动作与 Browser-use 多 Action 进入同一 Settlement/CoreTrace，并使用 `source_order.*` | 待生成 E2E Evidence | pending |
 
 ## State Timeline
 
 | Date | State | Trigger | Evidence | Note |
 | --- | --- | --- | --- | --- |
 | 2026-07-17 | active | 用户确认宿主重构设计并授权下一步 | ADR-006、宿主重构设计基线 | 进入增量 0，尚未开始业务实现 |
+| 2026-07-17 | active / acceptance revised | 用户指出工程底座先行缺少业务验收锚点 | 首个阶段一 E2E 验收场景设计基线 | 停止执行旧增量 0，改为场景反推契约与纵向实现 |
 
 ## Patch History
 
@@ -141,17 +146,17 @@ None yet.
 
 ## Recovery Snapshot
 
-- Read first: ADR-006，然后阅读本 Feature 和宿主重构设计基线。
+- Read first: ADR-006，然后阅读本 Feature、首个阶段一 E2E 验收场景和宿主重构设计基线。
 - Current capability state: 已有隔离 worktree 和通过的局部技术穿刺回归；新 `backend/rpa_agent` 尚未创建。
-- Known risks: 旧测试受本地 Browser-use 配置影响可能真实调用 LLM；正式数据模型仍位于外部设计目录；旧 RPA 规则可能误导后续 Agent 继续维护兼容链路。
-- Next safe action: 按增量 0 实施计划依次修复测试隔离、导入契约、建立依赖护栏和更新仓库入口文档。
-- Unblock condition: 增量 0 的离线验证和知识校验通过并形成 Evidence 后，才进入首个 CoreTrace 纵向切片。
+- Known risks: 共享变量和 `data_binding` 尚未从场景反推；Page/Frame/Effect 编译契约和 Skill 产物结构尚未确认；旧计划仍可能误导执行者从空工程底座开始。
+- Next safe action: 设计首个 E2E 所需的 Skill 输入参数、共享变量和 CoreTrace 编译链路，再设计 eval-app 测评集与实施计划。
+- Unblock condition: 上述契约通过用户评审后，才能开始首个纵向切片开发。
 
 ## Evidence
 
 - EV-025 与 EV-026 只证明旧 ScienceClaw 技术穿刺路线可行，并暴露整轮 History 压缩、运行时 LLM 回放和测试配置泄漏等风险。
-- 本 Feature 的新领域基线证据将在增量 0 完成后记录为 EV-027；当前不得声称 CoreTrace 新链路已经实现。
+- 当前新增材料只证明验收边界已明确，不证明 CoreTrace 新链路已经实现；首个产品能力 Evidence 必须来自双用例 E2E 回放和后端 Oracle。
 
 ## Next Step
 
-执行 `docs/superpowers/plans/2026-07-17-rpa-agent-host-rebuild-baseline.md`。完成其中离线隔离、契约导入、领域护栏和 EV-027 后，再为首个“单一人工动作 -> CoreTrace -> Playwright 回放”纵向切片单独设计实施计划。
+先基于首个 E2E 设计 Skill 输入参数、共享变量和 CoreTrace 编译链路。旧 `2026-07-17-rpa-agent-host-rebuild-baseline.md` 已失效，不得执行；新的实施计划只能在场景相关契约和 eval-app 测评设计确认后创建。
