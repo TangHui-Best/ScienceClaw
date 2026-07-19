@@ -109,10 +109,11 @@ async def test_local_launch_uses_relaxed_security_browser_args(monkeypatch):
     _install_fake_playwright_modules()
     sys.modules.pop("backend.rpa.cdp_connector", None)
     cdp_connector = importlib.import_module("backend.rpa.cdp_connector")
+    local_cdp = importlib.import_module("backend.runtime.local_cdp")
 
     fake_playwright = _FakePlaywrightHandle()
     monkeypatch.setattr(
-        cdp_connector,
+        local_cdp,
         "async_playwright",
         lambda: _FakeAsyncPlaywrightFactory(fake_playwright),
     )
