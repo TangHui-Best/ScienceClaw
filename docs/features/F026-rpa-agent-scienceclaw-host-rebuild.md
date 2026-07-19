@@ -119,6 +119,7 @@ Complete。独立 `backend/rpa_agent` 已实现创建态双通道、Settlement�
 ### Specs / Plans
 
 - [RPA Agent 基于 ScienceClaw 宿主重构设计基线](../superpowers/specs/2026-07-17-rpa-agent-scienceclaw-host-rebuild-design.md)
+- [F026.1 新版 RPA Agent 本地 CDP 宿主修复设计](../superpowers/specs/2026-07-19-rpa-agent-local-cdp-host-fix-design.md)
 - [首个阶段一 E2E 验收场景设计基线](../superpowers/specs/2026-07-17-RPA-Agent首个阶段一E2E验收场景设计基线.md)
 - [业务变量绑定与录制态上下文设计基线](../superpowers/specs/2026-07-17-RPA-Agent业务变量绑定与录制态上下文设计基线.md)
 - [CoreTrace 到 SKILL 编译链路设计基线](../superpowers/specs/2026-07-17-RPA-Agent-CoreTrace到SKILL编译链路设计基线.md)
@@ -159,14 +160,16 @@ Complete。独立 `backend/rpa_agent` 已实现创建态双通道、Settlement�
 
 ## Patch History
 
-None yet.
+| Patch | Date | Commit | Symptom | Root Cause | Protection | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| F026.1 | 2026-07-19 | pending | Windows 本地模式点击录制时，新版会话返回 503 | 新版 Provider 未按 `STORAGE_BACKEND=local` 分流，把 CDP 宿主错误解析为 `http://sandbox:8080` | 中立 Local CDP 宿主层、local/非 local 模式回归和真实本地冒烟验收 | design accepted / implementation pending |
 
 ## Recovery Snapshot
 
 - Read first: ADR-006，然后阅读本 Feature、首个阶段一 E2E 验收场景、业务变量绑定与录制态上下文设计基线、CoreTrace 到 SKILL 编译规格和首个 E2E Golden Sample。
 - Current capability state: 新 `backend/rpa_agent` 纵向链路已实现；默认宿主、Compiler、Runtime、录制 UI、eval fixture 和同一 SKILL 双 Replay 均有验证证据。
-- Known risks: scripted model 证明的是 Browser-use Agent/Tools 集成而非外部 LLM 语义质量；完整 DataAsset、分页循环及运行期自愈不在本 Feature；eval-app 仍有 EV-029 记录的两个非阻断 P2。
-- Next safe action: 后续需求必须新建独立业务验收增量，不应在 F026 上继续堆叠完整 DataAsset、阶段二或兼容层。
+- Known risks: scripted model 证明的是 Browser-use Agent/Tools 集成而非外部 LLM 语义质量；完整 DataAsset、分页循环及运行期自愈不在本 Feature；F026.1 正在补齐 `STORAGE_BACKEND=local` 的真实产品启动覆盖；eval-app 仍有 EV-029 记录的两个非阻断 P2。
+- Next safe action: 按 F026.1 设计以 TDD 修复本地 CDP 宿主分流并形成独立 Evidence；其他后续需求仍须新建业务验收增量，不应在 F026 上堆叠完整 DataAsset、阶段二或兼容层。
 - Recovery evidence: 先阅读 EV-029；原始 Live JSON 与生成四文件产物位于其 Artifacts 所列 `.tmp/task13-agent-live-evidence*` 目录。
 
 ## Evidence
