@@ -55,6 +55,16 @@ class HostDownloadEvent:
     failure: Awaitable[str | None]
 
 
+@dataclass(frozen=True, slots=True)
+class AgentRoundSettlement:
+    """Terminal settlement summary for exactly one Browser-use round."""
+
+    candidate_ids: tuple[str, ...]
+    accepted_ids: tuple[str, ...]
+    rejected_ids: tuple[str, ...]
+    pending_ids: tuple[str, ...]
+
+
 @dataclass(slots=True)
 class _ActionDispatchCausalScope:
     source_page_runtime_ref: str
@@ -477,6 +487,56 @@ class BrowserSession:
             resolved_assets=resolved_assets,
         )
 
+    def settle_agent_round(
+        self, candidate_ids: Sequence[str]
+    ) -> AgentRoundSettlement:
+        """Settle only candidates authored by the completed Browser-use round.
+
+        The route drains asynchronous browser facts before calling this method.
+        Keeping the round's candidate IDs explicit prevents a later stop action
+        from accepting unrelated or historical pending candidates.
+        """
+
+        ordered_ids = tuple(candidate_ids)
+        if len(ordered_ids) != len(set(ordered_ids)):
+            raise ValueError("browser_session.agent_candidate_duplicate")
+        candidates = self.creation.candidates
+        for candidate_id in ordered_ids:
+            candidate = candidates.get(candidate_id)
+            if candidate is None:
+                raise ValueError(
+                    f"browser_session.agent_candidate_unknown:{candidate_id}"
+                )
+            if candidate.origin != "agent":
+                raise ValueError(
+                    f"browser_session.agent_candidate_origin_invalid:{candidate_id}"
+                )
+            hint = candidate.scope_hint
+            if hint.page_ref is None or hint.frame_path is None:
+                raise ValueError(
+                    f"browser_session.agent_candidate_scope_missing:{candidate_id}"
+                )
+            self._settle_or_defer(
+                candidate_id,
+                scope=BrowserScope(
+                    page_ref=hint.page_ref,
+                    frame_path=hint.frame_path,
+                ),
+            )
+
+        accepted = self.creation.accepted_traces
+        diagnostics = self.creation.diagnostics
+        accepted_ids = tuple(item for item in ordered_ids if item in accepted)
+        rejected_ids = tuple(item for item in ordered_ids if item in diagnostics)
+        terminal = set(accepted_ids) | set(rejected_ids)
+        pending_ids = tuple(item for item in ordered_ids if item not in terminal)
+        return AgentRoundSettlement(
+            candidate_ids=ordered_ids,
+            accepted_ids=accepted_ids,
+            rejected_ids=rejected_ids,
+            pending_ids=pending_ids,
+        )
+
     async def drain_pending_facts(self, *, timeout: float) -> None:
         if timeout <= 0:
             raise ValueError("browser_session.drain_timeout_invalid")
@@ -507,6 +567,22 @@ class BrowserSession:
         releases, self._releases = self._releases, []
         self._attached = False
         self._release_callbacks(releases, primary=primary)
+
+    async def release_browser(
+        self,
+        *,
+        primary: BaseException | None = None,
+    ) -> None:
+        """Release the host browser without destroying settled creation state."""
+
+        detach_error: BaseException | None = None
+        try:
+            self.detach(primary=primary)
+        except BaseException as exc:
+            detach_error = exc
+        await self._close_port(primary=primary or detach_error)
+        if primary is None and detach_error is not None:
+            raise detach_error
 
     def close(self, *, at: datetime, primary: BaseException | None = None) -> None:
         if self._background_tasks:
@@ -541,16 +617,20 @@ class BrowserSession:
                 already_detached=True,
             )
         finally:
-            close_port = getattr(self.port, "aclose", None)
-            if callable(close_port):
-                try:
-                    result = close_port()
-                    if inspect.isawaitable(result):
-                        await result
-                except BaseException as cleanup:
-                    if primary is None:
-                        raise
-                    self.cleanup_errors.append(type(cleanup).__name__)
+            await self._close_port(primary=primary)
+
+    async def _close_port(self, *, primary: BaseException | None) -> None:
+        close_port = getattr(self.port, "aclose", None)
+        if not callable(close_port):
+            return
+        try:
+            result = close_port()
+            if inspect.isawaitable(result):
+                await result
+        except BaseException as cleanup:
+            if primary is None:
+                raise
+            self.cleanup_errors.append(type(cleanup).__name__)
 
     def _close_without_background_tasks(
         self,

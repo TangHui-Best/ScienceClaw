@@ -125,6 +125,21 @@ def _load_generated_package(path: Path, package_name: str) -> ModuleType:
     package = ModuleType(package_name)
     package.__path__ = [str(path)]  # type: ignore[attr-defined]
     sys.modules[package_name] = package
+    canonical_root_name = __package__.rsplit(".", 1)[0]
+    canonical_runtime_name = f"{canonical_root_name}.runtime"
+    canonical_root = sys.modules[canonical_root_name]
+    canonical_runtime = sys.modules[canonical_runtime_name]
+    missing = object()
+    previous_aliases = {
+        "rpa_agent": sys.modules.get("rpa_agent", missing),
+        "rpa_agent.runtime": sys.modules.get("rpa_agent.runtime", missing),
+    }
+    # Compiled artifacts intentionally depend on the public ``rpa_agent``
+    # runtime name. The local service is launched as ``backend.main``, so expose
+    # that public name only while importing the artifact and keep class identity
+    # aligned with the already-loaded host runtime.
+    sys.modules["rpa_agent"] = canonical_root
+    sys.modules["rpa_agent.runtime"] = canonical_runtime
     try:
         for module_name in ("browser_segment", "skill"):
             spec = importlib.util.spec_from_file_location(
@@ -139,6 +154,12 @@ def _load_generated_package(path: Path, package_name: str) -> ModuleType:
     except BaseException:
         _cleanup_generated_package(package_name)
         raise
+    finally:
+        for alias, previous in previous_aliases.items():
+            if previous is missing:
+                sys.modules.pop(alias, None)
+            else:
+                sys.modules[alias] = previous
 
 
 def _cleanup_generated_package(package_name: str) -> None:

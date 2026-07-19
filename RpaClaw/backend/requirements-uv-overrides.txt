@@ -1,0 +1,5 @@
+# browser-use 0.13.2 pins anthropic==0.76.0, while deepagents 0.4.4
+# requires langchain-anthropic>=1.3.3, whose supported anthropic baseline is newer.
+# The RPA Agent browser-use host uses ChatOpenAI; keep the shared backend's
+# already-validated Anthropic SDK version for deepagents.
+anthropic==0.116.0

@@ -12,6 +12,7 @@ export interface RpaAgentCreationStepViewModel {
   parentId: string | null;
   isEffect: boolean;
   is_action: boolean;
+  diagnostic?: string;
   validation: { status: string; details: string };
 }
 
@@ -31,6 +32,7 @@ export function projectRpaAgentCreationSteps(rows: readonly CreationProjectionRo
       parentId: row.parent_trace_id || null,
       isEffect,
       is_action: !isEffect,
+      diagnostic: details,
       validation: { status: row.status, details },
     };
   });

@@ -24,6 +24,9 @@ Identifier = Annotated[
 OpaqueHostRef = Annotated[
     str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 ]
+OpaqueModelRef = Annotated[
+    str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
+]
 SessionId = Annotated[
     str, Field(pattern=r"^rca_[a-z0-9]{24}$", min_length=28, max_length=28)
 ]
@@ -126,6 +129,7 @@ class ManualInputRequest(ApiModel):
 
 class AgentInstructionRequest(ApiModel):
     instruction: Annotated[str, Field(min_length=1, max_length=20_000)]
+    model_id: OpaqueModelRef | None = None
     business_terms: Annotated[
         list[Annotated[str, Field(min_length=1, max_length=256)]],
         Field(max_length=64),

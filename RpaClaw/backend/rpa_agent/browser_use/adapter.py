@@ -311,6 +311,7 @@ class RecordingRoundReport:
     non_sop: tuple[NonSopActionClassification, ...]
     invocation_count: int = 0
     blocked: tuple[NonSopActionClassification, ...] = ()
+    agent_result: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -792,7 +793,7 @@ class BrowserUseRecordingAdapter:
                     {"kind": "agent", "instruction": action.business_intent},
                     safe_bindings,
                     False,
-                    {},
+                    params,
                 )
             cls._ensure_literal_binding(bindings, "url", params.get("url"))
             return {"kind": "navigate", "mode": "url"}, bindings, True, params
@@ -848,6 +849,23 @@ class BrowserUseRecordingAdapter:
                 hint["attribute"] = params["attribute"]
             if hint["mode"] == "table" and isinstance(params.get("columns"), list):
                 hint["columns"] = params["columns"]
+            return hint, bindings, True, params
+        if (
+            name == "extract_variable"
+            and target is not None
+            and params.get("mode", "text") in {"text", "attribute"}
+        ):
+            output_ref = cls._declared_output_ref(bindings)
+            params["declared_output_ref"] = output_ref
+            hint = {
+                "kind": "extract",
+                "mode": params.get("mode", "text"),
+                "target_hint": target,
+            }
+            if hint["mode"] == "attribute" and isinstance(
+                params.get("attribute"), str
+            ):
+                hint["attribute"] = params["attribute"]
             return hint, bindings, True, params
         if name == "send_keys" and target is not None:
             cls._ensure_literal_binding(bindings, "keys", params.get("keys"))

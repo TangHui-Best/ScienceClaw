@@ -37,6 +37,13 @@ describe('ConfigurePage greenfield configuration', () => {
   it('uses exact binding location, configures then compiles exactly once and stores no secret value', async () => {
     const { default: Page } = await import('./ConfigurePage.vue');
     const root = document.createElement('div'); document.body.appendChild(root); const app = createApp(Page); app.mount(root); await flush();
+    expect(root.querySelector('[data-testid="configure-flow-guide"]')).not.toBeNull();
+    expect(root.querySelector('[data-testid="configure-steps"]')).not.toBeNull();
+    expect(root.querySelector('[data-testid="configure-skill-panel"]')).not.toBeNull();
+    expect(root.textContent).toContain('录制步骤');
+    expect(root.textContent).toContain('技能信息');
+    expect(root.textContent).toContain('可配置参数');
+    expect(root.textContent).not.toContain('trace_id + binding_name');
     const name = root.querySelector<HTMLInputElement>('input[name="skill-name"]')!; name.value = '采购验收'; name.dispatchEvent(new Event('input'));
     expect(root.querySelector('input[name="secret-value"]')).toBeNull();
     root.querySelectorAll<HTMLButtonElement>('[data-testid="promote-binding"]')[1].click(); await nextTick();

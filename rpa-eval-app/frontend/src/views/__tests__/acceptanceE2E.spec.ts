@@ -15,14 +15,15 @@ describe('first acceptance E2E page contracts', () => {
     expect(existsSync(`${views}/SystemBAcceptanceFrame.vue`)).toBe(true)
   })
 
-  it('registers the three stable routes without adding a navigation item', () => {
+  it('registers the three stable routes and exposes only System A in navigation', () => {
     const router = readFileSync(`${src}/router/index.ts`, 'utf8')
     const layout = readFileSync(`${views}/Layout.vue`, 'utf8')
 
     expect(router).toContain("path: '/system-a/orders'")
     expect(router).toContain("path: '/system-b/acceptance/:task_id'")
     expect(router).toContain("path: '/system-b/acceptance-frame/:task_id'")
-    expect(layout).not.toContain('index="/system-a/orders"')
+    expect(layout).toContain('index="/system-a/orders"')
+    expect(layout).toContain('>采购订单综合查询</el-menu-item>')
     expect(layout).not.toContain('index="/system-b/acceptance')
   })
 

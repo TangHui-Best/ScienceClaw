@@ -45,6 +45,7 @@ export interface BindingLocation {
 
 export interface StopRpaAgentSessionResponse {
   state: 'stopped';
+  creation_steps: CreationProjectionRow[];
   configuration_draft: import('@/utils/rpaAgentSkillConfiguration').SkillConfigurationDraft;
   configuration_options: {
     binding_locations: BindingLocation[];
@@ -87,6 +88,12 @@ export interface RpaAgentManualInputResponse {
   candidate_ids: string[];
 }
 
+// Real browser-use rounds can span up to 40 LLM/tool steps and may need to
+// recover from provider retries or a rate-limited site. Keep the UI request
+// alive for the backend-controlled execution window instead of reporting a
+// false failure while the backend continues and settles the round.
+export const RPA_AGENT_INSTRUCTION_TIMEOUT_MS = 600_000;
+
 const sessionPath = (sessionId: string) => `/rpa-agent/sessions/${encodeURIComponent(sessionId)}`;
 
 export async function startRpaAgentSession(browserSessionRef: string): Promise<StartRpaAgentSessionResponse> {
@@ -123,11 +130,13 @@ export async function runRpaAgentInstruction(
     business_terms: [], required_variable_refs: [], allowed_inputs: {},
     allowed_secret_names: [], allowed_data_assets: {}, page_aliases: {},
   },
+  modelId?: string,
 ): Promise<Record<string, unknown>> {
   const response = await apiClient.post(`${sessionPath(sessionId)}/agent-instructions`, {
     instruction,
     ...context,
-  });
+    ...(modelId ? { model_id: modelId } : {}),
+  }, { timeout: RPA_AGENT_INSTRUCTION_TIMEOUT_MS });
   return response.data;
 }
 
@@ -138,6 +147,11 @@ export async function getRpaAgentProjection(sessionId: string): Promise<RpaAgent
 
 export async function stopRpaAgentSession(sessionId: string): Promise<StopRpaAgentSessionResponse> {
   const response = await apiClient.post(`${sessionPath(sessionId)}/stop`);
+  return response.data;
+}
+
+export async function discardRpaAgentSession(sessionId: string): Promise<{ state: 'discarded' }> {
+  const response = await apiClient.delete(sessionPath(sessionId));
   return response.data;
 }
 

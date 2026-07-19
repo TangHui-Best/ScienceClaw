@@ -95,7 +95,9 @@ def BrowserUseRecordingAdapter(
         ),
         version_provider=lambda: BROWSER_USE_BASELINE_VERSION,
         clock=lambda: NOW,
-        allowed_extension_actions=frozenset({"new_private_tool"}),
+        allowed_extension_actions=frozenset(
+            {"new_private_tool", "extract_variable"}
+        ),
     )
 
 
@@ -342,6 +344,31 @@ async def test_navigate_missing_expected_url_and_switch_unknown_page_fail_closed
 
     assert session.candidates["agent_nav_missing"].execution.status == "failed"
     assert session.candidates["agent_switch_unknown"].execution.status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_dynamic_navigation_keeps_url_for_postcondition_judgement() -> None:
+    url = "https://github.com/search?q=skill&type=repositories"
+
+    async def executor(_: ActualToolAction) -> NormalizedActionResult:
+        return NormalizedActionResult(data={"url_reached": True})
+
+    session = _session()
+    await BrowserUseRecordingAdapter(session=session, executor=executor).record_round(
+        (
+            _action(
+                "navigate",
+                candidate_id="agent_dynamic_nav",
+                params={"url": url},
+                target=None,
+                intent="查找和 skill 最相关的项目",
+            ),
+        )
+    )
+
+    candidate = session.candidates["agent_dynamic_nav"]
+    assert candidate.action_hint.kind == "agent"
+    assert candidate.execution.status == "succeeded"
 
 
 @pytest.mark.asyncio
@@ -630,6 +657,51 @@ async def test_extract_mapping_and_real_settlement_acceptance() -> None:
     assert outcome.core_trace.action.kind == "extract"
     assert outcome.core_trace.data_bindings[0].ref == "采购订单.订单号"
     assert session.variables.read("采购订单.订单号") == "PO-1001"
+
+
+@pytest.mark.asyncio
+async def test_extract_variable_with_visible_target_maps_to_explicit_extract_trace() -> None:
+    binding = {
+        "name": "result",
+        "direction": "output",
+        "kind_hint": "variable",
+        "ref_hint": "github.repository.stars",
+        "sensitive": False,
+    }
+
+    async def executor(_: ActualToolAction) -> NormalizedActionResult:
+        return NormalizedActionResult(
+            data={"variables": {"github.repository.stars": 5267}}
+        )
+
+    session = _session()
+    await BrowserUseRecordingAdapter(session=session, executor=executor).record_round(
+        (
+            _action(
+                "extract_variable",
+                candidate_id="agent_extract_star_count",
+                params={
+                    "index": 7,
+                    "mode": "text",
+                    "variable_ref": "github.repository.stars",
+                    "value": 5267,
+                },
+                bindings=(binding,),
+                intent="获取当前项目的 Star 数",
+            ),
+        )
+    )
+
+    candidate = session.candidates["agent_extract_star_count"]
+    assert candidate.action_hint.kind == "extract"
+    assert candidate.execution.status == "succeeded"
+    outcome = session.settle_candidate(
+        "agent_extract_star_count",
+        scope=BrowserScope(page_ref="main", frame_path=[]),
+    )
+    assert outcome.status == "accepted"
+    assert outcome.core_trace.action.kind == "extract"
+    assert outcome.core_trace.data_bindings[0].ref == "github.repository.stars"
 
 
 @pytest.mark.asyncio

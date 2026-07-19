@@ -28,8 +28,9 @@ export interface BindingPromotion {
 export interface CreationRouteSnapshot {
   sessionId: string;
   browserSessionRef: string;
+  creationSteps?: import('@/utils/rpaAgentCreationProjection').RpaAgentCreationStepViewModel[];
   configurationDraft?: SkillConfigurationDraft;
-  bindingLocations?: Array<Record<string, unknown>>;
+  bindingLocations?: import('@/api/rpaAgent').BindingLocation[];
   artifactHash?: string;
   artifactFiles?: string[];
   configurationState?: 'configured' | 'compiled';

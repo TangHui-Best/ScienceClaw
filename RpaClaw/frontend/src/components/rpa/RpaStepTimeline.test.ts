@@ -14,7 +14,8 @@ describe('RpaStepTimeline greenfield view model', () => {
       { id: 'c', status: 'rejected', title: '录制失败', label: 'fill', parentId: null, isEffect: false },
     ] }); app.mount(root); await nextTick();
     expect(root.textContent).toContain('待结算'); expect(root.textContent).toContain('已确认'); expect(root.textContent).toContain('已拒绝');
-    expect(root.querySelector('[data-effect-child="true"]')?.textContent).toContain('不计为额外 CoreTrace');
+    expect(root.querySelector('[data-effect-child="true"]')?.textContent).toContain('不额外增加录制步骤');
+    expect(root.textContent).not.toContain('CoreTrace');
     app.unmount();
   });
 });

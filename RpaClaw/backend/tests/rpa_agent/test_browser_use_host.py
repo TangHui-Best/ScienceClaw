@@ -6,13 +6,19 @@ import json
 
 import pytest
 
+import rpa_agent.host.browser_use_agent as browser_use_agent_module
+from rpa_agent.browser_use import RecordingRoundReport
+from rpa_agent.browser_use.classifiers import classify_candidate_action
 from rpa_agent.creation import ControlMode, SkillCreationSession
 from rpa_agent.host import BrowserSession, HostBrowserEvent, PlaywrightBrowserSessionPort
 from rpa_agent.host.browser_use_agent import normalize_variable_action
 from rpa_agent.host.browser_use_agent import (
+    BROWSER_USE_COMPLETION_PROTOCOL,
+    BROWSER_USE_MAX_HISTORY_ITEMS,
     RecordingBrowserUseTools,
     build_agent_task,
     build_runtime_agent_backend,
+    execute_browser_use_instruction,
     normalize_allowed_input_action,
     semantic_hints_from_browser_use_node,
 )
@@ -24,6 +30,126 @@ from rpa_agent.host.scienceclaw_browser import (
 
 
 NOW = datetime(2026, 7, 18, tzinfo=timezone.utc)
+
+
+def test_browser_use_history_window_satisfies_real_runtime_contract():
+    assert BROWSER_USE_MAX_HISTORY_ITEMS > 5
+
+
+def test_browser_use_completion_protocol_requires_explicit_done_action():
+    assert "MUST call the done action" in BROWSER_USE_COMPLETION_PROTOCOL
+    assert "empty action list" in BROWSER_USE_COMPLETION_PROTOCOL
+    assert "MUST call extract_variable" in BROWSER_USE_COMPLETION_PROTOCOL
+    assert "Do not return browser data only in the done text" in BROWSER_USE_COMPLETION_PROTOCOL
+    assert "already on the current page" in BROWSER_USE_COMPLETION_PROTOCOL
+
+
+def test_navigation_url_match_accepts_redirect_noise_but_not_scope_drift():
+    matches = browser_use_agent_module._navigation_url_matches
+
+    assert matches(
+        "https://duckduckgo.com/?q=site%3Agithub.com+skill+repository&ia=web",
+        "https://duckduckgo.com/?q=site%3Agithub.com+skill+repository",
+    )
+    assert not matches(
+        "https://evil.example/?q=site%3Agithub.com+skill+repository",
+        "https://duckduckgo.com/?q=site%3Agithub.com+skill+repository",
+    )
+    assert not matches(
+        "https://duckduckgo.com/?ia=web",
+        "https://duckduckgo.com/?q=site%3Agithub.com+skill+repository",
+    )
+
+
+@pytest.mark.asyncio
+async def test_recording_instruction_returns_the_agent_final_result(monkeypatch):
+    calls: list[object] = []
+
+    class FakeTools:
+        def __init__(self, **kwargs):
+            calls.append(("tools", kwargs))
+            self.report = RecordingRoundReport(
+                invocation_count=1,
+                actual_action_count=1,
+                candidate_ids=("candidate-1",),
+                non_sop=(),
+            )
+
+    class FakeSession:
+        def __init__(self, **kwargs):
+            calls.append(("session", kwargs))
+
+        async def start(self):
+            calls.append("start")
+
+        async def stop(self):
+            calls.append("stop")
+
+    class FakeHistory:
+        def is_done(self):
+            return True
+
+        def is_successful(self):
+            return True
+
+        def final_result(self):
+            return "  ibelick/ui-skills 有 5,234 stars。  "
+
+    class FakeAgent:
+        def __init__(self, **kwargs):
+            calls.append(("agent", kwargs))
+
+        async def run(self, max_steps):
+            calls.append(("run", max_steps))
+            return FakeHistory()
+
+    class FakePort:
+        browser_use_cdp_url = "ws://runtime/devtools/browser/one"
+
+        async def active_page_object(self):
+            return object()
+
+    async def fake_model_factory(owner_id):
+        assert owner_id == "owner-1"
+        return object()
+
+    async def no_focus(*_args):
+        return None
+
+    monkeypatch.setattr(browser_use_agent_module, "RecordingBrowserUseTools", FakeTools)
+    monkeypatch.setattr(browser_use_agent_module, "_focus_exact_page", no_focus)
+    hosted = type(
+        "Hosted",
+        (),
+        {
+            "owner_id": "owner-1",
+            "browser": type(
+                "Browser",
+                (),
+                {"port": FakePort(), "creation": object()},
+            )(),
+        },
+    )()
+    request = AgentInstructionRequest(
+        instruction="获取star数",
+        business_terms=[],
+        required_variable_refs=[],
+        allowed_inputs={},
+        allowed_secret_names=[],
+        allowed_data_assets={},
+        page_aliases={},
+    )
+
+    report = await execute_browser_use_instruction(
+        hosted,
+        request,
+        model_factory=fake_model_factory,
+        agent_factory=FakeAgent,
+        browser_session_factory=FakeSession,
+    )
+
+    assert report.agent_result == "ibelick/ui-skills 有 5,234 stars。"
+    assert calls[-1] == "stop"
 
 
 class _Port:
@@ -82,6 +208,7 @@ def test_variable_aware_extract_requires_explicit_valid_ref_and_json_value():
     invocation = normalize_variable_action(
         "extract_variable",
         {
+            "index": 7,
             "variable_ref": "采购订单",
             "value": {"订单号": "PO-2002", "供应商": "乙方供应商"},
         },
@@ -92,6 +219,8 @@ def test_variable_aware_extract_requires_explicit_valid_ref_and_json_value():
     assert invocation.variable_outputs == {
         "采购订单": {"订单号": "PO-2002", "供应商": "乙方供应商"}
     }
+    assert invocation.params["index"] == 7
+    assert invocation.params["mode"] == "text"
     assert invocation.binding_hints[0]["ref_hint"] == "采购订单"
 
     with pytest.raises(ValueError, match="browser_use_host.variable_ref_invalid"):
@@ -292,6 +421,34 @@ async def test_browser_session_closes_owned_port_resources_once():
     assert port.browser_use_cdp_url == "ws://runtime.test/devtools/browser/one"
 
 
+@pytest.mark.asyncio
+async def test_browser_release_still_closes_port_when_listener_release_fails():
+    calls = []
+
+    class Port:
+        context = object()
+        main_page = object()
+        main_page_runtime_ref = "runtime_main"
+        main_frame_runtime_ref = "frame_main"
+
+        def subscribe(self, _kind, _callback):
+            def release():
+                raise RuntimeError("listener cleanup failed")
+
+            return release
+
+        async def aclose(self):
+            calls.append("port-close")
+
+    browser = BrowserSession(port=Port(), creation=_creation())
+    browser.attach()
+
+    with pytest.raises(RuntimeError, match="listener cleanup failed"):
+        await browser.release_browser()
+
+    assert calls == ["port-close"]
+
+
 def test_cdp_url_rewrites_only_the_runtime_network_location():
     assert rewrite_cdp_url(
         "ws://127.0.0.1:9222/devtools/browser/opaque-token",
@@ -381,6 +538,113 @@ async def test_runtime_lease_initializes_and_registers_same_cdp_browser():
         ("unregister", "7browser", page),
         ("stop",),
     ]
+
+
+@pytest.mark.asyncio
+async def test_isolated_runtime_leases_create_fresh_contexts_across_recordings():
+    contexts = []
+    stop_count = 0
+
+    class Page:
+        def __init__(self, context):
+            self.context = context
+
+    class Context:
+        def __init__(self):
+            self.pages = []
+            self.storage = {}
+            self.closed = False
+
+        async def new_page(self):
+            page = Page(self)
+            self.pages.append(page)
+            return page
+
+        async def close(self):
+            self.closed = True
+
+    class Browser:
+        contexts = [Context()]
+
+        async def new_context(self):
+            context = Context()
+            contexts.append(context)
+            return context
+
+    browser = Browser()
+
+    class Playwright:
+        async def stop(self):
+            nonlocal stop_count
+            stop_count += 1
+
+    class Registry:
+        page = None
+        cdp_url = None
+
+        def get_active_page(self, _ref):
+            return self.page
+
+        def get_cdp_url(self, _ref):
+            return self.cdp_url
+
+        async def register(self, _ref, page, *, cdp_url=None):
+            self.page = page
+            self.cdp_url = cdp_url
+
+        async def unregister(self, _ref, page):
+            if self.page is page:
+                self.page = None
+                self.cdp_url = None
+
+    registry = Registry()
+
+    async def resolve(_ref, _owner):
+        return "ws://127.0.0.1:19222/devtools/browser/local"
+
+    async def connect(_cdp):
+        return Playwright(), browser
+
+    async def acquire():
+        return await acquire_browser_runtime_lease(
+            owner_id="owner-1",
+            browser_ref="same-host-ref",
+            preview_registry=registry,
+            resolve_cdp_url=resolve,
+            connect=connect,
+            isolated_context=True,
+        )
+
+    first = await acquire()
+    first_context = first.page.context
+    first_context.storage["old-session"] = "must-not-cross"
+    await first.aclose()
+
+    second = await acquire()
+    second_context = second.page.context
+
+    assert first.page is not second.page
+    assert first_context is not second_context
+    assert first_context.closed is True
+    assert second_context.storage == {}
+    assert browser.contexts[0] is not first_context
+    assert len(contexts) == 2
+
+    await second.aclose()
+    assert second_context.closed is True
+    assert stop_count == 2
+
+
+def test_extract_action_normalizes_browser_use_bracketed_index():
+    action = browser_use_agent_module._ExtractVariableAction.model_validate(
+        {
+            "index": "[2752]",
+            "variable_ref": "github.skill.star_count",
+            "value": {"text_content": "669"},
+        }
+    )
+
+    assert action.index == 2752
 
 
 @pytest.mark.asyncio
@@ -573,6 +837,24 @@ async def test_recording_tools_accounts_extract_and_commits_explicit_output():
     assert "click_variable" in tools.registry.registry.actions
     assert "switch" in tools.registry.registry.actions
     assert "close" in tools.registry.registry.actions
+
+    class FileSystem:
+        def display_file(self, _name):
+            return None
+
+        def get_dir(self):
+            return "."
+
+    done_model = tools.registry.create_action_model(include_actions=["done"])
+    premature_done = done_model.model_validate(
+        {"done": {"text": "5,307 stars", "success": True, "files_to_display": []}}
+    )
+    premature_result = await tools.act(
+        premature_done, object(), file_system=FileSystem()
+    )
+    assert premature_result.error == "browser_use_host.replayable_action_missing"
+    assert tools.report.non_sop[-1].status == "failed"
+
     action_model = tools.registry.create_action_model(
         include_actions=["extract_variable"]
     )
@@ -588,19 +870,11 @@ async def test_recording_tools_accounts_extract_and_commits_explicit_output():
     result = await tools.act(action, object())
 
     assert result.error is None
-    assert tools.report.actual_action_count == 1
-    assert tools.report.invocation_count == 1
+    assert tools.report.actual_action_count == 2
+    assert tools.report.invocation_count == 2
     assert len(tools.report.candidate_ids) == 1
     assert creation.variables.read("采购订单") == {"订单号": "PO-2002"}
 
-    class FileSystem:
-        def display_file(self, _name):
-            return None
-
-        def get_dir(self):
-            return "."
-
-    done_model = tools.registry.create_action_model(include_actions=["done"])
     done = done_model.model_validate(
         {"done": {"text": "提取完成", "success": True, "files_to_display": []}}
     )
@@ -1053,7 +1327,11 @@ def test_agent_task_uses_active_popup_page_not_main_page():
 
     payload = json.loads(build_agent_task(hosted, request, page=popup))
 
-    assert payload["current_page_state"]["url"] == "https://eval.test/system-b/task"
+    assert payload["current_page_state"] == {
+        "attached": True,
+        "title": "current browser page",
+    }
+    assert "https://eval.test/system-b/task" not in json.dumps(payload)
 
 
 @pytest.mark.asyncio
@@ -1152,6 +1430,105 @@ async def test_playwright_port_reads_unique_action_specific_semantic_evidence():
 
 
 @pytest.mark.asyncio
+async def test_recording_click_evidence_does_not_re_resolve_after_navigation():
+    class Port:
+        async def semantic_action_evidence(self, **_kwargs):
+            raise AssertionError("navigation click must not resolve the source DOM again")
+
+    hosted = type(
+        "Hosted",
+        (),
+        {"browser": type("Browser", (), {"port": Port()})()},
+    )()
+    tools = object.__new__(RecordingBrowserUseTools)
+    tools._hosted = hosted
+    tools._pending = {
+        "candidate-click": type(
+            "Pending",
+            (),
+            {
+                "action_name": "click",
+                "params": {"index": 42},
+                "browser_session": object(),
+                "variable_outputs": {},
+                "target_match_count": 1,
+                "target_hint": {"name": "repo", "locators": []},
+                "page": object(),
+                "frame_path": (),
+                "lifecycle_page_runtime_ref": None,
+            },
+        )()
+    }
+    action = type(
+        "Action",
+        (),
+        {"candidate_id": "candidate-click", "params": {}},
+    )()
+    result = type("Result", (), {"error": None, "success": True})()
+
+    assert await tools._evidence_for(action, result) == {"dispatched": True}
+
+
+@pytest.mark.asyncio
+async def test_recording_navigation_uses_reached_url_despite_tool_timeout():
+    class State:
+        url = "https://github.com/search?q=skill&type=repositories"
+
+    class BrowserSessionState:
+        async def get_browser_state_summary(self, *, include_screenshot):
+            assert include_screenshot is False
+            return State()
+
+    tools = object.__new__(RecordingBrowserUseTools)
+    tools._pending = {
+        "candidate-navigate": type(
+            "Pending",
+            (),
+            {
+                "action_name": "navigate",
+                "params": {"url": State.url},
+                "browser_session": BrowserSessionState(),
+                "variable_outputs": {},
+            },
+        )()
+    }
+    action = type(
+        "Action",
+        (),
+        {"candidate_id": "candidate-navigate", "params": {}},
+    )()
+    result = type(
+        "Result",
+        (),
+        {"error": "Page readiness timeout", "success": False},
+    )()
+
+    assert await tools._evidence_for(action, result) == {"url_reached": True}
+
+
+def test_navigation_classifier_prefers_reached_url_over_readiness_timeout():
+    result = type(
+        "Result",
+        (),
+        {
+            "error": "Page readiness timeout",
+            "success": False,
+            "data": {"url_reached": True},
+        },
+    )()
+
+    judgement = classify_candidate_action(
+        "navigate",
+        {"url": "https://github.com/search?q=skill&type=repositories"},
+        result,
+        deterministic=False,
+    )
+
+    assert judgement.succeeded is True
+    assert judgement.reason == "postcondition_met"
+
+
+@pytest.mark.asyncio
 async def test_runtime_agent_backend_returns_only_structured_declared_outputs():
     calls = []
 
@@ -1242,6 +1619,9 @@ async def test_runtime_agent_backend_returns_only_structured_declared_outputs():
     )
 
     assert outputs == {"result": {"订单号": "PO-3003"}}
+    agent_kwargs = next(call[1] for call in calls if call[0] == "agent")
+    assert agent_kwargs["extend_system_message"] == BROWSER_USE_COMPLETION_PROTOCOL
+    assert agent_kwargs["max_history_items"] == BROWSER_USE_MAX_HISTORY_ITEMS
     assert calls[-1] == ("stop",)
 
 

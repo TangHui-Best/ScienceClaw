@@ -8,16 +8,26 @@ binding inference is permitted here.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import inspect
 import json
 import secrets
 from types import SimpleNamespace
-from typing import Any, Awaitable, Callable, Mapping
-from urllib.parse import urlsplit, urlunsplit
+from typing import Any, Awaitable, Callable, Literal, Mapping
+from urllib.parse import parse_qsl, urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, create_model
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    TypeAdapter,
+    ValidationError,
+    create_model,
+    field_validator,
+)
 
 from browser_use import Agent, BrowserSession as BrowserUseSession, ChatOpenAI, Tools
 from browser_use.agent.views import ActionResult
@@ -37,6 +47,45 @@ from ..creation.session import SessionVariableStore
 
 _VARIABLE_REF = TypeAdapter(BusinessVariableRef)
 _INPUT_REF = TypeAdapter(Identifier)
+BROWSER_USE_MAX_HISTORY_ITEMS = 6
+BROWSER_USE_COMPLETION_PROTOCOL = (
+    "When the task is complete, you MUST call the done action with success=true "
+    "and a concise result. Never finish with an empty action list or plain text only. "
+    "When the user asks to read, get, extract, or return data from the browser page, "
+    "you MUST call extract_variable before done, using the visible element index, a "
+    "stable semantic variable_ref, and the observed JSON value. Do not return browser "
+    "data only in the done text. Do not navigate or reload solely to report data that "
+    "is already visible on the current page. The active browser is already on the "
+    "current page: inspect and use it before navigating elsewhere, and never repeat "
+    "its navigation just to establish context. This is a semantic requirement, not "
+    "a keyword-matching rule."
+)
+
+
+def _navigation_url_matches(actual: str, expected: str) -> bool:
+    """Match a committed navigation without trusting redirect-added noise."""
+
+    try:
+        actual_url = urlsplit(actual)
+        expected_url = urlsplit(expected)
+        actual_port = actual_url.port
+        expected_port = expected_url.port
+    except ValueError:
+        return False
+    if not actual_url.scheme or not expected_url.scheme:
+        return False
+    if actual_url.scheme.lower() != expected_url.scheme.lower():
+        return False
+    if actual_url.hostname != expected_url.hostname:
+        return False
+    default_port = 443 if actual_url.scheme.lower() == "https" else 80
+    if (actual_port or default_port) != (expected_port or default_port):
+        return False
+    if (actual_url.path or "/") != (expected_url.path or "/"):
+        return False
+    actual_query = Counter(parse_qsl(actual_url.query, keep_blank_values=True))
+    expected_query = Counter(parse_qsl(expected_url.query, keep_blank_values=True))
+    return all(actual_query[item] >= count for item, count in expected_query.items())
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,9 +162,29 @@ def normalize_variable_action(
         )
         if input_error is not None and not _allow_input_errors:
             raise ValueError(input_error)
+        recorded_params: dict[str, object] = {
+            "variable_ref": variable_ref,
+            "value": value,
+        }
+        index = params.get("index")
+        if index is not None:
+            if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+                raise ValueError("browser_use_host.index_invalid")
+            recorded_params["index"] = index
+        mode = params.get("mode", "text")
+        if mode not in {"text", "attribute"}:
+            raise ValueError("browser_use_host.extract_mode_invalid")
+        recorded_params["mode"] = mode
+        attribute = params.get("attribute")
+        if mode == "attribute":
+            if not isinstance(attribute, str) or not attribute.strip():
+                raise ValueError("browser_use_host.extract_attribute_invalid")
+            recorded_params["attribute"] = attribute.strip()
+        elif attribute is not None:
+            raise ValueError("browser_use_host.extract_attribute_unexpected")
         return NormalizedVariableAction(
             action_name="extract_variable",
-            params={"variable_ref": variable_ref, "value": value},
+            params=recorded_params,
             binding_hints=tuple(
                 (*input_bindings, _binding("result", "output", variable_ref))
             ),
@@ -240,9 +309,24 @@ class _VariableTargetAction(BaseModel):
 
 class _ExtractVariableAction(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+    index: int | None = Field(default=None, ge=0)
     variable_ref: str
     value: JsonValue
     input_refs: list[str] = Field(default_factory=list)
+    mode: Literal["text", "attribute"] = "text"
+    attribute: str | None = None
+
+    @field_validator("index", mode="before")
+    @classmethod
+    def normalize_browser_use_index(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip()
+        if normalized.startswith("[") and normalized.endswith("]"):
+            normalized = normalized[1:-1].strip()
+        if normalized.isdecimal():
+            return int(normalized)
+        return value
 
 
 class _LiteralInputAction(BaseModel):
@@ -355,7 +439,9 @@ class RecordingBrowserUseTools(Tools):
             return ActionResult(error="internal allowed input action was not normalized")
 
         @self.registry.action(
-            "Write a JSON value to an explicit business variable reference.",
+            "Record browser data as a replayable Skill output. For data read from "
+            "the page, provide the visible element index, a stable semantic "
+            "variable_ref, and the observed JSON value before calling done.",
             param_model=_ExtractVariableAction,
         )
         async def extract_variable(params: _ExtractVariableAction) -> ActionResult:
@@ -472,6 +558,9 @@ class RecordingBrowserUseTools(Tools):
             actual_params = dict(raw_params)
             bindings = ()
             outputs = {}
+
+        if actual_name == "done" and not self.report.candidate_ids:
+            preflight_error = "browser_use_host.replayable_action_missing"
 
         port = getattr(getattr(self._hosted, "browser"), "port")
         page = await port.active_page_object()
@@ -672,18 +761,31 @@ class RecordingBrowserUseTools(Tools):
             return {}
         if pending.variable_outputs:
             return {"variables": dict(pending.variable_outputs)}
-        error = getattr(result, "error", None)
-        success = getattr(result, "success", None)
-        if error is not None or success is False:
-            return {"completed": False}
         if pending.action_name == "navigate":
             state = await pending.browser_session.get_browser_state_summary(
                 include_screenshot=False
             )
             expected = str(pending.params.get("url", ""))
-            return {"url_reached": str(getattr(state, "url", "")) == expected}
+            # A page-readiness timeout can be reported after the browser has
+            # already committed the requested URL.  The observable URL is the
+            # authoritative deterministic postcondition for navigation.
+            return {
+                "url_reached": _navigation_url_matches(
+                    str(getattr(state, "url", "")), expected
+                )
+            }
+        error = getattr(result, "error", None)
+        success = getattr(result, "success", None)
+        if error is not None or success is False:
+            return {"completed": False}
+        if pending.action_name == "click" and pending.target_match_count == 1:
+            # The target was uniquely resolved immediately before dispatch and
+            # browser-use returned without an action error. Re-resolving after
+            # a navigation click is invalid because the same Page object now
+            # exposes the destination DOM.
+            return {"dispatched": True}
         if (
-            pending.action_name in {"click", "input", "select_dropdown"}
+            pending.action_name in {"input", "select_dropdown"}
             and pending.target_match_count == 1
             and pending.target_hint is not None
             and pending.page is not None
@@ -772,8 +874,11 @@ def _safe_current_page(page: object) -> Mapping[str, object] | None:
     parsed = urlsplit(raw_url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return None
-    safe_url = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
-    return {"url": safe_url, "title": "current browser page"}
+    # Do not place the current URL in the task text. Browser-use scans task
+    # strings for URLs and would prepend an unintended navigate action before
+    # the LLM sees the already-attached page. The BrowserSession observation is
+    # the authoritative source of the active URL and DOM.
+    return {"attached": True, "title": "current browser page"}
 
 
 def semantic_hints_from_browser_use_node(
@@ -893,10 +998,20 @@ def build_agent_task(
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, allow_nan=False)
 
 
-async def _model_for(owner_id: str) -> ChatOpenAI:
-    from backend.models import resolve_default_model_config
+async def _model_for(owner_id: str, model_id: str | None = None) -> ChatOpenAI:
+    from backend.models import get_model_config, resolve_default_model_config
 
-    config = await resolve_default_model_config(owner_id)
+    if model_id:
+        selected = await get_model_config(model_id)
+        config = selected.model_dump() if selected is not None else None
+        if isinstance(config, Mapping):
+            selected_owner = config.get("user_id")
+            if selected_owner not in {None, owner_id} and not bool(config.get("is_system")):
+                raise RuntimeError("browser_use_host.model_not_owned")
+            if not bool(config.get("is_active", True)):
+                raise RuntimeError("browser_use_host.model_inactive")
+    else:
+        config = await resolve_default_model_config(owner_id)
     if not isinstance(config, Mapping):
         raise RuntimeError("browser_use_host.model_unavailable")
     model = config.get("model_name")
@@ -915,7 +1030,7 @@ async def execute_browser_use_instruction(
     hosted: object,
     request: AgentInstructionRequest,
     *,
-    model_factory: Callable[[str], Awaitable[object]] = _model_for,
+    model_factory: Callable[..., Awaitable[object]] = _model_for,
     agent_factory: Callable[..., object] = Agent,
     browser_session_factory: Callable[..., object] = BrowserUseSession,
 ) -> RecordingRoundReport:
@@ -923,7 +1038,12 @@ async def execute_browser_use_instruction(
     cdp_url = getattr(port, "browser_use_cdp_url", None)
     if not isinstance(cdp_url, str) or not cdp_url:
         raise RuntimeError("browser_use_host.cdp_url_unavailable")
-    model = await model_factory(str(getattr(hosted, "owner_id")))
+    owner_id = str(getattr(hosted, "owner_id"))
+    model = (
+        await model_factory(owner_id, request.model_id)
+        if request.model_id is not None
+        else await model_factory(owner_id)
+    )
     tools = RecordingBrowserUseTools(
         hosted=hosted,
         instruction=request.instruction,
@@ -940,8 +1060,11 @@ async def execute_browser_use_instruction(
             browser_session=browser_session,
             tools=tools,
             use_vision=False,
+            extend_system_message=BROWSER_USE_COMPLETION_PROTOCOL,
             max_actions_per_step=1,
-            max_history_items=2,
+            # browser-use 0.13.2 enforces a minimum window greater than five.
+            # Six keeps the prompt bounded while satisfying the real runtime contract.
+            max_history_items=BROWSER_USE_MAX_HISTORY_ITEMS,
             enable_signal_handler=False,
         )
         history = await agent.run(max_steps=40)
@@ -950,7 +1073,15 @@ async def execute_browser_use_instruction(
         report = tools.report
         if report.invocation_count != report.actual_action_count + len(report.blocked):
             raise RuntimeError("browser_use_host.action_accounting_incomplete")
-        return report
+        final_result = history.final_result()
+        return replace(
+            report,
+            agent_result=(
+                final_result.strip()
+                if isinstance(final_result, str) and final_result.strip()
+                else None
+            ),
+        )
     finally:
         await browser_session.stop()
 
@@ -1012,8 +1143,9 @@ def build_runtime_agent_backend(
                 browser_session=session,
                 output_model_schema=output_model,
                 use_vision=False,
+                extend_system_message=BROWSER_USE_COMPLETION_PROTOCOL,
                 max_actions_per_step=1,
-                max_history_items=2,
+                max_history_items=BROWSER_USE_MAX_HISTORY_ITEMS,
                 enable_signal_handler=False,
             )
             history = await agent.run(max_steps=30)

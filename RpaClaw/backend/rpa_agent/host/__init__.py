@@ -1,6 +1,7 @@
 """Narrow host adapters for greenfield RPA Agent creation sessions."""
 
 from .browser_session import (
+    AgentRoundSettlement,
     BrowserSession,
     BrowserSessionPort,
     HostBrowserEvent,
@@ -17,6 +18,7 @@ from .manual_input import (
 )
 
 __all__ = [
+    "AgentRoundSettlement",
     "BrowserSession",
     "BrowserSessionPort",
     "HostBrowserEvent",

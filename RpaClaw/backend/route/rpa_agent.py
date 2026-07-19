@@ -113,6 +113,7 @@ async def _scienceclaw_browser_provider(
         owner_id=owner_id,
         browser_ref=browser_ref,
         preview_registry=browser_preview_registry,
+        isolated_context=True,
         resolve_cdp_url=(
             _resolve_local_cdp_url
             if settings.storage_backend.strip().lower() == "local"
@@ -279,6 +280,8 @@ def _state_error(exc: ValueError) -> HTTPException:
         return _error(409, f"rpa_agent.{code}")
     if code.startswith("browser_session.pending_fact"):
         return _error(409, "rpa_agent.pending_browser_fact")
+    if code.startswith("browser_session.agent_settlement"):
+        return _error(422, "rpa_agent.agent_settlement_failed")
     return _error(422, "rpa_agent.operation_invalid")
 
 
@@ -443,6 +446,7 @@ def _report_payload(report: RecordingRoundReport) -> dict[str, Any]:
         "candidate_ids": list(report.candidate_ids),
         "non_sop": [asdict(item) for item in report.non_sop],
         "blocked": [asdict(item) for item in report.blocked],
+        "agent_result": report.agent_result,
     }
 
 
@@ -600,7 +604,25 @@ def build_router(services: RpaAgentApiServices) -> APIRouter:
                     report = await services.agent_executor(hosted, body)
                     if not isinstance(report, RecordingRoundReport):
                         raise ValueError("agent_executor.report_invalid")
-                    return _report_payload(report)
+                    await hosted.browser.drain_pending_facts(timeout=30)
+                    settlement = hosted.browser.settle_agent_round(
+                        report.candidate_ids
+                    )
+                    if settlement.pending_ids:
+                        raise ValueError(
+                            "browser_session.agent_settlement_incomplete:"
+                            + ",".join(settlement.pending_ids)
+                        )
+                    if settlement.rejected_ids:
+                        raise ValueError(
+                            "browser_session.agent_settlement_rejected:"
+                            + ",".join(settlement.rejected_ids)
+                        )
+                    payload = _report_payload(report)
+                    payload["replayable_action_count"] = len(
+                        settlement.accepted_ids
+                    )
+                    return payload
                 except BaseException as exc:
                     primary = exc
                     raise
@@ -647,9 +669,19 @@ def build_router(services: RpaAgentApiServices) -> APIRouter:
                 now = datetime.now(timezone.utc)
                 await hosted.browser.drain_pending_facts(timeout=30)
                 hosted.browser.finalize_recording(at=now)
-                hosted.browser.detach()
+                creation_steps = hosted.browser.creation.creation_projection()
                 hosted.configuration_draft = _draft(hosted.browser.creation)
                 hosted.state = SessionState.STOPPED
+                try:
+                    await hosted.browser.release_browser()
+                except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
+                    raise
+                except BaseException as exc:
+                    hosted.cleanup_errors.append(type(exc).__name__)
+                    logger.warning(
+                        "rpa_agent recording browser cleanup failed error_type=%s",
+                        type(exc).__name__,
+                    )
                 return {
                     "state": hosted.state.value,
                     "configuration_draft": hosted.configuration_draft.model_dump(
@@ -658,11 +690,29 @@ def build_router(services: RpaAgentApiServices) -> APIRouter:
                     "configuration_options": _configuration_options(
                         hosted.browser.creation, hosted.configuration_draft
                     ),
+                    "creation_steps": [
+                        {
+                            **asdict(item),
+                            "status": item.status.value,
+                        }
+                        for item in creation_steps
+                    ],
                 }
         except KeyError:
             raise _error(404, "rpa_agent.session_not_found") from None
         except ValueError as exc:
             raise _state_error(exc) from None
+
+    @router.delete("/sessions/{session_id}")
+    async def discard_session(
+        session_id: str,
+        user: User = Depends(require_user),
+    ):
+        _require_new_session_id(session_id)
+        removed = await services.store.discard(session_id, owner_id=_owner(user))
+        if not removed:
+            raise _error(404, "rpa_agent.session_not_found")
+        return {"state": "discarded"}
 
     @router.put("/sessions/{session_id}/configuration")
     async def apply_configuration(

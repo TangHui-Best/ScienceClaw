@@ -38,16 +38,24 @@ def classify_candidate_action(
 ) -> ActionJudgement:
     """分派到动作专属后置条件；绝不以 ``error is None`` 单独成功。"""
 
-    if getattr(result, "error", None) is not None or getattr(result, "success", None) is False:
-        return ActionJudgement(False, "tool_reported_failure")
-    data = getattr(result, "data", {})
+    # Browser-use may report a page-readiness timeout after the navigation has
+    # already committed. For navigation, the observed URL is the stronger,
+    # deterministic postcondition and must be evaluated before the generic
+    # tool-error guard. Other actions remain fail-closed on tool errors.
     if action_name == "navigate":
+        data = getattr(result, "data", {})
         valid = (
             isinstance(params.get("url"), str)
             and bool(params["url"].strip())
             and data.get("url_reached") is True
         )
-        return ActionJudgement(valid, "postcondition_met" if valid else "navigate_postcondition_failed")
+        if valid:
+            return ActionJudgement(True, "postcondition_met")
+    if getattr(result, "error", None) is not None or getattr(result, "success", None) is False:
+        return ActionJudgement(False, "tool_reported_failure")
+    data = getattr(result, "data", {})
+    if action_name == "navigate":
+        return ActionJudgement(False, "navigate_postcondition_failed")
     if action_name == "go_back":
         return _truth(data.get("history_changed"), "navigation_history_unchanged")
     if action_name == "click" and deterministic:
@@ -87,7 +95,7 @@ def classify_candidate_action(
             data.get("closed_page_ref") == params.get("scope_page_ref"),
             "close_matched" if data.get("closed_page_ref") == params.get("scope_page_ref") else "close_not_completed",
         )
-    if action_name == "extract" and deterministic:
+    if action_name in {"extract", "extract_variable"} and deterministic:
         declared_ref = params.get("declared_output_ref")
         variables = data.get("variables")
         valid = isinstance(declared_ref, str) and isinstance(variables, Mapping) and declared_ref in variables

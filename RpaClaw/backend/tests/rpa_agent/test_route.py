@@ -55,6 +55,8 @@ class FakeBrowserPort:
         self.main_page = object()
         self._listeners: dict[str, list[Callable[[object], None]]] = defaultdict(list)
         self.release_count = 0
+        self.cleanup_count = 0
+        self._closed = False
         self.manual_click_count = 0
         self.manual_value = ""
         self.manual_checked = False
@@ -111,6 +113,12 @@ class FakeBrowserPort:
         del target
         return self.manual_checked
 
+    async def aclose(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self.cleanup_count += 1
+
 
 class FakePublisher:
     def __init__(self) -> None:
@@ -146,6 +154,7 @@ def _services(
                     action_name="done", status="succeeded", reason="control_action"
                 ),
             ),
+            agent_result="已完成浏览器任务。",
         )
 
     async def runtime_runner(session: object, request: object) -> dict[str, Any]:
@@ -296,10 +305,11 @@ def test_atomic_manual_input_is_idempotent_and_rejects_ui_authored_scope(tmp_pat
 
 
 def test_atomic_manual_input_fails_closed_after_stop(tmp_path: Path) -> None:
-    services, _port, _publisher = _services(tmp_path)
+    services, port, _publisher = _services(tmp_path)
     with _client(services) as client:
         session_id = _start(client)
         assert client.post(f"/api/v1/rpa-agent/sessions/{session_id}/stop").status_code == 200
+        assert port.cleanup_count == 1
 
         response = client.post(
             f"/api/v1/rpa-agent/sessions/{session_id}/manual-inputs",
@@ -307,6 +317,22 @@ def test_atomic_manual_input_fails_closed_after_stop(tmp_path: Path) -> None:
         )
 
         assert response.status_code == 409
+
+
+def test_discard_releases_recording_browser_and_removes_session(tmp_path: Path) -> None:
+    services, port, _publisher = _services(tmp_path)
+    with _client(services) as client:
+        session_id = _start(client)
+
+        discarded = client.delete(f"/api/v1/rpa-agent/sessions/{session_id}")
+
+        assert discarded.status_code == 200, discarded.text
+        assert discarded.json() == {"state": "discarded"}
+        assert port.release_count == 3
+        assert port.cleanup_count == 1
+        assert client.get(
+            f"/api/v1/rpa-agent/sessions/{session_id}/projection"
+        ).status_code == 404
 
 
 def _compile_minimal_skill(client: TestClient, session_id: str) -> str:
@@ -330,6 +356,136 @@ def _compile_minimal_skill(client: TestClient, session_id: str) -> str:
     compiled = client.post(f"/api/v1/rpa-agent/sessions/{session_id}/compile")
     assert compiled.status_code == 200, compiled.text
     return compiled.json()["artifact_hash"]
+
+
+def test_agent_instruction_preserves_selected_model_id_for_host_executor(tmp_path: Path) -> None:
+    services, _, _ = _services(tmp_path)
+    original_executor = services.agent_executor
+    seen: dict[str, object] = {}
+    model_id = "5b20155d-2085-45b9-8183-178e7b10cff5"
+
+    async def capture_executor(session: object, request: AgentInstructionRequest):
+        seen["model_id"] = request.model_id
+        assert original_executor is not None
+        return await original_executor(session, request)
+
+    services.agent_executor = capture_executor
+    with _client(services) as client:
+        session_id = _start(client)
+        response = client.post(
+            f"/api/v1/rpa-agent/sessions/{session_id}/agent-instructions",
+            json={
+                "instruction": "打开和 skill 最相关的项目",
+                "model_id": model_id,
+                "business_terms": [],
+                "required_variable_refs": [],
+                "allowed_inputs": {},
+                "allowed_secret_names": [],
+                "allowed_data_assets": {},
+                "page_aliases": {},
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert seen == {"model_id": model_id}
+    assert response.json()["agent_result"] == "已完成浏览器任务。"
+
+
+def test_agent_instruction_settles_round_candidates_before_configuration(tmp_path: Path) -> None:
+    services, _, _ = _services(tmp_path)
+
+    async def recording_executor(hosted: object, request: AgentInstructionRequest):
+        del request
+        creation = hosted.browser.creation
+        candidate_id = "bu_route_settlement"
+        reservation = creation.reserve_agent(
+            candidate_id,
+            page_runtime_ref="runtime_main",
+            frame_runtime_ref="frame_main",
+        )
+        started_at = datetime.now(timezone.utc)
+        completed_at = started_at + timedelta(milliseconds=1)
+        creation.register_candidate(
+            reservation,
+            {
+                "candidate_id": candidate_id,
+                "ordinal": reservation.ordinal,
+                "origin": "agent",
+                "scope_hint": {"page_ref": "main", "frame_path": []},
+                "action_hint": {"kind": "navigate", "mode": "url"},
+                "binding_hints": [
+                    {
+                        "name": "url",
+                        "direction": "input",
+                        "kind_hint": "literal",
+                        "value": "https://github.com/trending",
+                        "sensitive": False,
+                    }
+                ],
+                "execution": {
+                    "status": "succeeded",
+                    "started_at": started_at,
+                    "ended_at": completed_at,
+                    "output": None,
+                    "error": None,
+                },
+            },
+            completed_at=completed_at,
+        )
+        return RecordingRoundReport(
+            invocation_count=2,
+            actual_action_count=2,
+            candidate_ids=(candidate_id,),
+            non_sop=(
+                NonSopActionClassification(
+                    action_name="done", status="succeeded", reason="control_action"
+                ),
+            ),
+            agent_result="已打开 GitHub Trending。",
+        )
+
+    services.agent_executor = recording_executor
+    with _client(services) as client:
+        session_id = _start(client)
+        response = client.post(
+            f"/api/v1/rpa-agent/sessions/{session_id}/agent-instructions",
+            json={
+                "instruction": "打开 GitHub Trending",
+                "business_terms": [],
+                "required_variable_refs": [],
+                "allowed_inputs": {},
+                "allowed_secret_names": [],
+                "allowed_data_assets": {},
+                "page_aliases": {},
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["actual_action_count"] == 2
+        assert response.json()["replayable_action_count"] == 1
+        projection = client.get(
+            f"/api/v1/rpa-agent/sessions/{session_id}/projection"
+        ).json()["steps"]
+        assert [(row["status"], row["action_kind"]) for row in projection] == [
+            ("accepted", "navigate")
+        ]
+
+        stopped = client.post(f"/api/v1/rpa-agent/sessions/{session_id}/stop")
+        assert stopped.status_code == 200, stopped.text
+        configured = client.put(
+            f"/api/v1/rpa-agent/sessions/{session_id}/configuration",
+            json={
+                "schema_version": "skill-configuration-draft/v0.1",
+                "skill": {"name": "GitHub Trending", "description": "打开趋势项目"},
+                "inputs": [],
+                "secrets": [],
+                "asset_inputs": [],
+                "outputs": [],
+                "asset_outputs": [],
+                "binding_promotions": [],
+            },
+        )
+        assert configured.status_code == 200, configured.text
 
 
 def test_full_api_journey_reuses_compiled_artifact_before_save(tmp_path: Path) -> None:
@@ -459,6 +615,8 @@ def test_stop_draft_is_derived_from_exact_timeline_binding_locations(tmp_path: P
             "ready": True,
             "issues": [],
         }
+        assert payload["creation_steps"]
+        assert any(item["status"] == "accepted" for item in payload["creation_steps"])
 
 
 def test_old_shapes_and_out_of_order_operations_fail_closed(tmp_path: Path) -> None:
@@ -1511,6 +1669,23 @@ def test_agent_instruction_dto_accepts_business_variable_path() -> None:
         }
     )
     assert request.required_variable_refs == ["采购订单.订单号", "采购订单.供应商"]
+
+
+@pytest.mark.parametrize("model_id", ["", " model-id", "model/id", "模型-id"])
+def test_agent_instruction_dto_rejects_invalid_model_ref(model_id: str) -> None:
+    with pytest.raises(ValidationError):
+        AgentInstructionRequest.model_validate(
+            {
+                "instruction": "打开项目",
+                "model_id": model_id,
+                "business_terms": [],
+                "required_variable_refs": [],
+                "allowed_inputs": {},
+                "allowed_secret_names": [],
+                "allowed_data_assets": {},
+                "page_aliases": {},
+            }
+        )
 
 
 @pytest.mark.parametrize(

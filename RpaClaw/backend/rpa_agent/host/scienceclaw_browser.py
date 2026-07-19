@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+import secrets
 from threading import RLock
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -87,6 +88,7 @@ class BrowserRuntimeLease:
 
 @dataclass(slots=True)
 class _OwnedRuntimeResource:
+    browser_ref: str
     page: object
     cdp_url: str
     playwright: object
@@ -96,11 +98,14 @@ class _OwnedRuntimeResource:
 
 
 _RESOURCE_MUTEX = RLock()
-_ACQUIRE_LOCKS: dict[tuple[int, str], asyncio.Lock] = {}
-_OWNED_RESOURCES: dict[tuple[int, str], _OwnedRuntimeResource] = {}
+_AcquireKey = tuple[int, str]
+_ResourceKey = tuple[int, str, str]
+
+_ACQUIRE_LOCKS: dict[_AcquireKey, asyncio.Lock] = {}
+_OWNED_RESOURCES: dict[_ResourceKey, _OwnedRuntimeResource] = {}
 
 
-def _acquire_lock(key: tuple[int, str]) -> asyncio.Lock:
+def _acquire_lock(key: _AcquireKey) -> asyncio.Lock:
     with _RESOURCE_MUTEX:
         return _ACQUIRE_LOCKS.setdefault(key, asyncio.Lock())
 
@@ -114,11 +119,12 @@ async def acquire_browser_runtime_lease(
     resolve_cdp_url: Callable[[str, str], Awaitable[str]] | None = None,
     fetch_cdp_url: Callable[[str], Awaitable[str]] = fetch_runtime_cdp_url,
     connect: Callable[[str], Awaitable[tuple[object, object]]] = _connect_playwright,
+    isolated_context: bool = False,
 ) -> BrowserRuntimeLease:
     """Ensure the generic runtime exposes one preview Page for both channels."""
 
-    key = (id(preview_registry), browser_ref)
-    async with _acquire_lock(key):
+    acquire_key = (id(preview_registry), browser_ref)
+    async with _acquire_lock(acquire_key):
         if resolve_cdp_url is not None:
             cdp_url = await resolve_cdp_url(browser_ref, owner_id)
             parsed_cdp = urlsplit(cdp_url) if isinstance(cdp_url, str) else None
@@ -142,7 +148,12 @@ async def acquire_browser_runtime_lease(
                 raise RuntimeError("browser_runtime.rest_base_url_invalid")
             cdp_url = await fetch_cdp_url(rest_base_url)
 
-        owned = _OWNED_RESOURCES.get(key)
+        resource_key: _ResourceKey = (
+            acquire_key[0],
+            browser_ref,
+            secrets.token_hex(12) if isolated_context else "shared",
+        )
+        owned = _OWNED_RESOURCES.get(resource_key)
         if owned is not None:
             if owned.cdp_url != cdp_url:
                 raise RuntimeError("browser_runtime.preview_cdp_mismatch")
@@ -150,11 +161,11 @@ async def acquire_browser_runtime_lease(
             return BrowserRuntimeLease(
                 page=owned.page,
                 cdp_url=owned.cdp_url,
-                _cleanup=lambda: _release_owned_resource(key),
+                _cleanup=lambda: _release_owned_resource(resource_key),
             )
 
         existing = getattr(preview_registry, "get_active_page")(browser_ref)
-        if existing is not None:
+        if not isolated_context and existing is not None:
             registered_cdp = getattr(preview_registry, "get_cdp_url", lambda _ref: None)(
                 browser_ref
             )
@@ -165,12 +176,20 @@ async def acquire_browser_runtime_lease(
         playwright, browser = await connect(cdp_url)
         created_context: object | None = None
         try:
-            contexts = tuple(getattr(browser, "contexts", ()) or ())
-            if contexts:
-                context = contexts[0]
-            else:
+            if isolated_context:
+                # A recording session owns its BrowserContext.  The underlying
+                # Chromium/CDP process may be shared by the neutral host, but
+                # cookies, storage, pages and history must never cross the
+                # recording-session boundary.
                 context = await getattr(browser, "new_context")()
                 created_context = context
+            else:
+                contexts = tuple(getattr(browser, "contexts", ()) or ())
+                if contexts:
+                    context = contexts[0]
+                else:
+                    context = await getattr(browser, "new_context")()
+                    created_context = context
             pages = tuple(getattr(context, "pages", ()) or ())
             page = pages[-1] if pages else await getattr(context, "new_page")()
             await getattr(preview_registry, "register")(
@@ -179,7 +198,8 @@ async def acquire_browser_runtime_lease(
         except BaseException:
             await _release_connection(playwright, created_context)
             raise
-        _OWNED_RESOURCES[key] = _OwnedRuntimeResource(
+        _OWNED_RESOURCES[resource_key] = _OwnedRuntimeResource(
+            browser_ref=browser_ref,
             page=page,
             cdp_url=cdp_url,
             playwright=playwright,
@@ -189,12 +209,13 @@ async def acquire_browser_runtime_lease(
         return BrowserRuntimeLease(
             page=page,
             cdp_url=cdp_url,
-            _cleanup=lambda: _release_owned_resource(key),
+            _cleanup=lambda: _release_owned_resource(resource_key),
         )
 
 
-async def _release_owned_resource(key: tuple[int, str]) -> None:
-    lock = _acquire_lock(key)
+async def _release_owned_resource(key: _ResourceKey) -> None:
+    acquire_key = (key[0], key[1])
+    lock = _acquire_lock(acquire_key)
     async with lock:
         owned = _OWNED_RESOURCES.get(key)
         if owned is None:
@@ -203,7 +224,7 @@ async def _release_owned_resource(key: tuple[int, str]) -> None:
         if owned.ref_count > 0:
             return
         del _OWNED_RESOURCES[key]
-        browser_ref = key[1]
+        browser_ref = owned.browser_ref
         first: BaseException | None = None
         try:
             await getattr(owned.preview_registry, "unregister")(
@@ -217,7 +238,11 @@ async def _release_owned_resource(key: tuple[int, str]) -> None:
             if first is None:
                 first = exc
         with _RESOURCE_MUTEX:
-            _ACQUIRE_LOCKS.pop(key, None)
+            if not any(
+                resource_key[:2] == acquire_key
+                for resource_key in _OWNED_RESOURCES
+            ):
+                _ACQUIRE_LOCKS.pop(acquire_key, None)
         if first is not None:
             raise first
 

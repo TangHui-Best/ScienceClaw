@@ -134,6 +134,29 @@ class SessionStore:
                 item.lock.release()
         return len(expired)
 
+    async def discard(self, session_id: str, *, owner_id: str) -> bool:
+        """Remove one owned session and release all of its short-lived resources."""
+
+        async with self._lock:
+            hosted = self._sessions.get(session_id)
+            if hosted is None or hosted.owner_id != owner_id:
+                return False
+            await hosted.lock.acquire()
+            if self._sessions.get(session_id) is not hosted:
+                hosted.lock.release()
+                return False
+            self._sessions.pop(session_id, None)
+        try:
+            try:
+                await hosted.browser.aclose(at=datetime.now(timezone.utc))
+            except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
+                raise
+            except BaseException as exc:
+                hosted.cleanup_errors.append(type(exc).__name__)
+        finally:
+            hosted.lock.release()
+        return True
+
     async def close_all(self) -> None:
         async with self._lock:
             sessions = tuple(self._sessions.values())

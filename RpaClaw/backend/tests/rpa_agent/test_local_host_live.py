@@ -25,7 +25,7 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.mark.asyncio
-async def test_local_mode_starts_rpa_agent_session_on_real_local_chromium(
+async def test_local_mode_isolates_consecutive_recording_contexts_on_real_chromium(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
@@ -55,20 +55,62 @@ async def test_local_mode_starts_rpa_agent_session_on_real_local_chromium(
             transport=httpx.ASGITransport(app=app),
             base_url="http://test",
         ) as client:
-            response = await client.post(
+            first_response = await client.post(
                 "/api/v1/rpa-agent/sessions",
                 json={"browser_session_ref": browser_ref},
             )
+            assert first_response.status_code == 201, first_response.text
+            first_payload = first_response.json()
+            first_page = browser_preview.browser_preview_registry.get_active_page(
+                browser_ref
+            )
+            assert first_page is not None
+            first_context = first_page.context
+            await first_context.add_cookies(
+                [
+                    {
+                        "name": "old_recording",
+                        "value": "must-not-cross",
+                        "url": "https://isolation.test",
+                    }
+                ]
+            )
+            first_cdp_url = browser_preview.browser_preview_registry.get_cdp_url(
+                browser_ref
+            )
 
-        assert response.status_code == 201, response.text
-        payload = response.json()
-        assert payload["session_id"].startswith("rca_")
-        assert payload["main_scope"]["page_runtime_ref"].startswith("host_page_")
-        assert payload["main_scope"]["frame_runtime_ref"].startswith("host_frame_")
-        assert browser_preview.browser_preview_registry.get_active_page(browser_ref)
-        assert browser_preview.browser_preview_registry.get_cdp_url(browser_ref).startswith(
-            "ws://127.0.0.1:"
-        )
+            stopped = await client.post(
+                f"/api/v1/rpa-agent/sessions/{first_payload['session_id']}/stop"
+            )
+            assert stopped.status_code == 200, stopped.text
+            assert first_page.is_closed()
+            assert browser_preview.browser_preview_registry.get_active_page(browser_ref) is None
+
+            second_response = await client.post(
+                "/api/v1/rpa-agent/sessions",
+                json={"browser_session_ref": browser_ref},
+            )
+            assert second_response.status_code == 201, second_response.text
+            second_payload = second_response.json()
+            second_page = browser_preview.browser_preview_registry.get_active_page(
+                browser_ref
+            )
+            assert second_page is not None
+            second_context = second_page.context
+
+            assert first_payload["session_id"] != second_payload["session_id"]
+            assert first_context is not second_context
+            assert first_page is not second_page
+            assert await second_context.cookies("https://isolation.test") == []
+            assert browser_preview.browser_preview_registry.get_cdp_url(
+                browser_ref
+            ) == first_cdp_url
+
+            discarded = await client.delete(
+                f"/api/v1/rpa-agent/sessions/{second_payload['session_id']}"
+            )
+            assert discarded.status_code == 200, discarded.text
+            assert second_page.is_closed()
     finally:
         assert services.store is not None
         await services.store.close_all()
