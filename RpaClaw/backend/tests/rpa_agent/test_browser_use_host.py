@@ -384,6 +384,38 @@ async def test_runtime_lease_initializes_and_registers_same_cdp_browser():
 
 
 @pytest.mark.asyncio
+async def test_runtime_lease_uses_direct_cdp_resolver_without_session_runtime():
+    calls = []
+
+    class Registry:
+        def get_active_page(self, _ref):
+            return None
+
+    async def forbidden_runtime(*_args):
+        raise AssertionError("local mode must not ensure a session runtime")
+
+    async def resolve_cdp(ref, owner):
+        calls.append((ref, owner))
+        return "ws://127.0.0.1:19222/devtools/browser/local"
+
+    async def stop_after_resolve(cdp_url):
+        assert cdp_url.endswith("/devtools/browser/local")
+        raise RuntimeError("stop_after_direct_resolve")
+
+    with pytest.raises(RuntimeError, match="stop_after_direct_resolve"):
+        await acquire_browser_runtime_lease(
+            owner_id="owner-1",
+            browser_ref="local-session",
+            preview_registry=Registry(),
+            ensure_runtime=forbidden_runtime,
+            resolve_cdp_url=resolve_cdp,
+            connect=stop_after_resolve,
+        )
+
+    assert calls == [("local-session", "owner-1")]
+
+
+@pytest.mark.asyncio
 async def test_runtime_lease_rejects_existing_page_without_exact_cdp_provenance():
     class Runtime:
         rest_base_url = "http://runtime.test"

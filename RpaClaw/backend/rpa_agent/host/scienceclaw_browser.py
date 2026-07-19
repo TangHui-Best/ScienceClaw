@@ -111,6 +111,7 @@ async def acquire_browser_runtime_lease(
     browser_ref: str,
     preview_registry: object,
     ensure_runtime: Callable[[str, str], Awaitable[object]] | None = None,
+    resolve_cdp_url: Callable[[str, str], Awaitable[str]] | None = None,
     fetch_cdp_url: Callable[[str], Awaitable[str]] = fetch_runtime_cdp_url,
     connect: Callable[[str], Awaitable[tuple[object, object]]] = _connect_playwright,
 ) -> BrowserRuntimeLease:
@@ -118,17 +119,28 @@ async def acquire_browser_runtime_lease(
 
     key = (id(preview_registry), browser_ref)
     async with _acquire_lock(key):
-        if ensure_runtime is None:
-            from backend.runtime.session_runtime_manager import (
-                get_session_runtime_manager,
-            )
+        if resolve_cdp_url is not None:
+            cdp_url = await resolve_cdp_url(browser_ref, owner_id)
+            parsed_cdp = urlsplit(cdp_url) if isinstance(cdp_url, str) else None
+            if (
+                parsed_cdp is None
+                or parsed_cdp.scheme not in {"ws", "wss"}
+                or not parsed_cdp.netloc
+                or not parsed_cdp.path.startswith("/devtools/browser/")
+            ):
+                raise RuntimeError("browser_runtime.cdp_url_invalid")
+        else:
+            if ensure_runtime is None:
+                from backend.runtime.session_runtime_manager import (
+                    get_session_runtime_manager,
+                )
 
-            ensure_runtime = get_session_runtime_manager().ensure_runtime
-        runtime = await ensure_runtime(browser_ref, owner_id)
-        rest_base_url = getattr(runtime, "rest_base_url", None)
-        if not isinstance(rest_base_url, str) or not rest_base_url:
-            raise RuntimeError("browser_runtime.rest_base_url_invalid")
-        cdp_url = await fetch_cdp_url(rest_base_url)
+                ensure_runtime = get_session_runtime_manager().ensure_runtime
+            runtime = await ensure_runtime(browser_ref, owner_id)
+            rest_base_url = getattr(runtime, "rest_base_url", None)
+            if not isinstance(rest_base_url, str) or not rest_base_url:
+                raise RuntimeError("browser_runtime.rest_base_url_invalid")
+            cdp_url = await fetch_cdp_url(rest_base_url)
 
         owned = _OWNED_RESOURCES.get(key)
         if owned is not None:
