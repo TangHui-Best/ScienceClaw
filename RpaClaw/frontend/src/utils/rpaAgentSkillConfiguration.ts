@@ -15,6 +15,23 @@ export interface SkillConfigurationDraft {
   outputs: Array<{ name: string; title: string; variable_ref: string; value_type: 'string' | 'number' | 'boolean' | 'json' }>;
   asset_outputs: Array<{ name: string; title: string; asset_ref: string }>;
   binding_promotions: BindingPromotion[];
+  manual_fallbacks?: Record<string, {
+    trace_id: string;
+    instruction: string;
+    scope_hint: { page_ref: string; url?: string | null; title?: string | null; frame_path: unknown[] };
+  }>;
+  agent_steps?: Record<string, {
+    step_id: string;
+    output_refs: string[];
+    expected_effects: Array<Record<string, unknown>>;
+    allowed_input_refs: string[];
+    allowed_secret_refs: string[];
+    allowed_asset_refs: string[];
+    page_aliases: Record<string, { page_ref: string; url: string; title: string }>;
+    business_terms: string[];
+    model_policy: { mode: 'runtime_default' | 'configured_model'; model_ref?: string | null };
+    timeout_seconds: number;
+  }>;
   stage_2_rules?: string;
 }
 
@@ -30,6 +47,14 @@ export interface CreationRouteSnapshot {
   browserSessionRef: string;
   configurationDraft?: SkillConfigurationDraft;
   bindingLocations?: Array<Record<string, unknown>>;
+  recordingSteps?: Array<{
+    id: string;
+    ordinal: number;
+    kind: 'manual' | 'ai_instruction';
+    title: string;
+    replayStatus: 'pending' | 'deterministic_ready' | 'insufficient_evidence' | 'needs_confirmation';
+    compileMode: null | 'playwright' | 'agent' | 'needs_confirmation';
+  }>;
   artifactHash?: string;
   artifactFiles?: string[];
   configurationState?: 'configured' | 'compiled';

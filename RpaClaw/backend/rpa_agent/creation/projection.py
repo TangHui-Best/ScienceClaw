@@ -4,9 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Collection, Mapping
+from typing import Collection, Mapping, Sequence
 
-from ..contracts import CoreTrace, Diagnostic, TraceCandidate
+from ..contracts import (
+    CoreTrace,
+    CoreTraceDraft,
+    Diagnostic,
+    RecordingTimeline,
+    ReplayAssessment,
+    TraceCandidate,
+)
 
 
 _SAFE_DIAGNOSTIC_MESSAGES = {
@@ -45,6 +52,123 @@ class CreationStepRow:
     parent_trace_id: str | None = None
     diagnostic_code: str | None = None
     diagnostic_message: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TimelineObservationRow:
+    trace_id: str
+    action: str
+    summary: str
+
+
+@dataclass(frozen=True, slots=True)
+class TimelineItemRow:
+    id: str
+    kind: str
+    ordinal: int
+    title: str
+    capture_status: str
+    execution_status: str
+    replay_status: str
+    compile_mode: str | None
+    observations: tuple[TimelineObservationRow, ...] = ()
+
+
+def project_recording_timeline(timeline: RecordingTimeline) -> tuple[TimelineItemRow, ...]:
+    """Project the intent-first source of truth without leaking evidence internals."""
+
+    return project_recording_items(timeline.items, timeline.observed_traces)
+
+
+def project_recording_items(
+    items: Sequence[CoreTraceDraft | CoreTrace | object],
+    observed_traces: Mapping[str, CoreTrace] | None = None,
+    assessments: Sequence[ReplayAssessment] = (),
+) -> tuple[TimelineItemRow, ...]:
+    """Project live recording items, including drafts that cannot enter a snapshot."""
+
+    rows: list[TimelineItemRow] = []
+    observations_by_id = observed_traces or {}
+    assessments_by_id = {assessment.item_id: assessment for assessment in assessments}
+    for ordinal, item in enumerate(items, start=1):
+        if isinstance(item, CoreTraceDraft):
+            rows.append(
+                TimelineItemRow(
+                    id=item.draft_id,
+                    kind="manual",
+                    ordinal=ordinal,
+                    title="正在捕获手工操作" if item.capture_state != "invalid" else "手工操作失败",
+                    capture_status=(
+                        "incomplete" if item.capture_state == "invalid" else "capturing"
+                    ),
+                    execution_status=(
+                        "failed" if item.capture_state == "invalid" else "running"
+                    ),
+                    replay_status="pending",
+                    compile_mode=None,
+                )
+            )
+            continue
+        if isinstance(item, CoreTrace):
+            assessment = assessments_by_id.get(item.trace_id)
+            rows.append(
+                TimelineItemRow(
+                    id=item.trace_id,
+                    kind="manual",
+                    ordinal=ordinal,
+                    title=_trace_title(item),
+                    capture_status="captured",
+                    execution_status="succeeded",
+                    replay_status=assessment.status if assessment else "pending",
+                    compile_mode=(
+                        "playwright"
+                        if assessment and assessment.status == "deterministic_ready"
+                        else "needs_confirmation"
+                        if assessment
+                        else None
+                    ),
+                )
+            )
+            continue
+        observations = tuple(
+            TimelineObservationRow(
+                trace_id=trace.trace_id,
+                action=trace.action.kind,
+                summary=_trace_title(trace),
+            )
+            for ref in item.observation_trace_refs
+            if (trace := observations_by_id.get(ref)) is not None
+        )
+        capture_status = (
+            "observing"
+            if item.execution.status in {"queued", "running"}
+            else "captured"
+            if item.execution.status == "succeeded"
+            else "incomplete"
+        )
+        assessment = assessments_by_id.get(item.step_id)
+        rows.append(
+            TimelineItemRow(
+                id=item.step_id,
+                kind="ai_instruction",
+                ordinal=ordinal,
+                title=_bounded_title(item.instruction),
+                capture_status=capture_status,
+                execution_status=item.execution.status,
+                replay_status=assessment.status if assessment else "pending",
+                compile_mode=(
+                    "playwright"
+                    if assessment and assessment.status == "deterministic_ready"
+                    else "agent"
+                    if assessment and assessment.status == "insufficient_evidence"
+                    else "needs_confirmation"
+                    if assessment
+                    else None
+                ),
+                observations=observations,
+            )
+        )
+    return tuple(rows)
 
 
 def project_creation_steps(

@@ -512,6 +512,261 @@ class AssetOutputDefinition(StrictModel):
     asset_ref: Identifier
 
 
+class CoreTraceDraft(StrictModel):
+    """创建期手工动作草稿；不会进入最终时间线或编译产物。"""
+
+    draft_id: Identifier
+    capture_state: Literal["capturing", "enriching", "ready", "invalid"]
+    partial_scope: BrowserScope | None = None
+    partial_action: ActionSpec | None = None
+    data_bindings: list[DataBinding] = Field(default_factory=list)
+    effects: list[BrowserEffect] = Field(default_factory=list)
+    diagnostic_codes: list[NonEmptyString] = Field(default_factory=list)
+
+
+class PageSummary(StrictModel):
+    page_ref: Identifier
+    url: str
+    title: str
+
+
+class BrowserScopeHint(StrictModel):
+    page_ref: Identifier
+    url: str | None = None
+    title: str | None = None
+    frame_path: list[FrameStep] = Field(default_factory=list)
+
+
+class NavigationExpectedEffect(StrictModel):
+    kind: Literal["navigation"]
+    url_pattern: NonEmptyString | None = None
+
+
+class NewPageExpectedEffect(StrictModel):
+    kind: Literal["new_page"]
+    page_ref: Identifier
+    url_pattern: NonEmptyString | None = None
+
+
+class DownloadExpectedEffect(StrictModel):
+    kind: Literal["download"]
+    asset_output_ref: Identifier
+
+
+class DialogExpectedEffect(StrictModel):
+    kind: Literal["dialog"]
+    dialog_policy: Literal["accept", "dismiss"]
+
+
+class FileChooserExpectedEffect(StrictModel):
+    kind: Literal["file_chooser"]
+    asset_input_ref: Identifier
+
+
+class PageClosedExpectedEffect(StrictModel):
+    kind: Literal["page_closed"]
+    page_ref: Identifier
+
+
+ExpectedEffect = Annotated[
+    NavigationExpectedEffect
+    | NewPageExpectedEffect
+    | DownloadExpectedEffect
+    | DialogExpectedEffect
+    | FileChooserExpectedEffect
+    | PageClosedExpectedEffect,
+    Field(discriminator="kind"),
+]
+
+
+class AIExecutionAttempt(StrictModel):
+    attempt_id: Identifier
+    model_ref: NonEmptyString
+    status: Literal["queued", "running", "succeeded", "failed", "cancelled"]
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    error_code: NonEmptyString | None = None
+    observation_trace_refs: list[Identifier] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_state_shape(self) -> "AIExecutionAttempt":
+        if self.status == "queued":
+            if self.started_at is not None or self.finished_at is not None or self.error_code is not None:
+                raise ValueError("ai.attempt_queued_shape")
+        elif self.status == "running":
+            if self.started_at is None or self.finished_at is not None or self.error_code is not None:
+                raise ValueError("ai.attempt_running_shape")
+        elif self.status == "succeeded":
+            if self.started_at is None or self.finished_at is None or self.error_code is not None:
+                raise ValueError("ai.attempt_succeeded_shape")
+        elif self.started_at is None or self.finished_at is None or self.error_code is None:
+            raise ValueError("ai.attempt_terminal_shape")
+        if len(self.observation_trace_refs) != len(set(self.observation_trace_refs)):
+            raise ValueError("ai.attempt_observation_refs_unique")
+        return self
+
+
+class AIExecutionState(StrictModel):
+    status: Literal["queued", "running", "succeeded", "failed", "cancelled"]
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    result_summary: str | None = None
+    error_code: NonEmptyString | None = None
+    error_message: NonEmptyString | None = None
+    selected_attempt_id: Identifier | None = None
+    attempts: list[AIExecutionAttempt] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_state_and_attempts(self) -> "AIExecutionState":
+        attempts_by_id = {attempt.attempt_id: attempt for attempt in self.attempts}
+        if len(attempts_by_id) != len(self.attempts):
+            raise ValueError("ai.execution_attempt_ids_unique")
+        if self.status == "queued":
+            if self.started_at is not None or self.finished_at is not None:
+                raise ValueError("ai.execution_queued_shape")
+        elif self.status == "running":
+            if self.started_at is None or self.finished_at is not None:
+                raise ValueError("ai.execution_running_shape")
+        elif self.status == "succeeded":
+            if self.started_at is None or self.finished_at is None or self.error_code is not None:
+                raise ValueError("ai.execution_succeeded_shape")
+        elif (
+            self.started_at is None
+            or self.finished_at is None
+            or self.error_code is None
+            or self.error_message is None
+        ):
+            raise ValueError("ai.execution_terminal_shape")
+        if self.selected_attempt_id is not None:
+            selected = attempts_by_id.get(self.selected_attempt_id)
+            if selected is None:
+                raise ValueError("ai.execution_selected_attempt_missing")
+            if selected.status != self.status:
+                raise ValueError("ai.execution_selected_attempt_status_mismatch")
+        return self
+
+
+class AIInstructionStep(StrictModel):
+    step_id: Identifier
+    instruction: Annotated[str, Field(min_length=1, max_length=20_000)]
+    created_at: datetime
+    execution: AIExecutionState
+    context_snapshot_ref: Identifier
+    observation_trace_refs: list[Identifier] = Field(default_factory=list)
+    orphan_effect_refs: list[Identifier] = Field(default_factory=list)
+    declared_outputs: list[OutputDefinition] = Field(default_factory=list)
+    expected_effects: list[ExpectedEffect] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_selected_attempt_projection(self) -> "AIInstructionStep":
+        if len(self.observation_trace_refs) != len(set(self.observation_trace_refs)):
+            raise ValueError("ai.observation_trace_refs_unique")
+        if len(self.orphan_effect_refs) != len(set(self.orphan_effect_refs)):
+            raise ValueError("ai.orphan_effect_refs_unique")
+        if self.execution.selected_attempt_id is not None:
+            selected = next(
+                attempt
+                for attempt in self.execution.attempts
+                if attempt.attempt_id == self.execution.selected_attempt_id
+            )
+            if selected.observation_trace_refs != self.observation_trace_refs:
+                raise ValueError("ai.execution_selected_attempt_refs_mismatch")
+        return self
+
+
+class FileChooserLifecycleEffect(StrictModel):
+    kind: Literal["file_chooser"]
+    page_ref: Identifier
+    asset_input_ref: Identifier | None = None
+
+
+class PageActivatedLifecycleEffect(StrictModel):
+    kind: Literal["page_activated"]
+    page_ref: Identifier
+
+
+class PageClosedLifecycleEffect(StrictModel):
+    kind: Literal["page_closed"]
+    page_ref: Identifier
+
+
+LifecycleEffect = Annotated[
+    FileChooserLifecycleEffect | PageActivatedLifecycleEffect | PageClosedLifecycleEffect,
+    Field(discriminator="kind"),
+]
+ObservedEffectPayload = Annotated[
+    BrowserEffect | LifecycleEffect,
+    Field(discriminator="kind"),
+]
+
+
+class ObservedEffectEnvelope(StrictModel):
+    effect_id: Identifier
+    session_id: Identifier
+    generation: Identifier
+    page_ref: Identifier
+    occurred_at: datetime
+    payload: ObservedEffectPayload
+    candidate_item_ids: list[Identifier] = Field(default_factory=list)
+    candidate_trace_ids: list[Identifier] = Field(default_factory=list)
+
+
+RecordingTimelineItem = CoreTrace | AIInstructionStep
+
+
+class RecordingTimeline(StrictModel):
+    schema_version: Literal["recording-timeline/v0.1"]
+    session_id: Identifier
+    items: list[RecordingTimelineItem]
+    observed_traces: dict[Identifier, CoreTrace] = Field(default_factory=dict)
+    orphan_effects: dict[Identifier, ObservedEffectEnvelope] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_references_and_ownership(self) -> "RecordingTimeline":
+        item_ids: list[str] = []
+        top_level_trace_ids: set[str] = set()
+        for item in self.items:
+            item_id = item.trace_id if isinstance(item, CoreTrace) else item.step_id
+            item_ids.append(item_id)
+            if isinstance(item, CoreTrace):
+                top_level_trace_ids.add(item.trace_id)
+        if len(item_ids) != len(set(item_ids)):
+            raise ValueError("timeline.item_ids_unique")
+        observed_ids = set(self.observed_traces)
+        if top_level_trace_ids & observed_ids:
+            raise ValueError("timeline.trace_ownership_conflict")
+        for key, trace in self.observed_traces.items():
+            if key != trace.trace_id:
+                raise ValueError("timeline.observed_trace_key_mismatch")
+        for key, effect in self.orphan_effects.items():
+            if key != effect.effect_id:
+                raise ValueError("timeline.orphan_effect_key_mismatch")
+            if effect.session_id != self.session_id:
+                raise ValueError("timeline.orphan_effect_session_mismatch")
+        orphan_ids = set(self.orphan_effects)
+        for item in self.items:
+            if not isinstance(item, AIInstructionStep):
+                continue
+            if any(ref not in observed_ids for ref in item.observation_trace_refs):
+                raise ValueError("timeline.observation_trace_unresolved")
+            if any(ref not in orphan_ids for ref in item.orphan_effect_refs):
+                raise ValueError("timeline.orphan_effect_unresolved")
+        return self
+
+
+class ReplayAssessment(StrictModel):
+    item_id: Identifier
+    status: Literal[
+        "deterministic_ready", "insufficient_evidence", "needs_confirmation"
+    ]
+    trace_refs: list[Identifier] = Field(default_factory=list)
+    effect_refs: list[Identifier] = Field(default_factory=list)
+    issue_codes: list[NonEmptyString] = Field(default_factory=list)
+    explanation: NonEmptyString
+    assessed_at: datetime
+    assessor_version: NonEmptyString
+
+
 class SkillDefinition(StrictModel):
     schema_version: Literal["skill-definition/v0.1"]
     skill: SkillIdentity
@@ -525,6 +780,123 @@ class SkillDefinition(StrictModel):
     @model_validator(mode="after")
     def declarations_are_unique(self) -> "SkillDefinition":
         _validate_skill_declaration_uniqueness(self)
+        return self
+
+
+class RuntimeModelPolicy(StrictModel):
+    mode: Literal["runtime_default", "configured_model"]
+    model_ref: NonEmptyString | None = None
+
+    @model_validator(mode="after")
+    def validate_model_ref(self) -> "RuntimeModelPolicy":
+        if self.mode == "configured_model" and self.model_ref is None:
+            raise ValueError("runtime_model_policy.model_ref_required")
+        if self.mode == "runtime_default" and self.model_ref is not None:
+            raise ValueError("runtime_model_policy.model_ref_forbidden")
+        return self
+
+
+class ManualFallbackInstruction(StrictModel):
+    trace_id: Identifier
+    instruction: Annotated[str, Field(min_length=1, max_length=20_000)]
+    scope_hint: BrowserScopeHint
+
+
+class AgentStepConfiguration(StrictModel):
+    step_id: Identifier
+    output_refs: list[Identifier]
+    expected_effects: list[ExpectedEffect]
+    allowed_input_refs: list[Identifier]
+    allowed_secret_refs: list[Identifier]
+    allowed_asset_refs: list[Identifier]
+    page_aliases: dict[Identifier, PageSummary]
+    business_terms: list[Annotated[str, Field(min_length=1, max_length=256)]]
+    model_policy: RuntimeModelPolicy
+    timeout_seconds: Annotated[int, Field(ge=1, le=3600)]
+
+    @model_validator(mode="after")
+    def validate_unique_refs(self) -> "AgentStepConfiguration":
+        for field_name in (
+            "output_refs",
+            "allowed_input_refs",
+            "allowed_secret_refs",
+            "allowed_asset_refs",
+            "business_terms",
+        ):
+            values = getattr(self, field_name)
+            if len(values) != len(set(values)):
+                raise ValueError(f"agent_step.{field_name}_unique")
+        for key, page in self.page_aliases.items():
+            if key != page.page_ref:
+                raise ValueError("agent_step.page_alias_key_mismatch")
+        return self
+
+
+class CompilationConfiguration(StrictModel):
+    skill_definition: SkillDefinition
+    manual_fallbacks: dict[Identifier, ManualFallbackInstruction]
+    agent_steps: dict[Identifier, AgentStepConfiguration]
+
+    @model_validator(mode="after")
+    def validate_mapping_keys(self) -> "CompilationConfiguration":
+        for key, fallback in self.manual_fallbacks.items():
+            if key != fallback.trace_id:
+                raise ValueError("configuration.manual_fallback_key_mismatch")
+        for key, step in self.agent_steps.items():
+            if key != step.step_id:
+                raise ValueError("configuration.agent_step_key_mismatch")
+        return self
+
+
+class PlaywrightSegment(StrictModel):
+    mode: Literal["playwright"]
+    step_id: Identifier
+    ordinal: Annotated[int, Field(ge=1)]
+    trace_refs: Annotated[list[Identifier], Field(min_length=1)]
+    operations: Annotated[list[CoreTrace], Field(min_length=1)]
+    expected_outputs: list[OutputDefinition]
+    expected_effects: list[ExpectedEffect]
+
+    @model_validator(mode="after")
+    def validate_operation_refs(self) -> "PlaywrightSegment":
+        operation_refs = [operation.trace_id for operation in self.operations]
+        if operation_refs != self.trace_refs:
+            raise ValueError("compiled.playwright_trace_refs_mismatch")
+        return self
+
+
+class AgentSegment(StrictModel):
+    mode: Literal["agent"]
+    step_id: Identifier
+    ordinal: Annotated[int, Field(ge=1)]
+    instruction: Annotated[str, Field(min_length=1, max_length=20_000)]
+    scope_hint: BrowserScopeHint
+    output_refs: list[Identifier]
+    expected_effects: list[ExpectedEffect]
+    allowed_input_refs: list[Identifier]
+    allowed_secret_refs: list[Identifier]
+    allowed_asset_refs: list[Identifier]
+    page_aliases: dict[Identifier, PageSummary]
+    business_terms: list[Annotated[str, Field(min_length=1, max_length=256)]]
+    model_policy: RuntimeModelPolicy
+    timeout_seconds: Annotated[int, Field(ge=1, le=3600)]
+
+
+CompiledStep = Annotated[PlaywrightSegment | AgentSegment, Field(discriminator="mode")]
+
+
+class CompiledSkillPlan(StrictModel):
+    schema_version: Literal["compiled-skill/v0.1"]
+    skill_id: Identifier
+    source_hash: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    steps: list[CompiledStep]
+
+    @model_validator(mode="after")
+    def validate_ordinals(self) -> "CompiledSkillPlan":
+        expected = list(range(1, len(self.steps) + 1))
+        actual = [step.ordinal for step in self.steps]
+        if actual != expected:
+            raise ValueError("compiled.step_ordinals_not_contiguous")
         return self
 
 
@@ -549,8 +921,24 @@ class SourceContract(StrictModel):
     compiler_version: Annotated[str, Field(min_length=1, max_length=128)]
 
 
+class CompilationSourceContract(StrictModel):
+    schema_version: Literal["recording-compilation-source/v0.1"]
+    recording_timeline_schema_version: Literal["recording-timeline/v0.1"]
+    compiler_version: Annotated[str, Field(min_length=1, max_length=128)]
+    source_hash: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    item_count: Annotated[int, Field(ge=0)]
+    playwright_segment_count: Annotated[int, Field(ge=0)]
+    agent_segment_count: Annotated[int, Field(ge=0)]
+
+    @model_validator(mode="after")
+    def segment_counts_cover_items(self) -> "CompilationSourceContract":
+        if self.playwright_segment_count + self.agent_segment_count != self.item_count:
+            raise ValueError("manifest.segment_counts_mismatch")
+        return self
+
+
 class SkillManifest(StrictModel):
-    schema_version: Literal["skill-manifest/v0.1"]
+    schema_version: Literal["skill-manifest/v0.1", "skill-manifest/v0.2"]
     skill: SkillIdentity
     entrypoint: Annotated[
         str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_]*$")
@@ -561,11 +949,24 @@ class SkillManifest(StrictModel):
     asset_inputs: list[AssetInputDefinition]
     outputs: list[OutputDefinition]
     asset_outputs: list[AssetOutputDefinition]
-    source: SourceContract
+    source: SourceContract | CompilationSourceContract
+    agent_policies: dict[Identifier, AgentStepConfiguration] | None = None
 
     @model_validator(mode="after")
     def declarations_are_unique(self) -> "SkillManifest":
         _validate_skill_declaration_uniqueness(self)
+        return self
+
+    @model_validator(mode="after")
+    def source_matches_manifest_version(self) -> "SkillManifest":
+        if self.schema_version == "skill-manifest/v0.1":
+            if not isinstance(self.source, SourceContract) or self.agent_policies:
+                raise ValueError("manifest.v01_source_invalid")
+        elif (
+            not isinstance(self.source, CompilationSourceContract)
+            or self.agent_policies is None
+        ):
+            raise ValueError("manifest.v02_source_invalid")
         return self
 
 

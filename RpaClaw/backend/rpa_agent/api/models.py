@@ -15,7 +15,7 @@ from pydantic import (
     model_validator,
 )
 
-from ..contracts.models import BusinessVariableRef
+from ..contracts.models import BusinessVariableRef, ExpectedEffect, OutputDefinition
 
 
 Identifier = Annotated[
@@ -47,7 +47,14 @@ class ApiModel(BaseModel):
 
 
 class StartSessionRequest(ApiModel):
-    browser_session_ref: OpaqueHostRef
+    start_url: Annotated[str, Field(max_length=2048)] | None = None
+
+    @field_validator("start_url")
+    @classmethod
+    def validate_start_url(cls, value: str | None) -> str | None:
+        if value is not None and not value.startswith(("http://", "https://")):
+            raise ValueError("api.start_url_scheme_invalid")
+        return value
 
 
 class BrowserRuntimeScope(ApiModel):
@@ -58,7 +65,9 @@ class BrowserRuntimeScope(ApiModel):
 class StartSessionResponse(ApiModel):
     session_id: SessionId
     state: Literal["recording"]
-    main_scope: BrowserRuntimeScope
+    browser_session_ref: OpaqueHostRef
+    page_ref: Identifier
+    generation: Identifier
 
 
 class ManualReservationRequest(ApiModel):
@@ -104,7 +113,7 @@ class ManualEventRequest(ApiModel):
 
 class ManualInputRequest(ApiModel):
     input_id: Identifier
-    kind: Literal["click", "text", "paste"]
+    kind: Literal["click", "text", "paste", "navigate"]
     x: Annotated[float, Field(ge=0, le=100_000)] | None = None
     y: Annotated[float, Field(ge=0, le=100_000)] | None = None
     text: Annotated[str, Field(min_length=1, max_length=65_536)] | None = None
@@ -119,6 +128,8 @@ class ManualInputRequest(ApiModel):
         else:
             if self.text is None:
                 raise ValueError("manual_input.text_required")
+            if self.kind == "navigate" and not self.text.startswith(("http://", "https://")):
+                raise ValueError("manual_input.navigation_url_invalid")
             if self.x is not None or self.y is not None:
                 raise ValueError("manual_input.coordinates_forbidden")
         return self
@@ -126,26 +137,35 @@ class ManualInputRequest(ApiModel):
 
 class AgentInstructionRequest(ApiModel):
     instruction: Annotated[str, Field(min_length=1, max_length=20_000)]
+    model_id: OpaqueHostRef | None = None
     business_terms: Annotated[
         list[Annotated[str, Field(min_length=1, max_length=256)]],
         Field(max_length=64),
-    ]
+    ] = Field(default_factory=list)
     required_variable_refs: Annotated[
         list[BusinessVariableRef], Field(max_length=128)
-    ]
+    ] = Field(default_factory=list)
     allowed_inputs: Annotated[
-        dict[Identifier, Annotated[str, Field(min_length=1, max_length=1000)]],
+        dict[Identifier, JsonValue],
         Field(max_length=128),
-    ]
-    allowed_secret_names: Annotated[list[Identifier], Field(max_length=128)]
+    ] = Field(default_factory=dict)
+    allowed_secret_names: Annotated[
+        list[Identifier], Field(max_length=128)
+    ] = Field(default_factory=list)
     allowed_data_assets: Annotated[
-        dict[Identifier, Annotated[str, Field(min_length=1, max_length=1000)]],
+        dict[Identifier, JsonValue],
         Field(max_length=128),
-    ]
+    ] = Field(default_factory=dict)
     page_aliases: Annotated[
-        dict[Identifier, Annotated[str, Field(min_length=1, max_length=1000)]],
+        dict[Identifier, JsonValue],
         Field(max_length=64),
-    ]
+    ] = Field(default_factory=dict)
+    declared_outputs: Annotated[
+        list[OutputDefinition], Field(max_length=128)
+    ] = Field(default_factory=list)
+    expected_effects: Annotated[
+        list[ExpectedEffect], Field(max_length=64)
+    ] = Field(default_factory=list)
 
     @field_validator("required_variable_refs")
     @classmethod
@@ -153,6 +173,12 @@ class AgentInstructionRequest(ApiModel):
         if any(part.isdigit() for ref in value for part in ref.split(".")):
             raise ValueError("api.required_variable_ref_numeric_segment")
         return value
+
+
+class AgentInstructionAcceptedResponse(ApiModel):
+    step_id: Identifier
+    ordinal: Annotated[int, Field(ge=1)]
+    execution_status: Literal["queued", "running", "succeeded", "failed", "cancelled"]
 
 
 class TestRunRequest(ApiModel):

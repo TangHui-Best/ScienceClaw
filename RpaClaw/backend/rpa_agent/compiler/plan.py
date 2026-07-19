@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from ..contracts import CoreTraceTimeline, SkillDefinition, SkillManifest
+from ..contracts import AgentStepConfiguration, CoreTraceTimeline, SkillDefinition, SkillManifest
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,6 +22,7 @@ class BrowserCompilePlan:
     definition: SkillDefinition
     manifest: SkillManifest
     agent_required_paths: dict[str, dict[str, tuple[str, ...]]]
+    agent_policies: dict[str, AgentStepConfiguration] = field(default_factory=dict)
 
 
 def sort_issues(issues: list[CompileIssue]) -> tuple[CompileIssue, ...]:

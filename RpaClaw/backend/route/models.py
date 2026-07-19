@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 import time
 import uuid
 from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage
 
 from backend.user.dependencies import get_current_user, require_user, User
@@ -34,6 +35,15 @@ async def verify_model_connection(provider: str, base_url: str | None, api_key: 
                 model=model_name,
                 google_api_key=api_key,
                 max_output_tokens=5,
+                timeout=10,
+            )
+        elif provider == "anthropic":
+            logger.info(f"[verify_model] Using ChatAnthropic, base_url={base_url or '(default)'}")
+            chat = ChatAnthropic(
+                model=model_name,
+                api_key=api_key,
+                base_url=base_url if base_url else None,
+                max_tokens=5,
                 timeout=10,
             )
         else:

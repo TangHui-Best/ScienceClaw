@@ -2,15 +2,51 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import sys
+from types import ModuleType
 
 import pytest
 
+from rpa_agent.host import default_services
 from rpa_agent.api import TestRunRequest as ApiTestRunRequest
 from rpa_agent.contracts import SkillDefinition
 from rpa_agent.host.default_services import publish_compiled_skill, run_compiled_skill
 
 
 REQUIRED = {"SKILL.md", "skill.manifest.json", "skill.py", "browser_segment.py"}
+
+
+def test_generated_runtime_imports_are_aliased_without_duplicate_class_identity(
+    monkeypatch,
+) -> None:
+    prefix = "backend_topology.rpa_agent"
+    source_modules = {
+        prefix: ModuleType(prefix),
+        f"{prefix}.runtime": ModuleType(f"{prefix}.runtime"),
+        f"{prefix}.runtime.results": ModuleType(f"{prefix}.runtime.results"),
+    }
+    aliases = {
+        "rpa_agent": source_modules[prefix],
+        "rpa_agent.runtime": source_modules[f"{prefix}.runtime"],
+        "rpa_agent.runtime.results": source_modules[f"{prefix}.runtime.results"],
+    }
+    originals = {name: sys.modules.get(name) for name in aliases}
+    monkeypatch.setattr(default_services, "__package__", f"{prefix}.host")
+    try:
+        for name, module in source_modules.items():
+            sys.modules[name] = module
+        for name in aliases:
+            sys.modules.pop(name, None)
+
+        default_services._ensure_public_runtime_aliases()
+
+        assert {name: sys.modules[name] for name in aliases} == aliases
+    finally:
+        for name in (*aliases, *source_modules):
+            sys.modules.pop(name, None)
+        for name, module in originals.items():
+            if module is not None:
+                sys.modules[name] = module
 
 
 def _definition() -> SkillDefinition:

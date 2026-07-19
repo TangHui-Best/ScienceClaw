@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 import asyncio
+import json
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -26,6 +27,7 @@ from backend.rpa_agent.api.models import (
 )
 from backend.rpa_agent.creation import ControlMode, SkillCreationSession
 from backend.rpa_agent.host import (
+    BrowserHostSession,
     BrowserSession,
     HostBrowserEvent,
     PlaywrightBrowserSessionPort,
@@ -133,7 +135,7 @@ def _services(
 
     async def browser_provider(owner_id: str, browser_session_ref: str) -> FakeBrowserPort:
         assert owner_id == "user-1"
-        assert browser_session_ref == expected_browser_ref
+        assert browser_session_ref.startswith("bhs_")
         return port
 
     async def agent_executor(session: object, request: object) -> RecordingRoundReport:
@@ -173,12 +175,14 @@ def _client(services: RpaAgentApiServices) -> TestClient:
 def _start(client: TestClient) -> str:
     response = client.post(
         "/api/v1/rpa-agent/sessions",
-        json={"browser_session_ref": "browser-workbench-1"},
+        json={},
     )
     assert response.status_code == 201, response.text
     payload = response.json()
     assert payload["session_id"].startswith("rca_")
     assert payload["state"] == "recording"
+    assert payload["browser_session_ref"].startswith("bhs_recording_")
+    assert payload["generation"].startswith("gen_")
     return payload["session_id"]
 
 
@@ -259,14 +263,14 @@ def test_atomic_manual_input_endpoint_authors_scope_locator_and_candidate(tmp_pa
         assert response.status_code == 200, response.text
         payload = response.json()
         assert payload["input_id"] == "ui_click_1"
-        assert payload["candidate_id"].startswith("manual_")
-        assert payload["candidate_ids"] == [payload["candidate_id"]]
+        assert payload["draft_id"].startswith("draft_")
+        assert payload["capture_status"] == "captured"
         assert port.manual_click_count == 1
         projection = client.get(
             f"/api/v1/rpa-agent/sessions/{session_id}/projection"
-        ).json()["steps"]
-        assert [(row["status"], row["action_kind"]) for row in projection] == [
-            ("accepted", "click")
+        ).json()["items"]
+        assert [(row["kind"], row["capture_status"]) for row in projection] == [
+            ("manual", "captured")
         ]
 
 
@@ -340,6 +344,7 @@ def test_full_api_journey_reuses_compiled_artifact_before_save(tmp_path: Path) -
 
         agent = client.post(
             f"/api/v1/rpa-agent/sessions/{session_id}/agent-instructions",
+            headers={"Idempotency-Key": "journey-agent-key-001"},
             json={
                 "instruction": "观察查询结果后结束",
                 "business_terms": ["采购订单"],
@@ -350,14 +355,14 @@ def test_full_api_journey_reuses_compiled_artifact_before_save(tmp_path: Path) -
                 "page_aliases": {"main": "采购订单查询页"},
             },
         )
-        assert agent.status_code == 200, agent.text
-        assert agent.json()["actual_action_count"] == 1
+        assert agent.status_code == 202, agent.text
+        assert agent.json()["execution_status"] == "queued"
 
         projection = client.get(
             f"/api/v1/rpa-agent/sessions/{session_id}/projection"
         )
         assert projection.status_code == 200
-        assert projection.json()["steps"][0]["status"] == "accepted"
+        assert projection.json()["items"][0]["kind"] == "manual"
 
         stopped = client.post(f"/api/v1/rpa-agent/sessions/{session_id}/stop")
         assert stopped.status_code == 200, stopped.text
@@ -387,6 +392,16 @@ def test_full_api_journey_reuses_compiled_artifact_before_save(tmp_path: Path) -
             "SKILL.md", "browser_segment.py", "skill.manifest.json", "skill.py"
         ]
         artifact_hash = compiled.json()["artifact_hash"]
+        manifest = json.loads(
+            (tmp_path / "artifacts" / session_id / "skill.manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert manifest["schema_version"] == "skill-manifest/v0.2"
+        assert manifest["source"]["source_hash"] == compiled.json()["source_hash"]
+        assert manifest["source"]["item_count"] == 2
+        assert manifest["source"]["playwright_segment_count"] == 1
+        assert manifest["source"]["agent_segment_count"] == 1
 
         tested = client.post(
             f"/api/v1/rpa-agent/sessions/{session_id}/test-run",
@@ -396,6 +411,18 @@ def test_full_api_journey_reuses_compiled_artifact_before_save(tmp_path: Path) -
         assert tested.json()["state"] == "tested"
         assert tested.json()["artifact_hash"] == artifact_hash
         assert tested.json()["run_result"]["status"] == "succeeded"
+        first_test_browser_ref = tested.json()["test_session"]["browser_session_ref"]
+
+        retested = client.post(
+            f"/api/v1/rpa-agent/sessions/{session_id}/test-run",
+            json={"inputs": {}, "secrets": {}, "data_assets": {}},
+        )
+        assert retested.status_code == 200, retested.text
+        assert retested.json()["state"] == "tested"
+        assert (
+            retested.json()["test_session"]["browser_session_ref"]
+            != first_test_browser_ref
+        )
 
         saved = client.post(f"/api/v1/rpa-agent/sessions/{session_id}/save")
         assert saved.status_code == 200, saved.text
@@ -416,20 +443,18 @@ def test_start_returns_fake_provider_main_scope_for_manual_round_trip(
     with _client(services) as client:
         started = client.post(
             "/api/v1/rpa-agent/sessions",
-            json={"browser_session_ref": "browser-workbench-1"},
+            json={},
         )
         assert started.status_code == 201, started.text
         payload = started.json()
-        assert payload["main_scope"] == {
-            "page_runtime_ref": "runtime_main",
-            "frame_runtime_ref": "frame_main",
-        }
+        assert payload["page_ref"] == "runtime_main"
         reserved = client.post(
             f"/api/v1/rpa-agent/sessions/{payload['session_id']}/manual-reservations",
-            json={
-                "candidate_id": "manual_round_trip",
-                **payload["main_scope"],
-            },
+                json={
+                    "candidate_id": "manual_round_trip",
+                    "page_runtime_ref": "runtime_main",
+                    "frame_runtime_ref": "frame_main",
+                },
         )
         assert reserved.status_code == 201, reserved.text
 
@@ -484,6 +509,7 @@ def test_agent_is_explicitly_unavailable_without_injected_executor(tmp_path: Pat
         session_id = _start(client)
         response = client.post(
             f"/api/v1/rpa-agent/sessions/{session_id}/agent-instructions",
+            headers={"Idempotency-Key": "unavailable-agent-001"},
             json={
                 "instruction": "提取订单号",
                 "business_terms": [],
@@ -518,7 +544,7 @@ def test_start_logs_browser_host_failure_without_exception_details(
     with _client(services) as client:
         response = client.post(
             "/api/v1/rpa-agent/sessions",
-            json={"browser_session_ref": "7browser"},
+            json={},
         )
 
     assert response.status_code == 503
@@ -538,7 +564,7 @@ def test_start_accepts_an_opaque_host_ref_that_begins_with_a_digit(
     with _client(services) as client:
         response = client.post(
             "/api/v1/rpa-agent/sessions",
-            json={"browser_session_ref": browser_ref},
+            json={},
         )
     assert response.status_code == 201, response.text
 
@@ -579,6 +605,7 @@ def test_agent_switch_settles_an_open_manual_fill_with_its_exact_scope(
 
         agent = client.post(
             f"/api/v1/rpa-agent/sessions/{session_id}/agent-instructions",
+            headers={"Idempotency-Key": "open-fill-agent-001"},
             json={
                 "instruction": "继续处理当前订单",
                 "business_terms": [],
@@ -589,13 +616,13 @@ def test_agent_switch_settles_an_open_manual_fill_with_its_exact_scope(
                 "page_aliases": {},
             },
         )
-        assert agent.status_code == 200, agent.text
+        assert agent.status_code == 202, agent.text
         projection = client.get(
             f"/api/v1/rpa-agent/sessions/{session_id}/projection"
         )
         assert projection.status_code == 200, projection.text
-        assert [step["status"] for step in projection.json()["steps"]] == [
-            "accepted"
+        assert [step["kind"] for step in projection.json()["items"]] == [
+            "manual", "ai_instruction"
         ]
 
 
@@ -667,9 +694,9 @@ def test_popup_fact_locks_the_explicit_reservation_and_projects_one_effect(tmp_p
         assert response.status_code == 200, response.text
         steps = client.get(
             f"/api/v1/rpa-agent/sessions/{session_id}/projection"
-        ).json()["steps"]
-        assert [step["status"] for step in steps] == ["accepted", "effect"]
-        assert steps[1]["effect_kind"] == "new_page"
+        ).json()["items"]
+        assert len(steps) == 1
+        assert steps[0]["kind"] == "manual"
 
 
 def test_reservation_token_is_session_and_scope_bound(tmp_path: Path) -> None:
@@ -1203,7 +1230,7 @@ def test_stop_waits_for_a_prelocked_download_before_building_the_draft(
         ) as client:
             started = await client.post(
                 "/api/v1/rpa-agent/sessions",
-                json={"browser_session_ref": "browser-workbench-1"},
+                json={},
             )
             payload = started.json()
             token = (
@@ -1211,7 +1238,8 @@ def test_stop_waits_for_a_prelocked_download_before_building_the_draft(
                     f"/api/v1/rpa-agent/sessions/{payload['session_id']}/manual-reservations",
                     json={
                         "candidate_id": "manual_stop_download",
-                        **payload["main_scope"],
+                        "page_runtime_ref": "runtime_main",
+                        "frame_runtime_ref": "frame_main",
                     },
                 )
             ).json()["reservation_token"]
@@ -1233,7 +1261,8 @@ def test_stop_waits_for_a_prelocked_download_before_building_the_draft(
                     "reservation_token": token,
                     "kind": "click",
                     "interaction_kind": "click",
-                    **payload["main_scope"],
+                    "page_runtime_ref": "runtime_main",
+                    "frame_runtime_ref": "frame_main",
                     "target_key": "download-orders",
                     "target_name": "下载订单",
                     "target_locators": [
@@ -1303,7 +1332,7 @@ def test_stop_drain_failure_keeps_recording_attached_and_retryable(
         ) as client:
             started = await client.post(
                 "/api/v1/rpa-agent/sessions",
-                json={"browser_session_ref": "browser-workbench-1"},
+                json={},
             )
             payload = started.json()
             token = (
@@ -1311,7 +1340,8 @@ def test_stop_drain_failure_keeps_recording_attached_and_retryable(
                     f"/api/v1/rpa-agent/sessions/{payload['session_id']}/manual-reservations",
                     json={
                         "candidate_id": "manual_retry_download",
-                        **payload["main_scope"],
+                        "page_runtime_ref": "runtime_main",
+                        "frame_runtime_ref": "frame_main",
                     },
                 )
             ).json()["reservation_token"]
@@ -1333,7 +1363,8 @@ def test_stop_drain_failure_keeps_recording_attached_and_retryable(
                     "reservation_token": token,
                     "kind": "click",
                     "interaction_kind": "click",
-                    **payload["main_scope"],
+                    "page_runtime_ref": "runtime_main",
+                    "frame_runtime_ref": "frame_main",
                     "target_key": "download-orders",
                     "target_name": "下载订单",
                     "target_locators": [
@@ -1540,6 +1571,7 @@ def test_agent_instruction_route_accepts_business_variable_path(tmp_path: Path) 
         session_id = _start(client)
         response = client.post(
             f"/api/v1/rpa-agent/sessions/{session_id}/agent-instructions",
+            headers={"Idempotency-Key": "business-variable-001"},
             json={
                 "instruction": "提取采购订单字段",
                 "business_terms": ["采购订单"],
@@ -1550,8 +1582,8 @@ def test_agent_instruction_route_accepts_business_variable_path(tmp_path: Path) 
                 "page_aliases": {},
             },
         )
-        assert response.status_code == 200, response.text
-        assert response.json()["actual_action_count"] == 1
+        assert response.status_code == 202, response.text
+        assert response.json()["execution_status"] == "queued"
 
 
 def test_test_run_rejects_tampered_compiled_files_before_runtime(
@@ -1906,19 +1938,17 @@ def test_default_provider_resolves_popup_main_and_named_iframe_without_guessing(
         ) as client:
             started = await client.post(
                 "/api/v1/rpa-agent/sessions",
-                json={"browser_session_ref": "7browser"},
+                json={},
             )
             assert started.status_code == 201, started.text
             payload = started.json()
-            assert payload["main_scope"] == {
-                "page_runtime_ref": captured_ports[0].main_page_runtime_ref,
-                "frame_runtime_ref": captured_ports[0].main_frame_runtime_ref,
-            }
+            assert payload["page_ref"] == captured_ports[0].main_page_runtime_ref
             reserved = await client.post(
                 f"/api/v1/rpa-agent/sessions/{payload['session_id']}/manual-reservations",
                 json={
                     "candidate_id": "manual_default_round_trip",
-                    **payload["main_scope"],
+                    "page_runtime_ref": captured_ports[0].main_page_runtime_ref,
+                    "frame_runtime_ref": captured_ports[0].main_frame_runtime_ref,
                 },
             )
             assert reserved.status_code == 201, reserved.text
@@ -2051,22 +2081,344 @@ def test_agent_cancellation_preserves_identity_and_restores_human_control(tmp_pa
         ) as client:
             created = await client.post(
                 "/api/v1/rpa-agent/sessions",
-                json={"browser_session_ref": "browser-workbench-1"},
+                json={},
             )
             session_id = created.json()["session_id"]
-            with pytest.raises(asyncio.CancelledError):
-                await client.post(
-                    f"/api/v1/rpa-agent/sessions/{session_id}/agent-instructions",
-                    json={
-                        "instruction": "取消本轮",
-                        "business_terms": [], "required_variable_refs": [],
-                        "allowed_inputs": {}, "allowed_secret_names": [],
-                        "allowed_data_assets": {}, "page_aliases": {},
-                    },
+            admitted = await client.post(
+                f"/api/v1/rpa-agent/sessions/{session_id}/agent-instructions",
+                headers={"Idempotency-Key": "cancel-agent-key-001"},
+                json={
+                    "instruction": "取消本轮",
+                    "business_terms": [], "required_variable_refs": [],
+                    "allowed_inputs": {}, "allowed_secret_names": [],
+                    "allowed_data_assets": {}, "page_aliases": {},
+                },
+            )
+            assert admitted.status_code == 202
+            for _ in range(100):
+                projection = await client.get(
+                    f"/api/v1/rpa-agent/sessions/{session_id}/projection"
                 )
+                if projection.json()["items"][0]["execution_status"] == "cancelled":
+                    break
+                await asyncio.sleep(0.01)
+            assert projection.json()["items"][0]["execution_status"] == "cancelled"
             assert services.store is not None
             async with services.store.use(session_id, owner_id="user-1") as hosted:
                 assert hosted.browser.creation.control_mode.value == "human"
                 assert hosted.state.value == "recording"
 
     asyncio.run(scenario())
+
+
+def test_agent_admission_is_immediate_idempotent_and_does_not_block_projection(
+    tmp_path: Path,
+) -> None:
+    services, _, _ = _services(tmp_path)
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocking_agent(_session: object, _request: object) -> object:
+        started.set()
+        await release.wait()
+        return object()
+
+    services.agent_executor = blocking_agent
+    app = FastAPI()
+    app.include_router(build_router(services), prefix="/api/v1/rpa-agent")
+    app.dependency_overrides[require_user] = lambda: User(
+        id="user-1", username="tester", role="user"
+    )
+
+    async def scenario() -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/api/v1/rpa-agent/sessions",
+                json={},
+            )
+            session_id = created.json()["session_id"]
+            url = f"/api/v1/rpa-agent/sessions/{session_id}/agent-instructions"
+            request = {"instruction": "打开和 skill 最相关的项目"}
+            headers = {"Idempotency-Key": "agent-key-0000001"}
+
+            admitted = await client.post(url, json=request, headers=headers)
+            assert admitted.status_code == 202, admitted.text
+            step_id = admitted.json()["step_id"]
+            assert admitted.json()["execution_status"] == "queued"
+
+            await asyncio.wait_for(started.wait(), timeout=1)
+            projection = await asyncio.wait_for(
+                client.get(f"/api/v1/rpa-agent/sessions/{session_id}/projection"),
+                timeout=1,
+            )
+            assert projection.status_code == 200, projection.text
+            assert projection.json()["items"] == [
+                {
+                    "id": step_id,
+                    "kind": "ai_instruction",
+                    "ordinal": 1,
+                    "title": request["instruction"],
+                    "capture_status": "observing",
+                    "execution_status": "running",
+                    "replay_status": "pending",
+                    "compile_mode": None,
+                    "observations": [],
+                }
+            ]
+
+            replay = await client.post(url, json=request, headers=headers)
+            assert replay.status_code == 202
+            assert replay.json()["step_id"] == step_id
+            assert replay.json()["execution_status"] == "running"
+
+            conflict = await client.post(
+                url,
+                json={"instruction": "另一条指令"},
+                headers=headers,
+            )
+            assert conflict.status_code == 409
+            assert conflict.json()["detail"]["code"] == "rpa_agent.idempotency_conflict"
+
+            busy = await client.post(
+                url,
+                json=request,
+                headers={"Idempotency-Key": "agent-key-0000002"},
+            )
+            assert busy.status_code == 409
+            assert busy.json()["detail"]["code"] == "rpa_agent.agent_instruction_in_progress"
+
+            release.set()
+            for _ in range(100):
+                projection = await client.get(
+                    f"/api/v1/rpa-agent/sessions/{session_id}/projection"
+                )
+                if projection.json()["items"][0]["execution_status"] == "succeeded":
+                    break
+                await asyncio.sleep(0.01)
+            assert projection.json()["items"][0]["execution_status"] == "succeeded"
+            assert projection.json()["items"][0]["id"] == step_id
+
+    asyncio.run(scenario())
+
+
+def test_stop_cancels_active_agent_before_freezing_timeline(tmp_path: Path) -> None:
+    services, _, _ = _services(tmp_path)
+    started = asyncio.Event()
+
+    async def blocking_agent(_session: object, _request: object) -> object:
+        started.set()
+        await asyncio.Event().wait()
+
+    services.agent_executor = blocking_agent
+    app = FastAPI()
+    app.include_router(build_router(services), prefix="/api/v1/rpa-agent")
+    app.dependency_overrides[require_user] = lambda: User(
+        id="user-1", username="tester", role="user"
+    )
+
+    async def scenario() -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            created = await client.post("/api/v1/rpa-agent/sessions", json={})
+            session_id = created.json()["session_id"]
+            admitted = await client.post(
+                f"/api/v1/rpa-agent/sessions/{session_id}/agent-instructions",
+                headers={"Idempotency-Key": "stop-agent-key-0001"},
+                json={"instruction": "打开和 skill 最相关的项目"},
+            )
+            assert admitted.status_code == 202
+            step_id = admitted.json()["step_id"]
+            await asyncio.wait_for(started.wait(), timeout=1)
+
+            stopped = await asyncio.wait_for(
+                client.post(f"/api/v1/rpa-agent/sessions/{session_id}/stop"),
+                timeout=1,
+            )
+            assert stopped.status_code == 200, stopped.text
+
+            projection = await client.get(
+                f"/api/v1/rpa-agent/sessions/{session_id}/projection"
+            )
+            assert projection.status_code == 200
+            assert projection.json()["recording_state"] == "stopped"
+            assert projection.json()["items"][0]["id"] == step_id
+            assert projection.json()["items"][0]["execution_status"] == "cancelled"
+
+            rejected = await client.post(
+                f"/api/v1/rpa-agent/sessions/{session_id}/agent-instructions",
+                headers={"Idempotency-Key": "stop-agent-key-0002"},
+                json={"instruction": "获取 star 数"},
+            )
+            assert rejected.status_code == 409
+
+    asyncio.run(scenario())
+
+
+def test_manual_input_projects_draft_before_browser_action_finishes(tmp_path: Path) -> None:
+    services, port, _ = _services(tmp_path)
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocking_click(_target: object) -> None:
+        started.set()
+        await release.wait()
+        port.manual_click_count += 1
+
+    port.click = blocking_click  # type: ignore[method-assign]
+    app = FastAPI()
+    app.include_router(build_router(services), prefix="/api/v1/rpa-agent")
+    app.dependency_overrides[require_user] = lambda: User(
+        id="user-1", username="tester", role="user"
+    )
+
+    async def scenario() -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/api/v1/rpa-agent/sessions",
+                json={},
+            )
+            session_id = created.json()["session_id"]
+            url = f"/api/v1/rpa-agent/sessions/{session_id}/manual-inputs"
+            payload = {"input_id": "manual-click-0001", "kind": "click", "x": 10, "y": 20}
+            pending = asyncio.create_task(client.post(url, json=payload))
+
+            await asyncio.wait_for(started.wait(), timeout=1)
+            projection = await asyncio.wait_for(
+                client.get(f"/api/v1/rpa-agent/sessions/{session_id}/projection"),
+                timeout=1,
+            )
+            draft = projection.json()["items"][0]
+            assert draft["kind"] == "manual"
+            assert draft["capture_status"] == "capturing"
+            assert draft["execution_status"] == "running"
+
+            replay = await client.post(url, json=payload)
+            assert replay.status_code == 200
+            assert replay.json()["draft_id"] == draft["id"]
+            assert replay.json()["capture_status"] == "capturing"
+
+            release.set()
+            completed = await asyncio.wait_for(pending, timeout=1)
+            assert completed.status_code == 200, completed.text
+            assert completed.json() == {
+                "input_id": payload["input_id"],
+                "draft_id": draft["id"],
+                "capture_status": "captured",
+            }
+            projection = await client.get(
+                f"/api/v1/rpa-agent/sessions/{session_id}/projection"
+            )
+            item = projection.json()["items"][0]
+            assert item["id"].startswith("trace_")
+            assert item["kind"] == "manual"
+            assert item["capture_status"] == "captured"
+            assert item["execution_status"] == "succeeded"
+
+    asyncio.run(scenario())
+
+
+def test_manual_navigation_is_an_immediate_top_level_core_trace(tmp_path: Path) -> None:
+    services, port, _ = _services(tmp_path)
+    visited: list[str] = []
+
+    class Page:
+        async def goto(self, url: str) -> None:
+            visited.append(url)
+
+    port.main_page = Page()
+    with _client(services) as client:
+        session_id = _start(client)
+        response = client.post(
+            f"/api/v1/rpa-agent/sessions/{session_id}/manual-inputs",
+            json={
+                "input_id": "manual-navigation-0001",
+                "kind": "navigate",
+                "text": "https://github.com/trending",
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["capture_status"] == "captured"
+        assert visited == ["https://github.com/trending"]
+
+        projection = client.get(
+            f"/api/v1/rpa-agent/sessions/{session_id}/projection"
+        ).json()
+        assert len(projection["items"]) == 1
+        assert projection["items"][0]["kind"] == "manual"
+        assert projection["items"][0]["capture_status"] == "captured"
+        assert projection["items"][0]["execution_status"] == "succeeded"
+        assert projection["items"][0]["title"] == "navigate"
+
+
+def test_recording_test_and_rerecord_receive_distinct_host_identity_and_page(
+    tmp_path: Path,
+) -> None:
+    class Factory:
+        def __init__(self) -> None:
+            self.hosts: list[BrowserHostSession] = []
+
+        async def _create(self, kind: str) -> BrowserHostSession:
+            port = FakeBrowserPort()
+            host = BrowserHostSession(
+                browser_session_ref=f"bhs_{kind}_{len(self.hosts) + 1}",
+                page_ref=f"page_{kind}_{len(self.hosts) + 1}",
+                target_id=f"target_{kind}_{len(self.hosts) + 1}",
+                generation=f"gen_{kind}_{len(self.hosts) + 1}",
+                port=port,
+            )
+            self.hosts.append(host)
+            return host
+
+        async def create_recording(self, *, owner_id: str) -> BrowserHostSession:
+            assert owner_id == "user-1"
+            return await self._create("recording")
+
+        async def create_test(self, *, owner_id: str, skill_id: str) -> BrowserHostSession:
+            assert owner_id == "user-1" and skill_id.startswith("skill_")
+            return await self._create("test")
+
+        async def create_run(self, *, owner_id: str, skill_id: str) -> BrowserHostSession:
+            assert owner_id == "user-1" and skill_id
+            return await self._create("run")
+
+    factory = Factory()
+    runtime_pages: list[object] = []
+
+    async def runtime_runner(session: object, _request: object) -> dict[str, Any]:
+        runtime_pages.append(getattr(getattr(session, "browser"), "main_page"))
+        return {"status": "succeeded", "outputs": {}}
+
+    services = RpaAgentApiServices(
+        artifact_root=tmp_path / "artifacts",
+        browser_factory=factory,
+        agent_executor=lambda *_args: None,  # type: ignore[arg-type]
+        runtime_runner=runtime_runner,
+        publisher=FakePublisher(),
+    )
+    with _client(services) as client:
+        session_id = _start(client)
+        _compile_minimal_skill(client, session_id)
+        tested = client.post(
+            f"/api/v1/rpa-agent/sessions/{session_id}/test-run",
+            json={"inputs": {}, "secrets": {}, "data_assets": {}},
+        )
+        assert tested.status_code == 200, tested.text
+        rerecorded = client.post(
+            f"/api/v1/rpa-agent/sessions/{session_id}/rerecord", json={}
+        )
+        assert rerecorded.status_code == 201, rerecorded.text
+
+    assert [host.browser_session_ref for host in factory.hosts] == [
+        "bhs_recording_1",
+        "bhs_test_2",
+        "bhs_recording_3",
+    ]
+    assert len({id(host.port.main_page) for host in factory.hosts}) == 3
+    assert runtime_pages == [factory.hosts[1].port.main_page]
+    assert rerecorded.json()["session_id"] != session_id
+    assert rerecorded.json()["generation"] == "gen_recording_3"

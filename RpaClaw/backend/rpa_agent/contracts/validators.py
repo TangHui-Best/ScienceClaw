@@ -241,6 +241,10 @@ def find_architecture_violations(package_root: Path) -> list[str]:
     compiler_allowed_contracts = {
         "CoreTrace", "CoreTraceTimeline", "SkillDefinition", "SkillManifest",
         "validate_trace", "validate_timeline", "validate_timeline_payload",
+        "AIInstructionStep", "AgentSegment", "BrowserScopeHint",
+        "CompilationConfiguration", "CompiledSkillPlan", "PlaywrightSegment",
+        "RecordingTimeline", "ReplayAssessment",
+        "AgentStepConfiguration", "CompilationSourceContract",
     }
 
     for path in sorted(package_root.rglob("*.py")):

@@ -12,7 +12,8 @@ vi.mock('@/api/rpaAgent', () => ({
   saveRpaAgentSkill: (...args: unknown[]) => save(...args),
   compileRpaAgentSkill: (...args: unknown[]) => compile(...args),
 }));
-const flush = async () => { await Promise.resolve(); await Promise.resolve(); await nextTick(); };
+vi.mock('@/components/SandboxPreview.vue', () => ({ default: { props: ['sessionId'], template: '<div data-testid="test-browser">{{ sessionId }}</div>' } }));
+const flush = async () => { for (let index = 0; index < 6; index += 1) await Promise.resolve(); await nextTick(); };
 
 describe('TestPage compiled artifact replay', () => {
   beforeEach(() => {

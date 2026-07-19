@@ -174,6 +174,11 @@ class VariableStore:
             result[self._declared_outputs[ref]] = self.require(ref)
         return result
 
+    def snapshot(self) -> dict[str, object]:
+        """Return all non-sensitive values produced by earlier steps."""
+
+        return _clone_value(self._roots)
+
 
 def _parts(ref: str) -> list[str]:
     parts = ref.split(".")

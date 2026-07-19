@@ -26,12 +26,23 @@ class AgentExecutor:
         instruction: str,
         inputs: Mapping[str, object],
         output_names: tuple[str, ...],
+        asset_output_refs: Mapping[str, str] | None = None,
         required_paths: Mapping[str, tuple[str, ...]],
+        variables: Mapping[str, object] | None = None,
+        sensitive_data: Mapping[str, ResolvedSecret] | None = None,
+        data_assets: Mapping[str, object] | None = None,
+        step_id: str = "legacy_agent_step",
+        scope_hint: Mapping[str, object] | None = None,
+        expected_effects: tuple[Mapping[str, object], ...] = (),
+        model_policy: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
         if self._backend is None:
             raise AgentExecutionError("agent.unavailable", "当前宿主未配置 AgentExecutor")
         if _contains_secret(inputs):
             raise AgentExecutionError("agent.secret_input_forbidden", "Secret 不得进入 Agent 上下文")
+        secrets = dict(sensitive_data or {})
+        if any(not isinstance(value, ResolvedSecret) for value in secrets.values()):
+            raise AgentExecutionError("agent.sensitive_data_invalid", "Secret 必须由受控解析器提供")
         try:
             outputs = await self._backend(
                 scope=scope,
@@ -39,7 +50,15 @@ class AgentExecutor:
                 instruction=instruction,
                 inputs=dict(inputs),
                 output_names=tuple(output_names),
+                asset_output_refs=dict(asset_output_refs or {}),
                 required_paths={key: tuple(value) for key, value in required_paths.items()},
+                variables=dict(variables or {}),
+                sensitive_data=secrets,
+                data_assets=dict(data_assets or {}),
+                step_id=step_id,
+                scope_hint=dict(scope_hint or {}),
+                expected_effects=tuple(dict(item) for item in expected_effects),
+                model_policy=dict(model_policy or {"mode": "runtime_default", "model_ref": None}),
             )
         except Exception as exc:
             raise AgentExecutionError("agent.execution_failed", "Agent Action 执行失败") from exc

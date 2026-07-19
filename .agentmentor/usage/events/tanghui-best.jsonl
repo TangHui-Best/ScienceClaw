@@ -1,2 +1,12 @@
 {"ts":"2026-07-19T17:25:20Z","doc":"docs/features/F028-rpa-recording-intent-first-dual-mode-compilation.md","doc_type":"feature","task":"编写 F028 零背景可实施架构规格","impact":"shaped_change_narrative"}
 {"ts":"2026-07-19T17:27:51Z","doc":"docs/decisions/ADR-007-rpa-recording-intent-first-dual-mode-compilation.md","doc_type":"adr","task":"编写 F028 零背景可实施架构规格","impact":"shaped_change_narrative"}
+{"ts":"2026-07-19T17:44:57Z","doc":"docs/features/F028-rpa-recording-intent-first-dual-mode-compilation.md","doc_type":"feature","task":"F028意图优先录制与双模式编译","impact":"changed_scope"}
+{"ts":"2026-07-19T17:44:58Z","doc":"docs/decisions/ADR-007-rpa-recording-intent-first-dual-mode-compilation.md","doc_type":"adr","task":"F028意图优先录制与双模式编译","impact":"changed_design"}
+{"ts":"2026-07-19T17:44:59Z","doc":"docs/evidence/EV-034-f028-implementation-spec-cold-start-review.md","doc_type":"evidence","task":"F028意图优先录制与双模式编译","impact":"changed_verification_gate"}
+{"ts":"2026-07-19T17:44:59Z","doc":"AGENTS.md","doc_type":"agents","task":"F028意图优先录制与双模式编译","impact":"changed_verification_gate"}
+{"ts":"2026-07-19T17:45:00Z","doc":"docs/lessons/LL-001-harness-feature-evidence-closeout-miss.md","doc_type":"lesson","task":"F028意图优先录制与双模式编译","impact":"changed_verification_gate"}
+{"ts":"2026-07-19T17:45:01Z","doc":"docs/decisions/ADR-004-rpa-core-owns-recording-facts-harness-adapts-only.md","doc_type":"adr","task":"F028意图优先录制与双模式编译","impact":"changed_design"}
+{"ts":"2026-07-19T17:45:02Z","doc":"docs/lessons/LL-002-harness-must-not-define-rpa-core-facts.md","doc_type":"lesson","task":"F028意图优先录制与双模式编译","impact":"prevented_repeat_failure"}
+{"ts":"2026-07-19T17:45:03Z","doc":"docs/lessons/LL-003-rpa-host-ui-regression-contract-e2e.md","doc_type":"lesson","task":"F028意图优先录制与双模式编译","impact":"changed_verification_gate"}
+{"ts":"2026-07-19T22:36:53Z","doc":"docs/features/F028-rpa-recording-intent-first-dual-mode-compilation.md","doc_type":"feature","task":"F028 intent-first dual-mode implementation and blocked Live UI handoff","impact":"shaped_change_narrative"}
+{"ts":"2026-07-19T22:36:53Z","doc":"docs/evidence/EV-035-f028-implementation-and-live-ui-blocker.md","doc_type":"evidence","task":"F028 intent-first dual-mode implementation and blocked Live UI handoff","impact":"shaped_change_narrative"}

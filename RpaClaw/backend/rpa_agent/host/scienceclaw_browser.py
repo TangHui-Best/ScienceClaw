@@ -165,14 +165,11 @@ async def acquire_browser_runtime_lease(
         playwright, browser = await connect(cdp_url)
         created_context: object | None = None
         try:
-            contexts = tuple(getattr(browser, "contexts", ()) or ())
-            if contexts:
-                context = contexts[0]
-            else:
-                context = await getattr(browser, "new_context")()
-                created_context = context
-            pages = tuple(getattr(context, "pages", ()) or ())
-            page = pages[-1] if pages else await getattr(context, "new_page")()
+            # Every RPA recording/test/run owns a fresh context and page. The
+            # Playwright driver/browser process may be shared, storage state may not.
+            context = await getattr(browser, "new_context")()
+            created_context = context
+            page = await getattr(context, "new_page")()
             await getattr(preview_registry, "register")(
                 browser_ref, page, cdp_url=cdp_url
             )

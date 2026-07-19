@@ -2,36 +2,41 @@ import { apiClient } from './client';
 
 export type RpaAgentSessionState = 'recording' | 'stopped' | 'configured' | 'compiled' | 'tested' | 'saved';
 
-export interface BrowserRuntimeScope {
-  page_runtime_ref: string;
-  frame_runtime_ref: string;
-}
-
 export interface StartRpaAgentSessionResponse {
   session_id: string;
   state: 'recording';
-  main_scope: BrowserRuntimeScope;
+  browser_session_ref: string;
+  page_ref: string;
+  generation: string;
 }
 
-export interface CreationProjectionRow {
-  row_id: string;
-  candidate_id: string;
+export type CaptureStatus = 'capturing' | 'observing' | 'captured' | 'incomplete';
+export type ExecutionStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+export type ReplayStatus = 'pending' | 'deterministic_ready' | 'insufficient_evidence' | 'needs_confirmation';
+export type CompileMode = null | 'playwright' | 'agent' | 'needs_confirmation';
+
+export interface TimelineObservation {
+  trace_id: string;
+  action: string;
+  summary: string;
+}
+
+export interface RecordingTimelineItem {
+  id: string;
+  kind: 'manual' | 'ai_instruction';
   ordinal: number;
-  status: 'pending' | 'accepted' | 'rejected' | 'deleted' | 'effect';
-  is_action: boolean;
   title: string;
-  action_kind?: string | null;
-  effect_kind?: string | null;
-  trace_id?: string | null;
-  sequence?: number | null;
-  parent_trace_id?: string | null;
-  diagnostic_code?: string | null;
-  diagnostic_message?: string | null;
+  capture_status: CaptureStatus;
+  execution_status: ExecutionStatus;
+  replay_status: ReplayStatus;
+  compile_mode: CompileMode;
+  observations: TimelineObservation[];
 }
 
 export interface RpaAgentProjectionResponse {
-  state: RpaAgentSessionState;
-  steps: CreationProjectionRow[];
+  session_id: string;
+  recording_state: RpaAgentSessionState;
+  items: RecordingTimelineItem[];
 }
 
 export interface BindingLocation {
@@ -56,6 +61,7 @@ export interface CompiledRpaAgentSkill {
   state: 'compiled';
   artifact_files: string[];
   artifact_hash: string;
+  source_hash: string;
 }
 
 export interface TestRunPayload {
@@ -65,6 +71,7 @@ export interface TestRunPayload {
 }
 
 export interface RpaAgentInstructionContext {
+  model_id?: string;
   business_terms: string[];
   required_variable_refs: string[];
   allowed_inputs: Record<string, string>;
@@ -75,7 +82,7 @@ export interface RpaAgentInstructionContext {
 
 export interface RpaAgentManualInputPayload {
   input_id: string;
-  kind: 'click' | 'text' | 'paste';
+  kind: 'click' | 'text' | 'paste' | 'navigate';
   x?: number;
   y?: number;
   text?: string;
@@ -83,14 +90,31 @@ export interface RpaAgentManualInputPayload {
 
 export interface RpaAgentManualInputResponse {
   input_id: string;
-  candidate_id: string;
-  candidate_ids: string[];
+  draft_id: string;
+  capture_status: 'capturing' | 'captured' | 'incomplete';
+}
+
+export interface RpaAgentInstructionAccepted {
+  step_id: string;
+  ordinal: number;
+  execution_status: ExecutionStatus;
 }
 
 const sessionPath = (sessionId: string) => `/rpa-agent/sessions/${encodeURIComponent(sessionId)}`;
 
-export async function startRpaAgentSession(browserSessionRef: string): Promise<StartRpaAgentSessionResponse> {
-  const response = await apiClient.post('/rpa-agent/sessions', { browser_session_ref: browserSessionRef });
+export async function startRpaAgentSession(startUrl?: string): Promise<StartRpaAgentSessionResponse> {
+  const response = await apiClient.post('/rpa-agent/sessions', startUrl ? { start_url: startUrl } : {});
+  return response.data;
+}
+
+export async function rerecordRpaAgentSession(
+  sessionId: string,
+  startUrl?: string,
+): Promise<StartRpaAgentSessionResponse> {
+  const response = await apiClient.post(
+    `${sessionPath(sessionId)}/rerecord`,
+    startUrl ? { start_url: startUrl } : {},
+  );
   return response.data;
 }
 
@@ -123,11 +147,12 @@ export async function runRpaAgentInstruction(
     business_terms: [], required_variable_refs: [], allowed_inputs: {},
     allowed_secret_names: [], allowed_data_assets: {}, page_aliases: {},
   },
-): Promise<Record<string, unknown>> {
+  idempotencyKey: string = crypto.randomUUID(),
+): Promise<RpaAgentInstructionAccepted> {
   const response = await apiClient.post(`${sessionPath(sessionId)}/agent-instructions`, {
     instruction,
     ...context,
-  });
+  }, { headers: { 'Idempotency-Key': idempotencyKey } });
   return response.data;
 }
 
@@ -154,8 +179,12 @@ export async function compileRpaAgentSkill(sessionId: string): Promise<CompiledR
   return response.data;
 }
 
+export const RPA_AGENT_TEST_RUN_TIMEOUT_MS = 10 * 60 * 1000;
+
 export async function testRpaAgentSkill(sessionId: string, payload: TestRunPayload): Promise<Record<string, unknown>> {
-  const response = await apiClient.post(`${sessionPath(sessionId)}/test-run`, payload);
+  const response = await apiClient.post(`${sessionPath(sessionId)}/test-run`, payload, {
+    timeout: RPA_AGENT_TEST_RUN_TIMEOUT_MS,
+  });
   return response.data;
 }
 

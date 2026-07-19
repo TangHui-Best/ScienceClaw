@@ -208,6 +208,21 @@ def _validate_declaration_bindings(
             elif binding.kind == "variable" and binding.direction == "output":
                 produced_variables.add(binding.ref)
 
+    # Runtime AI steps produce their declared output contract at execution
+    # time, so those variables do not need a synthetic CoreTrace binding from
+    # the recording phase.  The step points to output *names* while the skill
+    # definition exposes variable refs; resolve that explicit mapping here.
+    agent_output_names = {
+        output_name
+        for step in draft.agent_steps.values()
+        for output_name in step.output_refs
+    }
+    produced_variables.update(
+        output.variable_ref
+        for output in draft.outputs
+        if output.name in agent_output_names
+    )
+
     _require_resolved(declared_inputs - used_inputs, "input")
     _require_resolved(declared_secrets - used_secrets, "secret")
     _require_resolved(

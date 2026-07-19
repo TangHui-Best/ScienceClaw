@@ -746,7 +746,11 @@ def test_agent_executor_enforces_declared_outputs_and_required_leaf_paths() -> N
         )
     )
     assert outputs["order"]["订单号"] == "PO-001"
-    assert set(captured) == {"scope", "target", "instruction", "inputs", "output_names", "required_paths"}
+    assert set(captured) == {
+        "scope", "target", "instruction", "inputs", "output_names", "required_paths",
+        "variables", "sensitive_data", "data_assets", "step_id", "scope_hint",
+        "expected_effects", "model_policy", "asset_output_refs",
+    }
 
     async def undeclared(**kwargs: object) -> dict[str, object]:
         return {"order": {}, "secret": "leak"}

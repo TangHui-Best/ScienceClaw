@@ -374,6 +374,37 @@ def test_declarations_must_resolve_to_timeline_bindings(field: str, declaration:
         _transform(_timeline(_fill("trace_a", 10, "fixed")), _draft(**{field: [declaration]}))
 
 
+def test_runtime_agent_declared_output_resolves_without_synthetic_trace_binding() -> None:
+    draft = _draft(
+        outputs=[
+            {
+                "name": "star_count",
+                "title": "Star 数",
+                "variable_ref": "result.star_count",
+                "value_type": "number",
+            }
+        ],
+        agent_steps={
+            "ais_star_count": {
+                "step_id": "ais_star_count",
+                "output_refs": ["star_count"],
+                "expected_effects": [],
+                "allowed_input_refs": [],
+                "allowed_secret_refs": [],
+                "allowed_asset_refs": [],
+                "page_aliases": {},
+                "business_terms": [],
+                "model_policy": {"mode": "runtime_default", "model_ref": None},
+                "timeout_seconds": 180,
+            }
+        },
+    )
+
+    result = _transform(_timeline(_fill("trace_a", 10, "fixed")), draft)
+
+    assert result.skill_definition.outputs[0].variable_ref == "result.star_count"
+
+
 def test_configured_timeline_changes_only_promoted_binding_and_preserves_trace_shape() -> None:
     source = _timeline(_fill("trace_a", 10, "recorded"))
     source["traces"][0]["wait_until"] = [

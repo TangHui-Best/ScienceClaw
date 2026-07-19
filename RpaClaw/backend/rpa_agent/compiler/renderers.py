@@ -125,23 +125,51 @@ def _render_close_page(trace: CoreTrace) -> list[str]:
 
 
 def _render_agent(trace: CoreTrace, plan: BrowserCompilePlan) -> list[str]:
+    policy = plan.agent_policies.get(trace.trace_id)
     inputs = {
         binding.name: _binding_expression(binding)
         for binding in trace.data_bindings
-        if binding.direction == "input"
+        if binding.direction == "input" and binding.kind not in {"secret", "data_asset"}
+    }
+    secrets = {
+        binding.name: _binding_expression(binding)
+        for binding in trace.data_bindings
+        if binding.direction == "input" and binding.kind == "secret"
+    }
+    assets = {
+        binding.name: _binding_expression(binding)
+        for binding in trace.data_bindings
+        if binding.direction == "input" and binding.kind == "data_asset"
     }
     input_source = "{" + ", ".join(f"{name!r}: {expression}" for name, expression in inputs.items()) + "}"
+    secret_source = "{" + ", ".join(f"{name!r}: {expression}" for name, expression in secrets.items()) + "}"
+    asset_source = "{" + ", ".join(f"{name!r}: {expression}" for name, expression in assets.items()) + "}"
     outputs = [binding for binding in trace.data_bindings if binding.direction == "output"]
     output_names = tuple(binding.name for binding in outputs)
+    asset_output_refs = {
+        binding.name: binding.ref for binding in outputs if binding.kind == "data_asset"
+    }
     required_paths = plan.agent_required_paths.get(trace.trace_id, {})
+    scope_hint = {
+        "page_ref": trace.scope.page_ref,
+        "frame_path": [frame.model_dump(mode="python") for frame in trace.scope.frame_path],
+    }
     lines = [
         "agent_outputs = await ctx.agent.execute(",
         "    scope=scope,",
         "    target=target," if trace.action.target is not None else "    target=None,",
         f"    instruction={trace.action.instruction!r},",
         f"    inputs={input_source},",
+        "    variables=ctx.variables.snapshot(),",
+        f"    sensitive_data={secret_source},",
+        f"    data_assets={asset_source},",
         f"    output_names={output_names!r},",
+        f"    asset_output_refs={asset_output_refs!r},",
         f"    required_paths={required_paths!r},",
+        f"    step_id={trace.trace_id!r},",
+        f"    scope_hint={scope_hint!r},",
+        f"    expected_effects={tuple(effect.model_dump(mode='python', exclude_none=True) for effect in policy.expected_effects) if policy else ()!r},",
+        f"    model_policy={policy.model_policy.model_dump(mode='python') if policy else {'mode': 'runtime_default', 'model_ref': None}!r},",
         ")",
     ]
     return lines

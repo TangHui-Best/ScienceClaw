@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 
 from ..contracts import (
+    AgentStepConfiguration,
+    CompiledSkillPlan,
     CoreTraceTimeline,
     SkillDefinition,
     SkillManifest,
@@ -322,6 +324,11 @@ class DeterministicCompiler:
         timeline_payload: object,
         definition_payload: object,
         destination: str | Path,
+        *,
+        source_hash: str | None = None,
+        source_item_count: int | None = None,
+        compiled_plan: CompiledSkillPlan | None = None,
+        agent_policies: dict[str, AgentStepConfiguration] | None = None,
     ) -> CompileResult:
         issues: list[CompileIssue] = []
         definition: SkillDefinition | None = None
@@ -382,8 +389,27 @@ class DeterministicCompiler:
         if issues:
             return CompileResult("rejected", sort_issues(issues), None, None)
 
+        if compiled_plan is not None:
+            playwright_count = sum(step.mode == "playwright" for step in compiled_plan.steps)
+            agent_count = sum(step.mode == "agent" for step in compiled_plan.steps)
+            source_payload = {
+                "schema_version": "recording-compilation-source/v0.1",
+                "recording_timeline_schema_version": "recording-timeline/v0.1",
+                "compiler_version": self._compiler_version,
+                "source_hash": compiled_plan.source_hash,
+                "item_count": len(compiled_plan.steps),
+                "playwright_segment_count": playwright_count,
+                "agent_segment_count": agent_count,
+            }
+        else:
+            source_payload = {
+                "core_trace_schema_version": timeline.schema_version,
+                "trace_count": len(timeline.traces) if source_item_count is None else source_item_count,
+                "timeline_hash": source_hash or _canonical_timeline_hash(timeline),
+                "compiler_version": self._compiler_version,
+            }
         manifest_payload = {
-            "schema_version": "skill-manifest/v0.1",
+            "schema_version": "skill-manifest/v0.2" if compiled_plan is not None else "skill-manifest/v0.1",
             "skill": definition.skill.model_dump(mode="json"),
             "entrypoint": "skill:execute_skill",
             "runtime": {
@@ -395,13 +421,13 @@ class DeterministicCompiler:
             "asset_inputs": [item.model_dump(mode="json") for item in definition.asset_inputs],
             "outputs": [item.model_dump(mode="json") for item in definition.outputs],
             "asset_outputs": [item.model_dump(mode="json") for item in definition.asset_outputs],
-            "source": {
-                "core_trace_schema_version": timeline.schema_version,
-                "trace_count": len(timeline.traces),
-                "timeline_hash": _canonical_timeline_hash(timeline),
-                "compiler_version": self._compiler_version,
-            },
+            "source": source_payload,
         }
+        if compiled_plan is not None:
+            manifest_payload["agent_policies"] = {
+                key: value.model_dump(mode="json")
+                for key, value in sorted((agent_policies or {}).items())
+            }
         try:
             manifest = SkillManifest.model_validate(manifest_payload)
         except Exception as exc:
@@ -413,6 +439,7 @@ class DeterministicCompiler:
             definition=definition,
             manifest=manifest,
             agent_required_paths=_agent_required_paths(timeline),
+            agent_policies=dict(agent_policies or {}),
         )
         try:
             artifacts = render_artifacts(plan)

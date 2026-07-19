@@ -8,7 +8,12 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ..contracts.models import CoreTraceTimeline, SkillDefinition
+from ..contracts.models import (
+    AgentStepConfiguration,
+    CoreTraceTimeline,
+    ManualFallbackInstruction,
+    SkillDefinition,
+)
 from ..contracts.validators import validate_timeline_payload
 
 
@@ -116,6 +121,8 @@ class SkillConfigurationDraft(DraftModel):
     outputs: list[DraftOutput] = Field(default_factory=list)
     asset_outputs: list[DraftAssetOutput] = Field(default_factory=list)
     binding_promotions: list[BindingPromotion] = Field(default_factory=list)
+    manual_fallbacks: dict[Identifier, ManualFallbackInstruction] = Field(default_factory=dict)
+    agent_steps: dict[Identifier, AgentStepConfiguration] = Field(default_factory=dict)
     stage_2_rules: Annotated[str, Field(min_length=1, max_length=20_000)] | None = None
 
     @model_validator(mode="after")
@@ -156,6 +163,12 @@ class SkillConfigurationDraft(DraftModel):
                     f"{promotion.trace_id}:{promotion.binding_name}:{promotion.to_kind}:"
                     f"{promotion.ref}"
                 )
+        for key, fallback in self.manual_fallbacks.items():
+            if key != fallback.trace_id:
+                raise ValueError("configuration.manual_fallback_key_mismatch")
+        for key, step in self.agent_steps.items():
+            if key != step.step_id:
+                raise ValueError("configuration.agent_step_key_mismatch")
         return self
 
 

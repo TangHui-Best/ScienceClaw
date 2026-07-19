@@ -16,7 +16,11 @@ from .page_registry import PageRegistry
 from .projection import (
     CreationStepRow,
     ProjectionStatus,
+    TimelineItemRow,
+    TimelineObservationRow,
     project_creation_steps,
+    project_recording_items,
+    project_recording_timeline,
 )
 from .readiness import (
     BuildReadiness,
@@ -50,6 +54,8 @@ __all__ = [
     "ManualInteractionAggregator",
     "PageRegistry",
     "ProjectionStatus",
+    "TimelineItemRow",
+    "TimelineObservationRow",
     "ReadinessCode",
     "ReadinessIssue",
     "SettlementAttempt",
@@ -60,4 +66,6 @@ __all__ = [
     "TimelineStore",
     "derive_build_readiness",
     "project_creation_steps",
+    "project_recording_items",
+    "project_recording_timeline",
 ]

@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
@@ -5,15 +6,21 @@ from datetime import datetime, timedelta, timezone
 import json
 
 import pytest
+from browser_use import ChatAnthropic
+from browser_use.llm.exceptions import ModelProviderError
+from browser_use.llm.views import ChatInvokeCompletion
+from pydantic import BaseModel
 
 from rpa_agent.creation import ControlMode, SkillCreationSession
 from rpa_agent.host import BrowserSession, HostBrowserEvent, PlaywrightBrowserSessionPort
-from rpa_agent.host.browser_use_agent import normalize_variable_action
 from rpa_agent.host.browser_use_agent import (
-    RecordingBrowserUseTools,
+    _TextFallbackChatAnthropic,
+    _execution_guidance,
+    _validated_json_text,
+    _model_for,
     build_agent_task,
     build_runtime_agent_backend,
-    normalize_allowed_input_action,
+    execute_browser_use_instruction,
     semantic_hints_from_browser_use_node,
 )
 from rpa_agent.api import AgentInstructionRequest
@@ -24,6 +31,119 @@ from rpa_agent.host.scienceclaw_browser import (
 
 
 NOW = datetime(2026, 7, 18, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_gateway_alternates_auto_and_forced_schema_protocol(monkeypatch):
+    client = _TextFallbackChatAnthropic(
+        model="claude-sonnet-4-6",
+        api_key="secret-test-only",
+        base_url="https://model.example",
+    )
+
+    calls = []
+
+    async def invoke(_self, _messages, output_format=None, **_kwargs):
+        calls.append((_self._requires_auto_tool_choice(), output_format))
+        return object()
+
+    monkeypatch.setattr(ChatAnthropic, "ainvoke", invoke)
+
+    await client.ainvoke([], output_format=dict)
+    await client.ainvoke([], output_format=dict)
+
+    assert calls == [(True, dict), (False, dict)]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_gateway_validates_text_json_when_tool_use_is_omitted(
+    monkeypatch,
+):
+    class Result(BaseModel):
+        value: int
+
+    client = _TextFallbackChatAnthropic(
+        model="claude-sonnet-4-6",
+        api_key="secret-test-only",
+        base_url="https://model.example",
+    )
+    calls = []
+
+    async def invoke(_self, messages, output_format=None, **_kwargs):
+        calls.append((messages, output_format))
+        if output_format is not None:
+            raise ModelProviderError(
+                message="Expected tool use in response but none found",
+                model=_self.name,
+            )
+        return ChatInvokeCompletion(
+            completion='```json\n{"value":7}\n```', usage=None
+        )
+
+    monkeypatch.setattr(ChatAnthropic, "ainvoke", invoke)
+
+    result = await client.ainvoke([], output_format=Result)
+
+    assert result.completion == Result(value=7)
+    assert len(calls) == 2
+    assert calls[1][1] is None
+    assert "exact JSON Schema" in calls[1][0][-1].content
+
+
+def test_openai_compatible_gateway_accepts_only_plain_or_fenced_json():
+    assert _validated_json_text('{"ok":true}') == '{"ok":true}'
+    assert _validated_json_text('```json\n{"ok":true}\n```') == '{"ok":true}'
+    with pytest.raises(ValueError, match="structured_output_invalid"):
+        _validated_json_text('Result: {"ok":true}')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "client_name"),
+    [("anthropic", "anthropic"), ("openai", "openai"), ("deepseek", "openai")],
+)
+async def test_model_for_uses_native_anthropic_and_openai_compatible_clients(
+    monkeypatch, provider, client_name
+):
+    from backend import models
+    from rpa_agent.host import browser_use_agent
+
+    async def resolve(_owner_id):
+        return {
+            "provider": provider,
+            "model_name": "model-real",
+            "api_key": "secret-test-only",
+            "base_url": "https://model.example/v1",
+        }
+
+    calls = []
+
+    def anthropic_client(**kwargs):
+        calls.append(("anthropic", kwargs))
+        return object()
+
+    def openai_client(**kwargs):
+        calls.append(("openai", kwargs))
+        return object()
+
+    monkeypatch.setattr(models, "resolve_default_model_config", resolve)
+    monkeypatch.setattr(
+        browser_use_agent, "_TextFallbackChatAnthropic", anthropic_client
+    )
+    monkeypatch.setattr(browser_use_agent, "_TextJSONChatOpenAI", openai_client)
+
+    await _model_for("owner-1")
+
+    assert calls == [
+        (
+            client_name,
+            {
+                "model": "model-real",
+                "api_key": "secret-test-only",
+                "base_url": "https://model.example/v1",
+            },
+        )
+    ]
 
 
 class _Port:
@@ -47,183 +167,6 @@ def _creation() -> SkillCreationSession:
         fact_buffer_capacity=64,
         fact_ttl=timedelta(seconds=30),
     )
-
-
-def test_variable_aware_input_resolves_session_value_and_preserves_reference():
-    creation = _creation()
-    creation.variables.write(
-        "采购订单.订单号",
-        "PO-2002",
-        producer_candidate_id="producer_order",
-    )
-
-    invocation = normalize_variable_action(
-        "input_variable",
-        {"index": 7, "variable_ref": "采购订单.订单号"},
-        variables=creation.variables,
-    )
-
-    assert invocation.action_name == "input"
-    assert invocation.params == {"index": 7, "text": "PO-2002", "clear": True}
-    assert invocation.binding_hints == (
-        {
-            "name": "value",
-            "direction": "input",
-            "kind_hint": "variable",
-            "ref_hint": "采购订单.订单号",
-            "sensitive": False,
-        },
-    )
-
-
-def test_variable_aware_extract_requires_explicit_valid_ref_and_json_value():
-    creation = _creation()
-
-    invocation = normalize_variable_action(
-        "extract_variable",
-        {
-            "variable_ref": "采购订单",
-            "value": {"订单号": "PO-2002", "供应商": "乙方供应商"},
-        },
-        variables=creation.variables,
-    )
-
-    assert invocation.action_name == "extract_variable"
-    assert invocation.variable_outputs == {
-        "采购订单": {"订单号": "PO-2002", "供应商": "乙方供应商"}
-    }
-    assert invocation.binding_hints[0]["ref_hint"] == "采购订单"
-
-    with pytest.raises(ValueError, match="browser_use_host.variable_ref_invalid"):
-        normalize_variable_action(
-            "extract_variable",
-            {"variable_ref": "采购订单..订单号", "value": "x"},
-            variables=creation.variables,
-        )
-
-
-def test_extract_variable_adds_whitelisted_skill_input_bindings_without_values():
-    creation = _creation()
-    invocation = normalize_variable_action(
-        "extract_variable",
-        {
-            "variable_ref": "采购订单",
-            "value": {"订单号": "PO-2002"},
-            "input_refs": ["order_no", "business_type"],
-        },
-        variables=creation.variables,
-        allowed_inputs={
-            "order_no": "PO-RECORDED-2002",
-            "business_type": "自动创建",
-        },
-    )
-
-    assert invocation.binding_hints == (
-        {
-            "name": "input.order_no",
-            "direction": "input",
-            "kind_hint": "skill_input",
-            "ref_hint": "order_no",
-            "sensitive": False,
-        },
-        {
-            "name": "input.business_type",
-            "direction": "input",
-            "kind_hint": "skill_input",
-            "ref_hint": "business_type",
-            "sensitive": False,
-        },
-        {
-            "name": "result",
-            "direction": "output",
-            "kind_hint": "variable",
-            "ref_hint": "采购订单",
-            "sensitive": False,
-        },
-    )
-    serialized = json.dumps(
-        {"params": invocation.params, "bindings": invocation.binding_hints},
-        ensure_ascii=False,
-    )
-    assert "PO-RECORDED-2002" not in serialized
-    assert "自动创建" not in serialized
-
-    for refs, code in (
-        (["unknown_input"], "allowed_input_unknown"),
-        (["order_no", "order_no"], "extract_input_ref_duplicate"),
-        (["bad ref"], "input_ref_invalid"),
-    ):
-        with pytest.raises(ValueError, match=f"browser_use_host.{code}"):
-            normalize_variable_action(
-                "extract_variable",
-                {
-                    "variable_ref": "采购订单",
-                    "value": {"订单号": "PO-2002"},
-                    "input_refs": refs,
-                },
-                variables=creation.variables,
-                allowed_inputs={"order_no": "PO-RECORDED-2002"},
-            )
-
-
-def test_click_variable_keeps_business_ref_and_discards_recording_value():
-    creation = _creation()
-    creation.variables.write(
-        "采购订单.订单号", "PO-RECORDED-2002", producer_candidate_id="producer_order"
-    )
-
-    invocation = normalize_variable_action(
-        "click_variable",
-        {"index": 19, "variable_ref": "采购订单.订单号"},
-        variables=creation.variables,
-    )
-
-    assert invocation.action_name == "click"
-    assert invocation.params == {"index": 19}
-    assert invocation.binding_hints == (
-        {
-            "name": "row_key",
-            "direction": "input",
-            "kind_hint": "variable",
-            "ref_hint": "采购订单.订单号",
-            "sensitive": False,
-        },
-    )
-    assert "PO-RECORDED-2002" not in json.dumps(
-        {"params": invocation.params, "bindings": invocation.binding_hints},
-        ensure_ascii=False,
-    )
-
-
-def test_click_allowed_input_keeps_only_whitelisted_ref_and_rejects_unknown():
-    invocation = normalize_allowed_input_action(
-        "click_allowed_input",
-        {"index": 5, "input_ref": "business_type"},
-        allowed_inputs={"business_type": "自动创建"},
-    )
-
-    assert invocation.action_name == "click"
-    assert invocation.params == {"index": 5}
-    assert invocation.binding_hints == (
-        {
-            "name": "row_key",
-            "direction": "input",
-            "kind_hint": "skill_input",
-            "ref_hint": "business_type",
-            "sensitive": False,
-        },
-    )
-    assert "自动创建" not in json.dumps(
-        {"params": invocation.params, "bindings": invocation.binding_hints},
-        ensure_ascii=False,
-    )
-
-    with pytest.raises(ValueError, match="browser_use_host.allowed_input_unknown"):
-        normalize_allowed_input_action(
-            "click_allowed_input",
-            {"index": 5, "input_ref": "unknown_type"},
-            allowed_inputs={"business_type": "自动创建"},
-        )
 
 
 def test_page_activation_and_close_events_apply_to_registered_page_with_source_lock():
@@ -321,11 +264,21 @@ async def test_runtime_lease_initializes_and_registers_same_cdp_browser():
     class Context:
         pages = [page]
 
+        async def new_page(self):
+            return page
+
+        async def close(self):
+            calls.append(("close_context",))
+
     context = Context()
     page.context = context
 
     class Browser:
         contexts = [context]
+
+        async def new_context(self):
+            calls.append(("new_context",))
+            return context
 
     class Registry:
         cdp_url = None
@@ -377,8 +330,10 @@ async def test_runtime_lease_initializes_and_registers_same_cdp_browser():
         ("ensure", "7browser", "owner-1"),
         ("fetch", "http://sandbox-runtime:8080"),
         ("connect", "ws://sandbox-runtime:8080/devtools/browser/opaque-token"),
+        ("new_context",),
         ("register", "7browser", page),
         ("unregister", "7browser", page),
+        ("close_context",),
         ("stop",),
     ]
 
@@ -458,11 +413,20 @@ async def test_concurrent_runtime_leases_connect_once_and_cleanup_once():
     class Context:
         pages = [page]
 
+        async def new_page(self):
+            return page
+
+        async def close(self):
+            calls.append("close_context")
+
     context = Context()
     page.context = context
 
     class Browser:
         contexts = [context]
+
+        async def new_context(self):
+            return context
 
     class Playwright:
         async def stop(self):
@@ -519,454 +483,7 @@ async def test_concurrent_runtime_leases_connect_once_and_cleanup_once():
     await __import__("asyncio").gather(
         first.aclose(), first.aclose(), second.aclose(), second.aclose()
     )
-    assert calls == ["connect", "register", "unregister", "stop"]
-
-
-@pytest.mark.asyncio
-async def test_recording_tools_accounts_extract_and_commits_explicit_output():
-    creation = _creation()
-    creation.switch_control(ControlMode.AGENT, at=NOW)
-
-    class Frame:
-        pass
-
-    class Page:
-        main_frame = Frame()
-
-    page = Page()
-
-    class Port:
-        context = type("Context", (), {"pages": [page]})()
-        main_page = page
-
-        async def active_page_object(self):
-            return page
-
-        def page_runtime_ref(self, _page):
-            return "runtime_main"
-
-        def frame_runtime_ref(self, _frame):
-            return "frame_main"
-
-        def page_main_frame_runtime_ref(self, _page):
-            return "frame_main"
-
-        def resolve_frame_path(self, _page, _frame):
-            return ()
-
-        @asynccontextmanager
-        async def action_dispatch_scope(self, _target):
-            yield
-
-    hosted = type(
-        "Hosted",
-        (),
-        {
-            "browser": type("Browser", (), {"creation": creation, "port": Port()})(),
-            "owner_id": "owner-1",
-        },
-    )()
-    tools = RecordingBrowserUseTools(hosted=hosted, instruction="提取订单")
-    assert "input" not in tools.registry.registry.actions
-    assert "input_literal" in tools.registry.registry.actions
-    assert "input_variable" in tools.registry.registry.actions
-    assert "click_variable" in tools.registry.registry.actions
-    assert "switch" in tools.registry.registry.actions
-    assert "close" in tools.registry.registry.actions
-    action_model = tools.registry.create_action_model(
-        include_actions=["extract_variable"]
-    )
-    action = action_model.model_validate(
-        {
-            "extract_variable": {
-                "variable_ref": "采购订单",
-                "value": {"订单号": "PO-2002"},
-            }
-        }
-    )
-
-    result = await tools.act(action, object())
-
-    assert result.error is None
-    assert tools.report.actual_action_count == 1
-    assert tools.report.invocation_count == 1
-    assert len(tools.report.candidate_ids) == 1
-    assert creation.variables.read("采购订单") == {"订单号": "PO-2002"}
-
-    class FileSystem:
-        def display_file(self, _name):
-            return None
-
-        def get_dir(self):
-            return "."
-
-    done_model = tools.registry.create_action_model(include_actions=["done"])
-    done = done_model.model_validate(
-        {"done": {"text": "提取完成", "success": True, "files_to_display": []}}
-    )
-    done_result = await tools.act(done, object(), file_system=FileSystem())
-    assert done_result.is_done is True
-    assert tools.report.non_sop[-1].action_name == "done"
-    assert tools.report.non_sop[-1].status == "succeeded"
-
-    bound_tools = RecordingBrowserUseTools(
-        hosted=hosted,
-        instruction="按订单号提取采购订单",
-        allowed_inputs={"order_no": "PO-RECORDED-2002"},
-    )
-    bound_model = bound_tools.registry.create_action_model(
-        include_actions=["extract_variable"]
-    )
-    bound_action = bound_model.model_validate(
-        {
-            "extract_variable": {
-                "variable_ref": "目标采购订单",
-                "value": {"订单号": "PO-RECORDED-2002"},
-                "input_refs": ["order_no"],
-            }
-        }
-    )
-    await bound_tools.act(bound_action, object())
-    bound_candidate = creation.candidates[bound_tools.report.candidate_ids[-1]]
-    bound_payload = bound_candidate.model_dump(mode="json", exclude_none=True)
-    assert bound_payload["binding_hints"] == [
-        {
-            "name": "input.order_no",
-            "direction": "input",
-            "kind_hint": "skill_input",
-            "ref_hint": "order_no",
-            "sensitive": False,
-        },
-        {
-            "name": "result",
-            "direction": "output",
-            "kind_hint": "variable",
-            "ref_hint": "目标采购订单",
-            "sensitive": False,
-        },
-    ]
-    assert "PO-RECORDED-2002" not in json.dumps(bound_payload, ensure_ascii=False)
-
-    unknown_action = bound_model.model_validate(
-        {
-            "extract_variable": {
-                "variable_ref": "不应提交",
-                "value": {"订单号": "PO-NEVER-COMMIT"},
-                "input_refs": ["unknown_input"],
-            }
-        }
-    )
-    await bound_tools.act(unknown_action, object())
-    unknown_candidate = creation.candidates[bound_tools.report.candidate_ids[-1]]
-    assert unknown_candidate.execution.status == "failed"
-    with pytest.raises(KeyError, match="session_variable_store.ref_missing"):
-        creation.variables.read("不应提交")
-
-
-@pytest.mark.asyncio
-async def test_click_variable_records_agent_binding_and_iframe_scope_without_sample_value():
-    creation = _creation()
-    creation.variables.write(
-        "采购订单.订单号",
-        "PO-RECORDED-2002",
-        producer_candidate_id="producer_order",
-    )
-    creation.switch_control(ControlMode.AGENT, at=NOW)
-
-    iframe = type(
-        "Node",
-        (),
-        {
-            "tag_name": "iframe",
-            "attributes": {"data-testid": "orders-frame"},
-            "ax_node": type("Ax", (), {"name": "订单列表"})(),
-            "parent_node": None,
-        },
-    )()
-    document = type(
-        "Node",
-        (),
-        {
-            "tag_name": "document",
-            "attributes": {},
-            "ax_node": None,
-            "parent_node": iframe,
-        },
-    )()
-    target = type(
-        "Node",
-        (),
-        {
-            "tag_name": "button",
-            "attributes": {"data-testid": "start-acceptance"},
-            "ax_node": type("Ax", (), {"name": "发起验收"})(),
-            "parent_node": document,
-        },
-    )()
-
-    class Page:
-        main_frame = object()
-
-    page = Page()
-
-    class Port:
-        in_scope = False
-        scope_target = None
-        context = type("Context", (), {"pages": [page]})()
-        main_page = page
-
-        async def active_page_object(self):
-            return page
-
-        def page_runtime_ref(self, _page):
-            return "runtime_main"
-
-        def frame_runtime_ref(self, _frame):
-            return "frame_main"
-
-        def page_main_frame_runtime_ref(self, _page):
-            return "frame_main"
-
-        def resolve_frame_path(self, _page, _frame):
-            return ()
-
-        async def validate_semantic_target(self, **_kwargs):
-            return 0  # repeated row buttons force an Agent Action
-
-        @asynccontextmanager
-        async def action_dispatch_scope(self, target):
-            self.in_scope = True
-            self.scope_target = target
-            try:
-                yield
-            finally:
-                self.in_scope = False
-                self.scope_target = None
-
-    hosted = type(
-        "Hosted",
-        (),
-        {
-            "browser": type("Browser", (), {"creation": creation, "port": Port()})(),
-            "owner_id": "owner-1",
-        },
-    )()
-    tools = RecordingBrowserUseTools(hosted=hosted, instruction="按订单号发起验收")
-
-    async def click(*, params, browser_session=None, **_kwargs):
-        del params, browser_session
-        from browser_use.agent.views import ActionResult
-
-        assert hosted.browser.port.in_scope is True
-        assert hosted.browser.port.scope_target.page is page
-        assert hosted.browser.port.scope_target.page_runtime_ref == "runtime_main"
-        assert hosted.browser.port.scope_target.frame_runtime_ref == "frame_main"
-        trigger = creation.observer.start_new_page("runtime_main", "frame_main")
-        fact = creation.observer.complete_new_page(
-            trigger,
-            observed_at=NOW,
-            new_page_runtime_ref="runtime_popup_from_click",
-            initial_url="https://eval.test/system-b/random",
-        )
-        creation.pages.apply(fact)
-        return ActionResult()
-
-    tools.registry.registry.actions["click"].function = click
-
-    state = type(
-        "State",
-        (),
-        {"dom_state": type("Dom", (), {"selector_map": {19: target}})()},
-    )()
-
-    class BrowserUseSession:
-        async def get_browser_state_summary(self, *, include_screenshot):
-            assert include_screenshot is False
-            return state
-
-    action_model = tools.registry.create_action_model(
-        include_actions=["click_variable"]
-    )
-    action = action_model.model_validate(
-        {
-            "click_variable": {
-                "index": 19,
-                "variable_ref": "采购订单.订单号",
-            }
-        }
-    )
-
-    await tools.act(action, BrowserUseSession())
-
-    candidate = next(iter(creation.candidates.values()))
-    payload = candidate.model_dump(mode="json", exclude_none=True)
-    assert payload["scope_hint"]["frame_path"][0]["name"] == "订单列表"
-    assert payload["action_hint"]["kind"] == "agent"
-    assert payload["binding_hints"] == [
-        {
-            "name": "row_key",
-            "direction": "input",
-            "kind_hint": "variable",
-            "ref_hint": "采购订单.订单号",
-            "sensitive": False,
-        }
-    ]
-    assert "PO-RECORDED-2002" not in json.dumps(payload, ensure_ascii=False)
-    assert creation.candidate_has_fact(candidate.candidate_id, "new_page") is True
-
-    clicks = []
-    input_tools = RecordingBrowserUseTools(
-        hosted=hosted,
-        instruction="选择业务类型",
-        allowed_inputs={"business_type": "自动创建"},
-    )
-
-    async def click_input(*, params, browser_session=None, **_kwargs):
-        del browser_session
-        from browser_use.agent.views import ActionResult
-
-        clicks.append(params.index)
-        return ActionResult()
-
-    input_tools.registry.registry.actions["click"].function = click_input
-    input_model = input_tools.registry.create_action_model(
-        include_actions=["click_allowed_input"]
-    )
-    known = input_model.model_validate(
-        {"click_allowed_input": {"index": 19, "input_ref": "business_type"}}
-    )
-    await input_tools.act(known, BrowserUseSession())
-    known_candidate = creation.candidates[input_tools.report.candidate_ids[-1]]
-    known_payload = known_candidate.model_dump(mode="json", exclude_none=True)
-    assert clicks == [19]
-    assert known_payload["binding_hints"] == [
-        {
-            "name": "row_key",
-            "direction": "input",
-            "kind_hint": "skill_input",
-            "ref_hint": "business_type",
-            "sensitive": False,
-        }
-    ]
-    assert "自动创建" not in json.dumps(known_payload, ensure_ascii=False)
-
-    unknown = input_model.model_validate(
-        {"click_allowed_input": {"index": 20, "input_ref": "unknown_type"}}
-    )
-    await input_tools.act(unknown, BrowserUseSession())
-    unknown_candidate = creation.candidates[input_tools.report.candidate_ids[-1]]
-    assert clicks == [19]
-    assert unknown_candidate.execution.status == "failed"
-    assert unknown_candidate.execution.error.code == "tool_reported_failure"
-
-
-@pytest.mark.asyncio
-async def test_switch_tool_emits_locked_activation_fact_and_stable_switch_hint():
-    creation = _creation()
-    popup_trigger = creation.observer.start_new_page("runtime_main", "frame_main")
-    popup_fact = creation.observer.complete_new_page(
-        popup_trigger,
-        observed_at=NOW,
-        new_page_runtime_ref="runtime_popup",
-        initial_url="https://eval.test/system-b/random",
-    )
-    assert creation.pages.apply(popup_fact) == "page_001"
-    creation.switch_control(ControlMode.AGENT, at=NOW)
-
-    class Page:
-        def __init__(self, runtime_ref, target_id):
-            self.runtime_ref = runtime_ref
-            self.target_id = target_id
-            self.main_frame = type("Frame", (), {"runtime_ref": "frame_" + runtime_ref})()
-            self.context = None
-
-    main = Page("runtime_main", "target-main-AAAA")
-    popup = Page("runtime_popup", "target-popup-BBBB")
-
-    class Cdp:
-        def __init__(self, page):
-            self.page = page
-
-        async def send(self, method):
-            assert method == "Target.getTargetInfo"
-            return {"targetInfo": {"targetId": self.page.target_id}}
-
-        async def detach(self):
-            return None
-
-    class Context:
-        pages = [main, popup]
-
-        async def new_cdp_session(self, page):
-            return Cdp(page)
-
-    context = Context()
-    main.context = popup.context = context
-
-    class Port:
-        def __init__(self):
-            self.main_page = main
-            self.context = context
-
-        async def active_page_object(self):
-            return main
-
-        def page_runtime_ref(self, page):
-            return page.runtime_ref
-
-        def frame_runtime_ref(self, frame):
-            return frame.runtime_ref
-
-        def page_main_frame_runtime_ref(self, page):
-            return page.main_frame.runtime_ref
-
-        def resolve_frame_path(self, _page, _frame):
-            return ()
-
-        @asynccontextmanager
-        async def action_dispatch_scope(self, _target):
-            yield
-
-    class Browser:
-        def __init__(self):
-            self.port = Port()
-            self.creation = creation
-
-        def handle_event(self, event):
-            observer = creation.observer
-            trigger = observer.start_page_activated(
-                event.source_page_runtime_ref, event.source_frame_runtime_ref
-            )
-            fact = observer.complete_page_activated(
-                trigger,
-                observed_at=event.observed_at,
-                page_runtime_ref=event.runtime_page_ref,
-            )
-            creation.pages.apply(fact)
-
-    hosted = type(
-        "Hosted", (), {"browser": Browser(), "owner_id": "owner-1"}
-    )()
-    tools = RecordingBrowserUseTools(hosted=hosted, instruction="切换到系统B")
-
-    async def switch(*, params, browser_session=None, **_kwargs):
-        del params, browser_session
-        from browser_use.agent.views import ActionResult
-
-        return ActionResult()
-
-    tools.registry.registry.actions["switch"].function = switch
-    model = tools.registry.create_action_model(include_actions=["switch"])
-    action = model.model_validate({"switch": {"tab_id": "BBBB"}})
-
-    await tools.act(action, object())
-
-    assert creation.pages.active_page_ref == "page_001"
-    candidate_id = tools.report.candidate_ids[0]
-    candidate = creation.candidates[candidate_id]
-    assert candidate.action_hint.kind == "switch_page"
-    assert candidate.action_hint.page_ref == "page_001"
-    assert creation.candidate_has_fact(candidate_id, "page_activated") is True
+    assert calls == ["connect", "register", "unregister", "close_context", "stop"]
 
 
 def test_browser_use_node_projects_stable_iframe_scope_and_target_without_index():
@@ -1054,6 +571,33 @@ def test_agent_task_uses_active_popup_page_not_main_page():
     payload = json.loads(build_agent_task(hosted, request, page=popup))
 
     assert payload["current_page_state"]["url"] == "https://eval.test/system-b/task"
+
+
+@pytest.mark.parametrize(
+    ("instruction", "expected"),
+    [
+        ("打开和 skill 最相关的项目", "Do not use global site search."),
+        ("获取 star 数", "read the exact repository star counter"),
+    ],
+)
+def test_agent_task_adds_bounded_execution_guidance(instruction, expected):
+    creation = _creation()
+    page = type("Page", (), {"url": "https://github.com/trending"})()
+    hosted = type(
+        "Hosted",
+        (),
+        {
+            "browser": type(
+                "Browser", (), {"creation": creation, "port": _Port()}
+            )()
+        },
+    )()
+    request = AgentInstructionRequest(instruction=instruction)
+
+    payload = json.loads(build_agent_task(hosted, request, page=page))
+
+    assert expected in payload["execution_guidance"]
+    assert payload["execution_guidance"] == _execution_guidance(instruction)
 
 
 @pytest.mark.asyncio
@@ -1182,8 +726,8 @@ async def test_runtime_agent_backend_returns_only_structured_declared_outputs():
         def __init__(self, **kwargs):
             calls.append(("agent", kwargs))
 
-        async def run(self, max_steps):
-            calls.append(("run", max_steps))
+        async def run(self):
+            calls.append(("run",))
             return History()
 
     async def model_factory(_owner):
@@ -1242,7 +786,144 @@ async def test_runtime_agent_backend_returns_only_structured_declared_outputs():
     )
 
     assert outputs == {"result": {"订单号": "PO-3003"}}
+    agent_kwargs = next(call[1] for call in calls if call[0] == "agent")
+    assert "tools" not in agent_kwargs
+    assert "controller" not in agent_kwargs
+    assert "max_actions_per_step" not in agent_kwargs
+    assert "max_history_items" not in agent_kwargs
+    assert agent_kwargs["use_vision"] is False
     assert calls[-1] == ("stop",)
+
+
+@pytest.mark.asyncio
+async def test_native_agent_observer_appends_click_as_child_evidence_without_custom_tools():
+    calls = []
+    observations = []
+
+    class Cdp:
+        async def send(self, _method):
+            return {"targetInfo": {"targetId": "target-recording"}}
+
+        async def detach(self):
+            return None
+
+    class Context:
+        async def new_cdp_session(self, _page):
+            return Cdp()
+
+    class Page:
+        context = Context()
+        url = "https://github.com/trending"
+
+    page = Page()
+
+    class Port:
+        browser_use_cdp_url = "ws://runtime/devtools/browser/native"
+        main_page = page
+
+        async def active_page_object(self):
+            return page
+
+        def page_runtime_ref(self, _page):
+            return "page_recording"
+
+    class Variables:
+        def snapshot(self):
+            return {"采购订单": {"订单号": "PO-1"}}
+
+    class Creation:
+        variables = Variables()
+        pages = type("Pages", (), {"resolve": lambda _self, _runtime: "main"})()
+
+        def attach_ai_observation(self, *, step_id, trace):
+            observations.append((step_id, trace))
+
+    hosted = type(
+        "Hosted",
+        (),
+        {
+            "owner_id": "owner-1",
+            "active_operation_id": "ais_native",
+            "browser": type("Browser", (), {"port": Port(), "creation": Creation()})(),
+        },
+    )()
+
+    class Session:
+        def __init__(self, **kwargs):
+            calls.append(("session", kwargs))
+
+        async def start(self):
+            return None
+
+        async def stop(self):
+            return None
+
+        async def get_or_create_cdp_session(self, *, target_id, focus):
+            assert target_id == "target-recording" and focus is True
+
+    class Action:
+        def model_dump(self, **_kwargs):
+            return {"click": {"index": 1}}
+
+    class Result:
+        error = None
+
+    class Element:
+        tag_name = "button"
+        attributes = {"data-testid": "skill-project"}
+        parent_node = None
+        ax_node = type("Ax", (), {"name": "ui-skills"})()
+
+    item = type(
+        "HistoryItem",
+        (),
+        {
+            "model_output": type("Output", (), {"action": [Action()]})(),
+            "result": [Result()],
+            "state": type("State", (), {"interacted_element": [Element()]})(),
+        },
+    )()
+
+    class History:
+        history = [item]
+
+        def is_done(self):
+            return True
+
+        def is_successful(self):
+            return True
+
+        def action_names(self):
+            return ["click", "done"]
+
+    class NativeAgent:
+        def __init__(self, **kwargs):
+            calls.append(("agent", kwargs))
+            self.history = History()
+
+        async def run(self, *, on_step_end):
+            await on_step_end(self)
+            return self.history
+
+    async def model_factory(_owner):
+        return object()
+
+    report = await execute_browser_use_instruction(
+        hosted,
+        AgentInstructionRequest(instruction="打开和 skill 最相关的项目"),
+        model_factory=model_factory,
+        agent_factory=NativeAgent,
+        browser_session_factory=Session,
+    )
+
+    agent_kwargs = next(call[1] for call in calls if call[0] == "agent")
+    assert "tools" not in agent_kwargs and "controller" not in agent_kwargs
+    assert agent_kwargs["use_vision"] is False
+    assert observations[0][0] == "ais_native"
+    assert observations[0][1].action.kind == "click"
+    assert observations[0][1].scope.page_ref == "main"
+    assert observations[0][1].action.target.name == "ui-skills"
+    assert report.actual_action_count == 1
 
 
 @pytest.mark.asyncio

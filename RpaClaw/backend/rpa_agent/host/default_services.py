@@ -122,6 +122,7 @@ def _validate_artifact_files(path: Path, *, code_prefix: str = "runtime") -> Non
 
 
 def _load_generated_package(path: Path, package_name: str) -> ModuleType:
+    _ensure_public_runtime_aliases()
     package = ModuleType(package_name)
     package.__path__ = [str(path)]  # type: ignore[attr-defined]
     sys.modules[package_name] = package
@@ -139,6 +140,34 @@ def _load_generated_package(path: Path, package_name: str) -> ModuleType:
     except BaseException:
         _cleanup_generated_package(package_name)
         raise
+
+
+def _ensure_public_runtime_aliases() -> None:
+    """Keep generated imports stable under both supported app topologies.
+
+    The generated four-file package intentionally imports the public
+    ``rpa_agent.runtime`` API. Uvicorn can load this application either with
+    ``backend`` on ``sys.path`` (module prefix ``rpa_agent``) or with RpaClaw
+    on ``sys.path`` (module prefix ``backend.rpa_agent``). In the latter case,
+    alias the already-loaded package and runtime modules instead of importing
+    duplicate class identities.
+    """
+
+    package_prefix = __package__.removesuffix(".host")
+    if package_prefix == "rpa_agent":
+        return
+    source_names = [
+        name
+        for name in tuple(sys.modules)
+        if name == package_prefix or name.startswith(f"{package_prefix}.runtime")
+    ]
+    for source_name in source_names:
+        alias = "rpa_agent" + source_name[len(package_prefix) :]
+        source_module = sys.modules[source_name]
+        existing = sys.modules.get(alias)
+        if existing is not None and existing is not source_module:
+            raise ValueError("runtime.module_identity_conflict")
+        sys.modules[alias] = source_module
 
 
 def _cleanup_generated_package(package_name: str) -> None:

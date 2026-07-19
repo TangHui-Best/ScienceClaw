@@ -103,25 +103,25 @@ In Progress / implementation pending。设计边界已由用户确认并沉淀�
 
 ## Acceptance Criteria
 
-- [ ] 手工点击、输入、选择后无需等待 Settlement 即可在左侧出现 CoreTrace 步骤。
-- [ ] 自然语言提交后立即出现 AIInstructionStep，并始终保留原始指令。
-- [ ] Browser-use 不注册录制专用工具、不限制原生 Action 数、不使用 Candidate `done` 门禁。
-- [ ] 旁路观察能将动作与 Download、Popup、Navigation 等 BrowserFact 关联为 CoreTrace / Effect。
-- [ ] Compiler 对稳定证据生成 PlaywrightSegment，对证据不足的 AI 步骤生成 AgentSegment。
-- [ ] 手工证据不足时生成可审查 AI 指令或要求用户确认，不静默猜测。
-- [ ] AI 步骤在录制和回放时读取此前全局变量，并将声明输出写回后续步骤可见的变量表。
-- [ ] Recorder、Configure、Test 的主要 UI 交互与旧 ScienceClaw 保持一致。
+- [x] 手工点击、输入、选择后无需等待 Settlement 即可在左侧出现 CoreTrace 步骤。
+- [x] 自然语言提交后立即出现 AIInstructionStep，并始终保留原始指令。
+- [x] Browser-use 不注册录制专用工具、不限制原生 Action 数、不使用 Candidate `done` 门禁。
+- [x] 旁路观察能将动作与 Download、Popup、Navigation 等 BrowserFact 关联为 CoreTrace / Effect。
+- [x] Compiler 对稳定证据生成 PlaywrightSegment，对证据不足的 AI 步骤生成 AgentSegment。
+- [x] 手工证据不足时生成可审查 AI 指令或要求用户确认，不静默猜测。
+- [x] AI 步骤在录制和回放时读取此前全局变量，并将声明输出写回后续步骤可见的变量表。
+- [x] Recorder、Configure、Test 的主要 UI 交互与旧 ScienceClaw 保持一致。
 - [ ] 本地非 Docker、真实 LLM/browser-use 完成 GitHub 指令、Star 获取、Download Effect 和生成 Skill 回放验收。
 
 ## Acceptance Map
 
 | Claim | Acceptance | Evidence | Status |
 | --- | --- | --- | --- |
-| 即时录制反馈 | 手工和自然语言步骤不等待 Settlement 即显示 | 待实现后的 UI/API 测试与 Live UI | pending |
-| Browser-use 原生能力 | 相同 Page/模型/指令不受录制工具和完成门禁影响 | 待实现后的真实模型执行日志 | pending |
-| 双模式编译 | Playwright 与 Agent 两类输出均可生成和运行 | 待实现后的 Compiler/Runtime 回归 | pending |
-| 副作用闭环 | click + download 编译为 `expect_download()` | 待实现后的受控页面与 Live E2E | pending |
-| 全局变量连续性 | 前序输出可被后续 AI 使用并继续写回 | 待实现后的双用例回放与 Oracle | pending |
+| 即时录制反馈 | 手工和自然语言步骤不等待 Settlement 即显示 | EV-035；UI/API 自动化 | pass |
+| Browser-use 原生能力 | 相同 Page/模型/指令不受录制工具和完成门禁影响 | EV-035；真实模型执行日志与回归 | partial：最终 UI 额度阻塞 |
+| 双模式编译 | Playwright 与 Agent 两类输出均可生成和运行 | EV-035；Compiler/Runtime 回归 | pass |
+| 副作用闭环 | click + download 编译为 `expect_download()` | EV-035；受控自动化 | pass |
+| 全局变量连续性 | 前序输出可被后续 AI 使用并继续写回 | EV-035；双步骤结构化输出回归 | pass |
 | 设计边界 | ADR 覆盖原因、数据流、原则、拒绝方案和修改检查 | ADR-007 | pass |
 | 实施可执行性 | 零背景工程师/Agent 能从单一规格得到模块、数据、API、迁移、回滚与验收契约 | 权威实施规格；EV-034 | pass |
 
@@ -132,14 +132,19 @@ In Progress / implementation pending。设计边界已由用户确认并沉淀�
 | 2026-07-20 | active / design accepted | 用户确认简化链路、双模式编译、Browser-use 边界、AIInstructionStep、全局变量和副作用监听 | ADR-007；本 Feature | 实现尚未开始 |
 | 2026-07-20 | active / implementation branch ready | 当前已提交历史推送后，保存 pre-F028 源码/测试/文档快照，并从 `b8c3aedc` 创建不含旧工作区产品改动的正式分支 | `backup/rpa-agent-v1-coretrace-pre-f028-20260720@d7a01010`；`codex/rpa-agent-intent-first-dual-mode` | 新分支仅携带产品愿景和架构知识，等待影响面审计与实施计划 |
 | 2026-07-20 | active / implementation spec reviewed | 面向零背景 Coding Agent 补齐技术/数据架构、API/并发、会话所有权、迁移与验收；独立冷启动审阅发现并关闭 5 个 P0 | 权威实施规格；EV-034 | 规格可实施，不代表产品代码已实现 |
+| 2026-07-20 | active / implementation verified, live UI blocked | 核心实现与自动化完成；全新真实 UI 重录遭模型账户余额 403 | EV-035 | 补充额度后必须从新会话重跑附件 1–15，禁止复用旧结果 |
 
 ## Patch History
 
-None yet.
+| Patch | Date | Commit | Symptom | Root Cause | Protection | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| F028.1 | 2026-07-20 | pending | 实现与 Live UI 验收过程中暴露双模式分类、生产导入、运行提示、客户端超时和重跑状态缺口 | 原规格边界未被同一端到端 Harness 覆盖 | 自动化覆盖分类、导入、提示、超时与重跑；EV-035 保留真实额度阻塞和恢复步骤 | implementation verified; Live UI blocked |
 
 ## Evidence
 
-当前只有设计与可实施性审阅证据：用户真实复现推翻了 F027 的运行态门禁假设，ADR-007 已固定替代边界，EV-034 证明权威实施规格的五个冷启动 P0 已关闭。尚无产品代码、自动化或 Live E2E 证据证明新能力已经实现。
+- [EV-035 F028 实现验证与真实模型额度阻塞](../evidence/EV-035-f028-implementation-and-live-ui-blocker.md)
+
+EV-034 支撑设计可实施性；EV-035 支撑核心实现、自动化和真实后台回放，但明确不支撑最终 Live UI 通过声明。当前唯一验收缺口是外部模型账户余额不足导致全新录制 403。
 
 ## Recovery Snapshot
 
@@ -147,8 +152,9 @@ None yet.
 - Read first: ADR-007，然后阅读本 Feature、F027、ADR-006、旧 Trace-first Recording Design。
 - Development branch: `codex/rpa-agent-intent-first-dual-mode`；独立 worktree 为 `E:\RPA-Agent\.worktrees\rpa-agent-intent-first-dual-mode`。
 - Recovery branch: `backup/rpa-agent-v1-coretrace-pre-f028-20260720@d7a01010` 保存 pre-F028 源码、测试、UI 修复和已否决实验；不得整分支合并回正式分支。
-- Current capability state: 设计已接受；当前工作区仍运行 F027 风格的 Browser-use 扩展工具、`done` 门禁、Candidate/Settlement 热路径和现有 Compiler。
-- Known risks: 当前产品代码仍假设 Compiler 只消费已结算 CoreTrace，UI/API 仍按 Candidate/CoreTrace 投影，Session 长锁和 Browser-use 录制控制尚未移除；规格已冻结手工 fallback、DataAsset 上限、Agent per-step policy 和会话隔离，但都尚未实现。
+- Current capability state: F028 核心实现与自动化已落地；Feature 保持 `active`，因为附件要求的全新 Live UI E2E 尚未通过。
+- Known risks: 外部模型余额 `$0.025578` 低于关闭视觉后的单次最小请求 `$0.037968`；后台历史成功回放不能替代 UI 验收。
+- Next safe action: 补充足够覆盖至少四次真实 Agent 调用的额度，重启隔离服务，从全新 session/browser/page/generation 严格重走附件 1–15，并独立核对最终仓库和 Star。
 - Next safe action: 按权威实施规格“增量 0：契约与 Harness”开工，先建立数据 contract tests、Browser-use 构造参数守卫和迁移清单，再改生产热路径。
 - Unblock condition: 不需要额外产品方向确认；进入实现前只需把 ADR-007 的契约转换为可验证增量和回滚点。
 

@@ -4,18 +4,19 @@ import { createApp, nextTick } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { saveCreationSnapshot } from '@/utils/rpaAgentSkillConfiguration';
 
-const push = vi.fn(); const configure = vi.fn(); const compile = vi.fn();
+const push = vi.fn(); const configure = vi.fn(); const compile = vi.fn(); const rerecord = vi.fn();
 vi.mock('vue-router', () => ({ useRoute: () => ({ query: { sessionId: 'rca_abcdefghijklmnopqrstuvwx' } }), useRouter: () => ({ push }) }));
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (value: string) => value }) }));
 vi.mock('@/api/rpaAgent', () => ({
   configureRpaAgentSkill: (...args: unknown[]) => configure(...args),
   compileRpaAgentSkill: (...args: unknown[]) => compile(...args),
+  rerecordRpaAgentSession: (...args: unknown[]) => rerecord(...args),
 }));
 const flush = async () => { await Promise.resolve(); await Promise.resolve(); await nextTick(); };
 
 describe('ConfigurePage greenfield configuration', () => {
   beforeEach(() => {
-    sessionStorage.clear(); document.body.innerHTML = ''; push.mockReset(); configure.mockReset(); compile.mockReset();
+    sessionStorage.clear(); document.body.innerHTML = ''; push.mockReset(); configure.mockReset(); compile.mockReset(); rerecord.mockReset();
     push.mockResolvedValue(undefined);
     saveCreationSnapshot({
       sessionId: 'rca_abcdefghijklmnopqrstuvwx', browserSessionRef: 'browser-host-1',

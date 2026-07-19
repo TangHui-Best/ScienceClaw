@@ -14,10 +14,13 @@ from threading import RLock
 from typing import Any
 
 from ..contracts import (
+    AIInstructionStep,
     AcceptedSettlement,
     BrowserScope,
     CoreTrace,
+    CoreTraceDraft,
     Diagnostic,
+    RecordingTimeline,
     RejectedSettlement,
     TraceCandidate,
 )
@@ -28,7 +31,7 @@ from .page_registry import PageRegistry
 from .projection import CreationStepRow, project_creation_steps
 from .readiness import BuildReadiness, derive_build_readiness
 from .settlement import SettlementAttempt, SettlementEngine, SettlementOutcome
-from .timeline import TimelineStore
+from .timeline import RecordingTimelineStore, TimelineStore
 
 
 _IDENTIFIER = re.compile(r"^[A-Za-z][A-Za-z0-9._-]{0,127}$")
@@ -66,6 +69,16 @@ class SessionVariableStore:
             values, producers = self._prepare_writes_locked(
                 {ref: value},
                 producer_candidate_id=producer_candidate_id,
+            )
+            self._values = values
+            self._producers = producers
+
+    def write_many(
+        self, writes: Mapping[str, Any], *, producer_candidate_id: str
+    ) -> None:
+        with self._mutex:
+            values, producers = self._prepare_writes_locked(
+                writes, producer_candidate_id=producer_candidate_id
             )
             self._values = values
             self._producers = producers
@@ -208,6 +221,7 @@ class SkillCreationSession:
         self.pages = PageRegistry(main_runtime_ref=main_runtime_ref)
         self._settlement_engine = SettlementEngine(self.pages)
         self.timeline_store = TimelineStore()
+        self.recording_timeline_store = RecordingTimelineStore(session_id=session_id)
         self.variables = SessionVariableStore(session_id=session_id)
         self._tail_ttl = fact_ttl
         self._next_ordinal = 1
@@ -269,6 +283,242 @@ class SkillCreationSession:
     def settlement_attempts(self) -> dict[str, SettlementAttempt]:
         with self._mutex:
             return dict(self._attempts)
+
+    def queue_ai_instruction(
+        self,
+        *,
+        step_id: str,
+        instruction: str,
+        model_ref: str,
+        context_snapshot_ref: str,
+        created_at: datetime,
+        declared_outputs: tuple[object, ...] = (),
+        expected_effects: tuple[object, ...] = (),
+    ) -> tuple[AIInstructionStep, int]:
+        """原子写入 Intent；Browser-use 尚未启动时步骤已经可见。"""
+
+        attempt_id = "attempt_" + step_id
+        step = AIInstructionStep.model_validate(
+            {
+                "step_id": step_id,
+                "instruction": instruction,
+                "created_at": created_at,
+                "execution": {
+                    "status": "queued",
+                    "selected_attempt_id": attempt_id,
+                    "attempts": [
+                        {
+                            "attempt_id": attempt_id,
+                            "model_ref": model_ref,
+                            "status": "queued",
+                        }
+                    ],
+                },
+                "context_snapshot_ref": context_snapshot_ref,
+                "declared_outputs": list(declared_outputs),
+                "expected_effects": list(expected_effects),
+            }
+        )
+        with self._mutex:
+            self._require_open()
+            ordinal = self.recording_timeline_store.append_ai(step)
+        return step.model_copy(deep=True), ordinal
+
+    def mark_ai_instruction_running(
+        self, step_id: str, *, started_at: datetime
+    ) -> AIInstructionStep:
+        with self._mutex:
+            self._require_open()
+            step = self.recording_timeline_store.item(step_id)
+            if not isinstance(step, AIInstructionStep):
+                raise ValueError(f"creation_session.ai_step_unknown:{step_id}")
+            if step.execution.status != "queued":
+                raise ValueError(f"creation_session.ai_step_not_queued:{step_id}")
+            attempts = [
+                attempt.model_dump(mode="python", exclude_none=True)
+                for attempt in step.execution.attempts
+            ]
+            for attempt in attempts:
+                if attempt["attempt_id"] == step.execution.selected_attempt_id:
+                    attempt.update({"status": "running", "started_at": started_at})
+            payload = step.model_dump(mode="python", exclude_none=True)
+            payload["execution"] = {
+                "status": "running",
+                "started_at": started_at,
+                "selected_attempt_id": step.execution.selected_attempt_id,
+                "attempts": attempts,
+            }
+            updated = AIInstructionStep.model_validate(payload)
+            self.recording_timeline_store.replace_ai(updated)
+            return updated.model_copy(deep=True)
+
+    def finish_ai_instruction(
+        self,
+        step_id: str,
+        *,
+        finished_at: datetime,
+        succeeded: bool,
+        result_summary: str | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> AIInstructionStep:
+        with self._mutex:
+            self._require_open()
+            step = self.recording_timeline_store.item(step_id)
+            if not isinstance(step, AIInstructionStep):
+                raise ValueError(f"creation_session.ai_step_unknown:{step_id}")
+            if step.execution.status != "running":
+                raise ValueError(f"creation_session.ai_step_not_running:{step_id}")
+            status = "succeeded" if succeeded else "failed"
+            attempts = [
+                attempt.model_dump(mode="python", exclude_none=True)
+                for attempt in step.execution.attempts
+            ]
+            for attempt in attempts:
+                if attempt["attempt_id"] == step.execution.selected_attempt_id:
+                    attempt.update({"status": status, "finished_at": finished_at})
+                    if not succeeded:
+                        attempt["error_code"] = error_code or "agent_execution_failed"
+            payload = step.model_dump(mode="python", exclude_none=True)
+            execution: dict[str, object] = {
+                "status": status,
+                "started_at": step.execution.started_at,
+                "finished_at": finished_at,
+                "selected_attempt_id": step.execution.selected_attempt_id,
+                "attempts": attempts,
+            }
+            if succeeded:
+                execution["result_summary"] = result_summary
+            else:
+                execution["error_code"] = error_code or "agent_execution_failed"
+                execution["error_message"] = error_message or "Agent execution failed."
+            payload["execution"] = execution
+            updated = AIInstructionStep.model_validate(payload)
+            self.recording_timeline_store.replace_ai(updated)
+            return updated.model_copy(deep=True)
+
+    def cancel_ai_instruction(
+        self, step_id: str, *, finished_at: datetime
+    ) -> AIInstructionStep:
+        with self._mutex:
+            self._require_open()
+            step = self.recording_timeline_store.item(step_id)
+            if not isinstance(step, AIInstructionStep):
+                raise ValueError(f"creation_session.ai_step_unknown:{step_id}")
+            if step.execution.status not in {"queued", "running"}:
+                raise ValueError(f"creation_session.ai_step_not_cancellable:{step_id}")
+            started_at = step.execution.started_at or finished_at
+            attempts = [
+                attempt.model_dump(mode="python", exclude_none=True)
+                for attempt in step.execution.attempts
+            ]
+            for attempt in attempts:
+                if attempt["attempt_id"] == step.execution.selected_attempt_id:
+                    attempt.update(
+                        {
+                            "status": "cancelled",
+                            "started_at": attempt.get("started_at", started_at),
+                            "finished_at": finished_at,
+                            "error_code": "agent_execution_cancelled",
+                        }
+                    )
+            payload = step.model_dump(mode="python", exclude_none=True)
+            payload["execution"] = {
+                "status": "cancelled",
+                "started_at": started_at,
+                "finished_at": finished_at,
+                "error_code": "agent_execution_cancelled",
+                "error_message": "Agent execution was cancelled.",
+                "selected_attempt_id": step.execution.selected_attempt_id,
+                "attempts": attempts,
+            }
+            updated = AIInstructionStep.model_validate(payload)
+            self.recording_timeline_store.replace_ai(updated)
+            return updated.model_copy(deep=True)
+
+    def recording_timeline(self) -> RecordingTimeline:
+        with self._mutex:
+            self._require_open()
+            return self.recording_timeline_store.snapshot()
+
+    def begin_manual_draft(self, *, draft_id: str) -> tuple[CoreTraceDraft, int]:
+        draft = CoreTraceDraft(
+            draft_id=draft_id,
+            capture_state="capturing",
+        )
+        with self._mutex:
+            self._require_open()
+            ordinal = self.recording_timeline_store.append_draft(draft)
+        return draft.model_copy(deep=True), ordinal
+
+    def fail_manual_draft(self, *, draft_id: str, diagnostic_code: str) -> None:
+        with self._mutex:
+            self._require_open()
+            self.recording_timeline_store.invalidate_draft(
+                draft_id=draft_id, diagnostic_code=diagnostic_code
+            )
+
+    def complete_manual_navigation(
+        self,
+        *,
+        draft_id: str,
+        trace_id: str,
+        ordinal: int,
+        page_ref: str,
+        url: str,
+    ) -> CoreTrace:
+        trace = CoreTrace.model_validate(
+            {
+                "trace_id": trace_id,
+                "sequence": ordinal,
+                "scope": {"page_ref": page_ref, "frame_path": []},
+                "action": {"kind": "navigate", "mode": "url"},
+                "data_bindings": [
+                    {
+                        "name": "url",
+                        "direction": "input",
+                        "kind": "literal",
+                        "value": url,
+                        "sensitive": False,
+                    }
+                ],
+                # Navigation is intrinsic to a navigate action.  Emitting a
+                # second navigation effect violates the formal CoreTrace
+                # invariant and makes an otherwise valid recording impossible
+                # to compile.
+                "effects": [],
+            }
+        )
+        with self._mutex:
+            self._require_open()
+            self.recording_timeline_store.finalize_draft(
+                draft_id=draft_id, trace=trace
+            )
+        return trace
+
+    def discard_manual_draft(self, *, draft_id: str) -> None:
+        with self._mutex:
+            self._require_open()
+            self.recording_timeline_store.discard_draft(draft_id=draft_id)
+
+    def recording_projection_items(
+        self,
+    ) -> tuple[CoreTraceDraft | CoreTrace | AIInstructionStep, ...]:
+        with self._mutex:
+            self._require_open()
+            return self.recording_timeline_store.projection_items()
+
+    def recording_projection_state(self):
+        with self._mutex:
+            self._require_open()
+            return self.recording_timeline_store.projection_state()
+
+    def attach_ai_observation(self, *, step_id: str, trace: CoreTrace) -> None:
+        with self._mutex:
+            self._require_open()
+            self.recording_timeline_store.attach_observation(
+                step_id=step_id, trace=trace
+            )
 
     @property
     def reservation_count(self) -> int:
@@ -604,6 +854,15 @@ class SkillCreationSession:
                 raise ValueError(f"creation_session.sequence_mismatch:{candidate_id}")
             self.timeline_store.append(outcome)
             self._accepted_traces[candidate_id] = outcome.core_trace.model_copy(deep=True)
+            try:
+                self.recording_timeline_store.finalize_draft(
+                    draft_id=candidate_id,
+                    trace=outcome.core_trace,
+                )
+            except ValueError as exc:
+                if not str(exc).startswith("recording_timeline.draft_unknown:"):
+                    raise
+                self.recording_timeline_store.append_manual(outcome.core_trace)
         elif isinstance(outcome, RejectedSettlement):
             self._diagnostics[candidate_id] = outcome.diagnostic.model_copy(deep=True)
         else:

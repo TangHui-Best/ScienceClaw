@@ -3,18 +3,34 @@
 import { createApp, nextTick } from 'vue';
 import { describe, expect, it } from 'vitest';
 
-describe('RpaStepTimeline greenfield view model', () => {
-  it('renders accepted/pending/rejected and nested effect without legacy fallbacks', async () => {
+describe('RpaStepTimeline intent-first view model', () => {
+  it('renders independent execution/replay/compile states and nested observations', async () => {
     const { default: Timeline } = await import('./RpaStepTimeline.vue');
-    const root = document.createElement('div'); document.body.appendChild(root);
+    const root = document.createElement('div');
+    document.body.appendChild(root);
     const app = createApp(Timeline, { steps: [
-      { id: 'a', status: 'pending', title: '等待结算', label: 'click', parentId: null, isEffect: false },
-      { id: 'b', status: 'accepted', title: '点击查询', label: 'click', parentId: null, isEffect: false },
-      { id: 'b-effect', status: 'effect', title: '页面导航', label: 'navigation', parentId: 'trace-b', isEffect: true },
-      { id: 'c', status: 'rejected', title: '录制失败', label: 'fill', parentId: null, isEffect: false },
-    ] }); app.mount(root); await nextTick();
-    expect(root.textContent).toContain('待结算'); expect(root.textContent).toContain('已确认'); expect(root.textContent).toContain('已拒绝');
-    expect(root.querySelector('[data-effect-child="true"]')?.textContent).toContain('不计为额外 CoreTrace');
+      {
+        id: 'manual-1', ordinal: 1, kind: 'manual', title: '点击查询', description: '点击查询',
+        label: '手工', action: 'manual', captureStatus: 'captured', executionStatus: 'succeeded',
+        replayStatus: 'deterministic_ready', compileMode: 'playwright', observations: [],
+        isEffect: false, is_action: true, validation: { status: 'deterministic_ready', details: '已完成' },
+      },
+      {
+        id: 'ai-1', ordinal: 2, kind: 'ai_instruction', title: '获取 star 数', description: '获取 star 数',
+        label: 'AI', action: 'agent', captureStatus: 'observing', executionStatus: 'running',
+        replayStatus: 'insufficient_evidence', compileMode: 'agent',
+        observations: [{ trace_id: 'child-1', action: 'click', summary: '打开项目详情' }],
+        isEffect: false, is_action: true, validation: { status: 'insufficient_evidence', details: '执行中' },
+      },
+    ] });
+    app.mount(root);
+    await nextTick();
+    expect(root.textContent).toContain('已完成');
+    expect(root.textContent).toContain('可确定回放');
+    expect(root.textContent).toContain('Playwright');
+    expect(root.textContent).toContain('运行时 AI');
+    expect(root.textContent).toContain('打开项目详情');
+    expect(root.querySelectorAll('article')).toHaveLength(2);
     app.unmount();
   });
 });

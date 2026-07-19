@@ -37,6 +37,7 @@ class ManualTarget:
 class ManualInputCommand:
     input_id: str
     kind: Literal["click", "text", "paste"]
+    draft_id: str | None = None
     x: float | None = None
     y: float | None = None
     text: str | None = None
@@ -149,7 +150,7 @@ class ManualInputProducer:
         self, command: ManualInputCommand, target: ManualTarget
     ) -> ManualInputResult:
         if target.interaction_kind == "fill":
-            candidate_id, token = self._reserve(target)
+            candidate_id, token = self._reserve(target, candidate_id=command.draft_id)
             active = _ActiveFill(
                 candidate_id=candidate_id,
                 token=token,
@@ -183,7 +184,7 @@ class ManualInputProducer:
                 candidate_ids=(),
             )
 
-        candidate_id, token = self._reserve(target)
+        candidate_id, token = self._reserve(target, candidate_id=command.draft_id)
         failure_event = _event(
             target,
             kind=ManualEventKind.CLICK,
@@ -258,7 +259,7 @@ class ManualInputProducer:
     ) -> ManualInputResult:
         active = self._active_fill
         if active is None:
-            candidate_id, token = self._reserve(target)
+            candidate_id, token = self._reserve(target, candidate_id=command.draft_id)
             active = _ActiveFill(candidate_id=candidate_id, token=token, target=target)
             self._active_fill = active
         before_event = _event(
@@ -352,8 +353,10 @@ class ManualInputProducer:
         )
         raise ValueError("manual_input.dispatch_failed") from error
 
-    def _reserve(self, target: ManualTarget) -> tuple[str, str]:
-        candidate_id = "manual_" + secrets.token_hex(12)
+    def _reserve(
+        self, target: ManualTarget, *, candidate_id: str | None = None
+    ) -> tuple[str, str]:
+        candidate_id = candidate_id or "manual_" + secrets.token_hex(12)
         token = self._browser.reserve_manual(
             candidate_id=candidate_id,
             page_runtime_ref=target.page_runtime_ref,

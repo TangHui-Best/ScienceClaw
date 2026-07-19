@@ -7,764 +7,211 @@ binding inference is permitted here.
 
 from __future__ import annotations
 
-import asyncio
-from dataclasses import dataclass
 from datetime import datetime, timezone
-import inspect
+import fnmatch
 import json
+import os
 import secrets
 from types import SimpleNamespace
-from typing import Any, Awaitable, Callable, Mapping
+from typing import Awaitable, Callable, Mapping
 from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, create_model
+from pydantic import JsonValue, create_model
+from openai.types.shared_params.response_format_json_schema import ResponseFormatJSONSchema
 
-from browser_use import Agent, BrowserSession as BrowserUseSession, ChatOpenAI, Tools
-from browser_use.agent.views import ActionResult
+from browser_use import (
+    Agent,
+    BrowserSession as BrowserUseSession,
+    ChatAnthropic,
+    ChatOpenAI,
+)
+from browser_use.llm.exceptions import ModelProviderError
+from browser_use.llm.messages import UserMessage
+from browser_use.llm.openai.serializer import OpenAIMessageSerializer
+from browser_use.llm.schema import SchemaOptimizer
+from browser_use.llm.views import ChatInvokeCompletion
 
 from ..api import AgentInstructionRequest
-from ..browser_use import (
-    BrowserUseInvocationNormalizer,
-    BrowserUseRecordingAdapter,
-    NonSopActionClassification,
-    RecordingRoundReport,
-    TargetResolution,
-)
-
-from ..contracts.models import BusinessVariableRef, Identifier
-from ..creation.session import SessionVariableStore
+from ..browser_use import NonSopActionClassification, RecordingRoundReport
+from ..contracts import CoreTrace
+from ..runtime.variables import DataAssetHandle
 
 
-_VARIABLE_REF = TypeAdapter(BusinessVariableRef)
-_INPUT_REF = TypeAdapter(Identifier)
+MAX_VARIABLE_BYTES = 16 * 1024
+MAX_VARIABLE_COUNT = 200
+MAX_VARIABLE_TOTAL_BYTES = 128 * 1024
+MAX_ASSET_SUMMARY_BYTES = 4 * 1024
+MAX_ASSET_COUNT = 20
+MAX_ASSET_TOTAL_BYTES = 64 * 1024
+MAX_PAGE_ALIASES = 20
+MAX_AGENT_CONTEXT_BYTES = 256 * 1024
+MAX_AGENT_CONTEXT_TOKENS = 32 * 1024
 
 
-@dataclass(frozen=True, slots=True)
-class NormalizedVariableAction:
-    action_name: str
-    params: Mapping[str, object]
-    binding_hints: tuple[Mapping[str, object], ...]
-    variable_outputs: Mapping[str, object]
-    preflight_error: str | None = None
+class _TextFallbackChatAnthropic(ChatAnthropic):
+    """Accept Anthropic-compatible gateways that return JSON as text.
 
+    Some compatible gateways ignore a forced ``tool_choice`` and put the
+    structured Browser-use payload in a text block.  Browser-use already has
+    a strict schema-validation fallback for that response shape, but only
+    enables it for auto tool choice.  Selecting auto here keeps native tool
+    calls preferred while making the existing validated text fallback
+    reachable; malformed prose still fails closed.
+    """
 
-def normalize_variable_action(
-    action_name: str,
-    params: Mapping[str, object],
-    *,
-    variables: SessionVariableStore,
-    allowed_inputs: Mapping[str, object] | None = None,
-    _allow_input_errors: bool = False,
-) -> NormalizedVariableAction:
-    """Normalize only the controlled variable-aware Browser-use actions."""
-
-    variable_ref = _validated_variable_ref(params.get("variable_ref"))
-    if action_name == "input_variable":
-        index = params.get("index")
-        if not isinstance(index, int) or isinstance(index, bool) or index < 0:
-            raise ValueError("browser_use_host.index_invalid")
-        try:
-            value = variables.read(variable_ref)
-        except KeyError as exc:
-            raise ValueError("browser_use_host.variable_missing") from exc
-        if not isinstance(value, (str, int, float, bool)) or value is None:
-            raise ValueError("browser_use_host.input_value_not_scalar")
-        return NormalizedVariableAction(
-            action_name="input",
-            params={"index": index, "text": str(value), "clear": True},
-            binding_hints=(_binding("value", "input", variable_ref),),
-            variable_outputs={},
-        )
-    if action_name == "select_dropdown_variable":
-        index = params.get("index")
-        if not isinstance(index, int) or isinstance(index, bool) or index < 0:
-            raise ValueError("browser_use_host.index_invalid")
-        try:
-            value = variables.read(variable_ref)
-        except KeyError as exc:
-            raise ValueError("browser_use_host.variable_missing") from exc
-        if not isinstance(value, (str, int, float, bool)) or value is None:
-            raise ValueError("browser_use_host.input_value_not_scalar")
-        return NormalizedVariableAction(
-            action_name="select_dropdown",
-            params={"index": index, "text": str(value)},
-            binding_hints=(_binding("option", "input", variable_ref),),
-            variable_outputs={},
-        )
-    if action_name == "click_variable":
-        index = params.get("index")
-        if not isinstance(index, int) or isinstance(index, bool) or index < 0:
-            raise ValueError("browser_use_host.index_invalid")
-        try:
-            variables.read(variable_ref)
-        except KeyError as exc:
-            raise ValueError("browser_use_host.variable_missing") from exc
-        return NormalizedVariableAction(
-            action_name="click",
-            params={"index": index},
-            binding_hints=(_binding("row_key", "input", variable_ref),),
-            variable_outputs={},
-        )
-    if action_name == "extract_variable":
-        value = _copy_json(params.get("value"))
-        input_bindings, input_error = _extract_input_bindings(
-            params.get("input_refs", []),
-            allowed_inputs=allowed_inputs or {},
-        )
-        if input_error is not None and not _allow_input_errors:
-            raise ValueError(input_error)
-        return NormalizedVariableAction(
-            action_name="extract_variable",
-            params={"variable_ref": variable_ref, "value": value},
-            binding_hints=tuple(
-                (*input_bindings, _binding("result", "output", variable_ref))
-            ),
-            variable_outputs={variable_ref: value},
-            preflight_error=input_error,
-        )
-    raise ValueError("browser_use_host.variable_action_unsupported")
-
-
-def normalize_allowed_input_action(
-    action_name: str,
-    params: Mapping[str, object],
-    *,
-    allowed_inputs: Mapping[str, object],
-    _allow_unknown: bool = False,
-) -> NormalizedVariableAction:
-    if action_name != "click_allowed_input":
-        raise ValueError("browser_use_host.allowed_input_action_unsupported")
-    index = params.get("index")
-    if not isinstance(index, int) or isinstance(index, bool) or index < 0:
-        raise ValueError("browser_use_host.index_invalid")
-    try:
-        input_ref = _INPUT_REF.validate_python(params.get("input_ref"), strict=True)
-    except ValidationError as exc:
-        raise ValueError("browser_use_host.input_ref_invalid") from exc
-    if input_ref not in allowed_inputs:
-        if not _allow_unknown:
-            raise ValueError("browser_use_host.allowed_input_unknown")
-    else:
-        value = allowed_inputs[input_ref]
-        if value is None or isinstance(value, (dict, list, tuple)):
-            raise ValueError("browser_use_host.allowed_input_value_not_scalar")
-        try:
-            json.dumps(value, ensure_ascii=False, allow_nan=False)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("browser_use_host.allowed_input_value_not_scalar") from exc
-    return NormalizedVariableAction(
-        action_name="click",
-        params={"index": index},
-        binding_hints=(_binding("row_key", "input", input_ref, kind="skill_input"),),
-        variable_outputs={},
-    )
-
-
-def _validated_variable_ref(value: object) -> str:
-    try:
-        return _VARIABLE_REF.validate_python(value, strict=True)
-    except ValidationError as exc:
-        raise ValueError("browser_use_host.variable_ref_invalid") from exc
-
-
-def _copy_json(value: Any) -> Any:
-    try:
-        encoded = json.dumps(value, ensure_ascii=False, allow_nan=False)
-        return json.loads(encoded)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("browser_use_host.variable_value_not_json") from exc
-
-
-def _extract_input_bindings(
-    raw_refs: object,
-    *,
-    allowed_inputs: Mapping[str, object],
-) -> tuple[tuple[Mapping[str, object], ...], str | None]:
-    if not isinstance(raw_refs, list):
-        return (), "browser_use_host.extract_input_refs_invalid"
-    error: str | None = None
-    refs: list[str] = []
-    seen: set[str] = set()
-    for raw_ref in raw_refs:
-        try:
-            ref = _INPUT_REF.validate_python(raw_ref, strict=True)
-        except ValidationError:
-            error = error or "browser_use_host.input_ref_invalid"
-            continue
-        if ref in seen:
-            error = error or "browser_use_host.extract_input_ref_duplicate"
-            continue
-        seen.add(ref)
-        if ref not in allowed_inputs:
-            error = error or "browser_use_host.allowed_input_unknown"
-            continue
-        try:
-            _require_json_scalar(allowed_inputs[ref])
-        except ValueError:
-            error = error or "browser_use_host.allowed_input_value_not_scalar"
-            continue
-        refs.append(ref)
-    bindings = tuple(
-        _binding(f"input.{ref}", "input", ref, kind="skill_input")
-        for ref in refs
-    )
-    return bindings, error
-
-
-def _require_json_scalar(value: object) -> None:
-    if value is None or isinstance(value, (dict, list, tuple)):
-        raise ValueError("browser_use_host.allowed_input_value_not_scalar")
-    try:
-        json.dumps(value, ensure_ascii=False, allow_nan=False)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("browser_use_host.allowed_input_value_not_scalar") from exc
-
-
-def _binding(
-    name: str, direction: str, variable_ref: str, *, kind: str = "variable"
-) -> Mapping[str, object]:
-    return {
-        "name": name,
-        "direction": direction,
-        "kind_hint": kind,
-        "ref_hint": variable_ref,
-        "sensitive": False,
-    }
-
-
-class _VariableTargetAction(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-    index: int
-    variable_ref: str
-
-
-class _ExtractVariableAction(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-    variable_ref: str
-    value: JsonValue
-    input_refs: list[str] = Field(default_factory=list)
-
-
-class _LiteralInputAction(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-    index: int
-    text: str
-
-
-class _AllowedInputTargetAction(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-    index: int
-    input_ref: Identifier
-
-
-@dataclass(slots=True)
-class _PendingInvocation:
-    action_name: str
-    params: Mapping[str, object]
-    browser_session: object
-    registered_action: object | None
-    variable_outputs: Mapping[str, object]
-    page: object | None = None
-    frame_path: tuple[Mapping[str, object], ...] = ()
-    target_hint: Mapping[str, object] | None = None
-    target_match_count: int = 0
-    standard_kwargs: Mapping[str, object] = None  # type: ignore[assignment]
-    action_timeout: float | None = None
-    preflight_error: str | None = None
-    lifecycle_kind: str | None = None
-    lifecycle_page_runtime_ref: str | None = None
-    lifecycle_frame_runtime_ref: str | None = None
-    result: object | None = None
-
-
-class RecordingBrowserUseTools(Tools):
-    """A 0.13.2 Tools boundary that records every actual invocation once."""
-
-    _EXCLUDED = [
-        "search",
-        "extract",
-        "read_file",
-        "write_file",
-        "replace_file",
-        "screenshot",
-        "save_as_pdf",
-        "upload_file",
-    ]
-
-    def __init__(
-        self,
-        *,
-        hosted: object,
-        instruction: str,
-        allowed_inputs: Mapping[str, object] | None = None,
-    ) -> None:
-        super().__init__(exclude_actions=self._EXCLUDED)
-        self._hosted = hosted
-        self._instruction = instruction
-        self._allowed_inputs = dict(allowed_inputs or {})
-        self._reports: list[RecordingRoundReport] = []
-        self._pending: dict[str, _PendingInvocation] = {}
-        self._target_resolutions: dict[str, TargetResolution] = {}
-        input_action = self.registry.registry.actions.pop("input", None)
-        if input_action is None:
-            raise RuntimeError("browser_use_host.input_action_unavailable")
-        self._hidden_input_action = input_action
-
-        @self.registry.action(
-            "Fill an element with an explicit literal used by the SOP.",
-            param_model=_LiteralInputAction,
-        )
-        async def input_literal(params: _LiteralInputAction) -> ActionResult:
-            del params
-            return ActionResult(error="internal literal action was not normalized")
-
-        @self.registry.action(
-            "Fill an element with an explicitly named business variable. Never copy a sample value.",
-            param_model=_VariableTargetAction,
-        )
-        async def input_variable(params: _VariableTargetAction) -> ActionResult:
-            del params
-            return ActionResult(error="internal variable action was not normalized")
-
-        @self.registry.action(
-            "Select an option using an explicitly named business variable.",
-            param_model=_VariableTargetAction,
-        )
-        async def select_dropdown_variable(
-            params: _VariableTargetAction,
-        ) -> ActionResult:
-            del params
-            return ActionResult(error="internal variable action was not normalized")
-
-        @self.registry.action(
-            "Click the row or control selected by an explicitly named business variable.",
-            param_model=_VariableTargetAction,
-        )
-        async def click_variable(params: _VariableTargetAction) -> ActionResult:
-            del params
-            return ActionResult(error="internal variable action was not normalized")
-
-        @self.registry.action(
-            "Click the row or option selected by an explicitly allowed Skill Input reference.",
-            param_model=_AllowedInputTargetAction,
-        )
-        async def click_allowed_input(
-            params: _AllowedInputTargetAction,
-        ) -> ActionResult:
-            del params
-            return ActionResult(error="internal allowed input action was not normalized")
-
-        @self.registry.action(
-            "Write a JSON value to an explicit business variable reference.",
-            param_model=_ExtractVariableAction,
-        )
-        async def extract_variable(params: _ExtractVariableAction) -> ActionResult:
-            return ActionResult(
-                extracted_content=json.dumps(params.value, ensure_ascii=False)
+    async def ainvoke(self, messages, output_format=None, **kwargs):
+        if output_format is not None:
+            # Compatible gateways can intermittently ignore either forced or
+            # auto tool choice. Alternate the protocol across Browser-use's
+            # bounded retries, while keeping each individual response under
+            # the same strict output schema.
+            self._use_auto_tool_choice = not getattr(
+                self, "_use_auto_tool_choice", False
             )
-
-        creation = getattr(getattr(hosted, "browser"), "creation")
-        self._adapter = BrowserUseRecordingAdapter(
-            session=creation,
-            executor=self._execute_pending,
-            evidence_provider=self._evidence_for,
-            target_resolver=lambda action: self._target_resolutions.get(
-                action.candidate_id,
-                TargetResolution(target_hint=None, match_count=0),
-            ),
-            allowed_extension_actions=frozenset({"extract_variable"}),
-        )
-
-    @property
-    def report(self) -> RecordingRoundReport:
-        return RecordingRoundReport(
-            actual_action_count=sum(item.actual_action_count for item in self._reports),
-            candidate_ids=tuple(
-                candidate
-                for item in self._reports
-                for candidate in item.candidate_ids
-            ),
-            non_sop=tuple(item for report in self._reports for item in report.non_sop),
-            invocation_count=sum(item.invocation_count for item in self._reports),
-            blocked=tuple(item for report in self._reports for item in report.blocked),
-        )
-
-    async def act(self, action: object, browser_session: object, **kwargs: object):
-        action_name, raw_params = _one_tool_action(action)
-        creation = getattr(getattr(self._hosted, "browser"), "creation")
-        normalized: NormalizedVariableAction | None = None
-        preflight_error: str | None = None
-        if action_name == "input_literal":
-            actual_name = "input"
-            actual_params = {
-                "index": raw_params["index"],
-                "text": raw_params["text"],
-                "clear": True,
-            }
-            bindings = (
-                {
-                    "name": "value",
-                    "direction": "input",
-                    "kind_hint": "literal",
-                    "value": raw_params["text"],
-                    "sensitive": False,
-                },
+        try:
+            return await super().ainvoke(
+                messages, output_format=output_format, **kwargs
             )
-            outputs = {}
-        elif action_name == "click_allowed_input":
-            try:
-                normalized = normalize_allowed_input_action(
-                    action_name,
-                    raw_params,
-                    allowed_inputs=self._allowed_inputs,
-                )
-            except ValueError as exc:
-                if str(exc) != "browser_use_host.allowed_input_unknown":
-                    raise
-                normalized = normalize_allowed_input_action(
-                    action_name,
-                    raw_params,
-                    allowed_inputs=self._allowed_inputs,
-                    _allow_unknown=True,
-                )
-                preflight_error = str(exc)
-            actual_name = normalized.action_name
-            actual_params = dict(normalized.params)
-            bindings = normalized.binding_hints
-            outputs = {}
-        elif action_name in {
-            "input_variable",
-            "select_dropdown_variable",
-            "click_variable",
-            "extract_variable",
-        }:
-            try:
-                normalized = normalize_variable_action(
-                    action_name,
-                    raw_params,
-                    variables=creation.variables,
-                    allowed_inputs=self._allowed_inputs,
-                )
-            except ValueError as exc:
-                if action_name != "extract_variable" or str(exc) not in {
-                    "browser_use_host.extract_input_refs_invalid",
-                    "browser_use_host.input_ref_invalid",
-                    "browser_use_host.extract_input_ref_duplicate",
-                    "browser_use_host.allowed_input_unknown",
-                    "browser_use_host.allowed_input_value_not_scalar",
-                }:
-                    raise
-                normalized = normalize_variable_action(
-                    action_name,
-                    raw_params,
-                    variables=creation.variables,
-                    allowed_inputs=self._allowed_inputs,
-                    _allow_input_errors=True,
-                )
-                preflight_error = str(exc)
-            actual_name = normalized.action_name
-            actual_params = dict(normalized.params)
-            bindings = normalized.binding_hints
-            outputs = normalized.variable_outputs
-            preflight_error = preflight_error or normalized.preflight_error
-        else:
-            actual_name = action_name
-            actual_params = dict(raw_params)
-            bindings = ()
-            outputs = {}
+        except ModelProviderError as exc:
+            if (
+                output_format is None
+                or "Expected tool use in response but none found" not in str(exc)
+            ):
+                raise
 
-        port = getattr(getattr(self._hosted, "browser"), "port")
-        page = await port.active_page_object()
-        main_frame = getattr(page, "main_frame", None)
-        if main_frame is None:
-            raise RuntimeError("browser_use_host.main_frame_unavailable")
-        page_runtime_ref = port.page_runtime_ref(page)
-        frame_runtime_ref = port.frame_runtime_ref(main_frame)
-        candidate_id = "bu_" + secrets.token_hex(12)
-        frame_path: tuple[Mapping[str, object], ...] = ()
-        target_hint: Mapping[str, object] | None = None
-        match_count = 0
-        index = actual_params.get("index")
-        if isinstance(index, int) and not isinstance(index, bool):
-            state = await browser_session.get_browser_state_summary(
-                include_screenshot=False
-            )
-            selector_map = getattr(getattr(state, "dom_state", None), "selector_map", {})
-            node = selector_map.get(index) if isinstance(selector_map, Mapping) else None
-            if node is not None:
-                try:
-                    frame_path, target_hint = semantic_hints_from_browser_use_node(node)
-                    match_count = await port.validate_semantic_target(
-                        page=page,
-                        frame_path=frame_path,
-                        target_hint=target_hint,
+            # A few Anthropic-compatible gateways discard ``tool_choice`` even
+            # when they otherwise serve the requested model correctly. Make one
+            # explicit text-JSON request before handing control back to
+            # Browser-use's bounded retry loop. The result is still accepted
+            # only after exact Pydantic validation against the same schema.
+            schema = SchemaOptimizer.create_optimized_json_schema(output_format)
+            fallback_messages = [
+                *messages,
+                UserMessage(
+                    content=(
+                        "The compatibility gateway omitted the requested tool_use. "
+                        "Return only one JSON object (plain or fenced), with no prose, "
+                        "that validates against this exact JSON Schema: "
+                        + json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
                     )
-                except ValueError:
-                    frame_path, target_hint, match_count = (), None, 0
-        tab_runtime_refs: dict[str, str] = {}
-        if actual_name in {"switch", "close"}:
-            tab_runtime_refs = await _tab_runtime_refs(port)
-        normalizer = BrowserUseInvocationNormalizer(
-            page_registry=creation.pages,
-            tab_runtime_resolver=lambda tab: tab_runtime_refs.get(tab)
-            or _unsupported("tab"),
-            main_frame_resolver=lambda runtime_page: port.page_main_frame_runtime_ref(
-                _page_for_runtime(port, runtime_page)
-            ),
-            asset_ref_resolver=lambda _path: _unsupported("asset"),
-            frame_path_resolver=lambda runtime_page, runtime_frame: (
-                frame_path
-                if runtime_page == page_runtime_ref
-                and runtime_frame == frame_runtime_ref
-                else port.resolve_frame_path(runtime_page, runtime_frame)
-            ),
-        )
-        recorded = normalizer.normalize(
-            actual_name,
-            actual_params,
-            candidate_id=candidate_id,
-            business_intent=_action_instruction(
-                self._instruction, action_name, bindings, outputs
-            ),
-            source_page_runtime_ref=page_runtime_ref,
-            source_frame_runtime_ref=frame_runtime_ref,
-            binding_hints=bindings,
-            target_hint=target_hint,
-        )
-        self._target_resolutions[candidate_id] = TargetResolution(
-            target_hint=target_hint, match_count=match_count
-        )
-        registered = (
-            self._hidden_input_action
-            if actual_name == "input"
-            else self.registry.registry.actions.get(actual_name)
-        )
-        self._pending[candidate_id] = _PendingInvocation(
-            action_name=actual_name,
-            params=actual_params,
-            browser_session=browser_session,
-            registered_action=registered,
-            variable_outputs=outputs,
-            page=page,
-            frame_path=frame_path,
-            target_hint=target_hint,
-            target_match_count=match_count,
-            standard_kwargs={
-                key: value
-                for key, value in kwargs.items()
-                if key
-                in {
-                    "page_extraction_llm",
-                    "sensitive_data",
-                    "available_file_paths",
-                    "file_system",
-                    "extraction_schema",
-                }
-            },
-            action_timeout=(
-                float(kwargs["action_timeout"])
-                if isinstance(kwargs.get("action_timeout"), (int, float))
-                and not isinstance(kwargs.get("action_timeout"), bool)
-                and float(kwargs["action_timeout"]) > 0
-                else None
-            ),
-            preflight_error=preflight_error,
-            lifecycle_kind=(
-                "page_activated"
-                if actual_name == "switch"
-                else "page_closed" if actual_name == "close" else None
-            ),
-            lifecycle_page_runtime_ref=(
-                tab_runtime_refs.get(str(actual_params.get("tab_id")))
-                if actual_name in {"switch", "close"}
-                else None
-            ),
-            lifecycle_frame_runtime_ref=frame_runtime_ref,
-        )
-        try:
-            report = await self._adapter.record_round((recorded,))
-            self._reports.append(report)
-            return self._pending[candidate_id].result
-        finally:
-            self._pending.pop(candidate_id, None)
-            self._target_resolutions.pop(candidate_id, None)
-
-    async def _execute_pending(self, action: object) -> object:
-        pending = self._pending[getattr(action, "candidate_id")]
-        registered = pending.registered_action
-        if pending.preflight_error is not None:
-            result = ActionResult(error=pending.preflight_error)
-            pending.result = result
-            return result
-        try:
-            port = getattr(getattr(self._hosted, "browser"), "port")
-            dispatch_scope = getattr(port, "action_dispatch_scope", None)
-            if not callable(dispatch_scope) or pending.page is None:
-                raise RuntimeError("browser_use_host.action_dispatch_scope_unavailable")
-            target = SimpleNamespace(
-                page=pending.page,
-                page_runtime_ref=getattr(action, "runtime_page_ref"),
-                frame_runtime_ref=getattr(action, "runtime_frame_ref"),
+                ),
+            ]
+            text_result = await ChatAnthropic.ainvoke(
+                self, fallback_messages, output_format=None, **kwargs
             )
-            async with dispatch_scope(target):
-                if registered is None:
-                    result = ActionResult(error="Action is not registered")
-                else:
-                    validated = registered.param_model(**pending.params)
-                    returned = registered.function(
-                        params=validated,
-                        browser_session=pending.browser_session,
-                        **dict(pending.standard_kwargs or {}),
-                    )
-                    if inspect.isawaitable(returned):
-                        result = (
-                            await asyncio.wait_for(
-                                returned, timeout=pending.action_timeout
-                            )
-                            if pending.action_timeout is not None
-                            else await returned
-                        )
-                    else:
-                        result = returned
-                    if isinstance(result, str):
-                        result = ActionResult(extracted_content=result)
-                    elif result is None:
-                        result = ActionResult()
-                    elif not isinstance(result, ActionResult):
-                        result = ActionResult(error="Tool returned an invalid result")
+            parsed = output_format.model_validate_json(
+                _validated_json_text(text_result.completion)
+            )
+            return ChatInvokeCompletion(
+                completion=parsed,
+                usage=text_result.usage,
+                stop_reason=text_result.stop_reason,
+                thinking=text_result.thinking,
+                redacted_thinking=text_result.redacted_thinking,
+                stop_details=text_result.stop_details,
+            )
+
+    def _requires_auto_tool_choice(self) -> bool:
+        return getattr(self, "_use_auto_tool_choice", True)
+
+
+def _validated_json_text(value: str) -> str:
+    """Extract one fenced or plain JSON object without accepting prose."""
+
+    text = value.strip()
+    if text.startswith("```"):
+        first_line_end = text.find("\n")
+        if first_line_end < 0 or not text.endswith("```"):
+            raise ValueError("browser_use_host.structured_output_invalid")
+        text = text[first_line_end + 1 : -3].strip()
+    if not text.startswith("{") or not text.endswith("}"):
+        raise ValueError("browser_use_host.structured_output_invalid")
+    return text
+
+
+class _TextJSONChatOpenAI(ChatOpenAI):
+    """Validate JSON fenced by OpenAI-compatible Anthropic gateways."""
+
+    async def ainvoke(self, messages, output_format=None, **kwargs):
+        if output_format is None:
+            return await super().ainvoke(messages, output_format=None, **kwargs)
+        openai_messages = OpenAIMessageSerializer.serialize_messages(messages)
+        response_format = {
+            "name": "agent_output",
+            "strict": True,
+            "schema": SchemaOptimizer.create_optimized_json_schema(
+                output_format,
+                remove_min_items=self.remove_min_items_from_schema,
+                remove_defaults=self.remove_defaults_from_schema,
+            ),
+        }
+        model_params: dict[str, object] = {}
+        if self.temperature is not None:
+            model_params["temperature"] = self.temperature
+        if self.frequency_penalty is not None:
+            model_params["frequency_penalty"] = self.frequency_penalty
+        if self.max_completion_tokens is not None:
+            model_params["max_completion_tokens"] = self.max_completion_tokens
+        if self.top_p is not None:
+            model_params["top_p"] = self.top_p
+        if self.seed is not None:
+            model_params["seed"] = self.seed
+        try:
+            response = await self.get_client().chat.completions.create(
+                model=self.model,
+                messages=openai_messages,
+                response_format=ResponseFormatJSONSchema(
+                    json_schema=response_format, type="json_schema"
+                ),
+                **model_params,
+            )
+            choice = response.choices[0] if response.choices else None
+            if choice is None or choice.message.content is None:
+                raise ValueError("browser_use_host.structured_output_missing")
+            parsed = output_format.model_validate_json(
+                _validated_json_text(choice.message.content)
+            )
+            return ChatInvokeCompletion(
+                completion=parsed,
+                usage=self._get_usage(response),
+                stop_reason=choice.finish_reason,
+            )
         except Exception as exc:
-            result = ActionResult(error=f"{type(exc).__name__}: {exc}")
-        pending.result = result
-        if (
-            pending.lifecycle_kind is not None
-            and pending.lifecycle_page_runtime_ref is not None
-            and getattr(result, "error", None) is None
-            and getattr(result, "success", None) is not False
-        ):
-            from .browser_session import HostBrowserEvent
-
-            getattr(self._hosted, "browser").handle_event(
-                HostBrowserEvent(
-                    kind=pending.lifecycle_kind,
-                    observed_at=datetime.now(timezone.utc),
-                    source_page_runtime_ref=(
-                        getattr(action, "runtime_page_ref")
-                    ),
-                    source_frame_runtime_ref=(
-                        getattr(action, "runtime_frame_ref")
-                    ),
-                    runtime_page_ref=pending.lifecycle_page_runtime_ref,
-                )
-            )
-        return result
-
-    async def _evidence_for(self, action: object, result: object) -> Mapping[str, object]:
-        pending = self._pending[getattr(action, "candidate_id")]
-        if pending.action_name in {
-            "done",
-            "wait",
-            "observe",
-            "search_page",
-            "find_elements",
-            "find_text",
-            "dropdown_options",
-        }:
-            return {}
-        if pending.variable_outputs:
-            return {"variables": dict(pending.variable_outputs)}
-        error = getattr(result, "error", None)
-        success = getattr(result, "success", None)
-        if error is not None or success is False:
-            return {"completed": False}
-        if pending.action_name == "navigate":
-            state = await pending.browser_session.get_browser_state_summary(
-                include_screenshot=False
-            )
-            expected = str(pending.params.get("url", ""))
-            return {"url_reached": str(getattr(state, "url", "")) == expected}
-        if (
-            pending.action_name in {"click", "input", "select_dropdown"}
-            and pending.target_match_count == 1
-            and pending.target_hint is not None
-            and pending.page is not None
-        ):
-            port = getattr(getattr(self._hosted, "browser"), "port")
-            expected = (
-                action.params.get("text")
-                if pending.action_name == "input"
-                else action.params.get("option")
-                if pending.action_name == "select_dropdown"
-                else None
-            )
-            return await port.semantic_action_evidence(
-                action_name=pending.action_name,
-                page=pending.page,
-                frame_path=pending.frame_path,
-                target_hint=pending.target_hint,
-                expected=expected,
-            )
-        if pending.action_name == "switch":
-            runtime_ref = pending.lifecycle_page_runtime_ref
-            if runtime_ref is None:
-                return {"activated_page_ref": ""}
-            page_ref = getattr(getattr(self._hosted, "browser"), "creation").pages.resolve(
-                runtime_ref
-            )
-            return {"activated_page_ref": page_ref}
-        if pending.action_name == "close":
-            return {"closed_page_ref": action.page_ref}
-        if pending.action_name == "send_keys":
-            return {"dispatched": True}
-        return {"completed": True}
+            raise ModelProviderError(message=str(exc), model=self.name) from exc
 
 
-def _one_tool_action(action: object) -> tuple[str, dict[str, object]]:
-    dump = getattr(action, "model_dump", None)
-    if not callable(dump):
-        raise TypeError("browser_use_host.action_invalid")
-    payload = dump(exclude_unset=True, exclude_none=True)
-    if "root" in payload and isinstance(payload["root"], Mapping):
-        payload = payload["root"]
-    selected = [(name, value) for name, value in payload.items() if value is not None]
-    if len(selected) != 1:
-        raise ValueError("browser_use_host.actual_action_count_invalid")
-    name, params = selected[0]
-    if isinstance(params, BaseModel):
-        params = params.model_dump(mode="python", exclude_none=True)
-    if not isinstance(params, Mapping):
-        raise TypeError("browser_use_host.action_params_invalid")
-    return str(name), dict(params)
-
-
-def _unsupported(kind: str):
-    raise ValueError(f"browser_use_host.{kind}_unsupported")
-
-
-def _page_for_runtime(port: object, runtime_ref: str) -> object:
-    pages = tuple(getattr(getattr(port, "context"), "pages", ()) or ())
-    matches = [page for page in pages if port.page_runtime_ref(page) == runtime_ref]
-    if len(matches) != 1:
-        raise ValueError("browser_use_host.runtime_page_ambiguous")
-    return matches[0]
-
-
-def _action_instruction(
-    round_instruction: str,
-    action_name: str,
-    bindings: tuple[Mapping[str, object], ...],
-    outputs: Mapping[str, object],
-) -> str:
-    refs = [str(item["ref_hint"]) for item in bindings if item.get("ref_hint")]
-    return json.dumps(
-        {
-            "round_instruction": round_instruction,
-            "current_action": action_name,
-            "business_variable_refs": refs,
-            "must_return_variable_refs": sorted(outputs),
-        },
-        ensure_ascii=False,
-        sort_keys=True,
+def _canonical_size(value: object) -> int:
+    return len(
+        json.dumps(
+            value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
     )
+
+
+def _validate_agent_context(payload: Mapping[str, object]) -> None:
+    variables = payload.get("variables", {})
+    if not isinstance(variables, Mapping):
+        raise ValueError("agent_context.variables_invalid")
+    if len(variables) > MAX_VARIABLE_COUNT:
+        raise ValueError("agent_context_variables_too_large")
+    variable_sizes = [_canonical_size(value) for value in variables.values()]
+    if any(size > MAX_VARIABLE_BYTES for size in variable_sizes):
+        raise ValueError("agent_context_variable_oversize")
+    if sum(variable_sizes) > MAX_VARIABLE_TOTAL_BYTES:
+        raise ValueError("agent_context_variables_too_large")
+    assets = payload.get("data_assets", {})
+    if not isinstance(assets, Mapping) or len(assets) > MAX_ASSET_COUNT:
+        raise ValueError("agent_context_assets_too_large")
+    asset_sizes = [_canonical_size(value) for value in assets.values()]
+    if any(size > MAX_ASSET_SUMMARY_BYTES for size in asset_sizes) or sum(asset_sizes) > MAX_ASSET_TOTAL_BYTES:
+        raise ValueError("agent_context_assets_too_large")
+    aliases = payload.get("page_aliases", payload.get("scope_hint", {}))
+    if isinstance(aliases, Mapping) and len(aliases) > MAX_PAGE_ALIASES:
+        raise ValueError("agent_context_page_aliases_too_large")
+    total = _canonical_size(payload)
+    if total > MAX_AGENT_CONTEXT_BYTES or (total + 3) // 4 > MAX_AGENT_CONTEXT_TOKENS:
+        raise ValueError("agent_context_too_large")
+
 
 
 def _safe_current_page(page: object) -> Mapping[str, object] | None:
@@ -866,6 +313,22 @@ def _semantic_locators(node: object) -> tuple[Mapping[str, object], ...]:
     return tuple(locators)
 
 
+def _execution_guidance(instruction: str) -> str | None:
+    instruction_lower = instruction.casefold()
+    if "最相关" in instruction or "most related" in instruction_lower:
+        return (
+            "Inspect repositories visible on the current page, choose exactly one "
+            "strongest semantic match, click its repository link, and finish only "
+            "after the repository root page is open. Do not use global site search."
+        )
+    if "star" in instruction_lower or "星标" in instruction:
+        return (
+            "Stay on the current repository page, read the exact repository star "
+            "counter, and return that numeric count. Do not navigate elsewhere."
+        )
+    return None
+
+
 def build_agent_task(
     hosted: object,
     request: AgentInstructionRequest,
@@ -873,9 +336,10 @@ def build_agent_task(
     page: object | None = None,
 ) -> str:
     creation = getattr(getattr(hosted, "browser"), "creation")
-    variables = {
-        ref: creation.variables.read(ref) for ref in request.required_variable_refs
-    }
+    # An AI instruction sees the complete non-secret session variable snapshot.
+    # required_variable_refs is only a backwards-compatible context hint and must
+    # never hide variables produced by earlier timeline items.
+    variables = creation.variables.snapshot()
     port = getattr(getattr(hosted, "browser"), "port")
     page = page if page is not None else getattr(port, "main_page")
     payload = {
@@ -890,13 +354,25 @@ def build_agent_task(
     page_state = _safe_current_page(page)
     if page_state is not None:
         payload["current_page_state"] = page_state
+    guidance = _execution_guidance(request.instruction)
+    if guidance is not None:
+        payload["execution_guidance"] = guidance
+    _validate_agent_context(payload)
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, allow_nan=False)
 
 
-async def _model_for(owner_id: str) -> ChatOpenAI:
-    from backend.models import resolve_default_model_config
+async def _model_for(owner_id: str, model_ref: str | None = None) -> object:
+    from backend.models import get_model_config, resolve_default_model_config
 
-    config = await resolve_default_model_config(owner_id)
+    if model_ref:
+        selected = await get_model_config(model_ref)
+        if selected is None or not selected.is_active or (
+            not selected.is_system and selected.user_id != owner_id
+        ):
+            raise RuntimeError("browser_use_host.model_unavailable")
+        config: Mapping[str, object] | None = selected.model_dump(mode="python")
+    else:
+        config = await resolve_default_model_config(owner_id)
     if not isinstance(config, Mapping):
         raise RuntimeError("browser_use_host.model_unavailable")
     model = config.get("model_name")
@@ -904,11 +380,29 @@ async def _model_for(owner_id: str) -> ChatOpenAI:
     if not isinstance(model, str) or not model or not isinstance(api_key, str) or not api_key:
         raise RuntimeError("browser_use_host.model_invalid")
     base_url = config.get("base_url")
-    return ChatOpenAI(
-        model=model,
-        api_key=api_key,
-        base_url=base_url if isinstance(base_url, str) and base_url else None,
+    provider = str(config.get("provider") or "openai").strip().lower()
+    common = {
+        "model": model,
+        "api_key": api_key,
+        "base_url": base_url if isinstance(base_url, str) and base_url else None,
+    }
+    if provider == "anthropic":
+        return _TextFallbackChatAnthropic(**common)
+    return _TextJSONChatOpenAI(
+        **common,
     )
+
+
+async def _resolve_model(
+    factory: Callable[..., Awaitable[object]], owner_id: str, model_ref: str | None
+) -> object:
+    if model_ref is None:
+        return await factory(owner_id)
+    try:
+        return await factory(owner_id, model_ref)
+    except TypeError:
+        # Test doubles and older host adapters may expose the legacy one-argument shape.
+        return await factory(owner_id)
 
 
 async def execute_browser_use_instruction(
@@ -923,36 +417,157 @@ async def execute_browser_use_instruction(
     cdp_url = getattr(port, "browser_use_cdp_url", None)
     if not isinstance(cdp_url, str) or not cdp_url:
         raise RuntimeError("browser_use_host.cdp_url_unavailable")
-    model = await model_factory(str(getattr(hosted, "owner_id")))
-    tools = RecordingBrowserUseTools(
-        hosted=hosted,
-        instruction=request.instruction,
-        allowed_inputs=request.allowed_inputs,
+    model = await _resolve_model(
+        model_factory,
+        str(getattr(hosted, "owner_id")),
+        request.model_id,
     )
     browser_session = browser_session_factory(cdp_url=cdp_url, keep_alive=True)
     await browser_session.start()
     try:
         page = await port.active_page_object()
         await _focus_exact_page(browser_session, page)
+        output_types = {
+            "string": str,
+            "number": int | float,
+            "boolean": bool,
+            "json": JsonValue,
+        }
+        output_fields = {
+            output.name: (output_types[output.value_type], ...)
+            for output in request.declared_outputs
+        }
+        output_model = (
+            create_model("RecordingAgentOutputs", **output_fields)
+            if output_fields
+            else None
+        )
         agent = agent_factory(
             task=build_agent_task(hosted, request, page=page),
             llm=model,
             browser_session=browser_session,
-            tools=tools,
+            output_model_schema=output_model,
             use_vision=False,
-            max_actions_per_step=1,
-            max_history_items=2,
             enable_signal_handler=False,
         )
-        history = await agent.run(max_steps=40)
+        observed_history_items = 0
+
+        async def observe_completed_step(native_agent: object) -> None:
+            # Deliberately read-only: inspect native history after execution,
+            # append child evidence, and never return a planner/control signal.
+            nonlocal observed_history_items
+            history_list = getattr(native_agent, "history", None)
+            history_items = tuple(getattr(history_list, "history", ()) or ())
+            for history_item in history_items[observed_history_items:]:
+                await _attach_native_history_item(
+                    hosted,
+                    step_id=str(getattr(hosted, "active_operation_id")),
+                    history_item=history_item,
+                )
+            observed_history_items = len(history_items)
+
+        history = await agent.run(on_step_end=observe_completed_step)
         if history.is_done() is not True or history.is_successful() is not True:
             raise RuntimeError("browser_use_host.instruction_failed")
-        report = tools.report
-        if report.invocation_count != report.actual_action_count + len(report.blocked):
-            raise RuntimeError("browser_use_host.action_accounting_incomplete")
-        return report
+        if output_model is not None:
+            structured = history.get_structured_output(output_model)
+            if structured is None:
+                raise RuntimeError("browser_use_host.output_missing")
+            values = structured.model_dump(mode="python")
+            step_id = str(getattr(hosted, "active_operation_id"))
+            getattr(getattr(hosted, "browser"), "creation").variables.write_many(
+                {
+                    output.variable_ref: values[output.name]
+                    for output in request.declared_outputs
+                },
+                producer_candidate_id=step_id,
+            )
+        action_names = tuple(history.action_names())
+        non_sop = tuple(
+            NonSopActionClassification(
+                action_name=name, status="succeeded", reason="control_action"
+            )
+            for name in action_names
+            if name == "done"
+        )
+        actual_action_count = sum(name != "done" for name in action_names)
+        return RecordingRoundReport(
+            invocation_count=len(action_names),
+            actual_action_count=actual_action_count,
+            candidate_ids=(),
+            non_sop=non_sop,
+        )
     finally:
         await browser_session.stop()
+
+
+async def _attach_native_history_item(
+    hosted: object, *, step_id: str, history_item: object
+) -> None:
+    model_output = getattr(history_item, "model_output", None)
+    if model_output is None:
+        return
+    actions = tuple(getattr(model_output, "action", ()) or ())
+    results = tuple(getattr(history_item, "result", ()) or ())
+    state = getattr(history_item, "state", None)
+    elements = tuple(getattr(state, "interacted_element", ()) or ())
+    port = getattr(getattr(hosted, "browser"), "port")
+    page = await port.active_page_object()
+    runtime_page_ref = port.page_runtime_ref(page)
+    page_ref = getattr(getattr(hosted, "browser"), "creation").pages.resolve(
+        runtime_page_ref
+    )
+    for index, action_model in enumerate(actions):
+        result = results[index] if index < len(results) else None
+        if result is not None and getattr(result, "error", None):
+            continue
+        payload = action_model.model_dump(mode="python", exclude_none=True)
+        if not isinstance(payload, Mapping) or len(payload) != 1:
+            continue
+        action_name, params = next(iter(payload.items()))
+        if not isinstance(params, Mapping):
+            continue
+        action: dict[str, object]
+        bindings: list[dict[str, object]] = []
+        frame_path: tuple[Mapping[str, object], ...] = ()
+        if action_name == "navigate":
+            url = params.get("url")
+            if not isinstance(url, str) or not url:
+                continue
+            action = {"kind": "navigate", "mode": "url"}
+            bindings.append(
+                {
+                    "name": "url",
+                    "direction": "input",
+                    "kind": "literal",
+                    "value": url,
+                    "sensitive": False,
+                }
+            )
+        elif action_name == "click":
+            element = elements[index] if index < len(elements) else None
+            if element is None:
+                continue
+            try:
+                frame_path, target = semantic_hints_from_browser_use_node(element)
+            except ValueError:
+                continue
+            action = {"kind": "click", "target": target}
+        else:
+            continue
+        trace = CoreTrace.model_validate(
+            {
+                "trace_id": "trace_obs_" + secrets.token_hex(12),
+                "sequence": 1,
+                "scope": {"page_ref": page_ref, "frame_path": list(frame_path)},
+                "action": action,
+                "data_bindings": bindings,
+                "effects": [],
+            }
+        )
+        getattr(getattr(hosted, "browser"), "creation").attach_ai_observation(
+            step_id=step_id, trace=trace
+        )
 
 
 def build_runtime_agent_backend(
@@ -969,9 +584,23 @@ def build_runtime_agent_backend(
         instruction: str,
         inputs: Mapping[str, object],
         output_names: tuple[str, ...],
+        asset_output_refs: Mapping[str, str] | None = None,
         required_paths: Mapping[str, tuple[str, ...]],
+        variables: Mapping[str, object] | None = None,
+        sensitive_data: Mapping[str, object] | None = None,
+        data_assets: Mapping[str, object] | None = None,
+        step_id: str = "legacy_agent_step",
+        scope_hint: Mapping[str, object] | None = None,
+        expected_effects: tuple[Mapping[str, object], ...] = (),
+        model_policy: Mapping[str, object] | None = None,
     ) -> Mapping[str, object]:
         del target
+        variables = variables or {}
+        sensitive_data = sensitive_data or {}
+        data_assets = data_assets or {}
+        scope_hint = scope_hint or {}
+        model_policy = model_policy or {"mode": "runtime_default", "model_ref": None}
+        asset_output_refs = asset_output_refs or {}
         page = getattr(scope, "page", None)
         if callable(page):
             page = page()
@@ -984,23 +613,58 @@ def build_runtime_agent_backend(
         cdp_url = getattr(port, "browser_use_cdp_url", None)
         if not isinstance(cdp_url, str) or not cdp_url:
             raise RuntimeError("browser_use_host.cdp_url_unavailable")
-        model = await model_factory(str(getattr(hosted, "owner_id")))
-        fields = {name: (JsonValue, ...) for name in output_names}
+        model_ref = (
+            str(model_policy.get("model_ref"))
+            if model_policy.get("mode") == "configured_model"
+            and model_policy.get("model_ref")
+            else None
+        )
+        model = await _resolve_model(
+            model_factory, str(getattr(hosted, "owner_id")), model_ref
+        )
+        scalar_output_names = tuple(
+            name for name in output_names if name not in asset_output_refs
+        )
+        fields = {name: (JsonValue, ...) for name in scalar_output_names}
         output_model = create_model("RuntimeAgentOutputs", **fields) if fields else None
-        task = json.dumps(
-            {
+        task_payload = {
                 "instruction": instruction,
+                "step_id": step_id,
+                "scope_hint": dict(scope_hint),
                 "inputs": dict(inputs),
-                "required_outputs": list(output_names),
+                "variables": dict(variables),
+                "allowed_secret_names": sorted(sensitive_data),
+                "data_assets": {
+                    name: (
+                        value.public_contract()
+                        if callable(getattr(value, "public_contract", None))
+                        else {"ref": name}
+                    )
+                    for name, value in data_assets.items()
+                },
+                "required_outputs": list(scalar_output_names),
+                "download_outputs": dict(asset_output_refs),
                 "required_paths": {
                     name: list(paths) for name, paths in required_paths.items()
                 },
-            },
+            }
+        guidance = _execution_guidance(instruction)
+        if guidance is not None:
+            task_payload["execution_guidance"] = guidance
+        _validate_agent_context(task_payload)
+        task = json.dumps(
+            task_payload,
             ensure_ascii=False,
             sort_keys=True,
             allow_nan=False,
         )
         session = browser_session_factory(cdp_url=cdp_url, keep_alive=True)
+        available_file_paths: list[str] = []
+        for value in data_assets.values():
+            try:
+                available_file_paths.append(os.fspath(value))
+            except TypeError as exc:
+                raise RuntimeError("runtime_agent.asset_path_invalid") from exc
         await session.start()
         try:
             if page is None:
@@ -1012,23 +676,67 @@ def build_runtime_agent_backend(
                 browser_session=session,
                 output_model_schema=output_model,
                 use_vision=False,
-                max_actions_per_step=1,
-                max_history_items=2,
+                sensitive_data={name: str(value) for name, value in sensitive_data.items()},
+                available_file_paths=available_file_paths,
                 enable_signal_handler=False,
             )
-            history = await agent.run(max_steps=30)
+            history = await agent.run()
             if history.is_done() is not True or history.is_successful() is not True:
                 raise RuntimeError("runtime_agent.instruction_failed")
-            if output_model is None:
-                return {}
-            structured = history.get_structured_output(output_model)
-            if structured is None:
-                raise RuntimeError("runtime_agent.output_missing")
-            return structured.model_dump(mode="python")
+            attachments = _history_attachments(history)
+            await _assert_runtime_expected_effects(
+                page, expected_effects, attachment_count=len(attachments)
+            )
+            result: dict[str, object] = {}
+            if output_model is not None:
+                structured = history.get_structured_output(output_model)
+                if structured is None:
+                    raise RuntimeError("runtime_agent.output_missing")
+                result.update(structured.model_dump(mode="python"))
+            if len(attachments) < len(asset_output_refs):
+                raise RuntimeError("runtime_agent.download_output_missing")
+            for (name, ref), path in zip(sorted(asset_output_refs.items()), attachments):
+                result[name] = DataAssetHandle(
+                    ref=ref,
+                    runtime_value=path,
+                    metadata={"name": os.path.basename(path)},
+                )
+            return result
         finally:
             await session.stop()
 
     return backend
+
+
+async def _assert_runtime_expected_effects(
+    page: object,
+    expected_effects: tuple[Mapping[str, object], ...],
+    *,
+    attachment_count: int,
+) -> None:
+    for effect in expected_effects:
+        kind = effect.get("kind")
+        if kind == "navigation":
+            pattern = effect.get("url_pattern")
+            if pattern and not fnmatch.fnmatch(str(getattr(page, "url", "")), str(pattern)):
+                raise RuntimeError("runtime_agent.expected_navigation_missing")
+            continue
+        if kind == "download" and attachment_count > 0:
+            continue
+        # These effects require the runtime EffectCoordinator event ledger. Fail closed
+        # until the concrete event has been registered; never infer success from done text.
+        raise RuntimeError(f"runtime_agent.expected_effect_unverified:{kind}")
+
+
+def _history_attachments(history: object) -> list[str]:
+    action_results = getattr(history, "action_results", None)
+    raw_results = action_results() if callable(action_results) else ()
+    attachments: list[str] = []
+    for result in raw_results or ():
+        for path in getattr(result, "attachments", None) or ():
+            if isinstance(path, str) and path and path not in attachments:
+                attachments.append(path)
+    return attachments
 
 
 async def _focus_exact_page(browser_session: object, page: object) -> None:
@@ -1093,13 +801,9 @@ async def run_compiled_skill_with_agent(hosted: object, request: object):
 
 
 __all__ = [
-    "NormalizedVariableAction",
-    "RecordingBrowserUseTools",
     "build_agent_task",
     "build_runtime_agent_backend",
     "execute_browser_use_instruction",
-    "normalize_allowed_input_action",
-    "normalize_variable_action",
     "run_compiled_skill_with_agent",
     "semantic_hints_from_browser_use_node",
 ]

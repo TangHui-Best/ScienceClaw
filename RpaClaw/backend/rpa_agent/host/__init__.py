@@ -6,7 +6,18 @@ from .browser_session import (
     HostBrowserEvent,
     PlaywrightBrowserSessionPort,
 )
-from .session_store import HostedSession, SessionState, SessionStore
+from .session_store import (
+    AgentIdempotencyRecord,
+    HostedSession,
+    ManualIdempotencyRecord,
+    SessionState,
+    SessionStore,
+)
+from .browser_run_session import (
+    BrowserHostSession,
+    BrowserRunSessionFactory,
+    new_host_identity,
+)
 from .default_services import publish_compiled_skill, run_compiled_skill
 from .manual_input import (
     ManualInputCommand,
@@ -18,9 +29,13 @@ from .manual_input import (
 
 __all__ = [
     "BrowserSession",
+    "BrowserHostSession",
+    "BrowserRunSessionFactory",
     "BrowserSessionPort",
     "HostBrowserEvent",
+    "AgentIdempotencyRecord",
     "HostedSession",
+    "ManualIdempotencyRecord",
     "ManualInputCommand",
     "ManualInputPort",
     "ManualInputProducer",
@@ -31,4 +46,5 @@ __all__ = [
     "SessionStore",
     "publish_compiled_skill",
     "run_compiled_skill",
+    "new_host_identity",
 ]
