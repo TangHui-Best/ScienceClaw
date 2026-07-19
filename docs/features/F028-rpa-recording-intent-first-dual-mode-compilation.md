@@ -65,7 +65,7 @@ updated: 2026-07-20
 
 ## Current Status
 
-In Progress。设计边界已由用户确认并沉淀为 ADR-007；产品代码、Schema、API、UI 和 Harness 尚未按新方案实施，不能声称能力已恢复。
+In Progress。设计边界已由用户确认并沉淀为 ADR-007；正式开发分支 `codex/rpa-agent-intent-first-dual-mode` 已从干净基线 `b8c3aedc` 建立。产品代码、Schema、API、UI 和 Harness 尚未按新方案实施，不能声称能力已恢复。
 
 ## Links
 
@@ -127,6 +127,7 @@ In Progress。设计边界已由用户确认并沉淀为 ADR-007；产品代码�
 | Date | State | Trigger | Evidence | Note |
 | --- | --- | --- | --- | --- |
 | 2026-07-20 | active / design accepted | 用户确认简化链路、双模式编译、Browser-use 边界、AIInstructionStep、全局变量和副作用监听 | ADR-007；本 Feature | 实现尚未开始 |
+| 2026-07-20 | active / implementation branch ready | 当前已提交历史推送后，保存 pre-F028 源码/测试/文档快照，并从 `b8c3aedc` 创建不含旧工作区产品改动的正式分支 | `backup/rpa-agent-v1-coretrace-pre-f028-20260720@d7a01010`；`codex/rpa-agent-intent-first-dual-mode` | 新分支仅携带产品愿景和架构知识，等待影响面审计与实施计划 |
 
 ## Patch History
 
@@ -139,6 +140,8 @@ None yet.
 ## Recovery Snapshot
 
 - Read first: ADR-007，然后阅读本 Feature、F027、ADR-006、旧 Trace-first Recording Design。
+- Development branch: `codex/rpa-agent-intent-first-dual-mode`；独立 worktree 为 `E:\RPA-Agent\.worktrees\rpa-agent-intent-first-dual-mode`。
+- Recovery branch: `backup/rpa-agent-v1-coretrace-pre-f028-20260720@d7a01010` 保存 pre-F028 源码、测试、UI 修复和已否决实验；不得整分支合并回正式分支。
 - Current capability state: 设计已接受；当前工作区仍运行 F027 风格的 Browser-use 扩展工具、`done` 门禁、Candidate/Settlement 热路径和现有 Compiler。
 - Known risks: 当前 CoreTrace/Timeline 契约假设 Compiler 只消费已结算 CoreTrace；UI/API 仍按 Candidate/CoreTrace 投影；手工 AI 降级确认和大型 DataAsset 上下文上限尚需实现期冻结。
 - Next safe action: 先做零基线实现计划和影响面审计，按录制时间线、Browser-use 透明观察、Settlement、Compiler/Runtime、UI/Harness 分层迁移。
