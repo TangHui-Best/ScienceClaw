@@ -1,5 +1,7 @@
 # RPA Agent CoreTrace 到 SKILL 编译链路设计基线
 
+> **生命周期说明（2026-07-20）：** [F028 实施设计](2026-07-20-rpa-agent-intent-first-dual-mode-implementation-design.md) 已更新本文中“CoreTraceTimeline 是 Compiler 唯一输入”和“证据不足阻止编译”的范围。CoreTrace 的 Action/Scope/Binding/Effect、确定性 Action 编译、RunContext 与四文件原子发布部分仍然有效；新 Compiler 以 `RecordingTimeline` 为输入，并允许证据不足的 AI 步骤编译为 `AgentSegment`。
+
 > 文档状态：v0.1 设计与验收基线，已确认。
 > 适用范围：CoreTrace Timeline 到宿主型 RPA Agent SKILL 的编译、运行和产物契约。
 > 目标读者：后续负责实现 `backend/rpa_agent` 的 Agent、研发人员和评审人员。

@@ -1,5 +1,7 @@
 # RPA Agent 基于 ScienceClaw 宿主重构设计基线
 
+> **生命周期说明（2026-07-20）：** [F028 实施设计](2026-07-20-rpa-agent-intent-first-dual-mode-implementation-design.md) 已更新本文中 Browser-use Tools Adapter、Candidate 驱动用户时间线、Settlement 介入录制热路径等内容。宿主隔离、旧 UI 选择性复用和新领域核心不依赖旧 `backend.rpa` 的部分仍然有效；发生冲突时以 ADR-007 和 F028 实施设计为准。
+
 > 文档状态：已确认设计基线。
 >
 > 文档用途：固定 RPA Agent 在 ScienceClaw 仓库内重新实现时的宿主复用边界、领域隔离规则、分支策略、旧链路退出条件和首批实施约束。

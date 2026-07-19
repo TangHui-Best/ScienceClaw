@@ -27,7 +27,7 @@ updated: 2026-07-20
 - Capability promise: 建立 Action-first 手工路径和 Intent-first 自然语言路径，以同一 CoreTrace 事实模型和双模式 Compiler 完成稳定回放或 AI 降级。
 - Non-goals: 不建设通用 DAG、完整调试器、跨 Skill 全局变量、旧数据兼容层或站点专用规则。
 - Acceptance source: ADR-007 中的设计原则、数据流和七个验收场景；旧 ScienceClaw UI 行为；真实 Browser-use 本地运行结果。
-- Open questions: 手工步骤自动生成的 AI 语义描述需要达到什么证据阈值才能免用户确认；大型 DataAsset 向 Agent 暴露摘要和按需读取接口的具体上限。
+- Open questions: 无阻塞实施的产品问题。手工步骤不自动生成 AI 语义：确定性不足时必须由用户补回退指令或重录；Agent Context/DataAsset 的 V1 byte/token/item 上限和失败行为已在权威实施规格第 6.8 节冻结。
 
 ## Capability Contract
 
@@ -65,12 +65,13 @@ updated: 2026-07-20
 
 ## Current Status
 
-In Progress。设计边界已由用户确认并沉淀为 ADR-007；正式开发分支 `codex/rpa-agent-intent-first-dual-mode` 已从干净基线 `b8c3aedc` 建立。产品代码、Schema、API、UI 和 Harness 尚未按新方案实施，不能声称能力已恢复。
+In Progress / implementation pending。设计边界已由用户确认并沉淀为 ADR-007；自包含权威实施规格已完成并通过独立冷启动可实施性复核；正式开发分支 `codex/rpa-agent-intent-first-dual-mode` 已从干净基线 `b8c3aedc` 建立。产品代码、Schema、API、UI 和运行 Harness 尚未按新方案实施，不能声称能力已恢复。
 
 ## Links
 
 ### Evidence
 
+- [EV-034 F028 实施规格冷启动可实施性审阅](../evidence/EV-034-f028-implementation-spec-cold-start-review.md)
 - [EV-033 F027 录制结算与 Live UI 验证](../evidence/EV-033-rpa-recording-finalization-live-ui.md)
 
 ### Decisions / ADRs
@@ -86,6 +87,7 @@ In Progress。设计边界已由用户确认并沉淀为 ADR-007；正式开发�
 
 ### Specs / Plans
 
+- [RPA Agent 意图优先录制与双模式编译实施设计（权威实施规格）](../superpowers/specs/2026-07-20-rpa-agent-intent-first-dual-mode-implementation-design.md)
 - [RPA Trace-first Recording Design](../superpowers/specs/2026-04-20-rpa-trace-first-recording-design.md)
 - [CoreTrace 到 SKILL 编译链路设计基线](../superpowers/specs/2026-07-17-RPA-Agent-CoreTrace到SKILL编译链路设计基线.md)
 - [业务变量绑定与录制态上下文设计基线](../superpowers/specs/2026-07-17-RPA-Agent业务变量绑定与录制态上下文设计基线.md)
@@ -121,6 +123,7 @@ In Progress。设计边界已由用户确认并沉淀为 ADR-007；正式开发�
 | 副作用闭环 | click + download 编译为 `expect_download()` | 待实现后的受控页面与 Live E2E | pending |
 | 全局变量连续性 | 前序输出可被后续 AI 使用并继续写回 | 待实现后的双用例回放与 Oracle | pending |
 | 设计边界 | ADR 覆盖原因、数据流、原则、拒绝方案和修改检查 | ADR-007 | pass |
+| 实施可执行性 | 零背景工程师/Agent 能从单一规格得到模块、数据、API、迁移、回滚与验收契约 | 权威实施规格；EV-034 | pass |
 
 ## State Timeline
 
@@ -128,6 +131,7 @@ In Progress。设计边界已由用户确认并沉淀为 ADR-007；正式开发�
 | --- | --- | --- | --- | --- |
 | 2026-07-20 | active / design accepted | 用户确认简化链路、双模式编译、Browser-use 边界、AIInstructionStep、全局变量和副作用监听 | ADR-007；本 Feature | 实现尚未开始 |
 | 2026-07-20 | active / implementation branch ready | 当前已提交历史推送后，保存 pre-F028 源码/测试/文档快照，并从 `b8c3aedc` 创建不含旧工作区产品改动的正式分支 | `backup/rpa-agent-v1-coretrace-pre-f028-20260720@d7a01010`；`codex/rpa-agent-intent-first-dual-mode` | 新分支仅携带产品愿景和架构知识，等待影响面审计与实施计划 |
+| 2026-07-20 | active / implementation spec reviewed | 面向零背景 Coding Agent 补齐技术/数据架构、API/并发、会话所有权、迁移与验收；独立冷启动审阅发现并关闭 5 个 P0 | 权威实施规格；EV-034 | 规格可实施，不代表产品代码已实现 |
 
 ## Patch History
 
@@ -135,18 +139,19 @@ None yet.
 
 ## Evidence
 
-当前只有设计证据：用户真实复现推翻了 F027 的运行态门禁假设，ADR-007 已固定替代边界。尚无代码、自动化或 Live E2E 证据证明新能力已经实现。
+当前只有设计与可实施性审阅证据：用户真实复现推翻了 F027 的运行态门禁假设，ADR-007 已固定替代边界，EV-034 证明权威实施规格的五个冷启动 P0 已关闭。尚无产品代码、自动化或 Live E2E 证据证明新能力已经实现。
 
 ## Recovery Snapshot
 
+- Implementation source of truth: `docs/superpowers/specs/2026-07-20-rpa-agent-intent-first-dual-mode-implementation-design.md`。新 Agent 应先阅读该文档，再阅读 ADR-007；不得仅依据 F028 摘要或当前代码推断方案。
 - Read first: ADR-007，然后阅读本 Feature、F027、ADR-006、旧 Trace-first Recording Design。
 - Development branch: `codex/rpa-agent-intent-first-dual-mode`；独立 worktree 为 `E:\RPA-Agent\.worktrees\rpa-agent-intent-first-dual-mode`。
 - Recovery branch: `backup/rpa-agent-v1-coretrace-pre-f028-20260720@d7a01010` 保存 pre-F028 源码、测试、UI 修复和已否决实验；不得整分支合并回正式分支。
 - Current capability state: 设计已接受；当前工作区仍运行 F027 风格的 Browser-use 扩展工具、`done` 门禁、Candidate/Settlement 热路径和现有 Compiler。
-- Known risks: 当前 CoreTrace/Timeline 契约假设 Compiler 只消费已结算 CoreTrace；UI/API 仍按 Candidate/CoreTrace 投影；手工 AI 降级确认和大型 DataAsset 上下文上限尚需实现期冻结。
-- Next safe action: 先做零基线实现计划和影响面审计，按录制时间线、Browser-use 透明观察、Settlement、Compiler/Runtime、UI/Harness 分层迁移。
+- Known risks: 当前产品代码仍假设 Compiler 只消费已结算 CoreTrace，UI/API 仍按 Candidate/CoreTrace 投影，Session 长锁和 Browser-use 录制控制尚未移除；规格已冻结手工 fallback、DataAsset 上限、Agent per-step policy 和会话隔离，但都尚未实现。
+- Next safe action: 按权威实施规格“增量 0：契约与 Harness”开工，先建立数据 contract tests、Browser-use 构造参数守卫和迁移清单，再改生产热路径。
 - Unblock condition: 不需要额外产品方向确认；进入实现前只需把 ADR-007 的契约转换为可验证增量和回滚点。
 
 ## Next Step
 
-基于 ADR-007 制定实施计划：先恢复 Browser-use 原生运行和即时 RecordingTimelineItem，再闭合 ReplayAssessment、双模式 Compiler、全局变量与副作用 E2E。不得从局部删除 `extract_variable` 或放宽 `done` 开始无 Harness 修补。
+执行权威实施规格第 13 节：先完成增量 0 的契约与 Harness，再恢复 Browser-use 原生运行和即时 RecordingTimelineItem，随后闭合 ReplayAssessment、双模式 Compiler、全局变量、副作用和本地真实 LLM E2E。不得从局部删除 `extract_variable` 或放宽 `done` 开始无 Harness 修补。

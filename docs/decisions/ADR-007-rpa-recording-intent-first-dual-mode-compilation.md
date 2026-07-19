@@ -75,13 +75,13 @@ AIInstructionStep 的最小职责是：
 
 ```text
 step_id
-sequence
 instruction
-execution_status
+execution
 observation_trace_refs[]
-compile_mode: pending | playwright | agent
 expected_outputs[]
 ```
+
+用户时间线顺序只由 `RecordingTimeline.items` 数组决定；`compile_mode` 是 ReplayAssessment/Compiler 的派生状态，只进入 Projection 与 CompiledStep，不写回 AIInstructionStep。这样避免同一领域对象同时保存意图事实和编译决策。
 
 AIInstructionStep 表达用户意图和内部观察分组，不表达浏览器动作事实。旁路观察到的实际动作仍使用 CoreTrace，并通过 `observation_trace_refs` 与该 AI 步骤关联；这些子动作默认不拆成左侧主步骤。
 
@@ -203,7 +203,7 @@ expected_effects
 
 - `variables` 只包含当前会话或本次 Skill 运行中、截至当前步骤已经产生的非敏感值；
 - 普通标量和小型 JSON 对象可以提供完整值；大型 DataAsset 提供引用和摘要，按需读取；
-- Secret 与普通变量分离，只提供明确允许的名称和值；
+- Secret 与普通变量分离：task/context JSON 只提供允许的名称；值仅在执行边界由 SecretResolver 解析，并通过 Browser-use 原生 `sensitive_data` 通道或确定性受控动作使用，且必须从日志、History 回调、CoreTrace 和产物中脱敏；
 - AI 步骤必须返回声明的结构化输出，输出写回 SessionVariableStore 或 RunContext，供后续手工、Playwright 或 AI 步骤使用；
 - 不跨用户、录制会话、Skill 或运行实例共享所谓“全局变量”。
 
@@ -450,6 +450,7 @@ CompiledStep 顺序执行
 
 ## Evidence
 
+- Implementation specification: [RPA Agent 意图优先录制与双模式编译实施设计](../superpowers/specs/2026-07-20-rpa-agent-intent-first-dual-mode-implementation-design.md)
 - Feature: [F028 RPA 录制意图优先与双模式编译](../features/F028-rpa-recording-intent-first-dual-mode-compilation.md)
 - Superseded Feature: [F027 RPA Agent 录制动作结算与输出语义闭环](../features/F027-rpa-agent-recording-finalization-contract.md)
 - Updated decision: [ADR-006 在 ScienceClaw 宿主内绿地重建 RPA Agent 领域核心](./ADR-006-rpa-agent-scienceclaw-host-greenfield-core.md)
