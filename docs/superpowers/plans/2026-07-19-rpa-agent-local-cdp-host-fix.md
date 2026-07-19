@@ -176,7 +176,7 @@ CDPUrlResolver = Callable[[str, str], Awaitable[str]]
 +            if not isinstance(rest_base_url, str) or not rest_base_url:
 +                raise RuntimeError("browser_runtime.rest_base_url_invalid")
 +            cdp_url = await fetch_cdp_url(rest_base_url)
- 
+
          owned = _OWNED_RESOURCES.get(key)
 ```
 
