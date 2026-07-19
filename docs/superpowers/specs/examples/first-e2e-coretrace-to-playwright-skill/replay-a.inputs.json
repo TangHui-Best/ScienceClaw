@@ -1,0 +1,11 @@
+{
+  "fixture_profile": "A",
+  "inputs": {
+    "system_a_url": "http://127.0.0.1:8000/system-a/orders",
+    "query.business_type": "设备采购",
+    "query.date_from": "2026-05-01",
+    "query.date_to": "2026-05-31",
+    "query.supplier_name": "华东精密设备有限公司",
+    "query.order_no": "PO-2026-05017"
+  }
+}

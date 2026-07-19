@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 from os import getenv
 from pathlib import Path
 from secrets import token_urlsafe
@@ -187,6 +188,140 @@ def load_fixtures(db: Session) -> None:
             updated_at=datetime(2026, 1, 9, 10, 5, 0),
         )
     )
+    db.commit()
+
+
+ACCEPTANCE_PROFILES = {
+    "A": [
+        {
+            "order_no": "PO-2026-05017",
+            "business_type": "设备采购",
+            "supplier_name": "华东精密设备有限公司",
+            "contract_no": "CT-2026-0088",
+            "amount": Decimal("128600.50"),
+            "currency": "CNY",
+            "order_date": "2026-05-16",
+        },
+        {
+            "order_no": "PO-2026-05031",
+            "business_type": "设备采购",
+            "supplier_name": "华南自动化设备有限公司",
+            "contract_no": "CT-2026-0091",
+            "amount": Decimal("98600.00"),
+            "currency": "CNY",
+            "order_date": "2026-05-20",
+        },
+        {
+            "order_no": "PO-2026-05009",
+            "business_type": "备件采购",
+            "supplier_name": "西岭工业组件有限公司",
+            "contract_no": "CT-2026-0079",
+            "amount": Decimal("42680.25"),
+            "currency": "EUR",
+            "order_date": "2026-05-08",
+        },
+    ],
+    "B": [
+        {
+            "order_no": "PO-2026-06011",
+            "business_type": "软件采购",
+            "supplier_name": "远航云服务有限公司",
+            "contract_no": "CT-2026-0104",
+            "amount": Decimal("38900.00"),
+            "currency": "CNY",
+            "order_date": "2026-06-03",
+        },
+        {
+            "order_no": "PO-2026-06037",
+            "business_type": "服务采购",
+            "supplier_name": "青禾咨询有限公司",
+            "contract_no": "CT-2026-0112",
+            "amount": Decimal("23600.40"),
+            "currency": "GBP",
+            "order_date": "2026-06-06",
+        },
+        {
+            "order_no": "PO-2026-06042",
+            "business_type": "服务采购",
+            "supplier_name": "北辰数字技术有限公司",
+            "contract_no": "CT-2026-0116",
+            "amount": Decimal("10150.75"),
+            "currency": "USD",
+            "order_date": "2026-06-08",
+        },
+    ],
+}
+ACCEPTANCE_TARGET_ORDER_NOS = {
+    "A": "PO-2026-05017",
+    "B": "PO-2026-06042",
+}
+
+
+def load_acceptance_profile(db: Session, profile: str) -> None:
+    normalized = profile.upper()
+    if normalized not in ACCEPTANCE_PROFILES:
+        raise ValueError(f"Unknown acceptance profile: {profile}")
+
+    for position, row in enumerate(ACCEPTANCE_PROFILES[normalized], start=1):
+        suffix = f"{normalized}-{position}"
+        supplier = Supplier(
+            number=f"E2E-SUP-{suffix}",
+            name=row["supplier_name"],
+            status="active",
+            category=row["business_type"],
+            region="E2E",
+            risk_level="low",
+            compliance_rating="A",
+        )
+        db.add(supplier)
+        db.flush()
+
+        contract = Contract(
+            number=row["contract_no"],
+            title=f"{row['order_no']} 验收合同",
+            contract_type="acceptance_e2e",
+            status="effective",
+            supplier_id=supplier.id,
+            amount=float(row["amount"]),
+            currency=row["currency"],
+            owner_department="采购管理部",
+            start_date=row["order_date"],
+            end_date="2027-12-31",
+            compliance_clause="用于首个阶段一 E2E 验收。",
+        )
+        db.add(contract)
+        db.flush()
+
+        request = PurchaseRequest(
+            number=f"E2E-PR-{suffix}",
+            title=f"{row['order_no']} 采购申请",
+            contract_id=contract.id,
+            department="采购管理部",
+            requester="E2E",
+            status="approved",
+            total_amount=float(row["amount"]),
+            created_at=datetime.fromisoformat(f"{row['order_date']}T08:00:00"),
+        )
+        db.add(request)
+        db.flush()
+
+        db.add(
+            PurchaseOrder(
+                number=row["order_no"],
+                purchase_request_id=request.id,
+                supplier_id=supplier.id,
+                status="pending_acceptance",
+                priority="normal",
+                total_amount=float(row["amount"]),
+                created_at=datetime.fromisoformat(f"{row['order_date']}T09:00:00"),
+                profile=normalized,
+                display_position=position,
+                business_type=row["business_type"],
+                currency=row["currency"],
+                order_date=row["order_date"],
+                acceptance_target=row["order_no"] == ACCEPTANCE_TARGET_ORDER_NOS[normalized],
+            )
+        )
     db.commit()
 
 

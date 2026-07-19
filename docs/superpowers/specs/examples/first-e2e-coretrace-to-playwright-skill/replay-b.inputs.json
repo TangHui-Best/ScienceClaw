@@ -1,0 +1,11 @@
+{
+  "fixture_profile": "B",
+  "inputs": {
+    "system_a_url": "http://127.0.0.1:8000/system-a/orders",
+    "query.business_type": "服务采购",
+    "query.date_from": "2026-06-01",
+    "query.date_to": "2026-06-30",
+    "query.supplier_name": "北辰数字技术有限公司",
+    "query.order_no": "PO-2026-06042"
+  }
+}

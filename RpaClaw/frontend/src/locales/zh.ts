@@ -1012,4 +1012,12 @@ export default {
   'Harness Next NL Step': '下一条自然语言步骤',
   'Failed to start Harness capture': '启动 Harness capture 失败',
   'Failed to mark Harness step': '标记 Harness step 失败',
+  'RPA Agent Recorder': 'RPA Agent 录制工作台',
+  'Stop recording': '停止录制',
+  'Natural language operation': '自然语言操作',
+  'Post-recording configuration': '录制后配置',
+  'Save configuration and compile': '保存配置并编译',
+  'Test replay': '测试回放',
+  'Save SKILL': '保存 SKILL',
+  'Missing browserSessionRef': '缺少 browserSessionRef，无法启动录制。',
 }

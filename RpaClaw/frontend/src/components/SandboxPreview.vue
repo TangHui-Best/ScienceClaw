@@ -98,7 +98,17 @@
         <div class="relative min-h-0 flex-1 bg-black">
           <canvas
             ref="canvasRef"
-            class="h-full w-full bg-black object-contain"
+            class="h-full w-full bg-black object-contain outline-none"
+            tabindex="0"
+            @click="focusCanvas"
+            @mousedown="sendInputEvent"
+            @mouseup="sendInputEvent"
+            @mousemove="sendInputEvent"
+            @wheel.prevent="sendInputEvent"
+            @keydown="sendInputEvent"
+            @keyup.prevent="sendInputEvent"
+            @paste.prevent="handlePaste"
+            @contextmenu.prevent
           />
           <div
             v-if="previewError"
@@ -121,8 +131,12 @@ import SandboxTerminal from './SandboxTerminal.vue';
 import { getBackendVncPageUrl, getBackendWsUrl, isLocalMode, type SandboxPreviewMode } from '@/utils/sandbox';
 import {
   getFrameSizeFromMetadata,
+  getInputSizeFromMetadata,
+  mapClientPointToViewportPoint,
   type ScreencastFrameMetadata,
+  type ScreencastSize,
 } from '@/utils/screencastGeometry';
+import { shouldForwardScreencastKeyboardEvent } from '@/utils/screencastInput';
 import { getSandboxPreviewTabs, type SandboxPreviewTabId } from '@/utils/sandboxPreviewTabs';
 import {
   getBrowserPreviewTabLabel,
@@ -145,7 +159,17 @@ const props = defineProps<{
   history?: SandboxExecEntry[];
   sessionId?: string;
   variant?: 'panel' | 'inline';
+  manualInputDispatcher?: (input: SandboxManualInput) => Promise<void>;
+  manualInputDisabled?: boolean;
 }>();
+
+export interface SandboxManualInput {
+  input_id: string;
+  kind: 'click' | 'text' | 'paste';
+  x?: number;
+  y?: number;
+  text?: string;
+}
 
 const emit = defineEmits<{
   (e: 'close'): void;
@@ -158,10 +182,113 @@ const terminalRef = ref<InstanceType<typeof SandboxTerminal> | null>(null);
 const visible = ref(false);
 const localMode = ref(isLocalMode());
 const canvasRef = ref<HTMLCanvasElement | null>(null);
+const screencastFrameSize = ref<ScreencastSize>({ width: 300, height: 150 });
+const screencastInputSize = ref<ScreencastSize>({ width: 300, height: 150 });
 const browserTabs = ref<BrowserPreviewTab[]>([]);
 const activeBrowserTabId = ref<string | null>(null);
 const previewError = ref('');
 let screencastWs: WebSocket | null = null;
+let lastMoveAt = 0;
+let manualInputSequence = 0;
+let manualInputTail: Promise<void> = Promise.resolve();
+
+const nextManualInputId = () => {
+  manualInputSequence += 1;
+  return `input_${Date.now().toString(36)}_${manualInputSequence.toString(36)}`;
+};
+
+const queueManualInput = (input: Omit<SandboxManualInput, 'input_id'>): boolean => {
+  if (!props.manualInputDispatcher || props.manualInputDisabled) return false;
+  const payload = { input_id: nextManualInputId(), ...input } as SandboxManualInput;
+  manualInputTail = manualInputTail
+    .then(() => props.manualInputDispatcher!(payload))
+    .then(() => { previewError.value = ''; })
+    .catch(() => { previewError.value = '人工录制操作失败，浏览器未执行该操作。'; });
+  return true;
+};
+
+const modifiers = (event: MouseEvent | KeyboardEvent | WheelEvent): number => {
+  let mask = 0;
+  if (event.altKey) mask |= 1;
+  if (event.ctrlKey) mask |= 2;
+  if (event.metaKey) mask |= 4;
+  if (event.shiftKey) mask |= 8;
+  return mask;
+};
+
+const pointFor = (event: MouseEvent | WheelEvent) => {
+  const canvas = canvasRef.value;
+  if (!canvas) return null;
+  const rect = canvas.getBoundingClientRect();
+  return mapClientPointToViewportPoint({
+    clientX: event.clientX,
+    clientY: event.clientY,
+    containerRect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+    frameSize: screencastFrameSize.value,
+    inputSize: screencastInputSize.value,
+  });
+};
+
+const focusCanvas = () => canvasRef.value?.focus();
+
+const sendInputEvent = (event: Event) => {
+  if (props.manualInputDispatcher && !props.manualInputDisabled) {
+    if (event instanceof MouseEvent) {
+      if (event.type === 'mousedown') {
+        event.preventDefault();
+        if (event.button === 0) {
+          const point = pointFor(event); if (!point) return;
+          queueManualInput({ kind: 'click', x: point.x, y: point.y });
+        } else {
+          previewError.value = '录制模式暂不执行非左键点击。';
+        }
+        return;
+      }
+      if (event.type === 'mouseup') {
+        event.preventDefault();
+        return;
+      }
+    }
+    if (event instanceof KeyboardEvent) {
+      event.preventDefault();
+      if (event.type === 'keyup') return;
+      if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        queueManualInput({ kind: 'text', text: event.key });
+      } else {
+        previewError.value = '录制模式暂不执行特殊按键；请使用鼠标切换控件，并通过直接输入或粘贴录入值。';
+      }
+      return;
+    }
+  }
+  if (!screencastWs || screencastWs.readyState !== WebSocket.OPEN) return;
+  if (event instanceof WheelEvent) {
+    const point = pointFor(event); if (!point) return;
+    screencastWs.send(JSON.stringify({ type: 'wheel', coordinateSpace: 'css-pixel', ...point, deltaX: event.deltaX, deltaY: event.deltaY, modifiers: modifiers(event) }));
+    return;
+  }
+  if (event instanceof MouseEvent) {
+    if (event.type === 'mousemove') {
+      const now = Date.now(); if (now - lastMoveAt < 40) return; lastMoveAt = now;
+    }
+    const point = pointFor(event); if (!point) return;
+    const action = ({ mousedown: 'mousePressed', mouseup: 'mouseReleased', mousemove: 'mouseMoved' } as Record<string, string>)[event.type];
+    if (!action) return;
+    screencastWs.send(JSON.stringify({ type: 'mouse', action, coordinateSpace: 'css-pixel', ...point, button: ['left', 'middle', 'right'][event.button] || 'left', clickCount: event.type === 'mousedown' ? 1 : 0, modifiers: modifiers(event) }));
+    return;
+  }
+  if (event instanceof KeyboardEvent) {
+    if (!shouldForwardScreencastKeyboardEvent(event)) return;
+    event.preventDefault();
+    screencastWs.send(JSON.stringify({ type: 'keyboard', action: event.type === 'keydown' ? 'keyDown' : 'keyUp', key: event.key, code: event.code, text: event.type === 'keydown' && event.key.length === 1 ? event.key : '', modifiers: modifiers(event) }));
+  }
+};
+
+const handlePaste = (event: ClipboardEvent) => {
+  const text = event.clipboardData?.getData('text');
+  if (text && queueManualInput({ kind: 'paste', text })) return;
+  if (!screencastWs || screencastWs.readyState !== WebSocket.OPEN) return;
+  if (text) screencastWs.send(JSON.stringify({ type: 'paste', text }));
+};
 
 const vncPageUrl = computed(() => getBackendVncPageUrl(props.sessionId || 'sandbox', true));
 
@@ -191,6 +318,9 @@ const drawFrame = (base64Data: string, metadata?: ScreencastFrameMetadata) => {
       width: img.naturalWidth,
       height: img.naturalHeight,
     });
+    const inputSize = getInputSizeFromMetadata(metadata, frameSize);
+    screencastFrameSize.value = frameSize;
+    screencastInputSize.value = inputSize;
     if (canvas.width !== frameSize.width) canvas.width = frameSize.width;
     if (canvas.height !== frameSize.height) canvas.height = frameSize.height;
     ctx.drawImage(img, 0, 0);

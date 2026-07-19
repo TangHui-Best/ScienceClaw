@@ -27,6 +27,10 @@ from backend.route.memory import router as memory_router
 from backend.route.chat import router as chat_router
 from backend.route.statistics import router as statistics_router
 from backend.route.rpa import router as rpa_router
+from backend.route.rpa_agent import (
+    router as rpa_agent_router,
+    rpa_agent_default_services,
+)
 from backend.route.credential import router as credential_router
 from backend.route.mcp import router as mcp_router
 from backend.route.rpa_mcp import router as rpa_mcp_router
@@ -59,10 +63,29 @@ async def _runtime_cleanup_loop(stop_event: asyncio.Event) -> None:
             continue
 
 
+async def _rpa_agent_cleanup_loop(stop_event: asyncio.Event) -> None:
+    store = rpa_agent_default_services.store
+    if store is None:
+        return
+    while not stop_event.is_set():
+        try:
+            cleaned = await store.cleanup_expired()
+            if cleaned:
+                logger.info(f"Cleaned up {cleaned} expired RPA Agent session(s)")
+        except Exception as exc:
+            logger.error(f"Failed to cleanup expired RPA Agent sessions: {exc}")
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=60)
+        except asyncio.TimeoutError:
+            continue
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     runtime_cleanup_stop = asyncio.Event()
     runtime_cleanup_task: asyncio.Task | None = None
+    rpa_agent_cleanup_stop = asyncio.Event()
+    rpa_agent_cleanup_task: asyncio.Task | None = None
     await init_storage()
     try:
         await init_system_models()
@@ -87,29 +110,45 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to cleanup orphaned runtimes: {e}")
     runtime_cleanup_task = asyncio.create_task(_runtime_cleanup_loop(runtime_cleanup_stop))
-    yield
-    runtime_cleanup_stop.set()
-    if runtime_cleanup_task is not None:
+    rpa_agent_cleanup_task = asyncio.create_task(
+        _rpa_agent_cleanup_loop(rpa_agent_cleanup_stop)
+    )
+    try:
+        yield
+    finally:
+        runtime_cleanup_stop.set()
+        rpa_agent_cleanup_stop.set()
+        if runtime_cleanup_task is not None:
+            try:
+                await runtime_cleanup_task
+            except Exception as e:
+                logger.error(f"Failed to stop runtime cleanup loop: {e}")
+        if rpa_agent_cleanup_task is not None:
+            try:
+                await rpa_agent_cleanup_task
+            except Exception as e:
+                logger.error(f"Failed to stop RPA Agent cleanup loop: {e}")
         try:
-            await runtime_cleanup_task
+            if rpa_agent_default_services.store is not None:
+                await rpa_agent_default_services.store.close_all()
         except Exception as e:
-            logger.error(f"Failed to stop runtime cleanup loop: {e}")
-    try:
-        await graceful_shutdown_agents()
-    except Exception as e:
-        logger.error(f"Failed to gracefully shutdown agents: {e}")
-    try:
-        cleaned = await get_session_runtime_manager().cleanup_orphans()
-        if cleaned:
-            logger.info(f"Cleaned up {cleaned} runtime(s) on shutdown")
-    except Exception as e:
-        logger.error(f"Failed to cleanup runtimes on shutdown: {e}")
-    try:
-        from backend.rpa.cdp_connector import cdp_connector
-        await cdp_connector.close()
-    except Exception as e:
-        logger.error(f"Failed to close CDP connector: {e}")
-    await close_storage()
+            logger.error(f"Failed to close RPA Agent sessions: {e}")
+        try:
+            await graceful_shutdown_agents()
+        except Exception as e:
+            logger.error(f"Failed to gracefully shutdown agents: {e}")
+        try:
+            cleaned = await get_session_runtime_manager().cleanup_orphans()
+            if cleaned:
+                logger.info(f"Cleaned up {cleaned} runtime(s) on shutdown")
+        except Exception as e:
+            logger.error(f"Failed to cleanup runtimes on shutdown: {e}")
+        try:
+            from backend.rpa.cdp_connector import cdp_connector
+            await cdp_connector.close()
+        except Exception as e:
+            logger.error(f"Failed to close CDP connector: {e}")
+        await close_storage()
 
 
 def create_app() -> FastAPI:
@@ -166,6 +205,7 @@ def create_app() -> FastAPI:
     app.include_router(chat_router, prefix="/api/v1")
     app.include_router(statistics_router, prefix="/api/v1")
     app.include_router(rpa_router, prefix="/api/v1/rpa")
+    app.include_router(rpa_agent_router, prefix="/api/v1/rpa-agent")
     app.include_router(runtime_proxy_router, prefix="/api/v1")
     app.include_router(credential_router, prefix="/api/v1")
     app.include_router(mcp_router, prefix="/api/v1")

@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
@@ -140,3 +141,58 @@ class DownloadEventOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class AcceptanceSourceOrderOut(BaseModel):
+    order_no: str
+    business_type: str
+    supplier_name: str
+    contract_no: str
+    amount: Decimal
+    currency: str
+    order_date: str
+    action_label: str = "发起验收"
+
+
+class AcceptanceTaskCreate(BaseModel):
+    order_no: str
+
+
+class AcceptanceTaskCreated(BaseModel):
+    task_id: str
+    token: str
+    url: str
+    profile: str
+    order_no: str
+
+
+class AcceptanceTaskOut(BaseModel):
+    task_id: str
+    profile: str
+    source_order: AcceptanceSourceOrderOut
+
+
+class AcceptanceRecordCreate(BaseModel):
+    order_no: str
+    supplier_name: str
+    contract_no: str
+    amount: Decimal = Field(max_digits=18, decimal_places=2)
+    currency: str
+    order_date: str
+    description: str
+    confirmed: bool
+
+
+class AcceptanceRecordOut(AcceptanceRecordCreate):
+    task_id: str
+
+
+class AcceptanceOracleResult(BaseModel):
+    passed: bool
+    task_id: str
+    profile: str
+    target_order_no: str | None
+    selected_order_no: str
+    record_count: int
+    mismatches: list[str]
+    actual: AcceptanceRecordCreate | None

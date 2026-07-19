@@ -5,6 +5,9 @@ const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/login', name: 'login', component: () => import('@/views/Login.vue') },
+    { path: '/system-a/orders', name: 'system-a-orders', component: () => import('@/views/SystemAOrders.vue') },
+    { path: '/system-b/acceptance/:task_id', name: 'system-b-acceptance', component: () => import('@/views/SystemBAcceptanceHost.vue') },
+    { path: '/system-b/acceptance-frame/:task_id', name: 'system-b-acceptance-frame', component: () => import('@/views/SystemBAcceptanceFrame.vue') },
     {
       path: '/',
       component: () => import('@/views/Layout.vue'),

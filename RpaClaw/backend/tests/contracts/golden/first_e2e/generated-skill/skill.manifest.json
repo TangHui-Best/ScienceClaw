@@ -1,0 +1,37 @@
+{
+  "schema_version": "skill-manifest/v0.1",
+  "skill": {
+    "id": "purchase-order-acceptance-registration",
+    "name": "跨系统采购订单验收登记",
+    "version": "0.1.0",
+    "description": "在系统 A 查询并提取采购订单，再将订单字段填写到系统 B 的验收登记 iframe 中并提交。"
+  },
+  "entrypoint": "skill:execute_skill",
+  "runtime": {
+    "api_version": "rpa-agent-runtime/0.1",
+    "requirements": [
+      "playwright",
+      "agent"
+    ]
+  },
+  "inputs": [
+    { "ref": "system_a_url", "title": "系统 A 采购订单查询页", "value_type": "string", "required": true },
+    { "ref": "query.business_type", "title": "业务类型", "value_type": "string", "required": true },
+    { "ref": "query.date_from", "title": "订单日期起始日", "value_type": "string", "required": true },
+    { "ref": "query.date_to", "title": "订单日期结束日", "value_type": "string", "required": true },
+    { "ref": "query.supplier_name", "title": "供应商名称", "value_type": "string", "required": true },
+    { "ref": "query.order_no", "title": "订单编号", "value_type": "string", "required": true }
+  ],
+  "secrets": [],
+  "asset_inputs": [],
+  "outputs": [
+    { "name": "acceptance_result", "title": "验收登记结果", "variable_ref": "验收结果", "value_type": "string" }
+  ],
+  "asset_outputs": [],
+  "source": {
+    "core_trace_schema_version": "core-trace/v0.1",
+    "trace_count": 24,
+    "timeline_hash": "f9b29a4e68bde242075e3cbb91048a3a90c922140049062fea91620007b156aa",
+    "compiler_version": "rpa-agent-compiler/0.1-example"
+  }
+}

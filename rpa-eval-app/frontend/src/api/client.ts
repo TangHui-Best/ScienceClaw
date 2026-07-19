@@ -86,6 +86,42 @@ export interface ReportJob {
   completed_at?: string | null
 }
 
+export interface AcceptanceSourceOrder {
+  order_no: string
+  business_type: string
+  supplier_name: string
+  contract_no: string
+  amount: string
+  currency: string
+  order_date: string
+  action_label: string
+}
+
+export interface AcceptanceTaskCreated {
+  task_id: string
+  token: string
+  url: string
+  profile: string
+  order_no: string
+}
+
+export interface AcceptanceTask {
+  task_id: string
+  profile: string
+  source_order: AcceptanceSourceOrder
+}
+
+export interface AcceptanceRecordInput {
+  order_no: string
+  supplier_name: string
+  contract_no: string
+  amount: string
+  currency: string
+  order_date: string
+  description: string
+  confirmed: boolean
+}
+
 export const apiClient = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
   timeout: 15000
@@ -128,4 +164,36 @@ export function apiErrorMessage(error: unknown, fallback: string) {
       .join('；')
   }
   return fallback
+}
+
+export async function listAcceptanceOrders(params: Record<string, string>) {
+  const response = await apiClient.get<AcceptanceSourceOrder[]>('/e2e/system-a/orders', { params })
+  return response.data
+}
+
+export async function startAcceptanceTask(orderNo: string) {
+  const response = await apiClient.post<AcceptanceTaskCreated>('/e2e/acceptance-tasks', {
+    order_no: orderNo
+  })
+  return response.data
+}
+
+export async function getAcceptanceTask(taskId: string, token: string) {
+  const response = await apiClient.get<AcceptanceTask>(`/e2e/acceptance-tasks/${taskId}`, {
+    params: { token }
+  })
+  return response.data
+}
+
+export async function saveAcceptanceRecord(
+  taskId: string,
+  token: string,
+  payload: AcceptanceRecordInput
+) {
+  const response = await apiClient.post(
+    `/e2e/acceptance-tasks/${taskId}/records`,
+    payload,
+    { params: { token } }
+  )
+  return response.data
 }

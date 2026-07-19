@@ -1,6 +1,8 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
+from decimal import Decimal
+
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
@@ -100,10 +102,55 @@ class PurchaseOrder(Base):
     priority: Mapped[str] = mapped_column(String(32), index=True)
     total_amount: Mapped[float] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    profile: Mapped[str] = mapped_column(String(8), default="legacy", index=True)
+    display_position: Mapped[int] = mapped_column(Integer, default=0)
+    business_type: Mapped[str] = mapped_column(String(64), default="legacy")
+    currency: Mapped[str] = mapped_column(String(16), default="CNY")
+    order_date: Mapped[str] = mapped_column(String(16), default="")
+    acceptance_target: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
     purchase_request: Mapped[PurchaseRequest] = relationship(back_populates="purchase_orders")
     supplier: Mapped[Supplier] = relationship()
     approvals: Mapped[list["ApprovalTask"]] = relationship(back_populates="purchase_order")
+
+
+class AcceptanceTask(Base):
+    __tablename__ = "acceptance_tasks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    task_token_hash: Mapped[str] = mapped_column(String(64))
+    profile: Mapped[str] = mapped_column(String(8), index=True)
+    purchase_order_id: Mapped[int] = mapped_column(ForeignKey("purchase_orders.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+    purchase_order: Mapped[PurchaseOrder] = relationship()
+    records: Mapped[list["AcceptanceRecord"]] = relationship(
+        back_populates="task",
+        cascade="all, delete-orphan",
+    )
+
+
+class AcceptanceRecord(Base):
+    __tablename__ = "acceptance_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_id: Mapped[int] = mapped_column(
+        ForeignKey("acceptance_tasks.id"),
+        unique=True,
+        index=True,
+    )
+    order_no: Mapped[str] = mapped_column(String(40))
+    supplier_name: Mapped[str] = mapped_column(String(160))
+    contract_no: Mapped[str] = mapped_column(String(40))
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 2))
+    currency: Mapped[str] = mapped_column(String(16))
+    order_date: Mapped[str] = mapped_column(String(16))
+    description: Mapped[str] = mapped_column(Text)
+    confirmed: Mapped[bool] = mapped_column(Boolean)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+    task: Mapped[AcceptanceTask] = relationship(back_populates="records")
 
 
 class ApprovalTask(Base):

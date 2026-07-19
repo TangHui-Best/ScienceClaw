@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rpa-agent.local/schemas/skill-manifest-v0.1.json",
+  "title": "RPA Agent SkillManifest v0.1",
+  "description": "确定性 Compiler 生成、宿主 Runtime 消费的 SKILL 机器契约。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "skill",
+    "entrypoint",
+    "runtime",
+    "inputs",
+    "secrets",
+    "asset_inputs",
+    "outputs",
+    "asset_outputs",
+    "source"
+  ],
+  "properties": {
+    "schema_version": { "const": "skill-manifest/v0.1" },
+    "skill": {
+      "$ref": "https://rpa-agent.local/schemas/skill-definition-v0.1.json#/$defs/skill_identity"
+    },
+    "entrypoint": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "runtime": { "$ref": "#/$defs/runtime_contract" },
+    "inputs": {
+      "type": "array",
+      "items": {
+        "$ref": "https://rpa-agent.local/schemas/skill-definition-v0.1.json#/$defs/input_definition"
+      },
+      "uniqueItems": true
+    },
+    "secrets": {
+      "type": "array",
+      "items": {
+        "$ref": "https://rpa-agent.local/schemas/skill-definition-v0.1.json#/$defs/secret_definition"
+      },
+      "uniqueItems": true
+    },
+    "asset_inputs": {
+      "type": "array",
+      "items": {
+        "$ref": "https://rpa-agent.local/schemas/skill-definition-v0.1.json#/$defs/asset_input_definition"
+      },
+      "uniqueItems": true
+    },
+    "outputs": {
+      "type": "array",
+      "items": {
+        "$ref": "https://rpa-agent.local/schemas/skill-definition-v0.1.json#/$defs/output_definition"
+      },
+      "uniqueItems": true
+    },
+    "asset_outputs": {
+      "type": "array",
+      "items": {
+        "$ref": "https://rpa-agent.local/schemas/skill-definition-v0.1.json#/$defs/asset_output_definition"
+      },
+      "uniqueItems": true
+    },
+    "source": { "$ref": "#/$defs/source_contract" }
+  },
+  "$defs": {
+    "runtime_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["api_version", "requirements"],
+      "properties": {
+        "api_version": { "const": "rpa-agent-runtime/0.1" },
+        "requirements": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": ["playwright", "agent", "data_asset", "download", "upload"]
+          }
+        }
+      }
+    },
+    "source_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "core_trace_schema_version",
+        "trace_count",
+        "timeline_hash",
+        "compiler_version"
+      ],
+      "properties": {
+        "core_trace_schema_version": { "const": "core-trace/v0.1" },
+        "trace_count": { "type": "integer", "minimum": 0 },
+        "timeline_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "compiler_version": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    }
+  }
+}

@@ -13,6 +13,7 @@ class BrowserPreviewSession:
     active_page: Page
     context: object
     known_page_ids: set[int] = field(default_factory=set)
+    cdp_url: str | None = None
 
 
 class BrowserPreviewRegistry:
@@ -22,13 +23,16 @@ class BrowserPreviewRegistry:
         self._sessions: Dict[str, BrowserPreviewSession] = {}
         self._lock = asyncio.Lock()
 
-    async def register(self, session_id: str, page: Page) -> None:
+    async def register(
+        self, session_id: str, page: Page, *, cdp_url: str | None = None
+    ) -> None:
         async with self._lock:
             self._sessions[session_id] = BrowserPreviewSession(
                 root_page=page,
                 active_page=page,
                 context=page.context,
                 known_page_ids={id(page)},
+                cdp_url=cdp_url,
             )
 
     async def unregister(self, session_id: str, page: Page | None = None) -> None:
@@ -52,6 +56,12 @@ class BrowserPreviewRegistry:
             return None
         self._refresh_pages(session)
         return session.active_page
+
+    def get_cdp_url(self, session_id: str) -> str | None:
+        """Return exact browser provenance when the registering host supplied it."""
+
+        session = self._sessions.get(session_id)
+        return session.cdp_url if session is not None else None
 
     async def wait_for_page(self, session_id: str, timeout: float = 8.0) -> Optional[Page]:
         deadline = asyncio.get_running_loop().time() + timeout

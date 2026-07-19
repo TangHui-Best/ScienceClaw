@@ -1,437 +1,134 @@
 // @vitest-environment jsdom
 
 import { createApp, nextTick } from 'vue';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { saveCreationSnapshot } from '@/utils/rpaAgentSkillConfiguration';
 
-const push = vi.fn();
-const get = vi.fn();
-const post = vi.fn();
-const deleteRequest = vi.fn();
-
-vi.mock('vue-router', () => ({
-  useRoute: () => ({ query: { sessionId: 'session-1' } }),
-  useRouter: () => ({ push }),
+const push = vi.fn(); const configure = vi.fn(); const compile = vi.fn();
+vi.mock('vue-router', () => ({ useRoute: () => ({ query: { sessionId: 'rca_abcdefghijklmnopqrstuvwx' } }), useRouter: () => ({ push }) }));
+vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (value: string) => value }) }));
+vi.mock('@/api/rpaAgent', () => ({
+  configureRpaAgentSkill: (...args: unknown[]) => configure(...args),
+  compileRpaAgentSkill: (...args: unknown[]) => compile(...args),
 }));
+const flush = async () => { await Promise.resolve(); await Promise.resolve(); await nextTick(); };
 
-vi.mock('@/api/client', () => ({
-  apiClient: {
-    get: (...args: unknown[]) => get(...args),
-    post: (...args: unknown[]) => post(...args),
-    delete: (...args: unknown[]) => deleteRequest(...args),
-  },
-}));
-
-vi.mock('@/components/rpa/RpaFlowGuide.vue', () => ({
-  default: {
-    name: 'RpaFlowGuideStub',
-    props: ['secondaryActions'],
-    emits: ['secondary-action'],
-    template: `
-      <div data-testid="flow-guide">
-        <button
-          v-for="action in secondaryActions"
-          :key="action.id"
-          type="button"
-          :disabled="action.disabled"
-          @click="$emit('secondary-action', action.id)"
-        >
-          {{ action.label }}
-        </button>
-      </div>
-    `,
-  },
-}));
-
-vi.mock('@/components/rpa/RpaDiscardRecordingDialog.vue', () => ({
-  default: {
-    name: 'RpaDiscardRecordingDialogStub',
-    template: '<div />',
-  },
-}));
-
-vi.mock('@/components/rpa/RpaStepTimeline.vue', () => ({
-  default: {
-    name: 'RpaStepTimelineStub',
-    props: ['steps'],
-    emits: ['promote-locator'],
-    template: `
-      <div data-testid="step-timeline">
-        <span>{{ steps.length }} steps</span>
-        <div
-          v-for="(step, index) in steps"
-          :key="step.id"
-          data-testid="timeline-step"
-        >
-          {{ step.description }} {{ step.label }}
-          <button
-            v-if="step.locator_candidates?.length"
-            type="button"
-            data-testid="promote-locator"
-            @click="$emit('promote-locator', { step, stepIndex: index, candidateIndex: 0 })"
-          >
-            Promote
-          </button>
-        </div>
-      </div>
-    `,
-  },
-}));
-
-vi.mock('@/components/ui/dialog', () => ({
-  Dialog: {
-    name: 'DialogStub',
-    props: ['open'],
-    template: '<div v-if="open" data-testid="script-dialog"><slot /></div>',
-  },
-  DialogContent: {
-    name: 'DialogContentStub',
-    template: '<div><slot /></div>',
-  },
-  DialogHeader: {
-    name: 'DialogHeaderStub',
-    template: '<div><slot /></div>',
-  },
-  DialogTitle: {
-    name: 'DialogTitleStub',
-    template: '<div><slot /></div>',
-  },
-}));
-
-const flushAsyncUpdates = async () => {
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
-  await nextTick();
-};
-
-const mountConfigurePage = async () => {
-  const { default: ConfigurePage } = await import('./ConfigurePage.vue');
-  const root = document.createElement('div');
-  document.body.appendChild(root);
-
-  const app = createApp(ConfigurePage);
-  app.mount(root);
-  await flushAsyncUpdates();
-
-  return { app, root };
-};
-
-const mockCommonRequests = (session: any) => {
-  get.mockImplementation((url: string) => {
-    if (url === '/credentials') return Promise.resolve({ data: { credentials: [] } });
-    if (url === '/rpa/session/session-1/skill-config-draft') {
-      return Promise.resolve({ data: { draft: null } });
-    }
-    if (url === '/rpa/session/session-1') {
-      return Promise.resolve({ data: { session } });
-    }
-    return Promise.reject(new Error(`Unexpected GET ${url}`));
-  });
-  post.mockResolvedValue({ data: { script: 'print("generated script")' } });
-  deleteRequest.mockResolvedValue({ data: {} });
-};
-
-describe('ConfigurePage script preview entry', () => {
-  afterEach(() => {
-    document.body.innerHTML = '';
-    vi.clearAllMocks();
-    vi.resetModules();
-  });
-
-  it('keeps the top preview action without rendering an inline script preview panel', async () => {
-    get.mockImplementation((url: string) => {
-      if (url === '/credentials') return Promise.resolve({ data: { credentials: [] } });
-      return Promise.resolve({
-        data: {
-          session: {
-            url: 'https://github.com/trending',
-            steps: [
-              { id: 'step-1', action: 'goto', url: 'https://github.com/trending' },
-            ],
-          },
-        },
-      });
+describe('ConfigurePage greenfield configuration', () => {
+  beforeEach(() => {
+    sessionStorage.clear(); document.body.innerHTML = ''; push.mockReset(); configure.mockReset(); compile.mockReset();
+    push.mockResolvedValue(undefined);
+    saveCreationSnapshot({
+      sessionId: 'rca_abcdefghijklmnopqrstuvwx', browserSessionRef: 'browser-host-1',
+      configurationDraft: {
+        schema_version: 'skill-configuration-draft/v0.1', skill: { name: '未命名 SKILL', description: '请填写' }, inputs: [], secrets: [],
+        asset_inputs: [{ ref: 'source_asset', title: '源文件', required: true }],
+        outputs: [{ name: 'order_no', title: '订单号', variable_ref: '采购订单.订单号', value_type: 'string' }],
+        asset_outputs: [{ name: 'result_asset', title: '结果文件', asset_ref: 'acceptance_result' }], binding_promotions: [],
+      },
+      bindingLocations: [
+        { trace_id: 'trace-1', binding_name: 'value', direction: 'input', kind: 'literal', sensitive: true },
+        { trace_id: 'trace-2', binding_name: 'value', direction: 'input', kind: 'literal', sensitive: false },
+      ],
     });
-    post.mockResolvedValue({ data: { script: 'print("generated script")' } });
+    configure.mockResolvedValue({ state: 'configured' });
+    compile.mockResolvedValue({ state: 'compiled', artifact_hash: 'artifact-hash', artifact_files: ['SKILL.md', 'skill.manifest.json', 'skill.py', 'browser_segment.py'] });
+  });
 
-    const { app, root } = await mountConfigurePage();
+  it('uses exact binding location, configures then compiles exactly once and stores no secret value', async () => {
+    const { default: Page } = await import('./ConfigurePage.vue');
+    const root = document.createElement('div'); document.body.appendChild(root); const app = createApp(Page); app.mount(root); await flush();
+    const name = root.querySelector<HTMLInputElement>('input[name="skill-name"]')!; name.value = '采购验收'; name.dispatchEvent(new Event('input'));
+    expect(root.querySelector('input[name="secret-value"]')).toBeNull();
+    root.querySelectorAll<HTMLButtonElement>('[data-testid="promote-binding"]')[1].click(); await nextTick();
+    root.querySelectorAll<HTMLButtonElement>('[data-testid="promote-secret"]')[0].click();
+    await nextTick();
+    const inputRow = root.querySelector<HTMLInputElement>('input[aria-label="Input ref"]')!.parentElement!;
+    const inputRef = inputRow.querySelector<HTMLInputElement>('input[aria-label="Input ref"]')!;
+    inputRef.value = 'purchase_order'; inputRef.dispatchEvent(new Event('change')); await nextTick();
+    let refreshedRow = root.querySelector<HTMLInputElement>('input[aria-label="Input ref"]')!.parentElement!;
+    const type = refreshedRow.querySelector<HTMLSelectElement>('select')!; type.value = 'number'; type.dispatchEvent(new Event('change')); await nextTick();
+    refreshedRow = root.querySelector<HTMLInputElement>('input[aria-label="Input ref"]')!.parentElement!;
+    const checkboxes = refreshedRow.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
+    checkboxes[1].checked = true; checkboxes[1].dispatchEvent(new Event('change')); await nextTick();
+    const numberDefault = root.querySelector<HTMLInputElement>('input[type="number"]')!; numberDefault.value = '0'; numberDefault.dispatchEvent(new Event('input')); await nextTick();
+    root.querySelector<HTMLButtonElement>('[data-testid="compile-skill"]')!.click(); await flush();
 
-    expect(root.textContent).toContain('预览脚本');
-    expect(root.textContent).not.toContain('脚本预览');
-    expect(root.textContent).not.toContain('generated script');
-
+    expect(configure).toHaveBeenCalledTimes(1); expect(compile).toHaveBeenCalledTimes(1);
+    const payload = configure.mock.calls[0][1];
+    expect(payload.binding_promotions).toEqual(expect.arrayContaining([
+      { trace_id: 'trace-2', binding_name: 'value', to_kind: 'skill_input', ref: 'purchase_order' },
+      { trace_id: 'trace-1', binding_name: 'value', to_kind: 'secret', ref: 'value_trace_1_secret' },
+    ]));
+    expect(payload.secrets).toHaveLength(1); expect(payload.outputs).toHaveLength(1);
+    expect(payload.inputs[0]).toEqual(expect.objectContaining({ ref: 'purchase_order', value_type: 'number', default: 0 }));
+    expect(payload.asset_inputs).toHaveLength(1); expect(payload.asset_outputs).toHaveLength(1);
+    expect(sessionStorage.getItem('rpa-agent:rca_abcdefghijklmnopqrstuvwx')).not.toContain('secret-value');
+    expect(push).toHaveBeenCalledWith({ path: '/rpa/test', query: { sessionId: 'rca_abcdefghijklmnopqrstuvwx' } });
     app.unmount();
   });
 
-  it('renders and derives config from timeline projection when session has no legacy steps', async () => {
-    mockCommonRequests({
-      timeline: [
-        {
-          kind: 'trace',
-          trace_id: 'trace-open',
-          action: 'navigate',
-          title: 'Open search page',
-          summary: 'https://example.test/search',
-          url: 'https://example.test/search',
-        },
-        {
-          kind: 'trace',
-          trace_id: 'trace-fill-query',
-          action: 'fill',
-          title: 'Fill query',
-          summary: 'Search terms',
-          locator: { method: 'role', role: 'textbox', name: 'Search terms' },
-          url: 'https://example.test/search',
-          raw_trace: { value: 'neural claws' },
-        },
-      ],
+  it('persists configured state and retries only compile after a compile failure', async () => {
+    compile.mockRejectedValueOnce(new Error('compile failed'))
+      .mockResolvedValueOnce({ state: 'compiled', artifact_hash: 'artifact-hash', artifact_files: ['SKILL.md', 'skill.manifest.json', 'skill.py', 'browser_segment.py'] });
+    const { default: Page } = await import('./ConfigurePage.vue');
+    const root = document.createElement('div'); document.body.appendChild(root); const app = createApp(Page); app.mount(root); await flush();
+
+    const button = root.querySelector<HTMLButtonElement>('[data-testid="compile-skill"]')!;
+    button.click(); await flush();
+    expect(configure).toHaveBeenCalledTimes(1); expect(compile).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(sessionStorage.getItem('rpa-agent:rca_abcdefghijklmnopqrstuvwx')!)).toMatchObject({ configurationState: 'configured' });
+    expect(push).not.toHaveBeenCalled();
+
+    app.unmount();
+    const retryRoot = document.createElement('div'); document.body.appendChild(retryRoot); const retryApp = createApp(Page); retryApp.mount(retryRoot); await flush();
+    retryRoot.querySelector<HTMLButtonElement>('[data-testid="compile-skill"]')!.click(); await flush();
+    expect(configure).toHaveBeenCalledTimes(1); expect(compile).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(sessionStorage.getItem('rpa-agent:rca_abcdefghijklmnopqrstuvwx')!)).toMatchObject({ configurationState: 'compiled', artifactHash: 'artifact-hash' });
+    expect(push).toHaveBeenCalledTimes(1);
+    retryApp.unmount();
+  });
+
+  it('reloads a compiled snapshot without calling configuration or compile again', async () => {
+    saveCreationSnapshot({
+      sessionId: 'rca_abcdefghijklmnopqrstuvwx', browserSessionRef: 'browser-host-1', configurationState: 'compiled',
+      artifactHash: 'artifact-hash', artifactFiles: ['SKILL.md', 'skill.manifest.json', 'skill.py', 'browser_segment.py'],
+      configurationDraft: {
+        schema_version: 'skill-configuration-draft/v0.1', skill: { name: '采购验收', description: '测试' },
+        inputs: [], secrets: [], asset_inputs: [], outputs: [], asset_outputs: [], binding_promotions: [],
+      },
     });
-
-    const { app, root } = await mountConfigurePage();
-
-    expect(root.textContent).toContain('2 steps');
-    expect(root.textContent).toContain('Open search page');
-    expect(root.textContent).toContain('Fill query');
-    expect(root.textContent).not.toContain('DO_NOT_USE_LEGACY');
-    const inputValues = Array.from(root.querySelectorAll('input')).map((input) => input.value);
-    expect(inputValues.some((value) => value.includes('example.test'))).toBe(true);
-    expect(inputValues).toContain('search');
-
+    const { default: Page } = await import('./ConfigurePage.vue');
+    const root = document.createElement('div'); document.body.appendChild(root); const app = createApp(Page); app.mount(root); await flush();
+    root.querySelector<HTMLButtonElement>('[data-testid="compile-skill"]')!.click(); await flush();
+    expect(configure).not.toHaveBeenCalled(); expect(compile).not.toHaveBeenCalled();
+    expect(push).toHaveBeenCalledWith({ path: '/rpa/test', query: { sessionId: 'rca_abcdefghijklmnopqrstuvwx' } });
     app.unmount();
   });
 
-  it('renders credential selector for sensitive fill traces from timeline projection', async () => {
-    get.mockImplementation((url: string) => {
-      if (url === '/credentials') {
-        return Promise.resolve({
-          data: {
-            credentials: [
-              { id: 'cred-portal', name: 'Portal Password', username: 'demo@example.test' },
-            ],
-          },
-        });
-      }
-      if (url === '/rpa/session/session-1/skill-config-draft') {
-        return Promise.resolve({ data: { draft: null } });
-      }
-      if (url === '/rpa/session/session-1') {
-        return Promise.resolve({
-          data: {
-            session: {
-              timeline: [
-                {
-                  kind: 'trace',
-                  trace_id: 'trace-password',
-                  action: 'fill',
-                  title: 'Fill password',
-                  summary: 'Password',
-                  locator: { method: 'role', role: 'textbox', name: 'Password' },
-                  value: '{{credential}}',
-                  sensitive: true,
-                  raw_trace: {
-                    value: 'DO_NOT_USE_RAW_TRACE_VALUE',
-                    sensitive: false,
-                  },
-                },
-              ],
-              recorded_actions: [
-                { step_id: 'legacy-action', description: 'DO_NOT_USE_LEGACY action' },
-              ],
-              recording_diagnostics: [],
-            },
-          },
-        });
-      }
-      return Promise.reject(new Error(`Unexpected GET ${url}`));
-    });
-    post.mockResolvedValue({ data: { script: 'print("generated script")' } });
-
-    const { app, root } = await mountConfigurePage();
-    await flushAsyncUpdates();
-
-    const credentialSelect = root.querySelector<HTMLSelectElement>('select');
-    expect(credentialSelect).not.toBeNull();
-    expect(credentialSelect?.textContent).toContain('Portal Password');
-    expect(root.textContent).toContain('敏感');
-    expect(root.textContent).not.toContain('DO_NOT_USE_RAW_TRACE_VALUE');
-
+  it('keeps a compiled artifact after navigation failure and allows retrying navigation only', async () => {
+    push.mockRejectedValueOnce(new Error('navigation failed')).mockResolvedValueOnce(undefined);
+    const { default: Page } = await import('./ConfigurePage.vue');
+    const root = document.createElement('div'); document.body.appendChild(root); const app = createApp(Page); app.mount(root); await flush();
+    const button = root.querySelector<HTMLButtonElement>('[data-testid="compile-skill"]')!;
+    button.click(); await flush();
+    expect(JSON.parse(sessionStorage.getItem('rpa-agent:rca_abcdefghijklmnopqrstuvwx')!)).toMatchObject({ configurationState: 'compiled', artifactHash: 'artifact-hash' });
+    expect(root.textContent).toContain('产物已生成');
+    const retryButton = root.querySelector<HTMLButtonElement>('[data-testid="compile-skill"]')!;
+    await vi.waitFor(() => expect(retryButton.disabled).toBe(false)); retryButton.click(); await flush();
+    expect(configure).toHaveBeenCalledTimes(1); expect(compile).toHaveBeenCalledTimes(1); expect(push).toHaveBeenCalledTimes(2);
     app.unmount();
   });
 
-  it('promotes trace-backed locators by trace id and never calls step locator endpoints', async () => {
-    mockCommonRequests({
-      timeline: [
-        {
-          kind: 'trace',
-          trace_id: 'trace-fill-query',
-          action: 'fill',
-          title: 'Fill query',
-          summary: 'Search terms',
-          locator: { method: 'role', role: 'textbox', name: 'Search terms' },
-          locator_candidates: [
-            { kind: 'role', locator: { method: 'role', role: 'textbox', name: 'Search terms' } },
-          ],
-        },
-      ],
-    });
-
-    const { app, root } = await mountConfigurePage();
-    post.mockClear();
-
-    const button = root.querySelector<HTMLButtonElement>('[data-testid="promote-locator"]');
-    expect(button).not.toBeNull();
-    button?.click();
-    await flushAsyncUpdates();
-
-    expect(post).toHaveBeenCalledWith('/rpa/session/session-1/trace/trace-fill-query/locator', {
-      candidate_index: 0,
-    });
-    expect(post.mock.calls.some(([url]) => String(url).includes('/step/'))).toBe(false);
-
-    app.unmount();
-  });
-
-  it('deletes diagnostics by diagnostic id and never falls back to step deletion', async () => {
-    mockCommonRequests({
-      timeline: [
-        {
-          kind: 'diagnostic',
-          diagnostic_id: 'diagnostic-fill-query',
-          trace_id: 'trace-fill-query',
-          action: 'fill',
-          title: 'Fill query needs repair',
-          summary: 'canonical_target_missing',
-          validation: { status: 'broken', details: 'canonical target missing' },
-        },
-      ],
-    });
-
-    const { app, root } = await mountConfigurePage();
-
-    const button = root.querySelector<HTMLButtonElement>('article button');
-    expect(button).not.toBeNull();
-    button?.click();
-    await flushAsyncUpdates();
-
-    expect(deleteRequest).toHaveBeenCalledWith('/rpa/session/session-1/diagnostic/diagnostic-fill-query');
-    expect(deleteRequest.mock.calls.some(([url]) => String(url).includes('/step/'))).toBe(false);
-
-    app.unmount();
-  });
-
-  it('resolves diagnostic locator candidates by diagnostic id', async () => {
-    mockCommonRequests({
-      timeline: [
-        {
-          kind: 'diagnostic',
-          diagnostic_id: 'diagnostic-fill-query',
-          trace_id: 'trace-fill-query',
-          action: 'fill',
-          title: 'Fill query needs repair',
-          summary: 'canonical_target_missing',
-          locator_candidates: [
-            { kind: 'css', locator: { method: 'css', value: '#query' } },
-          ],
-          validation: { status: 'broken', details: 'canonical target missing' },
-        },
-      ],
-    });
-
-    const { app, root } = await mountConfigurePage();
-    post.mockClear();
-
-    const buttons = Array.from(root.querySelectorAll<HTMLButtonElement>('article button'));
-    const promoteButton = buttons.find((button) => button.textContent?.includes('使用此定位器'));
-    expect(promoteButton).not.toBeUndefined();
-    promoteButton?.click();
-    await flushAsyncUpdates();
-
-    expect(post).toHaveBeenCalledWith('/rpa/session/session-1/diagnostic/diagnostic-fill-query/resolve-locator', {
-      candidate_index: 0,
-    });
-    expect(post.mock.calls.some(([url]) => String(url).includes('/trace/'))).toBe(false);
-    expect(post.mock.calls.some(([url]) => String(url).includes('/step/'))).toBe(false);
-
-    app.unmount();
-  });
-
-  it('ignores legacy poison data for display and mutation endpoints', async () => {
-    mockCommonRequests({
-      timeline: [
-        {
-          kind: 'trace',
-          trace_id: 'trace-valid',
-          action: 'click',
-          title: 'Click valid target',
-          summary: 'Valid target',
-          locator_candidates: [
-            { kind: 'css', locator: { method: 'css', value: '#valid' } },
-          ],
-        },
-      ],
-      steps: [
-        {
-          id: 'legacy-step',
-          action: 'click',
-          description: 'DO_NOT_USE_LEGACY step',
-          locator_candidates: [{ locator: '#legacy' }],
-        },
-      ],
-      recorded_actions: [
-        { step_id: 'legacy-action', description: 'DO_NOT_USE_LEGACY action' },
-      ],
-      recording_diagnostics: [
-        { related_step_id: 'legacy-step', failure_reason: 'DO_NOT_USE_LEGACY diagnostic' },
-      ],
-    });
-
-    const { app, root } = await mountConfigurePage();
-    post.mockClear();
-
-    expect(root.textContent).toContain('Click valid target');
-    expect(root.textContent).not.toContain('DO_NOT_USE_LEGACY');
-
-    root.querySelector<HTMLButtonElement>('[data-testid="promote-locator"]')?.click();
-    await flushAsyncUpdates();
-
-    expect(post.mock.calls.some(([url]) => String(url).includes('/step/'))).toBe(false);
-
-    app.unmount();
-  });
-
-  it('does not promote locator candidates when a projected item lacks a trace id', async () => {
-    mockCommonRequests({
-      timeline: [
-        {
-          id: 'projection-without-trace-id',
-          kind: 'trace',
-          action: 'click',
-          title: 'Click projected target',
-          summary: 'Projected target',
-          locator_candidates: [
-            { kind: 'css', locator: { method: 'css', value: '#projected' } },
-          ],
-        },
-      ],
-      steps: [
-        {
-          id: 'legacy-step',
-          action: 'click',
-          description: 'DO_NOT_USE_LEGACY step',
-          locator_candidates: [{ locator: '#legacy' }],
-        },
-      ],
-    });
-
-    const { app, root } = await mountConfigurePage();
-    post.mockClear();
-
-    root.querySelector<HTMLButtonElement>('[data-testid="promote-locator"]')?.click();
-    await flushAsyncUpdates();
-
-    expect(post).not.toHaveBeenCalled();
-    expect(post.mock.calls.some(([url]) => String(url).includes('/step/'))).toBe(false);
-
+  it('restores an invalid rename in the DOM and blocks compilation until corrected', async () => {
+    const { default: Page } = await import('./ConfigurePage.vue');
+    const root = document.createElement('div'); document.body.appendChild(root); const app = createApp(Page); app.mount(root); await flush();
+    root.querySelectorAll<HTMLButtonElement>('[data-testid="promote-binding"]')[0].click(); await nextTick();
+    const input = root.querySelector<HTMLInputElement>('input[aria-label="Input ref"]')!;
+    const original = input.value; input.value = ''; input.dispatchEvent(new Event('change')); await nextTick();
+    expect(input.value).toBe(original);
+    expect(root.querySelector<HTMLButtonElement>('[data-testid="compile-skill"]')!.disabled).toBe(true);
+    input.dispatchEvent(new Event('change')); await nextTick();
+    expect(root.querySelector<HTMLButtonElement>('[data-testid="compile-skill"]')!.disabled).toBe(false);
     app.unmount();
   });
 });

@@ -414,12 +414,13 @@ Browser-use Operator + Runtime Context + Compiler 专项：125 passed
 - 旧录制核心达到能力退出门槛后再删除或归档；
 - 整个 `backend/rpa` 不能机械删除，必须按能力分类处置。
 - 首个 E2E 是“系统 A 复杂查询与取值 -> 新标签页 -> 系统 B iframe 填写”；
-- 首个 E2E 仅使用共享标量变量，不前置设计 DataAsset；
+- 首个 E2E 使用一个业务对象及其标量叶子路径，不前置设计 DataAsset；
+- 会话级 `SessionVariableStore`、业务语义变量引用、双通道来源保留和运行态隔离已经形成 v0.1 基线；
 - 同一个 Skill 必须通过两组不同数据和后端 Oracle，以暴露行号、URL、frame 和字段值硬编码。
 
 ### 后续设计
 
-- Skill 输入参数与共享变量最小契约；
+- Skill 外部输入参数与运行时命名空间最小契约；
 - Page Registry、Frame Scope、Page Effect 和变量绑定的编译契约；
 - CoreTrace -> Playwright 浏览器段 -> Skill 的产物链路；
 - 首个 E2E 的 eval-app 测评设计和分层实施计划；
@@ -430,16 +431,16 @@ Browser-use Operator + Runtime Context + Compiler 专项：125 passed
 
 当前分支、worktree、ADR 和 Feature 已建立。下一步按首个 E2E 场景继续：
 
-1. 设计 Skill 输入参数和共享变量最小契约；
-2. 设计 Page/Frame/Effect 与变量绑定的编译契约；
-3. 设计 CoreTrace 到最终 Skill 的产物链路；
-4. 设计 eval-app fixture、随机任务 URL 和后端 Oracle；
-5. 制定首个 E2E 的分层实施计划；
-6. 完成双用例回放后，再进入 DataAsset 场景。
+1. 基于已确认的业务变量基线设计 Skill Input/RunContext、Page/Frame/Effect 与变量读写的编译契约；
+2. 设计 CoreTrace 到最终 Skill 的产物链路；
+3. 设计 eval-app fixture、随机任务 URL 和后端 Oracle；
+4. 制定首个 E2E 的分层实施计划；
+5. 完成双用例回放后，再进入 DataAsset 场景。
 
 ## 19. 相关材料
 
 - [首个阶段一 E2E 验收场景设计基线](./2026-07-17-RPA-Agent首个阶段一E2E验收场景设计基线.md)
+- [业务变量绑定与录制态上下文设计基线](./2026-07-17-RPA-Agent业务变量绑定与录制态上下文设计基线.md)
 - [F026：RPA Agent ScienceClaw 宿主重构](<../../features/F026-rpa-agent-scienceclaw-host-rebuild.md>)
 - [ADR-006：RPA Agent 在 ScienceClaw 内绿地重建领域核心](<../../decisions/ADR-006-rpa-agent-scienceclaw-host-greenfield-core.md>)
 - [ScienceClaw RPA 架构接手导航](<../../project/agent-architecture-onboarding.md>)

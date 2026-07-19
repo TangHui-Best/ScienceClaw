@@ -1,0 +1,420 @@
+{
+  "evidence_kind": "live-playwright-hidden-oracle",
+  "compile_count": 1,
+  "artifact_hash": "fb82ee52afc035aa16f994c851eb0a812f4127e50718493e1eddbc033d91325d",
+  "trace_count": 22,
+  "creation_candidate_count": 22,
+  "adapter_rounds": [
+    {
+      "adapter_actions": 6,
+      "candidate_ids": [
+        "bu_c8f554d5bb04d385e27cdec7",
+        "bu_dcb0c53837c605162eeae924",
+        "bu_88d527b3cdfc1134d0f2a48b",
+        "bu_d50f01113cb0015446e661a9"
+      ],
+      "non_sop": [
+        "wait",
+        "done"
+      ]
+    },
+    {
+      "adapter_actions": 3,
+      "candidate_ids": [
+        "bu_18df914c8eae8b18e06ac765",
+        "bu_99c6981ed2fb038129727cd3"
+      ],
+      "non_sop": [
+        "done"
+      ]
+    },
+    {
+      "adapter_actions": 14,
+      "candidate_ids": [
+        "bu_c130ba40a15c295da66c57ad",
+        "bu_50a4f6485219cdc46b1f9bd4",
+        "bu_46e4f8725a485f7087050ec5",
+        "bu_53163a482ca90b86c54c29b5",
+        "bu_7c7732ed30c52c89857026ef",
+        "bu_8ce2e2ffb1ff9a245cc2d2f2",
+        "bu_7e4c4bdff3fc298473d73ba4",
+        "bu_48d19671e39c20ebb904a934",
+        "bu_78de296cf5d7ad735d5c7ac0",
+        "bu_9dbac80bb121c5056554ee76",
+        "bu_4271e5e5e4a78321bfeeb144",
+        "bu_3d44115e4fe7587ff0f7ecf0",
+        "bu_551ab1a0ffe1e9794a693178"
+      ],
+      "non_sop": [
+        "done"
+      ]
+    }
+  ],
+  "creation": {
+    "producer": "playwright-manual-inputs",
+    "agent_action_producer": "production-browser-use-executor",
+    "executor": "rpa_agent.host.browser_use_agent.execute_browser_use_instruction",
+    "agent_factory": "browser_use.Agent",
+    "tools": "RecordingBrowserUseTools.act",
+    "natural_language_agent_invoked": true,
+    "browser_use_version_gate": "0.13.2",
+    "scripted_model_invocations": 23,
+    "invocation_count": 23,
+    "adapter_actual_actions": 23,
+    "blocked_count": 0,
+    "manual_candidate_ids": {
+      "supplier_name": "manual_9af76e89aeac1c0cba33d949",
+      "order_no": "manual_9a0773404f7c611c1bd10ac9",
+      "query_submit": "manual_cae9f5fec15d526f09ed7717"
+    },
+    "candidate_ids": [
+      "bu_c8f554d5bb04d385e27cdec7",
+      "bu_dcb0c53837c605162eeae924",
+      "bu_88d527b3cdfc1134d0f2a48b",
+      "bu_d50f01113cb0015446e661a9",
+      "bu_18df914c8eae8b18e06ac765",
+      "bu_99c6981ed2fb038129727cd3",
+      "bu_c130ba40a15c295da66c57ad",
+      "bu_50a4f6485219cdc46b1f9bd4",
+      "bu_46e4f8725a485f7087050ec5",
+      "bu_53163a482ca90b86c54c29b5",
+      "bu_7c7732ed30c52c89857026ef",
+      "bu_8ce2e2ffb1ff9a245cc2d2f2",
+      "bu_7e4c4bdff3fc298473d73ba4",
+      "bu_48d19671e39c20ebb904a934",
+      "bu_78de296cf5d7ad735d5c7ac0",
+      "bu_9dbac80bb121c5056554ee76",
+      "bu_4271e5e5e4a78321bfeeb144",
+      "bu_3d44115e4fe7587ff0f7ecf0",
+      "bu_551ab1a0ffe1e9794a693178"
+    ],
+    "non_sop": [
+      "wait",
+      "done",
+      "done",
+      "done"
+    ],
+    "pages": [
+      "runtime_main",
+      "runtime_popup"
+    ],
+    "frames": [
+      "acceptance_frame",
+      "main_frame",
+      "runtime_frame_2"
+    ],
+    "pending": false,
+    "ready": true,
+    "candidate_count": 22,
+    "accepted_count": 22
+  },
+  "replays": [
+    {
+      "profile": "A",
+      "run_id": "live-replay-a",
+      "artifact_hash": "fb82ee52afc035aa16f994c851eb0a812f4127e50718493e1eddbc033d91325d",
+      "status": "passed",
+      "steps": [
+        {
+          "trace_id": "trace_1637249db1bda830a95f441a",
+          "sequence": 1,
+          "action_kind": "fill",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_7edcd5b21235c08b6de70cb1",
+          "sequence": 2,
+          "action_kind": "fill",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_9330cbbce13236412192f5cc",
+          "sequence": 3,
+          "action_kind": "click",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_567c3a0e692da4895e1a5db4",
+          "sequence": 4,
+          "action_kind": "agent",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_3d0dc22d57f8ca96b805dbb7",
+          "sequence": 5,
+          "action_kind": "fill",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_82bef43a808fd0238c198ad0",
+          "sequence": 6,
+          "action_kind": "fill",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_435a5d6f4dd762069b512a1b",
+          "sequence": 7,
+          "action_kind": "click",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_877c695a9b54781ea6438349",
+          "sequence": 8,
+          "action_kind": "agent",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_f53372032dd6ce7eef4ed1b9",
+          "sequence": 9,
+          "action_kind": "agent",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_ec45fea576623b4ce26b2f5e",
+          "sequence": 10,
+          "action_kind": "fill",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_0eba80e17a45e9ba916eff98",
+          "sequence": 11,
+          "action_kind": "fill",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_edb2303d5c84dca009e6d3d6",
+          "sequence": 12,
+          "action_kind": "fill",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_57c32d8555fdf164f4565ec0",
+          "sequence": 13,
+          "action_kind": "agent",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_9dac4ce8b2bf6d1f8dcd56c4",
+          "sequence": 14,
+          "action_kind": "fill",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_f741c7e5a47c8715ab423267",
+          "sequence": 15,
+          "action_kind": "agent",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_4256438fce93d3a2ddb2fd6b",
+          "sequence": 16,
+          "action_kind": "click",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_2f26364f906adf7944126380",
+          "sequence": 17,
+          "action_kind": "agent",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_45268e94a5fc290205d58e67",
+          "sequence": 18,
+          "action_kind": "fill",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_6cd186773b0e5817b974aad6",
+          "sequence": 19,
+          "action_kind": "agent",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_7357c0c81f8fef8cf6ab646a",
+          "sequence": 20,
+          "action_kind": "click",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_02f46144aa2f93ca5a491203",
+          "sequence": 21,
+          "action_kind": "agent",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_653d2d1062300c6fe4161f66",
+          "sequence": 22,
+          "action_kind": "agent",
+          "status": "succeeded"
+        }
+      ],
+      "pages": [
+        "/system-a/orders",
+        "/system-b/acceptance/{task_id}"
+      ],
+      "frame": "验收登记表单",
+      "oracle": {
+        "passed": true,
+        "profile": "A",
+        "record_count": 1,
+        "mismatches": [],
+        "target_order_no": "PO-2026-05017",
+        "selected_order_no": "PO-2026-05017"
+      }
+    },
+    {
+      "profile": "B",
+      "run_id": "live-replay-b",
+      "artifact_hash": "fb82ee52afc035aa16f994c851eb0a812f4127e50718493e1eddbc033d91325d",
+      "status": "passed",
+      "steps": [
+        {
+          "trace_id": "trace_1637249db1bda830a95f441a",
+          "sequence": 1,
+          "action_kind": "fill",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_7edcd5b21235c08b6de70cb1",
+          "sequence": 2,
+          "action_kind": "fill",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_9330cbbce13236412192f5cc",
+          "sequence": 3,
+          "action_kind": "click",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_567c3a0e692da4895e1a5db4",
+          "sequence": 4,
+          "action_kind": "agent",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_3d0dc22d57f8ca96b805dbb7",
+          "sequence": 5,
+          "action_kind": "fill",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_82bef43a808fd0238c198ad0",
+          "sequence": 6,
+          "action_kind": "fill",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_435a5d6f4dd762069b512a1b",
+          "sequence": 7,
+          "action_kind": "click",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_877c695a9b54781ea6438349",
+          "sequence": 8,
+          "action_kind": "agent",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_f53372032dd6ce7eef4ed1b9",
+          "sequence": 9,
+          "action_kind": "agent",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_ec45fea576623b4ce26b2f5e",
+          "sequence": 10,
+          "action_kind": "fill",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_0eba80e17a45e9ba916eff98",
+          "sequence": 11,
+          "action_kind": "fill",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_edb2303d5c84dca009e6d3d6",
+          "sequence": 12,
+          "action_kind": "fill",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_57c32d8555fdf164f4565ec0",
+          "sequence": 13,
+          "action_kind": "agent",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_9dac4ce8b2bf6d1f8dcd56c4",
+          "sequence": 14,
+          "action_kind": "fill",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_f741c7e5a47c8715ab423267",
+          "sequence": 15,
+          "action_kind": "agent",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_4256438fce93d3a2ddb2fd6b",
+          "sequence": 16,
+          "action_kind": "click",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_2f26364f906adf7944126380",
+          "sequence": 17,
+          "action_kind": "agent",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_45268e94a5fc290205d58e67",
+          "sequence": 18,
+          "action_kind": "fill",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_6cd186773b0e5817b974aad6",
+          "sequence": 19,
+          "action_kind": "agent",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_7357c0c81f8fef8cf6ab646a",
+          "sequence": 20,
+          "action_kind": "click",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_02f46144aa2f93ca5a491203",
+          "sequence": 21,
+          "action_kind": "agent",
+          "status": "succeeded"
+        },
+        {
+          "trace_id": "trace_653d2d1062300c6fe4161f66",
+          "sequence": 22,
+          "action_kind": "agent",
+          "status": "succeeded"
+        }
+      ],
+      "pages": [
+        "/system-a/orders",
+        "/system-b/acceptance/{task_id}"
+      ],
+      "frame": "验收登记表单",
+      "oracle": {
+        "passed": true,
+        "profile": "B",
+        "record_count": 1,
+        "mismatches": [],
+        "target_order_no": "PO-2026-06042",
+        "selected_order_no": "PO-2026-06042"
+      }
+    }
+  ],
+  "passed": true
+}

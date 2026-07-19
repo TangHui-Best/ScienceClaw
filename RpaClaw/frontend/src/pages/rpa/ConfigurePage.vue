@@ -1,740 +1,181 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
-import { useRouter, useRoute } from 'vue-router';
+import { computed, ref } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import { useI18n } from 'vue-i18n';
+import { compileRpaAgentSkill, configureRpaAgentSkill } from '@/api/rpaAgent';
 import {
-  Settings,
-  Code,
-  Tag,
-} from 'lucide-vue-next';
-import { apiClient } from '@/api/client';
-import RpaDiscardRecordingDialog from '@/components/rpa/RpaDiscardRecordingDialog.vue';
-import RpaFlowGuide from '@/components/rpa/RpaFlowGuide.vue';
-import RpaStepTimeline from '@/components/rpa/RpaStepTimeline.vue';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { buildRpaToolEditorLocation } from '@/utils/rpaMcpConvert';
-import {
-  getManualRecordingDiagnostics,
-  mapRpaConfigureDisplaySteps,
-  type RpaRecordingDiagnosticItem,
-  type RpaConfigureStep,
-} from '@/utils/rpaConfigureTimeline';
-import {
-  formatRpaActionLabel,
-  formatRpaStepLocator,
-} from '@/utils/rpaStepTimeline';
-import {
-  buildRpaSkillConfigDraft,
-  draftParamsToParamItems,
-  paramItemsToDraftParams,
-  type RpaConfigParamItem,
-  type RpaSkillConfigDraft,
-} from '@/utils/rpaSkillConfigDraft';
+  promoteBindingLocation,
+  renamePromotedBindingRef,
+  setDraftInputDefault,
+  loadCreationSnapshot,
+  saveCreationSnapshot,
+  type SkillConfigurationDraft,
+} from '@/utils/rpaAgentSkillConfiguration';
 
-const router = useRouter();
-const route = useRoute();
+const route = useRoute(); const router = useRouter();
+const { t } = useI18n();
+const sessionId = computed(() => String(route.query.sessionId || ''));
+const snapshot = loadCreationSnapshot(sessionId.value);
+const creationSnapshot = ref(snapshot);
+const draft = ref<SkillConfigurationDraft | null>(snapshot?.configurationDraft ? structuredClone(snapshot.configurationDraft) : null);
+const compiling = ref(false); const error = ref('');
+const locations = computed(() => snapshot?.bindingLocations || []);
+const configurationState = ref<'configured' | 'compiled' | undefined>(snapshot?.configurationState ?? (snapshot?.artifactHash ? 'compiled' : undefined));
+const invalidRenameKeys = ref<Set<string>>(new Set());
+const hasInvalidRename = computed(() => invalidRenameKeys.value.size > 0);
 
-const sessionId = computed(() => typeof route.query.sessionId === 'string' ? route.query.sessionId : '');
-const loading = ref(true);
-const loadFailed = ref(false);
-const error = ref<string | null>(null);
-
-interface ParsedLocator {
-  method?: string;
-  role?: string;
-  name?: string;
-  value?: string;
-  parent?: ParsedLocator;
-  child?: ParsedLocator;
-  base?: ParsedLocator;
-  index?: number;
-  locator?: ParsedLocator;
-}
-
-interface LocatorCandidate {
-  kind?: string;
-  score?: number;
-  selected?: boolean;
-  reason?: string;
-  strict_match_count?: number;
-  visible_match_count?: number;
-  locator?: ParsedLocator | string | null;
-}
-
-interface StepValidation {
-  status?: string;
-  details?: string;
-}
-
-interface StepItem extends RpaConfigureStep {
-  id: string;
-  action: string;
-  target?: ParsedLocator | string | null;
-  frame_path?: string[];
-  locator_candidates?: LocatorCandidate[];
-  validation?: StepValidation;
-  value?: string;
-  description?: string;
-  label?: string;
-  sensitive?: boolean;
-  url?: string;
-  source?: string;
-  configurable?: boolean;
-}
-
-interface ParamItem extends RpaConfigParamItem {}
-
-interface CredentialItem {
-  id: string;
-  name?: string;
-  username?: string;
-}
-
-const steps = ref<StepItem[]>([]);
-const diagnostics = ref<RpaRecordingDiagnosticItem[]>([]);
-const skillName = ref('');
-const skillDescription = ref('');
-const generatedScript = ref('');
-const scriptGenerating = ref(false);
-const params = ref<ParamItem[]>([]);
-const credentials = ref<CredentialItem[]>([]);
-const promotingStepIndex = ref<number | null>(null);
-const isScriptDrawerOpen = ref(false);
-const hasDiagnostics = computed(() => diagnostics.value.length > 0);
-const isDiscardDialogOpen = ref(false);
-
-const parseLocator = (raw: unknown): ParsedLocator | null => {
-  if (!raw) return null;
-  if (typeof raw === 'string') {
-    try {
-      return JSON.parse(raw);
-    } catch {
-      return { method: 'css', value: raw };
-    }
-  }
-  return raw as ParsedLocator;
+const persistSnapshot = (updates: Partial<NonNullable<typeof snapshot>>) => {
+  if (!creationSnapshot.value) return;
+  const next = { ...creationSnapshot.value, ...updates };
+  saveCreationSnapshot(next);
+  creationSnapshot.value = next;
 };
 
-const VALIDATION_LABELS: Record<string, string> = {
-  ok: 'Strict match',
-  ambiguous: 'Ambiguous / not unique',
-  fallback: 'Fallback',
-  warning: 'Warning',
-  broken: 'Broken',
+const markRenameValidity = (key: string, valid: boolean) => {
+  const next = new Set(invalidRenameKeys.value);
+  if (valid) next.delete(key); else next.add(key);
+  invalidRenameKeys.value = next;
 };
 
-const VALIDATION_CLASS_MAP: Record<string, string> = {
-  ok: 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400 ring-1 ring-emerald-200 dark:ring-emerald-800',
-  ambiguous: 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 ring-1 ring-amber-200 dark:ring-amber-800',
-  fallback: 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 ring-1 ring-amber-200 dark:ring-amber-800',
-  warning: 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 ring-1 ring-amber-200 dark:ring-amber-800',
-  broken: 'bg-rose-100 dark:bg-rose-900/40 text-rose-700 dark:text-rose-400 ring-1 ring-rose-200 dark:ring-rose-800',
+const promoteBinding = (locationValue: Record<string, unknown>, toKind: 'skill_input' | 'secret') => {
+  if (!draft.value) return;
+  const location = locationValue as { trace_id: string; binding_name: string };
+  draft.value = promoteBindingLocation(draft.value, location, toKind);
 };
 
-const getValidationLabel = (status?: string) => {
-  if (!status) return 'Unknown';
-  return VALIDATION_LABELS[status] || status.replace(/_/g, ' ');
-};
-
-const getValidationClass = (status?: string) => {
-  if (!status) return 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 ring-1 ring-gray-200 dark:ring-gray-700';
-  return VALIDATION_CLASS_MAP[status] || 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 ring-1 ring-gray-200 dark:ring-gray-700';
-};
-
-const promoteLocator = async (stepIndex: number, candidateIndex: number, step: StepItem = steps.value[stepIndex]) => {
-  if (!sessionId.value || promotingStepIndex.value !== null) return;
-  if (!step?.traceId) {
-    error.value = 'Cannot promote locator without trace id';
-    return;
-  }
-  promotingStepIndex.value = stepIndex;
-  error.value = null;
+const renameInputRef = (oldRef: string, event: Event) => {
+  if (!draft.value) return;
+  const input = event.target as HTMLInputElement;
   try {
-    await apiClient.post(`/rpa/session/${sessionId.value}/trace/${step.traceId}/locator`, {
-      candidate_index: candidateIndex,
-    });
-    await loadSession();
-  } catch (err: any) {
-    error.value = `切换定位器失败: ${err.response?.data?.detail || err.message}`;
-  } finally {
-    promotingStepIndex.value = null;
+    draft.value = renamePromotedBindingRef(draft.value, 'skill_input', oldRef, input.value);
+    markRenameValidity(`input:${oldRef}`, true);
+    error.value = '';
+  } catch (exception) {
+    input.value = oldRef;
+    markRenameValidity(`input:${oldRef}`, false);
+    error.value = exception instanceof Error && exception.message === 'configuration.ref_duplicate'
+      ? 'Ref 不能重复。'
+      : 'Ref 不能为空。';
   }
 };
-
-const promoteDiagnosticLocator = async (diagnostic: RpaRecordingDiagnosticItem, candidateIndex: number) => {
-  if (!sessionId.value || promotingStepIndex.value !== null) return;
-  if (!diagnostic.diagnosticId) {
-    error.value = 'Cannot resolve diagnostic locator without diagnostic id';
-    return;
-  }
-  promotingStepIndex.value = -1;
-  error.value = null;
+const renameSecretRef = (oldRef: string, event: Event) => {
+  if (!draft.value) return;
+  const input = event.target as HTMLInputElement;
   try {
-    await apiClient.post(`/rpa/session/${sessionId.value}/diagnostic/${diagnostic.diagnosticId}/resolve-locator`, {
-      candidate_index: candidateIndex,
-    });
-    await loadSession();
-  } catch (err: any) {
-    error.value = `切换定位器失败: ${err.response?.data?.detail || err.message}`;
-  } finally {
-    promotingStepIndex.value = null;
+    draft.value = renamePromotedBindingRef(draft.value, 'secret', oldRef, input.value);
+    markRenameValidity(`secret:${oldRef}`, true);
+    error.value = '';
+  } catch (exception) {
+    input.value = oldRef;
+    markRenameValidity(`secret:${oldRef}`, false);
+    error.value = exception instanceof Error && exception.message === 'configuration.ref_duplicate'
+      ? 'Ref 不能重复。'
+      : 'Ref 不能为空。';
   }
 };
-
-const deleteDiagnosticStep = async (diagnostic: RpaRecordingDiagnosticItem) => {
-  if (!sessionId.value || promotingStepIndex.value !== null) return;
-  if (!diagnostic.diagnosticId) {
-    error.value = 'Cannot delete diagnostic without diagnostic id';
-    return;
-  }
-  promotingStepIndex.value = -1;
-  error.value = null;
-  try {
-    await apiClient.delete(`/rpa/session/${sessionId.value}/diagnostic/${diagnostic.diagnosticId}`);
-    await loadSession();
-    if (!diagnostics.value.length && !generatedScript.value) {
-      await generateScript({ openDrawer: false });
-    }
-  } catch (err: any) {
-    error.value = `删除待修复步骤失败: ${err.response?.data?.detail || err.message}`;
-  } finally {
-    promotingStepIndex.value = null;
-  }
+const changeInputType = (ref: string, type: 'string' | 'number' | 'boolean') => {
+  if (!draft.value) return;
+  draft.value = { ...draft.value, inputs: draft.value.inputs.map((item) => item.ref === ref ? { ref: item.ref, title: item.title, required: item.required, value_type: type } : item) };
+};
+const toggleDefault = (ref: string, enabled: boolean) => {
+  if (!draft.value) return;
+  const input = draft.value.inputs.find((item) => item.ref === ref);
+  if (!input) return;
+  const initial = input.value_type === 'number' ? 0 : input.value_type === 'boolean' ? false : '';
+  draft.value = setDraftInputDefault(draft.value, ref, enabled, initial);
+};
+const updateDefault = (ref: string, value: unknown) => {
+  if (draft.value) draft.value = setDraftInputDefault(draft.value, ref, true, value);
 };
 
-const loadCredentials = async () => {
+const continueToTest = async () => {
   try {
-    const resp = await apiClient.get('/credentials');
-    credentials.value = resp.data.credentials || [];
+    await router.push({ path: '/rpa/test', query: { sessionId: sessionId.value } });
+    error.value = '';
   } catch {
-    // Credentials are optional for this page.
+    error.value = '产物已生成，请重试进入测试页。';
   }
 };
 
-const loadSkillConfigDraft = async (generatedParams: ParamItem[]) => {
-  if (!sessionId.value) return false;
+const configureAndCompile = async () => {
+  if (!snapshot || !draft.value || compiling.value || hasInvalidRename.value) return;
+  compiling.value = true; error.value = '';
   try {
-    const resp = await apiClient.get(`/rpa/session/${sessionId.value}/skill-config-draft`);
-    const draft = resp.data.draft as RpaSkillConfigDraft | null;
-    if (!draft) return false;
-    skillName.value = draft.skill_name || skillName.value;
-    skillDescription.value = draft.description || skillDescription.value;
-    params.value = draftParamsToParamItems(draft.params || {}, generatedParams) as ParamItem[];
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-const KEYWORD_MAP: Record<string, string> = {
-  '邮箱': 'email',
-  '邮件': 'email',
-  email: 'email',
-  'e-mail': 'email',
-  '密码': 'password',
-  password: 'password',
-  pwd: 'password',
-  '用户名': 'username',
-  '用户': 'username',
-  username: 'username',
-  user: 'username',
-  '账号': 'account',
-  account: 'account',
-  '手机': 'phone',
-  '电话': 'phone',
-  phone: 'phone',
-  tel: 'phone',
-  mobile: 'phone',
-  '验证码': 'captcha',
-  captcha: 'captcha',
-  code: 'code',
-  '搜索': 'search',
-  search: 'search',
-  '地址': 'address',
-  address: 'address',
-  url: 'url',
-  '姓名': 'name',
-  name: 'name',
-};
-
-function deriveParamName(loc: ParsedLocator | null, sensitive: boolean): string {
-  if (!loc) return sensitive ? 'password' : '';
-  if (sensitive) return 'password';
-
-  const candidates: string[] = [];
-  if (loc.name) candidates.push(loc.name);
-  if (loc.value && loc.method !== 'css') candidates.push(loc.value);
-  if (loc.role) candidates.push(loc.role);
-
-  for (const text of candidates) {
-    const lower = text.toLowerCase().trim();
-    for (const [keyword, paramName] of Object.entries(KEYWORD_MAP)) {
-      if (lower.includes(keyword)) return paramName;
-    }
-
-    const ascii = lower
-      .replace(/[^a-z0-9_]/g, '_')
-      .replace(/_+/g, '_')
-      .replace(/^_|_$/g, '');
-    if (ascii && ascii.length >= 2 && ascii.length <= 30 && /^[a-z]/.test(ascii)) {
-      return ascii;
-    }
-  }
-  return '';
-}
-
-const loadSession = async () => {
-  if (!sessionId.value) {
-    error.value = '缺少 sessionId 参数';
-    loadFailed.value = true;
-    loading.value = false;
-    return;
-  }
-
-  try {
-    const resp = await apiClient.get(`/rpa/session/${sessionId.value}`);
-    const session = {
-      ...(resp.data.session || {}),
-      timeline: resp.data.session?.timeline ?? resp.data.timeline,
-    };
-    steps.value = mapRpaConfigureDisplaySteps(session) as StepItem[];
-    diagnostics.value = getManualRecordingDiagnostics(session);
-    loadFailed.value = false;
-    error.value = null;
-
-    const usedNames = new Set<string>();
-    const generatedParams = steps.value
-      .filter((step) => step.action === 'fill' || step.action === 'select')
-      .map((step, index) => {
-        let label = `参数${index + 1}`;
-        let semanticName = '';
-
-        try {
-          const loc = parseLocator(step.target);
-          if (loc?.name) label = loc.name;
-          else if (loc?.value) label = loc.value;
-          semanticName = deriveParamName(loc, !!step.sensitive);
-        } catch {
-          // Fall back to generated defaults.
-        }
-
-        let name = semanticName || `param_${index}`;
-        if (usedNames.has(name)) {
-          let suffix = 2;
-          while (usedNames.has(`${name}_${suffix}`)) suffix++;
-          name = `${name}_${suffix}`;
-        }
-        usedNames.add(name);
-
-        return {
-          id: `param_${index}`,
-          name,
-          label,
-          original_value: step.value || '',
-          default_value: step.value || '',
-          enabled: true,
-          step_id: step.id,
-          sensitive: !!step.sensitive,
-          credential_id: '',
-        };
-      });
-    params.value = generatedParams;
-
-    const navStep = steps.value.find((step) => !!step.url);
-    if (navStep?.url) {
+    if (!configurationState.value) {
       try {
-        const url = new URL(navStep.url);
-        skillName.value = `${url.hostname} 自动化`;
+        await configureRpaAgentSkill(sessionId.value, draft.value);
+        configurationState.value = 'configured';
+        persistSnapshot({ configurationDraft: draft.value, configurationState: 'configured' });
       } catch {
-        skillName.value = '录制技能';
+        error.value = '配置保存失败，请修正后重试。';
+        return;
       }
-    } else {
-      skillName.value = '录制技能';
     }
-    skillDescription.value = `自动执行 ${steps.value.length} 个录制步骤`;
-  } catch (err: any) {
-    error.value = `加载会话失败: ${err.response?.data?.detail || err.message}`;
-    if (!steps.value.length) loadFailed.value = true;
-  } finally {
-    loading.value = false;
-  }
+    if (configurationState.value === 'configured') {
+      try {
+        const artifact = await compileRpaAgentSkill(sessionId.value);
+        configurationState.value = 'compiled';
+        persistSnapshot({
+          configurationDraft: draft.value,
+          configurationState: 'compiled',
+          artifactHash: artifact.artifact_hash,
+          artifactFiles: artifact.artifact_files,
+          testPassed: false,
+          savedRef: undefined,
+        });
+      } catch {
+        error.value = '编译失败，配置已保存，可直接重试编译。';
+        return;
+      }
+    }
+    await continueToTest();
+  } finally { compiling.value = false; }
 };
-
-const buildParamMap = () => paramItemsToDraftParams(params.value);
-
-const saveSkillConfigDraft = async () => {
-  if (!sessionId.value) return;
-  await apiClient.put(
-    `/rpa/session/${sessionId.value}/skill-config-draft`,
-    buildRpaSkillConfigDraft({
-      skillName: skillName.value,
-      skillDescription: skillDescription.value,
-      params: params.value,
-    }),
-  );
-};
-
-const generateScript = async (options: { openDrawer?: boolean } | Event = { openDrawer: true }) => {
-  const resolvedOptions = options instanceof Event ? { openDrawer: true } : options;
-  if (hasDiagnostics.value) {
-    generatedScript.value = '';
-    isScriptDrawerOpen.value = false;
-    error.value = `还有 ${diagnostics.value.length} 个待修复步骤，修复后才能生成脚本`;
-    return;
-  }
-  try {
-    scriptGenerating.value = true;
-    error.value = null;
-    const resp = await apiClient.post(`/rpa/session/${sessionId.value}/generate`, {
-      params: buildParamMap(),
-    });
-    generatedScript.value = resp.data.script || '';
-    isScriptDrawerOpen.value = resolvedOptions.openDrawer !== false;
-  } catch (err: any) {
-    isScriptDrawerOpen.value = false;
-    generatedScript.value = '';
-    error.value = `生成脚本失败: ${err.response?.data?.detail || err.message}`;
-  } finally {
-    scriptGenerating.value = false;
-  }
-};
-
-const goToTest = async () => {
-  if (hasDiagnostics.value) {
-    error.value = `还有 ${diagnostics.value.length} 个待修复步骤，修复后才能开始测试`;
-    return;
-  }
-  try {
-    await saveSkillConfigDraft();
-    router.push({
-      path: '/rpa/test',
-      query: {
-        sessionId: sessionId.value,
-      },
-    });
-  } catch (err: any) {
-    error.value = `保存配置失败: ${err.response?.data?.detail || err.message}`;
-  }
-};
-
-const confirmDiscardAndRecord = () => {
-  isDiscardDialogOpen.value = true;
-};
-
-const startNewRecording = () => {
-  router.push('/rpa/recorder');
-};
-
-const goToHome = () => {
-  router.push('/chat');
-};
-
-const goToSkills = () => {
-  router.push('/chat/skills');
-};
-
-const goToMcpToolEditor = () => {
-  router.push(buildRpaToolEditorLocation({
-    sessionId: sessionId.value,
-    skillName: skillName.value,
-    skillDescription: skillDescription.value,
-  }));
-};
-
-const handleSecondaryAction = (id: string) => {
-  if (id === 'preview-script') {
-    generateScript();
-    return;
-  }
-  if (id === 'convert-mcp') {
-    goToMcpToolEditor();
-  }
-};
-
-onMounted(async () => {
-  await loadSession();
-  if (!loadFailed.value) {
-    await loadSkillConfigDraft(params.value);
-  }
-  loadCredentials();
-  if (!loadFailed.value && sessionId.value && !hasDiagnostics.value) {
-    await generateScript({ openDrawer: false });
-  }
-});
 </script>
 
 <template>
-  <div class="min-h-screen bg-[#f5f6f7] dark:bg-[#161618] text-gray-900 dark:text-gray-100">
-    <RpaFlowGuide
-      class="sticky top-0 z-30"
-      current-step="configure"
-      :session-id="sessionId"
-      :recorded-step-count="steps.length"
-      :diagnostic-count="diagnostics.length"
-      :skill-name="skillName"
-      primary-label="开始测试"
-      :primary-disabled="hasDiagnostics"
-      :secondary-actions="[
-        { id: 'convert-mcp', label: '转换为 MCP 工具', tone: 'accent' },
-        { id: 'preview-script', label: scriptGenerating ? '生成中...' : '预览脚本', disabled: scriptGenerating || hasDiagnostics },
-      ]"
-      @home="goToHome"
-      @skills="goToSkills"
-      @go-record="confirmDiscardAndRecord"
-      @go-test="goToTest"
-      @primary-action="goToTest"
-      @secondary-action="handleSecondaryAction"
-    />
-
-    <RpaDiscardRecordingDialog
-      v-model:open="isDiscardDialogOpen"
-      @confirm="startNewRecording"
-    />
-
-    <div v-if="loading" class="flex h-64 items-center justify-center">
-      <p class="text-sm text-gray-500 dark:text-gray-400">加载中...</p>
-    </div>
-
-    <div v-else-if="loadFailed" class="flex h-64 items-center justify-center px-6">
-      <div class="rounded-2xl border border-rose-200 bg-white dark:bg-[#272728] px-6 py-5 text-sm text-rose-600 shadow-sm">
-        {{ error || '页面加载失败' }}
-      </div>
-    </div>
-
-    <main v-else class="mx-auto max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8">
-      <div v-if="error" class="mb-4 rounded-2xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/30 px-4 py-3 text-sm text-amber-800">
-        {{ error }}
-      </div>
-
-      <div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <section class="space-y-4">
-          <div class="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 class="text-xl font-extrabold tracking-tight">录制步骤</h2>
-              <p class="text-sm text-gray-500 dark:text-gray-400">默认显示摘要信息，点击任一步骤可展开查看详细定位诊断。</p>
-            </div>
-            <div class="rounded-full bg-white dark:bg-[#272728] px-4 py-1.5 text-xs font-bold text-[#831bd7] shadow-sm ring-1 ring-[#831bd7]/10">
-              共 {{ steps.length }} 步
-            </div>
-          </div>
-
-          <section
-            v-if="diagnostics.length"
-            class="rounded-3xl border border-rose-200 dark:border-rose-900/60 bg-rose-50/80 dark:bg-rose-950/20 p-4 shadow-sm"
-          >
-            <div class="flex items-start justify-between gap-3">
-              <div>
-                <h3 class="text-sm font-bold text-rose-700 dark:text-rose-300">待修复步骤</h3>
-                <p class="mt-1 text-xs text-rose-600 dark:text-rose-300/80">
-                  这些步骤还没有形成稳定可回放的事实，修复或删除后才能生成脚本。
-                </p>
-              </div>
-              <span class="rounded-full bg-white/80 dark:bg-rose-950/40 px-3 py-1 text-[11px] font-bold text-rose-700 dark:text-rose-300 ring-1 ring-rose-200 dark:ring-rose-900/60">
-                {{ diagnostics.length }} 个待处理
-              </span>
-            </div>
-
-            <div class="mt-4 space-y-3">
-              <article
-                v-for="diagnostic in diagnostics"
-                :key="diagnostic.id"
-                class="rounded-2xl border border-rose-200/80 dark:border-rose-900/60 bg-white dark:bg-[#272728] p-4"
-              >
-                <div class="flex items-start justify-between gap-3">
-                  <div class="min-w-0 flex-1">
-                    <div class="flex flex-wrap items-center gap-2">
-                      <span class="rounded-full bg-rose-100 dark:bg-rose-900/40 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-rose-700 dark:text-rose-300">
-                        {{ formatRpaActionLabel(diagnostic.action) }}
-                      </span>
-                      <span
-                        class="rounded-full px-2.5 py-1 text-[10px] font-semibold"
-                        :class="getValidationClass(diagnostic.validation.status)"
-                      >
-                        {{ getValidationLabel(diagnostic.validation.status) }}
-                      </span>
-                    </div>
-                    <h4 class="mt-2 text-sm font-bold text-gray-900 dark:text-gray-100">
-                      {{ diagnostic.description }}
-                    </h4>
-                    <p class="mt-1 text-xs text-rose-700 dark:text-rose-300/80">
-                      {{ diagnostic.validation.details }}
-                    </p>
-                    <p v-if="diagnostic.url" class="mt-2 break-all font-mono text-[11px] text-gray-500 dark:text-gray-400">
-                      {{ diagnostic.url }}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    class="shrink-0 rounded-full border border-rose-200 dark:border-rose-900/60 px-3 py-1.5 text-xs font-semibold text-rose-700 dark:text-rose-300 transition-colors hover:bg-rose-100/80 dark:hover:bg-rose-900/30 disabled:cursor-not-allowed disabled:opacity-60"
-                    :disabled="!diagnostic.diagnosticId || promotingStepIndex === -1"
-                    @click="deleteDiagnosticStep(diagnostic)"
-                  >
-                    {{ promotingStepIndex === -1 ? '处理中...' : '删除该步' }}
-                  </button>
-                </div>
-
-                <div v-if="diagnostic.locator_candidates?.length" class="mt-4 space-y-2">
-                  <div
-                    v-for="(candidate, candidateIndex) in diagnostic.locator_candidates"
-                    :key="`${diagnostic.id}-${candidateIndex}`"
-                    class="flex flex-col gap-2 rounded-2xl border border-gray-200 dark:border-gray-700 bg-[#fafafa] dark:bg-[#383739] px-3 py-3 md:flex-row md:items-start md:justify-between"
-                  >
-                    <div class="min-w-0 flex-1">
-                      <div class="flex flex-wrap items-center gap-2 text-[11px]">
-                        <span class="rounded-full bg-gray-100 dark:bg-[#444345] px-2 py-0.5 font-semibold uppercase tracking-wide text-gray-600 dark:text-gray-400">
-                          {{ candidate.kind || 'locator' }}
-                        </span>
-                        <span v-if="candidate.playwright_locator" class="text-gray-400 dark:text-gray-500">Playwright</span>
-                        <span v-if="candidate.selector" class="text-gray-400 dark:text-gray-500">Selector</span>
-                      </div>
-                      <p class="mt-1 break-all font-mono text-xs text-gray-700 dark:text-gray-300">
-                        {{ formatRpaStepLocator(candidate.locator) }}
-                      </p>
-                      <p v-if="candidate.reason" class="mt-1 text-[11px] text-gray-500 dark:text-gray-400">{{ candidate.reason }}</p>
-                    </div>
-
-                    <button
-                      type="button"
-                      class="shrink-0 rounded-full border border-[#831bd7]/25 px-3 py-1.5 text-xs font-semibold text-[#831bd7] transition-colors hover:bg-[#831bd7]/5 disabled:cursor-not-allowed disabled:opacity-60"
-                      :disabled="!diagnostic.diagnosticId || promotingStepIndex === -1"
-                      @click="promoteDiagnosticLocator(diagnostic, candidateIndex)"
-                    >
-                      {{ promotingStepIndex === -1 ? '切换中...' : '使用此定位器' }}
-                    </button>
-                  </div>
-                </div>
-              </article>
-            </div>
-          </section>
-
-          <RpaStepTimeline
-            class="min-h-[620px] overflow-hidden rounded-2xl"
-            :steps="steps"
-            mode="configure"
-            :show-header="false"
-            :show-candidates="true"
-            :promoting-step-index="promotingStepIndex"
-            empty-message="当前没有可配置的录制步骤。"
-            @promote-locator="promoteLocator($event.stepIndex, $event.candidateIndex, $event.step)"
-          />
-        </section>
-
-        <aside class="space-y-4 xl:sticky xl:top-24 xl:self-start">
-          <section class="rounded-3xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#272728] p-5 shadow-sm">
-            <div class="flex items-center gap-3">
-              <div class="flex h-10 w-10 items-center justify-center rounded-2xl bg-[#f4eaff] text-[#831bd7]">
-                <Settings :size="18" />
-              </div>
-              <div>
-                <h2 class="text-base font-extrabold">技能信息</h2>
-              </div>
-            </div>
-
-            <div class="mt-4 space-y-4">
-              <div class="space-y-1.5">
-                <label class="text-xs font-semibold text-gray-500 dark:text-gray-400">技能名称</label>
-                <input
-                  v-model="skillName"
-                  class="w-full rounded-2xl border border-gray-200 dark:border-gray-700 bg-[#fafafa] dark:bg-[#383739] px-3 py-2.5 text-sm outline-none transition-colors focus:border-[#831bd7] focus:bg-white"
-                />
-              </div>
-              <div class="space-y-1.5">
-                <label class="text-xs font-semibold text-gray-500 dark:text-gray-400">描述</label>
-                <textarea
-                  v-model="skillDescription"
-                  rows="3"
-                  class="w-full resize-none rounded-2xl border border-gray-200 dark:border-gray-700 bg-[#fafafa] dark:bg-[#383739] px-3 py-2.5 text-sm outline-none transition-colors focus:border-[#831bd7] focus:bg-white"
-                />
-              </div>
-            </div>
-          </section>
-
-          <section class="rounded-3xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#272728] p-5 shadow-sm">
-            <div class="flex items-start gap-3">
-              <div class="flex h-10 w-10 items-center justify-center rounded-2xl bg-[#f4eaff] text-[#831bd7]">
-                <Tag :size="18" />
-              </div>
-              <div class="min-w-0">
-                <h2 class="text-base font-extrabold">可配置参数</h2>
-              </div>
-            </div>
-
-            <div v-if="params.length > 0" class="mt-4 max-h-[calc(100vh-22rem)] space-y-3 overflow-y-auto pr-1">
-              <div
-                v-for="param in params"
-                :key="param.id"
-                class="rounded-2xl border border-gray-200 dark:border-gray-700 bg-[#fafafa] dark:bg-[#383739] p-3"
-              >
-                <div class="flex items-center gap-3">
-                  <input
-                    v-model="param.enabled"
-                    type="checkbox"
-                    class="h-4 w-4 rounded border-gray-300 dark:border-gray-600 accent-[#831bd7]"
-                  />
-                  <input
-                    v-model="param.name"
-                    class="min-w-0 flex-1 border-0 bg-transparent text-sm font-semibold text-gray-800 dark:text-gray-200 outline-none"
-                    placeholder="参数名"
-                  />
-                  <span
-                    class="rounded-full px-2 py-0.5 text-[10px] font-semibold"
-                    :class="param.sensitive ? 'bg-fuchsia-100 dark:bg-fuchsia-900/40 text-fuchsia-700 dark:text-fuchsia-400' : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'"
-                  >
-                    {{ param.sensitive ? '敏感' : '普通' }}
-                  </span>
-                </div>
-
-                <p class="mt-2 text-[11px] text-gray-500 dark:text-gray-400">{{ param.label }}</p>
-
-                <div class="mt-3">
-                  <select
-                    v-if="param.sensitive"
-                    v-model="param.credential_id"
-                    class="w-full rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#272728] px-3 py-2 text-sm text-gray-700 dark:text-gray-300 outline-none transition-colors focus:border-[#831bd7]"
-                  >
-                    <option value="">选择凭据...</option>
-                    <option
-                      v-for="cred in credentials"
-                      :key="cred.id"
-                      :value="cred.id"
-                    >
-                      {{ cred.name || '未命名凭据' }}{{ cred.username ? ` (${cred.username})` : '' }}
-                    </option>
-                  </select>
-                  <input
-                    v-else
-                    v-model="param.default_value"
-                    class="w-full rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#272728] px-3 py-2 text-sm text-gray-700 dark:text-gray-300 outline-none transition-colors focus:border-[#831bd7]"
-                    placeholder="默认值"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div v-else class="mt-4 rounded-2xl border border-dashed border-gray-200 dark:border-gray-700 bg-[#fafafa] dark:bg-[#383739] px-4 py-6 text-center text-sm text-gray-400 dark:text-gray-500">
-              当前没有可参数化的输入步骤。
-            </div>
-          </section>
-        </aside>
-      </div>
-    </main>
-
-    <Dialog :open="isScriptDrawerOpen" @update:open="(open: boolean) => { isScriptDrawerOpen = open }">
-      <DialogContent
-        class="left-auto right-0 top-0 h-screen w-[min(760px,100vw)] max-h-none max-w-none translate-x-0 translate-y-0 overflow-hidden rounded-none border-l border-gray-200 dark:border-gray-700 bg-[#0f1115] p-0"
-      >
-        <div class="flex h-full flex-col">
-          <DialogHeader class="border-b border-white/10 px-6 py-4 text-left">
-            <DialogTitle class="flex items-center gap-2 text-base font-bold text-white">
-              <Code :size="18" />
-              脚本预览
-            </DialogTitle>
-          </DialogHeader>
-
-          <div class="flex-1 overflow-auto px-6 py-5">
-            <pre class="min-h-full overflow-x-auto rounded-2xl bg-black/30 p-4 text-xs leading-6 text-emerald-300"><code>{{ generatedScript }}</code></pre>
+  <main class="mx-auto max-w-5xl p-6">
+    <header><h1 class="text-2xl font-extrabold">{{ t('Post-recording configuration') }}</h1><p class="mt-1 text-sm text-gray-500">配置名称、输入、Secret、输出与 DataAsset，然后确定性编译。</p></header>
+    <p v-if="!draft" role="alert" class="mt-6 rounded-lg bg-rose-50 p-4 text-rose-700">配置快照不存在或 session id 不匹配，请返回录制工作台。</p>
+    <form v-else class="mt-6 space-y-5" @submit.prevent="configureAndCompile">
+      <fieldset :disabled="Boolean(configurationState)" class="contents">
+      <section class="grid gap-4 rounded-xl bg-white p-5 shadow-sm dark:bg-[#252527] md:grid-cols-2">
+        <label class="text-sm font-bold">SKILL 名称<input v-model="draft.skill.name" name="skill-name" class="mt-2 w-full rounded-lg border p-2 font-normal" /></label>
+        <label class="text-sm font-bold">说明<textarea v-model="draft.skill.description" class="mt-2 w-full rounded-lg border p-2 font-normal" /></label>
+      </section>
+      <section class="rounded-xl bg-white p-5 shadow-sm dark:bg-[#252527]">
+        <h2 class="font-extrabold">参数与精确绑定</h2>
+        <p class="mt-1 text-xs text-gray-500">每项提升以 trace_id + binding_name 唯一定位。</p>
+        <div v-for="location in locations" :key="`${location.trace_id}:${location.binding_name}`" class="mt-3 flex items-center justify-between rounded-lg bg-gray-50 p-3 text-sm">
+          <code>{{ location.trace_id }} · {{ location.binding_name }}</code>
+          <div class="flex gap-2">
+            <button data-testid="promote-binding" type="button" class="rounded bg-violet-700 px-3 py-1.5 font-bold text-white" @click="promoteBinding(location, 'skill_input')">提升为 Input</button>
+            <button data-testid="promote-secret" type="button" class="rounded border border-violet-700 px-3 py-1.5 font-bold text-violet-700" @click="promoteBinding(location, 'secret')">提升为 Secret</button>
           </div>
         </div>
-      </DialogContent>
-    </Dialog>
-  </div>
+        <div v-for="input in draft.inputs" :key="input.ref" class="mt-3 grid grid-cols-2 gap-2 rounded-lg border p-3 text-sm md:grid-cols-4">
+          <input :value="input.ref" class="rounded border p-2" aria-label="Input ref" @change="renameInputRef(input.ref, $event)" />
+          <input v-model="input.title" class="rounded border p-2" aria-label="Input title" />
+          <label class="flex items-center gap-2"><input v-model="input.required" type="checkbox" />required</label>
+          <select :value="input.value_type" class="rounded border p-2" @change="changeInputType(input.ref, ($event.target as HTMLSelectElement).value as 'string' | 'number' | 'boolean')"><option value="string">string</option><option value="number">number</option><option value="boolean">boolean</option></select>
+          <label class="flex items-center gap-2"><input type="checkbox" :checked="Object.prototype.hasOwnProperty.call(input, 'default')" @change="toggleDefault(input.ref, ($event.target as HTMLInputElement).checked)" />设置默认值</label>
+          <select v-if="input.value_type === 'boolean' && Object.prototype.hasOwnProperty.call(input, 'default')" :value="String(input.default)" class="rounded border p-2" @change="updateDefault(input.ref, ($event.target as HTMLSelectElement).value)"><option value="false">false</option><option value="true">true</option></select>
+          <input v-else-if="Object.prototype.hasOwnProperty.call(input, 'default')" :type="input.value_type === 'number' ? 'number' : 'text'" :value="String(input.default ?? '')" class="rounded border p-2" @input="updateDefault(input.ref, ($event.target as HTMLInputElement).value)" />
+        </div>
+      </section>
+      <section class="rounded-xl bg-white p-5 shadow-sm dark:bg-[#252527]">
+        <h2 class="font-extrabold">声明输入输出</h2>
+        <p class="mt-1 text-xs text-gray-500">这里只声明 Secret 名称；明文仅在测试页内存输入。</p>
+        <div class="mt-3 space-y-3 text-sm">
+          <div v-for="item in draft.secrets" :key="`secret:${item.ref}`" class="grid grid-cols-3 gap-2"><input :value="item.ref" class="rounded border p-2" @change="renameSecretRef(item.ref, $event)" /><input v-model="item.title" class="rounded border p-2" /><label><input v-model="item.required" type="checkbox" /> required</label></div>
+          <div v-for="item in draft.outputs" :key="`output:${item.name}`" class="grid grid-cols-4 gap-2"><input v-model="item.name" class="rounded border p-2" /><input v-model="item.title" class="rounded border p-2" /><input v-model="item.variable_ref" class="rounded border p-2" /><select v-model="item.value_type" class="rounded border p-2"><option>string</option><option>number</option><option>boolean</option><option>json</option></select></div>
+          <div v-for="item in draft.asset_inputs" :key="`asset-input:${item.ref}`" class="grid grid-cols-3 gap-2"><input v-model="item.ref" class="rounded border p-2" /><input v-model="item.title" class="rounded border p-2" /><label><input v-model="item.required" type="checkbox" /> required</label></div>
+          <div v-for="item in draft.asset_outputs" :key="`asset-output:${item.name}`" class="grid grid-cols-3 gap-2"><input v-model="item.name" class="rounded border p-2" /><input v-model="item.title" class="rounded border p-2" /><input v-model="item.asset_ref" class="rounded border p-2" /></div>
+        </div>
+      </section>
+      </fieldset>
+      <p v-if="error" role="alert" class="text-sm text-rose-700">{{ error }}</p>
+      <button data-testid="compile-skill" type="submit" class="rounded-lg bg-violet-700 px-5 py-2.5 font-bold text-white disabled:opacity-50" :disabled="compiling || hasInvalidRename">{{ compiling ? '处理中…' : configurationState === 'compiled' ? '进入测试' : configurationState === 'configured' ? '重试编译' : t('Save configuration and compile') }}</button>
+    </form>
+  </main>
 </template>

@@ -63,7 +63,7 @@ flowchart TD
     A --> F["下拉框、日期范围、输入框、图标查询按钮"]
     F --> T["多行查询结果和多个同名‘发起验收’按钮"]
     T --> X["自然语言提取目标行字段"]
-    X --> V["共享变量 source_order.*"]
+    X --> V["业务变量 采购订单.*"]
     V --> C["用户点击目标行‘发起验收’"]
     C --> N["新标签页：随机任务 URL"]
     N --> I["系统 B 验收登记 iframe"]
@@ -161,15 +161,15 @@ query.order_no
 自然语言执行成功后，结果进入共享变量上下文：
 
 ```text
-source_order.order_no
-source_order.supplier_name
-source_order.contract_no
-source_order.amount
-source_order.currency
-source_order.order_date
+采购订单.订单号
+采购订单.供应商
+采购订单.合同号
+采购订单.含税金额
+采购订单.币种
+采购订单.订单日期
 ```
 
-变量必须保留业务类型语义。金额不能只保存页面格式化文本；至少需要能够被系统 B 的数字输入框稳定消费。字段级结构将在后续共享变量最小契约中定义。
+变量值必须保留后续消费者所需的业务语义。金额不能只保存带货币符号的页面展示文本；至少需要能够被系统 B 的数字输入框稳定消费。变量命名、值域与运行态隔离规则以 [RPA Agent 业务变量绑定与录制态上下文设计基线](<./2026-07-17-RPA-Agent业务变量绑定与录制态上下文设计基线.md>) 为准；v0.1 不额外建设强类型系统。
 
 ## 7. 两条采集通道的职责
 
@@ -191,7 +191,7 @@ source_order.order_date
 自然语言完成：
 
 - 根据业务条件识别目标行并提取指定字段；
-- 在系统 B iframe 中使用 `source_order.*` 填写表单并保存。
+- 在系统 B iframe 中使用 `采购订单.*` 填写表单并保存。
 
 对话执行期间关闭人工事件录制，Browser-use 的每个实际浏览器动作分别形成 TraceCandidate；不得把整轮 History 压成一条 CoreTrace。
 
@@ -204,7 +204,7 @@ source_order.order_date
 - 当前活动 Page；
 - Frame Scope；
 - Skill 输入参数；
-- `source_order.*` 变量。
+- `采购订单.*` 变量。
 
 对话完成后恢复人工录制时，不得丢失当前新标签页、iframe 或变量上下文。
 
@@ -259,12 +259,12 @@ iframe 内包含：
 
 | 目标字段 | UI 组件 | 数据来源 |
 | --- | --- | --- |
-| 来源订单号 | 输入框 | `source_order.order_no` |
-| 供应商 | 可搜索自定义下拉框 | `source_order.supplier_name` |
-| 合同号 | 输入框 | `source_order.contract_no` |
-| 验收金额 | 数字输入框 | `source_order.amount` |
-| 币种 | 自定义下拉框 | `source_order.currency` |
-| 订单日期 | 日期控件 | `source_order.order_date` |
+| 来源订单号 | 输入框 | `采购订单.订单号` |
+| 供应商 | 可搜索自定义下拉框 | `采购订单.供应商` |
+| 合同号 | 输入框 | `采购订单.合同号` |
+| 验收金额 | 数字输入框 | `采购订单.含税金额` |
+| 币种 | 自定义下拉框 | `采购订单.币种` |
+| 订单日期 | 日期控件 | `采购订单.订单日期` |
 | 验收说明 | 多行文本框 | 固定业务文本“自动创建” |
 | 信息确认 | 复选框 | 固定为选中 |
 | 保存 | 普通按钮 | 提交动作 |
@@ -282,7 +282,7 @@ Browser-use 可能执行多个 fill、click、select 或日期控件操作。每
 填入动作最终必须引用变量，不得只保留本次执行时的字面值。即使 Browser-use 实际向页面输入了 `128600.50`，结算和编译结果也应知道其来源是：
 
 ```text
-source_order.amount
+采购订单.含税金额
 ```
 
 ## 10. CoreTrace 与浏览器事实预期
@@ -298,7 +298,7 @@ source_order.amount
 | 随机 URL | 运行时事实可记录实际 URL，但编译器不得把完整随机 URL 当作唯一定位依据 |
 | iframe 内动作 | Scope 包含目标 Page 和 Frame 路径/身份 |
 | 多步 Browser-use | 每个实际浏览器动作独立结算为 CoreTrace |
-| 表单填入 | DataBinding 指向 `source_order.*`，而不是只保存字面值 |
+| 表单填入 | DataBinding 指向 `采购订单.*`，而不是只保存字面值 |
 | 保存确认 | 保存和确认是可解释、可回放的独立动作 |
 
 页面加载、等待和观察本身不必机械生成动作 Trace；只有实际可回放动作进入 CoreTrace Timeline。必要完成条件保持可选，不能阻塞主流程。
@@ -344,7 +344,7 @@ eval-app 至少提供两个可重置 fixture profile。
 ```text
 Skill 输入参数
   -> 系统 A 浏览器脚本
-  -> source_order 变量产生
+  -> 采购订单变量产生
   -> 新 Page 捕获与切换
   -> 系统 B iframe 浏览器脚本
   -> 提交结果
@@ -429,7 +429,7 @@ Oracle 接口只供 Harness 使用，不应暴露在被录制页面或 Agent 提
 | 图标按钮 | 系统 A 查询/重置 | 通过语义区分相邻图标 |
 | 动态表格 | 系统 A 结果 | 根据业务主键识别目标行 |
 | 多个同名按钮 | 系统 A 操作列 | 通过行上下文点击正确按钮 |
-| 逻辑提取 | 系统 A 目标行 | 产生结构化 `source_order.*` |
+| 逻辑提取 | 系统 A 目标行 | 产生结构化 `采购订单.*` |
 | 新标签页 | 系统 A -> 系统 B | 捕获点击产生的新 Page |
 | 随机 URL | 系统 B 宿主页 | 不依赖录制期完整 URL |
 | iframe | 系统 B 表单 | 每个动作拥有正确 Frame Scope |
@@ -478,24 +478,28 @@ business_oracle_failure
 
 ## 19. 本场景对后续设计的输入
 
-在开始开发前，还需要由本场景反推并确认：
+本场景已经反推并确认：
 
-1. Skill 输入参数与共享变量的最小契约；
-2. CoreTrace `data_binding` 如何表达参数引用和提取变量引用；
-3. Browser-use 实际输入值如何在结算时恢复为变量来源；
-4. Page Registry、Frame Scope 和点击 Page Effect 的编译契约；
-5. CoreTrace -> Playwright 浏览器段 -> Skill 的产物结构；
-6. eval-app fixture、随机任务 URL 和 Oracle 接口的测评设计；
-7. 第一条 E2E 的分层开发与验收计划。
+- 创建态会话级 `SessionVariableStore`、业务语义变量引用与运行态隔离；
+- CoreTrace `data_bindings` 使用 output/input variable ref 表达生产和消费；
+- Browser-use 通过变量感知 Adapter Action 显式保留变量来源，值相等只作为弱候选。
+
+在开始开发前还需要确认：
+
+1. Skill 外部输入参数与运行时命名空间的最小契约；
+2. Page Registry、Frame Scope 和点击 Page Effect 的编译契约；
+3. CoreTrace -> Playwright 浏览器段 -> Skill 的产物结构；
+4. eval-app fixture、随机任务 URL 和 Oracle 接口的测评设计；
+5. 第一条 E2E 的分层开发与验收计划。
 
 DataAsset v0.1 在第二个“下载文件/分页提取 -> DataAsset”验收场景前设计，不作为首个阶段一 E2E 的前置模型。
 
 ## 20. 推荐开发顺序
 
 ```text
-验收场景与 eval fixture
-  -> 共享参数/变量最小契约
-  -> Page/Frame/Effect 编译契约
+验收场景与双用例 [已确认]
+  -> 业务变量绑定与录制态上下文 [已确认]
+  -> Skill Input + Page/Frame/Effect 编译契约
   -> CoreTrace 到 Skill 的链路规格
   -> 首个 E2E 分层实施计划
   -> 开发与双用例回放

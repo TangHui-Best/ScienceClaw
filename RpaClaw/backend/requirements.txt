@@ -28,6 +28,7 @@ lark-oapi
 qrcode>=8.0
 websockets>=11.0
 playwright>=1.40
+browser-use==0.13.2
 docker>=7.1
 kubernetes>=30.1.0
 reportlab>=4.0.0

@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rpa-agent.local/schemas/skill-definition-v0.1.json",
+  "title": "RPA Agent SkillDefinition v0.1",
+  "description": "录制后配置完成、进入确定性 Compiler 的 Skill 版本级输入契约。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "skill",
+    "inputs",
+    "secrets",
+    "asset_inputs",
+    "outputs",
+    "asset_outputs",
+    "stage_2_rules"
+  ],
+  "properties": {
+    "schema_version": { "const": "skill-definition/v0.1" },
+    "skill": { "$ref": "#/$defs/skill_identity" },
+    "inputs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/input_definition" },
+      "uniqueItems": true
+    },
+    "secrets": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/secret_definition" },
+      "uniqueItems": true
+    },
+    "asset_inputs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/asset_input_definition" },
+      "uniqueItems": true
+    },
+    "outputs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/output_definition" },
+      "uniqueItems": true
+    },
+    "asset_outputs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/asset_output_definition" },
+      "uniqueItems": true
+    },
+    "stage_2_rules": {
+      "oneOf": [
+        { "type": "string", "minLength": 1, "maxLength": 20000 },
+        { "type": "null" }
+      ]
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z][A-Za-z0-9._-]*$"
+    },
+    "business_variable_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^.\\s]+(?:\\.[^.\\s]+)*$",
+      "not": { "pattern": "(?:^|\\.)[0-9]+(?:\\.|$)" }
+    },
+    "skill_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "version", "description"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "version": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$"
+        },
+        "description": { "type": "string", "minLength": 1, "maxLength": 2000 }
+      }
+    },
+    "input_definition": {
+      "oneOf": [
+        { "$ref": "#/$defs/string_input" },
+        { "$ref": "#/$defs/number_input" },
+        { "$ref": "#/$defs/boolean_input" }
+      ]
+    },
+    "string_input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "title", "value_type", "required"],
+      "properties": {
+        "ref": { "$ref": "#/$defs/identifier" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "value_type": { "const": "string" },
+        "required": { "type": "boolean" },
+        "default": { "type": "string" }
+      }
+    },
+    "number_input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "title", "value_type", "required"],
+      "properties": {
+        "ref": { "$ref": "#/$defs/identifier" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "value_type": { "const": "number" },
+        "required": { "type": "boolean" },
+        "default": { "type": "number" }
+      }
+    },
+    "boolean_input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "title", "value_type", "required"],
+      "properties": {
+        "ref": { "$ref": "#/$defs/identifier" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "value_type": { "const": "boolean" },
+        "required": { "type": "boolean" },
+        "default": { "type": "boolean" }
+      }
+    },
+    "secret_definition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "title", "required"],
+      "properties": {
+        "ref": { "$ref": "#/$defs/identifier" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "required": { "type": "boolean" }
+      }
+    },
+    "asset_input_definition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "title", "required"],
+      "properties": {
+        "ref": { "$ref": "#/$defs/identifier" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "required": { "type": "boolean" }
+      }
+    },
+    "output_definition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "title", "variable_ref", "value_type"],
+      "properties": {
+        "name": { "$ref": "#/$defs/identifier" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "variable_ref": { "$ref": "#/$defs/business_variable_ref" },
+        "value_type": { "enum": ["string", "number", "boolean", "json"] }
+      }
+    },
+    "asset_output_definition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "title", "asset_ref"],
+      "properties": {
+        "name": { "$ref": "#/$defs/identifier" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "asset_ref": { "$ref": "#/$defs/identifier" }
+      }
+    }
+  }
+}

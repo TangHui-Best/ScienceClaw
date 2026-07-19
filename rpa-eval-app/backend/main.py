@@ -6,9 +6,9 @@ from sqlalchemy.orm import Session
 from auth import create_access_token, verify_reset_token
 from database import SessionLocal
 from database import ensure_app_dirs, recreate_database
-from fixtures import load_fixtures, reset_downloads_dir
+from fixtures import load_acceptance_profile, load_fixtures, reset_downloads_dir
 from models import User
-from routes import approvals, auth, contracts, purchase_orders, purchase_requests, reports, suppliers
+from routes import acceptance_e2e, approvals, auth, contracts, purchase_orders, purchase_requests, reports, suppliers
 from schemas import EvalTokenRequest, EvalTokenResponse, UserOut
 
 
@@ -30,6 +30,7 @@ def startup() -> None:
     db: Session = SessionLocal()
     try:
         load_fixtures(db)
+        load_acceptance_profile(db, "A")
     finally:
         db.close()
 
@@ -46,6 +47,7 @@ def reset_eval() -> dict[str, str]:
     db = SessionLocal()
     try:
         load_fixtures(db)
+        load_acceptance_profile(db, "A")
     finally:
         db.close()
     return {"status": "reset", "database": "reloaded", "downloads": "cleared"}
@@ -85,3 +87,4 @@ app.include_router(
 )
 app.include_router(approvals.router, prefix="/api/approvals", tags=["approvals"])
 app.include_router(reports.router, prefix="/api/reports", tags=["reports"])
+app.include_router(acceptance_e2e.router, prefix="/api/e2e", tags=["acceptance e2e"])

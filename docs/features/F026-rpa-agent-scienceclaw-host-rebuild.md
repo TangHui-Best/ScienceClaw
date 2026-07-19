@@ -1,9 +1,9 @@
 ---
 id: F026
 doc_kind: feature
-status: active
+status: complete
 created: 2026-07-17
-updated: 2026-07-17
+updated: 2026-07-18
 ---
 
 # F026：RPA Agent 基于 ScienceClaw 宿主重构
@@ -27,7 +27,7 @@ updated: 2026-07-17
 - Capability promise: 在同一仓库内绿地建立新领域核心，先用 Harness 固定边界和可验收能力，再逐步替换旧录制链路。
 - Non-goals: 不迁移旧资产，不创建转换器，不一次性删除整个 `backend/rpa`，不以代码量作为进度。
 - Acceptance source: ADR-006、宿主重构设计基线、首个阶段一 E2E 验收场景、正式数据模型 Schema、双用例回放和后端 Oracle。
-- Open questions: Skill 输入参数与共享变量最小契约、Page/Frame/Effect 编译契约、CoreTrace 到 Skill 的产物结构和首个 E2E 的分层实施计划仍需确认；DataAsset 推迟到第二个验收场景。
+- Open questions: 本 Feature 的首个 E2E 纵向切片已完成；完整 DataAsset、分页循环、Outcome Contract、阶段二执行器和通知模型继续作为后续 Feature，不从本次完成结论外推。
 
 ## Capability Contract
 
@@ -39,6 +39,8 @@ updated: 2026-07-17
 - 自动化测试默认离线运行，不得因本地模型配置而真实调用 LLM。
 - 旧录制核心只在新链路达到能力覆盖、回放、数据与依赖退出门槛后删除或归档。
 - 首个产品验收以“系统 A 复杂查询与取值 -> 新标签页 -> 系统 B iframe 填写”为闭环；同一 Skill 必须通过两组字段值和目标行位置不同的数据。
+- 新 Compiler 不兼容旧 Trace、旧 Compiler、旧 Skill 产物或旧运行参数协议；ScienceClaw 只提供宿主与已验证底层机制。
+- 新 Skill 采用 `RunContext`、逻辑 PageRef、稳定 FramePath、显式 Effect 和业务变量引用，并生成可读 Playwright 浏览器段。
 
 ## Decision Context
 
@@ -54,6 +56,7 @@ updated: 2026-07-17
 
 - [ADR-006](../decisions/ADR-006-rpa-agent-scienceclaw-host-greenfield-core.md)
 - [宿主重构设计基线](../superpowers/specs/2026-07-17-rpa-agent-scienceclaw-host-rebuild-design.md)
+- [CoreTrace 到 SKILL 编译链路设计基线](../superpowers/specs/2026-07-17-RPA-Agent-CoreTrace到SKILL编译链路设计基线.md)
 - 新代码是否绕过 Settlement Engine 直接创建 CoreTrace。
 - Compiler 是否读取了 CoreTrace 之外的 BrowserFact、Evidence 或 Browser-use History。
 - 测试是否会在未显式标记为 live E2E 时访问真实模型或业务系统。
@@ -77,19 +80,20 @@ updated: 2026-07-17
 - [x] 用户确认在 ScienceClaw 宿主内新建 `backend/rpa_agent`，旧 `backend/rpa` 仅作只读参考。
 - [x] 已创建隔离分支与独立 worktree，未修改原 ScienceClaw 工作目录中的本地数据。
 - [x] 首个阶段一 E2E 场景、非目标、两组 fixtures、硬编码防护和后端 Oracle 已确认。
-- [ ] Skill 输入参数、共享变量和 CoreTrace `data_binding` 最小契约已确认。
-- [ ] Page Registry、Frame Scope、新 Page Effect 和变量引用的编译契约已确认。
-- [ ] CoreTrace -> Playwright 浏览器段 -> Skill 的产物链路已确认。
-- [ ] eval-app 可重置两组测试数据，并提供随机任务 URL、iframe 表单和不可见 Oracle。
-- [ ] `RpaClaw/backend/rpa_agent/` 随首个纵向切片建立，且自动化护栏禁止导入旧领域模型和 Compiler。
-- [ ] Route 和新链路离线回归不会因本地 Browser-use 配置意外调用真实 LLM。
-- [ ] 创建态可解释展示人工动作、Browser-use 多 Action、新标签页 Effect、iframe Scope 和变量绑定。
-- [ ] 同一个生成 Skill 在 Replay A 与 Replay B 中均通过编译产物检查和后端 Oracle。
-- [ ] 首个 E2E 通过后，再设计 DataAsset、下载与分页提取场景。
+- [x] 业务变量绑定、录制态会话上下文和 CoreTrace `data_binding` 最小契约已确认。
+- [x] Skill 外部输入参数与运行时命名空间的最小契约已确认。
+- [x] Page Registry、Frame Scope、新 Page Effect 和变量引用的编译契约已确认。
+- [x] CoreTrace -> Playwright 浏览器段 -> Skill 的产物链路已确认。
+- [x] eval-app 可重置两组测试数据，并提供随机任务 URL、iframe 表单和不可见 Oracle。
+- [x] `RpaClaw/backend/rpa_agent/` 随首个纵向切片建立，且自动化护栏禁止导入旧领域模型和 Compiler。
+- [x] Route 和新链路离线回归不会因本地 Browser-use 配置意外调用真实 LLM。
+- [x] 创建态可解释展示人工动作、Browser-use 多 Action、新标签页 Effect、iframe Scope 和变量绑定。
+- [x] 同一个生成 Skill 在 Replay A 与 Replay B 中均通过编译产物检查和后端 Oracle。
+- [x] 本增量未提前扩展 DataAsset、下载与分页提取场景；后续能力保持独立验收边界。
 
 ## Current Status
 
-In Progress。宿主重构设计、隔离分支和首个阶段一 E2E 验收场景已经确认；业务实现尚未开始。下一步是用该场景反推共享变量与 CoreTrace 编译链路，不执行脱离业务验收的“增量 0”。
+Complete。独立 `backend/rpa_agent` 已实现创建态双通道、Settlement、Build Readiness、CoreTrace Timeline、录制后配置、确定性 Compiler、四文件 Publisher、默认 ScienceClaw CDP 宿主与首个 Runtime。真实 Live E2E 从人工 Playwright 事件及 `browser_use.Agent.run`/Tools 开始，形成 22 条 accepted CoreTrace，仅编译一次；同一 SKILL 的 Replay A/B 各 22/22 步成功并通过隐藏后端 Oracle。完整结果见 EV-029。
 
 ## Links
 
@@ -97,6 +101,9 @@ In Progress。宿主重构设计、隔离分支和首个阶段一 E2E 验收场�
 
 - [EV-025 Browser-use Live UI E2E](../evidence/EV-025-browser-use-live-ui-e2e.md)（历史技术穿刺证据）
 - [EV-026 Browser-use 真实业务矩阵 Live UI E2E](../evidence/EV-026-browser-use-live-ui-business-matrix.md)（历史技术穿刺证据）
+- [EV-027 CoreTrace 到 SKILL 编译链路设计基线验证](../evidence/EV-027-coretrace-skill-compiler-design-baseline.md)（只证明设计规格已确认，不证明实现或回放）
+- [EV-028 首个 E2E CoreTrace 到 Playwright SKILL Golden Sample 验证](../evidence/EV-028-first-e2e-coretrace-to-playwright-skill-golden-sample.md)（只证明样例静态自洽，不证明动态回放）
+- [EV-029 新版 RPA Agent 首个阶段一纵向 Live E2E](../evidence/EV-029-rpa-agent-first-stage-one-live-e2e.md)（本 Feature 完成证据）
 
 ### Decisions / ADRs
 
@@ -113,6 +120,9 @@ In Progress。宿主重构设计、隔离分支和首个阶段一 E2E 验收场�
 
 - [RPA Agent 基于 ScienceClaw 宿主重构设计基线](../superpowers/specs/2026-07-17-rpa-agent-scienceclaw-host-rebuild-design.md)
 - [首个阶段一 E2E 验收场景设计基线](../superpowers/specs/2026-07-17-RPA-Agent首个阶段一E2E验收场景设计基线.md)
+- [业务变量绑定与录制态上下文设计基线](../superpowers/specs/2026-07-17-RPA-Agent业务变量绑定与录制态上下文设计基线.md)
+- [CoreTrace 到 SKILL 编译链路设计基线](../superpowers/specs/2026-07-17-RPA-Agent-CoreTrace到SKILL编译链路设计基线.md)
+- [首个 E2E：CoreTrace 到 Playwright SKILL 完整示例](../superpowers/specs/examples/first-e2e-coretrace-to-playwright-skill/README.md)
 - [已失效：宿主重构基线实施计划](../superpowers/plans/2026-07-17-rpa-agent-host-rebuild-baseline.md)
 
 ### Related Features
@@ -121,17 +131,20 @@ In Progress。宿主重构设计、隔离分支和首个阶段一 E2E 验收场�
 
 ### External Context
 
-- 已确认的外部设计工作区：`E:\RPA-Agent\docs\design`。首个 E2E 的仓库内副本已建立；后续实现必须链接仓库内规格，不得只依赖对话历史。
+- 已确认的外部设计工作区：`E:\RPA-Agent\docs\design`。首个 E2E 与业务变量基线的仓库内副本已建立；对应变量契约验证记录为 `E:\RPA-Agent\docs\evidence\EV-004-business-variable-binding-v0.1-contract-validation.md`。后续实现必须链接仓库内规格，不得只依赖对话历史。
 
 ## Acceptance Map
 
 | Claim | Acceptance | Evidence | Status |
 | --- | --- | --- | --- |
 | 首个业务验收锚点稳定 | 场景、非目标、两组 fixtures、硬编码防护和 Oracle 有明确规格 | 首个阶段一 E2E 验收场景设计基线 | pass |
-| 新领域与旧核心隔离 | 首个纵向切片中的新代码通过架构测试阻止旧领域 import | 待生成 Evidence | pending |
-| 离线验证不依赖真实 LLM | 强制 Browser-use 配置时离线单测仍由替身执行 | 待生成 Evidence | pending |
-| CoreTrace 可形成可回放 Skill | 同一 Skill 完成 Replay A、Replay B 和后端 Oracle | 待生成 E2E Evidence | pending |
-| 双通道共享浏览器和变量 | 人工动作与 Browser-use 多 Action 进入同一 Settlement/CoreTrace，并使用 `source_order.*` | 待生成 E2E Evidence | pending |
+| 新领域与旧核心隔离 | 首个纵向切片中的新代码通过架构测试阻止旧领域 import | EV-029、473 项新领域/契约回归 | pass |
+| 离线验证不依赖真实 LLM | 强制 Browser-use 配置时离线单测仍由替身执行 | EV-029、Route/Host 测试 | pass |
+| CoreTrace 可形成可回放 Skill | 同一 Skill 完成 Replay A、Replay B 和后端 Oracle | EV-029 | pass |
+| 业务变量契约稳定 | 变量使用业务语义引用，创建态值与 CoreTrace 引用、运行态值分离 | 业务变量绑定与录制态上下文设计基线 | pass |
+| CoreTrace 编译契约稳定 | Compiler 只消费 CoreTrace，RunContext、Page/Frame/Effect、Action Matrix、失败规则和 Skill 产物有明确规格 | EV-027、CoreTrace 到 SKILL 编译链路设计基线 | pass |
+| 首个 E2E 编译目标可检查 | Skill Definition、24 条 CoreTrace、双 Replay Input 与四文件 SKILL 构成静态自洽 Golden Sample | EV-028、首个 E2E 完整示例 | pass |
+| 双通道共享浏览器和变量 | 人工动作与 Browser-use 多 Action 进入同一 Settlement/CoreTrace，并使用 `purchase_order.*` | EV-029 | pass |
 
 ## State Timeline
 
@@ -139,6 +152,10 @@ In Progress。宿主重构设计、隔离分支和首个阶段一 E2E 验收场�
 | --- | --- | --- | --- | --- |
 | 2026-07-17 | active | 用户确认宿主重构设计并授权下一步 | ADR-006、宿主重构设计基线 | 进入增量 0，尚未开始业务实现 |
 | 2026-07-17 | active / acceptance revised | 用户指出工程底座先行缺少业务验收锚点 | 首个阶段一 E2E 验收场景设计基线 | 停止执行旧增量 0，改为场景反推契约与纵向实现 |
+| 2026-07-17 | active / variable contract accepted | 用户确认业务语义变量、会话级 Store、双通道来源与运行态隔离原则 | 业务变量绑定与录制态上下文设计基线 | 共享变量不再是未决项，进入编译契约设计 |
+| 2026-07-17 | active / compiler contract accepted | 用户确认非兼容新链路、RunContext、Page/Frame/Effect、Action Matrix、校验失败规则和 Skill 产物边界 | CoreTrace 到 SKILL 编译链路设计基线 | 编译规格不再是未决项，后续 Goal 可进入首个纵向切片实现 |
+| 2026-07-17 | active / golden sample added | 用户要求用首个 E2E 串出完整 CoreTrace 到 Playwright SKILL 示例 | EV-028、首个 E2E 完整示例 | 形成静态目标样例；动态实现和双用例回放仍待完成 |
+| 2026-07-18 | complete | 两次连续真实创建、编译、Replay A/B 与隐藏 Oracle 全部通过 | EV-029 | 首个阶段一纵向切片完成；后续能力不并入本 Feature |
 
 ## Patch History
 
@@ -146,17 +163,19 @@ None yet.
 
 ## Recovery Snapshot
 
-- Read first: ADR-006，然后阅读本 Feature、首个阶段一 E2E 验收场景和宿主重构设计基线。
-- Current capability state: 已有隔离 worktree 和通过的局部技术穿刺回归；新 `backend/rpa_agent` 尚未创建。
-- Known risks: 共享变量和 `data_binding` 尚未从场景反推；Page/Frame/Effect 编译契约和 Skill 产物结构尚未确认；旧计划仍可能误导执行者从空工程底座开始。
-- Next safe action: 设计首个 E2E 所需的 Skill 输入参数、共享变量和 CoreTrace 编译链路，再设计 eval-app 测评集与实施计划。
-- Unblock condition: 上述契约通过用户评审后，才能开始首个纵向切片开发。
+- Read first: ADR-006，然后阅读本 Feature、首个阶段一 E2E 验收场景、业务变量绑定与录制态上下文设计基线、CoreTrace 到 SKILL 编译规格和首个 E2E Golden Sample。
+- Current capability state: 新 `backend/rpa_agent` 纵向链路已实现；默认宿主、Compiler、Runtime、录制 UI、eval fixture 和同一 SKILL 双 Replay 均有验证证据。
+- Known risks: scripted model 证明的是 Browser-use Agent/Tools 集成而非外部 LLM 语义质量；完整 DataAsset、分页循环及运行期自愈不在本 Feature；eval-app 仍有 EV-029 记录的两个非阻断 P2。
+- Next safe action: 后续需求必须新建独立业务验收增量，不应在 F026 上继续堆叠完整 DataAsset、阶段二或兼容层。
+- Recovery evidence: 先阅读 EV-029；原始 Live JSON 与生成四文件产物位于其 Artifacts 所列 `.tmp/task13-agent-live-evidence*` 目录。
 
 ## Evidence
 
 - EV-025 与 EV-026 只证明旧 ScienceClaw 技术穿刺路线可行，并暴露整轮 History 压缩、运行时 LLM 回放和测试配置泄漏等风险。
-- 当前新增材料只证明验收边界已明确，不证明 CoreTrace 新链路已经实现；首个产品能力 Evidence 必须来自双用例 E2E 回放和后端 Oracle。
+- EV-027 只证明 CoreTrace 到 SKILL 的设计规格已经确认并可恢复，不证明新 Compiler、Runtime 或生成 Skill 已经实现。
+- EV-028 只证明首个 E2E Golden Sample 的 Schema、基础语义、语法、来源摘要和硬编码扫描通过，不证明它已经可执行。
+- EV-029 证明新链路已从实际人工事件与 Browser-use Agent/Tools 形成 CoreTrace，并以同一编译产物完成双用例回放和后端 Oracle；它不扩展证明非目标能力。
 
 ## Next Step
 
-先基于首个 E2E 设计 Skill 输入参数、共享变量和 CoreTrace 编译链路。旧 `2026-07-17-rpa-agent-host-rebuild-baseline.md` 已失效，不得执行；新的实施计划只能在场景相关契约和 eval-app 测评设计确认后创建。
+关闭 F026。后续若进入下载/DataAsset、阶段二处理、通知或运行期修复，应以新的业务场景、Harness 和 Feature 单独立项；继续禁止为了复用旧代码增加 Trace/Compiler/Skill 兼容层。

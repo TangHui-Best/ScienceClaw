@@ -1,0 +1,10 @@
+{
+  "schemas/core-trace-timeline-v0.1.schema.json": "411e828cb8111902a46cbc8f81a004c272a056d647dbfd547e72beda6e2d0782",
+  "schemas/skill-definition-v0.1.schema.json": "300de7f9966f7be2a59d35bb10ef02d6964d80ac3d782f15532dff218ab39775",
+  "schemas/skill-manifest-v0.1.schema.json": "daba52bd258c573d9970c8c08a3438e7ecb0c19c53e4c909b933267f4df2803a",
+  "golden/first_e2e/coretrace.timeline.json": "f9b29a4e68bde242075e3cbb91048a3a90c922140049062fea91620007b156aa",
+  "golden/first_e2e/skill.definition.json": "73725985553398ebce4342b5ed55e8eb5e0f911b43a39b5f5802c9d5a3330b8b",
+  "golden/first_e2e/generated-skill/skill.manifest.json": "10404b93300f8d1795a7ed89d8c45733218168d6e19ed12ce59eb57d915d04cc",
+  "golden/first_e2e/replay-a.inputs.json": "6f9cba25c645cca67d20f82861a71c333bf55230b82fda1e153ecd18b2fcafca",
+  "golden/first_e2e/replay-b.inputs.json": "8d097a86d2a3c645c1b6e1e9bc03042d31b9255e02573f899110999ed9caa251"
+}

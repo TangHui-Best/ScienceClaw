@@ -1,12 +1,15 @@
 import json
+import io
 import sys
+import traceback
 import unittest
+from urllib import error
 from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from eval_app_client import EvalAppClient, EvalAppUserSession
+from eval_app_client import EvalAppClient, EvalAppError, EvalAppUserSession
 from runner import (
     CaseAssertionError,
     assert_api_assertions,
@@ -125,6 +128,133 @@ class RunnerAssertionTests(unittest.TestCase):
             ],
             calls,
         )
+
+    def test_eval_app_client_acceptance_tokens_stay_on_separate_endpoints(self):
+        client = EvalAppClient("http://localhost:8085")
+        calls = []
+
+        def fake_request(method, path, **kwargs):
+            calls.append((method, path, kwargs))
+            if path == "/api/e2e/reset/A":
+                return {"status": "reset", "profile": "A"}
+            if path == "/api/e2e/acceptance-tasks":
+                return {
+                    "task_id": "task-random",
+                    "token": "task-secret",
+                    "url": "/system-b/acceptance/task-random?token=task-secret",
+                    "profile": "A",
+                    "order_no": "PO-1",
+                }
+            if path == "/api/e2e/oracle/task-random":
+                return {
+                    "passed": True,
+                    "task_id": "task-random",
+                    "profile": "A",
+                    "record_count": 1,
+                    "mismatches": [],
+                }
+            raise AssertionError(f"unexpected request: {method} {path}")
+
+        with patch.object(client, "_request", fake_request):
+            reset = client.reset_acceptance_profile("A", "reset-secret")
+            task = client.start_acceptance_task("PO-1")
+            oracle = client.acceptance_oracle(task.task_id, "oracle-secret")
+
+        self.assertEqual("A", reset.profile)
+        self.assertEqual("task-random", task.task_id)
+        self.assertTrue(oracle.passed)
+        self.assertEqual(
+            {
+                "X-RPA-Eval-Reset-Token": "reset-secret",
+            },
+            calls[0][2]["headers"],
+        )
+        self.assertNotIn("headers", calls[1][2])
+        self.assertEqual(
+            {
+                "X-RPA-Eval-Oracle-Token": "oracle-secret",
+            },
+            calls[2][2]["headers"],
+        )
+        self.assertNotIn("reset-secret", repr(oracle))
+        self.assertNotIn("oracle-secret", repr(oracle))
+        self.assertNotIn("task-secret", repr(oracle))
+        self.assertNotIn("task-secret", repr(task))
+        self.assertNotIn("token=", repr(task))
+
+    def test_eval_app_client_redacts_task_token_from_transport_errors(self):
+        client = EvalAppClient("http://localhost:8085")
+
+        with patch("eval_app_client.request.urlopen", side_effect=error.URLError("offline")):
+            with self.assertRaises(EvalAppError) as raised:
+                client.get_acceptance_task("task-random", "task-secret")
+
+        self.assertNotIn("task-secret", str(raised.exception))
+        self.assertIn("<redacted>", str(raised.exception))
+
+    def test_eval_app_client_transport_failures_drop_secret_causes_urls_and_bodies(self):
+        client = EvalAppClient("http://localhost:8085")
+        secrets = ("task-secret", "reset-secret", "oracle-secret")
+        reflected = (
+            'https://evil.invalid/path?token=task-secret '
+            '{"token":"task-secret","reset_token":"reset-secret",'
+            '"oracle_token":"oracle-secret"}'
+        )
+        failures = (
+            error.HTTPError(
+                "https://evil.invalid/path?token=task-secret",
+                403,
+                "forbidden",
+                {},
+                io.BytesIO(reflected.encode("utf-8")),
+            ),
+            error.URLError(reflected),
+            TimeoutError(reflected),
+        )
+        for failure in failures:
+            with self.subTest(type=type(failure).__name__):
+                with patch("eval_app_client.request.urlopen", side_effect=failure):
+                    with self.assertRaises(EvalAppError) as raised:
+                        client._request(
+                            "GET",
+                            "/api/e2e/task?token=task-secret",
+                            headers={
+                                "X-RPA-Eval-Reset-Token": "reset-secret",
+                                "X-RPA-Eval-Oracle-Token": "oracle-secret",
+                            },
+                        )
+                rendered = "".join(
+                    traceback.format_exception(
+                        type(raised.exception),
+                        raised.exception,
+                        raised.exception.__traceback__,
+                    )
+                ) + repr(raised.exception)
+                for secret in secrets:
+                    self.assertNotIn(secret, rendered)
+                self.assertNotIn("https://evil.invalid", rendered)
+                self.assertIsNone(raised.exception.__cause__)
+                self.assertIsNone(raised.exception.__context__)
+
+        class NonJsonResponse:
+            def __enter__(self): return self
+            def __exit__(self, *_): return None
+            def read(self): return reflected.encode("utf-8")
+
+        with patch("eval_app_client.request.urlopen", return_value=NonJsonResponse()):
+            with self.assertRaises(EvalAppError) as non_json:
+                client.get_acceptance_task("task-random", "task-secret")
+        rendered = "".join(
+            traceback.format_exception(
+                type(non_json.exception),
+                non_json.exception,
+                non_json.exception.__traceback__,
+            )
+        )
+        self.assertNotIn("task-secret", rendered)
+        self.assertNotIn("https://evil.invalid", rendered)
+        self.assertIsNone(non_json.exception.__cause__)
+        self.assertIsNone(non_json.exception.__context__)
 
     def test_run_case_separates_login_setup_from_business_instruction(self):
         args = type(

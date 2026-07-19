@@ -26,6 +26,7 @@ export interface RpaStepTimelineItem {
 }
 
 const ACTION_LABELS: Record<string, string> = {
+  effect: '副作用',
   ai_operation: 'AI 操作',
   check: '勾选',
   click: '点击',
@@ -53,10 +54,14 @@ const ACTION_LABELS: Record<string, string> = {
 
 const VALIDATION_STATUS: Record<string, RpaTimelineStatus> = {
   accepted: { label: '已确认', tone: 'success' },
+  deleted: { label: '已删除', tone: 'neutral' },
+  effect: { label: '副作用', tone: 'warning' },
   broken: { label: '待修复', tone: 'danger' },
   exact: { label: '已确认', tone: 'success' },
   failed: { label: '待修复', tone: 'danger' },
   ok: { label: '已确认', tone: 'success' },
+  pending: { label: '待结算', tone: 'active' },
+  rejected: { label: '已拒绝', tone: 'danger' },
   strict: { label: '已确认', tone: 'success' },
   unique: { label: '已确认', tone: 'success' },
   warning: { label: '需关注', tone: 'warning' },

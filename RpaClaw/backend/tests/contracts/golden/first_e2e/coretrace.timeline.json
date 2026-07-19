@@ -1,0 +1,732 @@
+{
+  "schema_version": "core-trace/v0.1",
+  "traces": [
+    {
+      "trace_id": "trace_010",
+      "sequence": 10,
+      "scope": { "page_ref": "main", "frame_path": [] },
+      "action": { "kind": "navigate", "mode": "url" },
+      "data_bindings": [
+        { "name": "url", "direction": "input", "kind": "skill_input", "ref": "system_a_url", "sensitive": false }
+      ],
+      "effects": [],
+      "wait_until": [
+        {
+          "kind": "element_state",
+          "target": {
+            "name": "采购订单综合查询区",
+            "locators": [
+              { "strategy": "test_id", "value": "order-query-form" },
+              { "strategy": "role", "role": "form", "name": "采购订单综合查询", "exact": true }
+            ]
+          },
+          "state": "visible"
+        }
+      ]
+    },
+    {
+      "trace_id": "trace_020",
+      "sequence": 20,
+      "scope": { "page_ref": "main", "frame_path": [] },
+      "action": {
+        "kind": "click",
+        "target": {
+          "name": "业务类型下拉框",
+          "locators": [
+            { "strategy": "role", "role": "combobox", "name": "业务类型", "exact": true },
+            { "strategy": "test_id", "value": "business-type-combobox" }
+          ]
+        }
+      },
+      "data_bindings": [],
+      "effects": []
+    },
+    {
+      "trace_id": "trace_030",
+      "sequence": 30,
+      "scope": { "page_ref": "main", "frame_path": [] },
+      "action": {
+        "kind": "click",
+        "target": {
+          "name": "与 Skill Input 匹配的业务类型选项",
+          "path": [
+            {
+              "name": "业务类型选项列表",
+              "locators": [
+                { "strategy": "role", "role": "listbox", "name": "业务类型选项", "exact": true },
+                { "strategy": "test_id", "value": "business-type-options" }
+              ]
+            },
+            {
+              "name": "业务类型匹配项",
+              "locators": [
+                { "strategy": "role", "role": "option" }
+              ],
+              "filter_binding": "option"
+            }
+          ],
+          "locators": [
+            { "strategy": "css", "value": "[data-testid=\"option-label\"]" }
+          ]
+        }
+      },
+      "data_bindings": [
+        { "name": "option", "direction": "input", "kind": "skill_input", "ref": "query.business_type", "sensitive": false }
+      ],
+      "effects": []
+    },
+    {
+      "trace_id": "trace_040",
+      "sequence": 40,
+      "scope": { "page_ref": "main", "frame_path": [] },
+      "action": {
+        "kind": "fill",
+        "target": {
+          "name": "订单日期起始日",
+          "locators": [
+            { "strategy": "label", "value": "订单日期起始日", "exact": true },
+            { "strategy": "test_id", "value": "order-date-from" }
+          ]
+        }
+      },
+      "data_bindings": [
+        { "name": "value", "direction": "input", "kind": "skill_input", "ref": "query.date_from", "sensitive": false }
+      ],
+      "effects": []
+    },
+    {
+      "trace_id": "trace_050",
+      "sequence": 50,
+      "scope": { "page_ref": "main", "frame_path": [] },
+      "action": {
+        "kind": "fill",
+        "target": {
+          "name": "订单日期结束日",
+          "locators": [
+            { "strategy": "label", "value": "订单日期结束日", "exact": true },
+            { "strategy": "test_id", "value": "order-date-to" }
+          ]
+        }
+      },
+      "data_bindings": [
+        { "name": "value", "direction": "input", "kind": "skill_input", "ref": "query.date_to", "sensitive": false }
+      ],
+      "effects": []
+    },
+    {
+      "trace_id": "trace_060",
+      "sequence": 60,
+      "scope": { "page_ref": "main", "frame_path": [] },
+      "action": {
+        "kind": "fill",
+        "target": {
+          "name": "供应商名称查询框",
+          "locators": [
+            { "strategy": "label", "value": "供应商名称", "exact": true },
+            { "strategy": "placeholder", "value": "请输入供应商名称", "exact": true }
+          ]
+        }
+      },
+      "data_bindings": [
+        { "name": "value", "direction": "input", "kind": "skill_input", "ref": "query.supplier_name", "sensitive": false }
+      ],
+      "effects": []
+    },
+    {
+      "trace_id": "trace_070",
+      "sequence": 70,
+      "scope": { "page_ref": "main", "frame_path": [] },
+      "action": {
+        "kind": "fill",
+        "target": {
+          "name": "订单编号查询框",
+          "locators": [
+            { "strategy": "label", "value": "订单编号", "exact": true },
+            { "strategy": "placeholder", "value": "请输入订单编号", "exact": true }
+          ]
+        }
+      },
+      "data_bindings": [
+        { "name": "value", "direction": "input", "kind": "skill_input", "ref": "query.order_no", "sensitive": false }
+      ],
+      "effects": []
+    },
+    {
+      "trace_id": "trace_080",
+      "sequence": 80,
+      "scope": { "page_ref": "main", "frame_path": [] },
+      "action": {
+        "kind": "click",
+        "target": {
+          "name": "图标查询按钮",
+          "locators": [
+            { "strategy": "role", "role": "button", "name": "查询", "exact": true },
+            { "strategy": "test_id", "value": "query-orders" }
+          ]
+        }
+      },
+      "data_bindings": [],
+      "effects": [],
+      "wait_until": [
+        {
+          "kind": "element_state",
+          "target": {
+            "name": "采购订单查询结果表格",
+            "locators": [
+              { "strategy": "test_id", "value": "order-results-table" },
+              { "strategy": "role", "role": "table", "name": "采购订单查询结果", "exact": true }
+            ]
+          },
+          "state": "visible"
+        }
+      ]
+    },
+    {
+      "trace_id": "trace_090",
+      "sequence": 90,
+      "scope": { "page_ref": "main", "frame_path": [] },
+      "action": {
+        "kind": "agent",
+        "instruction": "在采购订单查询结果表格中找到订单编号等于输入 order_no 的唯一一行，提取订单号、供应商、合同号、含税金额、币种和订单日期，并以 result 对象返回。字段名必须分别为：订单号、供应商、合同号、含税金额、币种、订单日期。",
+        "target": {
+          "name": "采购订单查询结果表格",
+          "locators": [
+            { "strategy": "test_id", "value": "order-results-table" },
+            { "strategy": "role", "role": "table", "name": "采购订单查询结果", "exact": true }
+          ]
+        }
+      },
+      "data_bindings": [
+        { "name": "order_no", "direction": "input", "kind": "skill_input", "ref": "query.order_no", "sensitive": false },
+        { "name": "result", "direction": "output", "kind": "variable", "ref": "采购订单", "sensitive": false }
+      ],
+      "effects": []
+    },
+    {
+      "trace_id": "trace_100",
+      "sequence": 100,
+      "scope": { "page_ref": "main", "frame_path": [] },
+      "action": {
+        "kind": "click",
+        "target": {
+          "name": "目标采购订单行的发起验收按钮",
+          "path": [
+            {
+              "name": "采购订单查询结果表格",
+              "locators": [
+                { "strategy": "test_id", "value": "order-results-table" },
+                { "strategy": "role", "role": "table", "name": "采购订单查询结果", "exact": true }
+              ]
+            },
+            {
+              "name": "订单号匹配的目标行",
+              "locators": [
+                { "strategy": "role", "role": "row" }
+              ],
+              "filter_binding": "row_key"
+            }
+          ],
+          "locators": [
+            { "strategy": "role", "role": "button", "name": "发起验收", "exact": true }
+          ]
+        }
+      },
+      "data_bindings": [
+        { "name": "row_key", "direction": "input", "kind": "skill_input", "ref": "query.order_no", "sensitive": false }
+      ],
+      "effects": [
+        { "kind": "new_page", "page_ref": "acceptance_detail" }
+      ],
+      "wait_until": [
+        {
+          "kind": "element_state",
+          "target": {
+            "name": "采购订单验收登记标题",
+            "locators": [
+              { "strategy": "role", "role": "heading", "name": "采购订单验收登记", "exact": true },
+              { "strategy": "test_id", "value": "acceptance-page-title" }
+            ]
+          },
+          "state": "visible"
+        }
+      ]
+    },
+    {
+      "trace_id": "trace_110",
+      "sequence": 110,
+      "scope": {
+        "page_ref": "acceptance_detail",
+        "frame_path": [
+          {
+            "name": "验收登记表单 iframe",
+            "locators": [
+              { "strategy": "title", "value": "验收登记表单", "exact": true },
+              { "strategy": "css", "value": "iframe[name=\"acceptance-form\"]" }
+            ]
+          }
+        ]
+      },
+      "action": {
+        "kind": "fill",
+        "target": {
+          "name": "来源订单号",
+          "locators": [
+            { "strategy": "label", "value": "来源订单号", "exact": true },
+            { "strategy": "test_id", "value": "source-order-no" }
+          ]
+        }
+      },
+      "data_bindings": [
+        { "name": "value", "direction": "input", "kind": "variable", "ref": "采购订单.订单号", "sensitive": false }
+      ],
+      "effects": []
+    },
+    {
+      "trace_id": "trace_120",
+      "sequence": 120,
+      "scope": {
+        "page_ref": "acceptance_detail",
+        "frame_path": [
+          {
+            "name": "验收登记表单 iframe",
+            "locators": [
+              { "strategy": "title", "value": "验收登记表单", "exact": true },
+              { "strategy": "css", "value": "iframe[name=\"acceptance-form\"]" }
+            ]
+          }
+        ]
+      },
+      "action": {
+        "kind": "click",
+        "target": {
+          "name": "供应商下拉框",
+          "locators": [
+            { "strategy": "role", "role": "combobox", "name": "供应商", "exact": true },
+            { "strategy": "test_id", "value": "supplier-combobox" }
+          ]
+        }
+      },
+      "data_bindings": [],
+      "effects": []
+    },
+    {
+      "trace_id": "trace_130",
+      "sequence": 130,
+      "scope": {
+        "page_ref": "acceptance_detail",
+        "frame_path": [
+          {
+            "name": "验收登记表单 iframe",
+            "locators": [
+              { "strategy": "title", "value": "验收登记表单", "exact": true },
+              { "strategy": "css", "value": "iframe[name=\"acceptance-form\"]" }
+            ]
+          }
+        ]
+      },
+      "action": {
+        "kind": "fill",
+        "target": {
+          "name": "供应商搜索框",
+          "locators": [
+            { "strategy": "placeholder", "value": "搜索供应商", "exact": true },
+            { "strategy": "test_id", "value": "supplier-search" }
+          ]
+        }
+      },
+      "data_bindings": [
+        { "name": "value", "direction": "input", "kind": "variable", "ref": "采购订单.供应商", "sensitive": false }
+      ],
+      "effects": []
+    },
+    {
+      "trace_id": "trace_140",
+      "sequence": 140,
+      "scope": {
+        "page_ref": "acceptance_detail",
+        "frame_path": [
+          {
+            "name": "验收登记表单 iframe",
+            "locators": [
+              { "strategy": "title", "value": "验收登记表单", "exact": true },
+              { "strategy": "css", "value": "iframe[name=\"acceptance-form\"]" }
+            ]
+          }
+        ]
+      },
+      "action": {
+        "kind": "click",
+        "target": {
+          "name": "与采购订单供应商匹配的选项",
+          "path": [
+            {
+              "name": "供应商选项列表",
+              "locators": [
+                { "strategy": "role", "role": "listbox", "name": "供应商选项", "exact": true },
+                { "strategy": "test_id", "value": "supplier-options" }
+              ]
+            },
+            {
+              "name": "供应商匹配项",
+              "locators": [
+                { "strategy": "role", "role": "option" }
+              ],
+              "filter_binding": "option"
+            }
+          ],
+          "locators": [
+            { "strategy": "css", "value": "[data-testid=\"option-label\"]" }
+          ]
+        }
+      },
+      "data_bindings": [
+        { "name": "option", "direction": "input", "kind": "variable", "ref": "采购订单.供应商", "sensitive": false }
+      ],
+      "effects": []
+    },
+    {
+      "trace_id": "trace_150",
+      "sequence": 150,
+      "scope": {
+        "page_ref": "acceptance_detail",
+        "frame_path": [
+          {
+            "name": "验收登记表单 iframe",
+            "locators": [
+              { "strategy": "title", "value": "验收登记表单", "exact": true },
+              { "strategy": "css", "value": "iframe[name=\"acceptance-form\"]" }
+            ]
+          }
+        ]
+      },
+      "action": {
+        "kind": "fill",
+        "target": {
+          "name": "合同号",
+          "locators": [
+            { "strategy": "label", "value": "合同号", "exact": true },
+            { "strategy": "test_id", "value": "contract-no" }
+          ]
+        }
+      },
+      "data_bindings": [
+        { "name": "value", "direction": "input", "kind": "variable", "ref": "采购订单.合同号", "sensitive": false }
+      ],
+      "effects": []
+    },
+    {
+      "trace_id": "trace_160",
+      "sequence": 160,
+      "scope": {
+        "page_ref": "acceptance_detail",
+        "frame_path": [
+          {
+            "name": "验收登记表单 iframe",
+            "locators": [
+              { "strategy": "title", "value": "验收登记表单", "exact": true },
+              { "strategy": "css", "value": "iframe[name=\"acceptance-form\"]" }
+            ]
+          }
+        ]
+      },
+      "action": {
+        "kind": "fill",
+        "target": {
+          "name": "验收金额",
+          "locators": [
+            { "strategy": "label", "value": "验收金额", "exact": true },
+            { "strategy": "test_id", "value": "acceptance-amount" }
+          ]
+        }
+      },
+      "data_bindings": [
+        { "name": "value", "direction": "input", "kind": "variable", "ref": "采购订单.含税金额", "sensitive": false }
+      ],
+      "effects": []
+    },
+    {
+      "trace_id": "trace_170",
+      "sequence": 170,
+      "scope": {
+        "page_ref": "acceptance_detail",
+        "frame_path": [
+          {
+            "name": "验收登记表单 iframe",
+            "locators": [
+              { "strategy": "title", "value": "验收登记表单", "exact": true },
+              { "strategy": "css", "value": "iframe[name=\"acceptance-form\"]" }
+            ]
+          }
+        ]
+      },
+      "action": {
+        "kind": "click",
+        "target": {
+          "name": "币种下拉框",
+          "locators": [
+            { "strategy": "role", "role": "combobox", "name": "币种", "exact": true },
+            { "strategy": "test_id", "value": "currency-combobox" }
+          ]
+        }
+      },
+      "data_bindings": [],
+      "effects": []
+    },
+    {
+      "trace_id": "trace_180",
+      "sequence": 180,
+      "scope": {
+        "page_ref": "acceptance_detail",
+        "frame_path": [
+          {
+            "name": "验收登记表单 iframe",
+            "locators": [
+              { "strategy": "title", "value": "验收登记表单", "exact": true },
+              { "strategy": "css", "value": "iframe[name=\"acceptance-form\"]" }
+            ]
+          }
+        ]
+      },
+      "action": {
+        "kind": "click",
+        "target": {
+          "name": "与采购订单币种匹配的选项",
+          "path": [
+            {
+              "name": "币种选项列表",
+              "locators": [
+                { "strategy": "role", "role": "listbox", "name": "币种选项", "exact": true },
+                { "strategy": "test_id", "value": "currency-options" }
+              ]
+            },
+            {
+              "name": "币种匹配项",
+              "locators": [
+                { "strategy": "role", "role": "option" }
+              ],
+              "filter_binding": "option"
+            }
+          ],
+          "locators": [
+            { "strategy": "css", "value": "[data-testid=\"option-label\"]" }
+          ]
+        }
+      },
+      "data_bindings": [
+        { "name": "option", "direction": "input", "kind": "variable", "ref": "采购订单.币种", "sensitive": false }
+      ],
+      "effects": []
+    },
+    {
+      "trace_id": "trace_190",
+      "sequence": 190,
+      "scope": {
+        "page_ref": "acceptance_detail",
+        "frame_path": [
+          {
+            "name": "验收登记表单 iframe",
+            "locators": [
+              { "strategy": "title", "value": "验收登记表单", "exact": true },
+              { "strategy": "css", "value": "iframe[name=\"acceptance-form\"]" }
+            ]
+          }
+        ]
+      },
+      "action": {
+        "kind": "fill",
+        "target": {
+          "name": "订单日期",
+          "locators": [
+            { "strategy": "label", "value": "订单日期", "exact": true },
+            { "strategy": "test_id", "value": "order-date" }
+          ]
+        }
+      },
+      "data_bindings": [
+        { "name": "value", "direction": "input", "kind": "variable", "ref": "采购订单.订单日期", "sensitive": false }
+      ],
+      "effects": []
+    },
+    {
+      "trace_id": "trace_200",
+      "sequence": 200,
+      "scope": {
+        "page_ref": "acceptance_detail",
+        "frame_path": [
+          {
+            "name": "验收登记表单 iframe",
+            "locators": [
+              { "strategy": "title", "value": "验收登记表单", "exact": true },
+              { "strategy": "css", "value": "iframe[name=\"acceptance-form\"]" }
+            ]
+          }
+        ]
+      },
+      "action": {
+        "kind": "fill",
+        "target": {
+          "name": "验收说明",
+          "locators": [
+            { "strategy": "label", "value": "验收说明", "exact": true },
+            { "strategy": "test_id", "value": "acceptance-note" }
+          ]
+        }
+      },
+      "data_bindings": [
+        { "name": "value", "direction": "input", "kind": "literal", "value": "自动创建", "sensitive": false }
+      ],
+      "effects": []
+    },
+    {
+      "trace_id": "trace_210",
+      "sequence": 210,
+      "scope": {
+        "page_ref": "acceptance_detail",
+        "frame_path": [
+          {
+            "name": "验收登记表单 iframe",
+            "locators": [
+              { "strategy": "title", "value": "验收登记表单", "exact": true },
+              { "strategy": "css", "value": "iframe[name=\"acceptance-form\"]" }
+            ]
+          }
+        ]
+      },
+      "action": {
+        "kind": "set_checked",
+        "target": {
+          "name": "信息确认",
+          "locators": [
+            { "strategy": "role", "role": "checkbox", "name": "信息确认", "exact": true },
+            { "strategy": "test_id", "value": "information-confirmed" }
+          ]
+        },
+        "checked": true
+      },
+      "data_bindings": [],
+      "effects": []
+    },
+    {
+      "trace_id": "trace_220",
+      "sequence": 220,
+      "scope": {
+        "page_ref": "acceptance_detail",
+        "frame_path": [
+          {
+            "name": "验收登记表单 iframe",
+            "locators": [
+              { "strategy": "title", "value": "验收登记表单", "exact": true },
+              { "strategy": "css", "value": "iframe[name=\"acceptance-form\"]" }
+            ]
+          }
+        ]
+      },
+      "action": {
+        "kind": "click",
+        "target": {
+          "name": "保存验收登记",
+          "locators": [
+            { "strategy": "role", "role": "button", "name": "保存", "exact": true },
+            { "strategy": "test_id", "value": "save-acceptance" }
+          ]
+        }
+      },
+      "data_bindings": [],
+      "effects": [],
+      "wait_until": [
+        {
+          "kind": "element_state",
+          "target": {
+            "name": "提交确认模态框",
+            "locators": [
+              { "strategy": "role", "role": "dialog", "name": "确认提交", "exact": true },
+              { "strategy": "test_id", "value": "submit-confirmation-dialog" }
+            ]
+          },
+          "state": "visible"
+        }
+      ]
+    },
+    {
+      "trace_id": "trace_230",
+      "sequence": 230,
+      "scope": {
+        "page_ref": "acceptance_detail",
+        "frame_path": [
+          {
+            "name": "验收登记表单 iframe",
+            "locators": [
+              { "strategy": "title", "value": "验收登记表单", "exact": true },
+              { "strategy": "css", "value": "iframe[name=\"acceptance-form\"]" }
+            ]
+          }
+        ]
+      },
+      "action": {
+        "kind": "click",
+        "target": {
+          "name": "确认提交按钮",
+          "path": [
+            {
+              "name": "提交确认模态框",
+              "locators": [
+                { "strategy": "role", "role": "dialog", "name": "确认提交", "exact": true },
+                { "strategy": "test_id", "value": "submit-confirmation-dialog" }
+              ]
+            }
+          ],
+          "locators": [
+            { "strategy": "role", "role": "button", "name": "确认提交", "exact": true },
+            { "strategy": "test_id", "value": "confirm-submit" }
+          ]
+        }
+      },
+      "data_bindings": [],
+      "effects": [],
+      "wait_until": [
+        {
+          "kind": "element_state",
+          "target": {
+            "name": "保存成功结果",
+            "locators": [
+              { "strategy": "role", "role": "status", "name": "保存成功", "exact": true },
+              { "strategy": "test_id", "value": "acceptance-success" }
+            ]
+          },
+          "state": "visible"
+        }
+      ]
+    },
+    {
+      "trace_id": "trace_240",
+      "sequence": 240,
+      "scope": {
+        "page_ref": "acceptance_detail",
+        "frame_path": [
+          {
+            "name": "验收登记表单 iframe",
+            "locators": [
+              { "strategy": "title", "value": "验收登记表单", "exact": true },
+              { "strategy": "css", "value": "iframe[name=\"acceptance-form\"]" }
+            ]
+          }
+        ]
+      },
+      "action": {
+        "kind": "extract",
+        "target": {
+          "name": "保存成功结果",
+          "locators": [
+            { "strategy": "role", "role": "status", "name": "保存成功", "exact": true },
+            { "strategy": "test_id", "value": "acceptance-success" }
+          ]
+        },
+        "mode": "text"
+      },
+      "data_bindings": [
+        { "name": "result", "direction": "output", "kind": "variable", "ref": "验收结果", "sensitive": false }
+      ],
+      "effects": []
+    }
+  ]
+}

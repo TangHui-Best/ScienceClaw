@@ -1,222 +1,62 @@
 // @vitest-environment jsdom
 
 import { createApp, nextTick } from 'vue';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { saveCreationSnapshot } from '@/utils/rpaAgentSkillConfiguration';
 
-const get = vi.fn();
-const post = vi.fn();
-const push = vi.fn();
-
-vi.mock('vue-router', () => ({
-  useRoute: () => ({ query: { sessionId: 'session-1' } }),
-  useRouter: () => ({ push }),
+const testRun = vi.fn(); const save = vi.fn(); const compile = vi.fn();
+vi.mock('vue-router', () => ({ useRoute: () => ({ query: { sessionId: 'rca_abcdefghijklmnopqrstuvwx' } }), useRouter: () => ({ push: vi.fn() }) }));
+vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (value: string) => value }) }));
+vi.mock('@/api/rpaAgent', () => ({
+  testRpaAgentSkill: (...args: unknown[]) => testRun(...args),
+  saveRpaAgentSkill: (...args: unknown[]) => save(...args),
+  compileRpaAgentSkill: (...args: unknown[]) => compile(...args),
 }));
+const flush = async () => { await Promise.resolve(); await Promise.resolve(); await nextTick(); };
 
-vi.mock('@/api/client', () => ({
-  apiClient: {
-    get: (...args: unknown[]) => get(...args),
-    post: (...args: unknown[]) => post(...args),
-  },
-}));
-
-vi.mock('@/utils/sandbox', () => ({
-  getBackendWsUrl: () => 'ws://localhost/rpa/screencast/session-1',
-}));
-
-vi.mock('@/components/rpa/RpaDiscardRecordingDialog.vue', () => ({
-  default: {
-    name: 'RpaDiscardRecordingDialogStub',
-    template: '<div />',
-  },
-}));
-
-vi.mock('@/components/rpa/RpaFlowGuide.vue', () => ({
-  default: {
-    name: 'RpaFlowGuideStub',
-    props: ['recordedStepCount', 'diagnosticCount'],
-    template: '<div data-testid="flow-guide">{{ recordedStepCount }} {{ diagnosticCount }}</div>',
-  },
-}));
-
-vi.mock('@/components/rpa/RpaStepTimeline.vue', () => ({
-  default: {
-    name: 'RpaStepTimelineStub',
-    props: ['steps', 'failedStepIndex', 'failedStepCandidates'],
-    emits: ['retry-candidate'],
-    template: `
-      <div data-testid="step-timeline">
-        <div
-          v-for="step in steps"
-          :key="step.id"
-          data-testid="timeline-step"
-        >
-          {{ step.description }} {{ step.label }}
-        </div>
-        <button
-          v-if="failedStepCandidates?.length"
-          type="button"
-          data-testid="retry-candidate"
-          @click="$emit('retry-candidate', 0)"
-        >
-          Retry
-        </button>
-      </div>
-    `,
-  },
-}));
-
-class MockWebSocket {
-  static OPEN = 1;
-  static CONNECTING = 0;
-  readyState = MockWebSocket.OPEN;
-  onopen: (() => void) | null = null;
-  onmessage: ((event: MessageEvent) => void) | null = null;
-  onerror: (() => void) | null = null;
-  onclose: (() => void) | null = null;
-
-  constructor() {
-    Promise.resolve().then(() => this.onopen?.());
-  }
-
-  close() {
-    this.readyState = 3;
-  }
-}
-
-const flushAsyncUpdates = async () => {
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
-  await nextTick();
-};
-
-const mountTestPage = async () => {
-  const { default: TestPage } = await import('./TestPage.vue');
-  const root = document.createElement('div');
-  document.body.appendChild(root);
-
-  const app = createApp(TestPage);
-  app.mount(root);
-  await flushAsyncUpdates();
-
-  return { app, root };
-};
-
-const mockSession = (session: any) => {
-  get.mockImplementation((url: string) => {
-    if (url === '/rpa/session/session-1/skill-config-draft') {
-      return Promise.resolve({
-        data: {
-          draft: {
-            skill_name: 'Trace test skill',
-            description: 'Trace test',
-            params: {},
-          },
-        },
-      });
-    }
-    if (url === '/rpa/session/session-1') {
-      return Promise.resolve({ data: { session } });
-    }
-    return Promise.reject(new Error(`Unexpected GET ${url}`));
-  });
-};
-
-describe('TestPage trace-first failure retry', () => {
+describe('TestPage compiled artifact replay', () => {
   beforeEach(() => {
-    vi.stubGlobal('WebSocket', MockWebSocket);
-    document.body.innerHTML = '';
-    get.mockReset();
-    post.mockReset();
-    push.mockReset();
+    sessionStorage.clear(); document.body.innerHTML = ''; testRun.mockReset(); save.mockReset(); compile.mockReset();
+    saveCreationSnapshot({
+      sessionId: 'rca_abcdefghijklmnopqrstuvwx', browserSessionRef: 'browser-host-1', artifactHash: 'artifact-hash', artifactFiles: ['SKILL.md', 'skill.manifest.json', 'skill.py', 'browser_segment.py'],
+      configurationDraft: { schema_version: 'skill-configuration-draft/v0.1', skill: { name: '采购验收', description: '测试' }, inputs: [], secrets: [{ ref: 'erp_password', title: 'ERP 密码', required: true }], asset_inputs: [{ ref: 'source_file', title: '源文件', required: true }, { ref: 'optional_file', title: '可选文件', required: false }], outputs: [], asset_outputs: [], binding_promotions: [] },
+    });
   });
 
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    document.body.innerHTML = '';
-  });
-
-  it('retries failed locators by failed trace id and never calls step endpoints', async () => {
-    mockSession({
-      timeline: [
-        {
-          kind: 'trace',
-          trace_id: 'trace-failed',
-          action: 'click',
-          title: 'Click failed target',
-          summary: 'Failed target',
-        },
-      ],
-    });
-    post.mockImplementation((url: string) => {
-      if (url === '/rpa/session/session-1/test') {
-        return Promise.resolve({
-          data: {
-            result: { success: false, error: 'locator failed' },
-            failed_trace_id: 'trace-failed',
-            failed_step_index: 0,
-            failed_step_candidates: [
-              { kind: 'css', original_index: 3, locator: { method: 'css', value: '#fixed' } },
-            ],
-          },
-        });
-      }
-      return Promise.resolve({ data: {} });
-    });
-
-    const { app, root } = await mountTestPage();
-    await flushAsyncUpdates();
-    post.mockClear();
-
-    root.querySelector<HTMLButtonElement>('[data-testid="retry-candidate"]')?.click();
-    await vi.waitFor(() => {
-      expect(post).toHaveBeenCalledWith('/rpa/session/session-1/trace/trace-failed/locator', {
-        candidate_index: 3,
-      });
-    });
-
-    expect(post.mock.calls.some(([url]) => String(url).includes('/step/'))).toBe(false);
-
+  it('never recompiles, shows exact failed step and prevents save after a failed run', async () => {
+    testRun.mockResolvedValue({ state: 'compiled', artifact_hash: 'artifact-hash', run_result: { status: 'failed', steps: [{ trace_id: 'trace-1', sequence: 1, status: 'succeeded' }], failed_step: { trace_id: 'trace-9', sequence: 9, phase: 'action' }, error: 'locator ambiguous' } });
+    const { default: Page } = await import('./TestPage.vue'); const root = document.createElement('div'); document.body.appendChild(root); const app = createApp(Page); app.mount(root); await flush();
+    const secret = root.querySelector<HTMLInputElement>('input[name="secret-erp_password"]')!; secret.value = 'MEMORY-ONLY'; secret.dispatchEvent(new Event('input'));
+    root.querySelector<HTMLButtonElement>('[data-testid="test-run"]')!.click(); await flush();
+    expect(testRun).not.toHaveBeenCalled(); expect(root.textContent).toContain('source_file');
+    const asset = root.querySelector<HTMLInputElement>('input[name="asset-source_file"]')!; asset.value = 'asset://source.csv'; asset.dispatchEvent(new Event('input'));
+    root.querySelector<HTMLButtonElement>('[data-testid="test-run"]')!.click(); await flush();
+    expect(testRun.mock.calls[0][1].secrets).toEqual({ erp_password: 'MEMORY-ONLY' });
+    expect(testRun.mock.calls[0][1].data_assets).toEqual({ source_file: 'asset://source.csv' });
+    expect(secret.value).toBe('');
+    expect(compile).not.toHaveBeenCalled(); expect(root.textContent).toContain('trace-1'); expect(root.textContent).toContain('trace-9'); expect(root.textContent).toContain('locator ambiguous');
+    expect(root.querySelector<HTMLButtonElement>('[data-testid="save-skill"]')!.disabled).toBe(true);
+    expect(root.querySelector<HTMLButtonElement>('[data-testid="test-run"]')!.disabled).toBe(false);
     app.unmount();
   });
 
-  it('does not use legacy failed_step_index for locator retry when failed trace id is absent', async () => {
-    mockSession({
-      timeline: [
-        {
-          kind: 'trace',
-          trace_id: 'trace-visible',
-          action: 'click',
-          title: 'Click visible target',
-          summary: 'Visible target',
-        },
-      ],
-    });
-    post.mockImplementation((url: string) => {
-      if (url === '/rpa/session/session-1/test') {
-        return Promise.resolve({
-          data: {
-            result: { success: false, error: 'locator failed' },
-            failed_step_index: 0,
-            failed_step_candidates: [
-              { kind: 'css', original_index: 0, locator: { method: 'css', value: '#legacy' } },
-            ],
-          },
-        });
-      }
-      return Promise.resolve({ data: {} });
-    });
-
-    const { app, root } = await mountTestPage();
-    await flushAsyncUpdates();
-    post.mockClear();
-
-    root.querySelector<HTMLButtonElement>('[data-testid="retry-candidate"]')?.click();
-    await flushAsyncUpdates();
-
-    expect(post).not.toHaveBeenCalled();
-    expect(post.mock.calls.some(([url]) => String(url).includes('/step/'))).toBe(false);
-
+  it('disables rerun after success, restores tested state after reload, and saves only once', async () => {
+    testRun.mockResolvedValue({ state: 'tested', artifact_hash: 'artifact-hash', run_result: { status: 'succeeded', steps: [] } }); save.mockResolvedValue({ state: 'saved', skill_ref: 'skill-1', artifact_hash: 'artifact-hash' });
+    const { default: Page } = await import('./TestPage.vue'); const root = document.createElement('div'); document.body.appendChild(root); const app = createApp(Page); app.mount(root); await flush();
+    const asset = root.querySelector<HTMLInputElement>('input[name="asset-source_file"]')!; asset.value = 'asset://source.csv'; asset.dispatchEvent(new Event('input'));
+    const optional = root.querySelector<HTMLInputElement>('input[name="asset-optional_file"]')!; optional.value = '   '; optional.dispatchEvent(new Event('input'));
+    const runButton = root.querySelector<HTMLButtonElement>('[data-testid="test-run"]')!; runButton.click(); await flush();
+    expect(testRun).toHaveBeenCalledTimes(1); expect(testRun.mock.calls[0][1].data_assets).toEqual({ source_file: 'asset://source.csv' });
+    expect(runButton.disabled).toBe(true); runButton.click(); await flush(); expect(testRun).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(sessionStorage.getItem('rpa-agent:rca_abcdefghijklmnopqrstuvwx')!)).toMatchObject({ testPassed: true });
     app.unmount();
+
+    const reloadRoot = document.createElement('div'); document.body.appendChild(reloadRoot); const reloadApp = createApp(Page); reloadApp.mount(reloadRoot); await flush();
+    expect(reloadRoot.querySelector<HTMLButtonElement>('[data-testid="test-run"]')!.disabled).toBe(true);
+    const saveButton = reloadRoot.querySelector<HTMLButtonElement>('[data-testid="save-skill"]')!; expect(saveButton.disabled).toBe(false); saveButton.click(); await flush();
+    expect(save).toHaveBeenCalledWith('rca_abcdefghijklmnopqrstuvwx'); expect(compile).not.toHaveBeenCalled();
+    expect(JSON.parse(sessionStorage.getItem('rpa-agent:rca_abcdefghijklmnopqrstuvwx')!)).toMatchObject({ savedRef: 'skill-1', testPassed: true });
+    expect(saveButton.disabled).toBe(true); saveButton.click(); await flush(); expect(save).toHaveBeenCalledTimes(1);
+    reloadApp.unmount();
   });
 });

@@ -1,0 +1,1114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rpa-agent.local/schemas/core-trace-timeline-v0.1.json",
+  "title": "RPA Agent Core Trace Timeline v0.1",
+  "description": "浏览器 Skill 创建态的扁平 CoreTrace 时间线机器契约。跨 Trace 唯一性、PageRef 生命周期和绑定引用完整性由语义校验器负责。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "traces"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "core-trace/v0.1"
+    },
+    "traces": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/core_trace"
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z][A-Za-z0-9._-]*$"
+    },
+    "business_variable_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^.\\s]+(?:\\.[^.\\s]+)*$",
+      "not": {
+        "pattern": "(?:^|\\.)[0-9]+(?:\\.|$)"
+      }
+    },
+    "core_trace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trace_id",
+        "sequence",
+        "scope",
+        "action",
+        "data_bindings",
+        "effects"
+      ],
+      "properties": {
+        "trace_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "scope": {
+          "$ref": "#/$defs/browser_scope"
+        },
+        "action": {
+          "$ref": "#/$defs/action_spec"
+        },
+        "data_bindings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/data_binding"
+          }
+        },
+        "effects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/browser_effect"
+          }
+        },
+        "wait_until": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/wait_condition"
+          }
+        }
+      }
+    },
+    "browser_scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "page_ref",
+        "frame_path"
+      ],
+      "properties": {
+        "page_ref": {
+          "$ref": "#/$defs/identifier"
+        },
+        "frame_path": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/frame_step"
+          }
+        }
+      }
+    },
+    "frame_step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "locators"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "locators": {
+          "$ref": "#/$defs/locator_list"
+        }
+      }
+    },
+    "target_spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "locators"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/target_path_step"
+          }
+        },
+        "locators": {
+          "$ref": "#/$defs/locator_list"
+        },
+        "index": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "target_path_step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "locators"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "locators": {
+          "$ref": "#/$defs/locator_list"
+        },
+        "index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "filter_text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "filter_binding": {
+          "$ref": "#/$defs/identifier"
+        }
+      },
+      "not": {
+        "required": [
+          "filter_text",
+          "filter_binding"
+        ]
+      }
+    },
+    "locator_list": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/locator_spec"
+      }
+    },
+    "locator_spec": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/role_locator"
+        },
+        {
+          "$ref": "#/$defs/semantic_value_locator"
+        },
+        {
+          "$ref": "#/$defs/selector_locator"
+        }
+      ]
+    },
+    "role_locator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "strategy",
+        "role"
+      ],
+      "properties": {
+        "strategy": {
+          "const": "role"
+        },
+        "role": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "exact": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "semantic_value_locator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "strategy",
+        "value"
+      ],
+      "properties": {
+        "strategy": {
+          "enum": [
+            "test_id",
+            "label",
+            "placeholder",
+            "text",
+            "title",
+            "alt_text"
+          ]
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1
+        },
+        "exact": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "selector_locator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "strategy",
+        "value"
+      ],
+      "properties": {
+        "strategy": {
+          "enum": [
+            "css",
+            "xpath"
+          ]
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "action_spec": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/navigate_action"
+        },
+        {
+          "$ref": "#/$defs/click_action"
+        },
+        {
+          "$ref": "#/$defs/fill_action"
+        },
+        {
+          "$ref": "#/$defs/press_action"
+        },
+        {
+          "$ref": "#/$defs/select_action"
+        },
+        {
+          "$ref": "#/$defs/set_checked_action"
+        },
+        {
+          "$ref": "#/$defs/hover_action"
+        },
+        {
+          "$ref": "#/$defs/upload_action"
+        },
+        {
+          "$ref": "#/$defs/scroll_action"
+        },
+        {
+          "$ref": "#/$defs/extract_text_action"
+        },
+        {
+          "$ref": "#/$defs/extract_attribute_action"
+        },
+        {
+          "$ref": "#/$defs/extract_table_action"
+        },
+        {
+          "$ref": "#/$defs/switch_page_action"
+        },
+        {
+          "$ref": "#/$defs/close_page_action"
+        },
+        {
+          "$ref": "#/$defs/agent_action"
+        }
+      ]
+    },
+    "navigate_action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "mode"
+      ],
+      "properties": {
+        "kind": {
+          "const": "navigate"
+        },
+        "mode": {
+          "enum": [
+            "url",
+            "back",
+            "forward",
+            "reload"
+          ]
+        }
+      }
+    },
+    "click_action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "target"
+      ],
+      "properties": {
+        "kind": {
+          "const": "click"
+        },
+        "target": {
+          "$ref": "#/$defs/target_spec"
+        },
+        "button": {
+          "enum": [
+            "left",
+            "right",
+            "middle"
+          ],
+          "default": "left"
+        },
+        "count": {
+          "enum": [
+            1,
+            2
+          ],
+          "default": 1
+        }
+      }
+    },
+    "fill_action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "target"
+      ],
+      "properties": {
+        "kind": {
+          "const": "fill"
+        },
+        "target": {
+          "$ref": "#/$defs/target_spec"
+        }
+      }
+    },
+    "press_action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "target"
+      ],
+      "properties": {
+        "kind": {
+          "const": "press"
+        },
+        "target": {
+          "$ref": "#/$defs/target_spec"
+        }
+      }
+    },
+    "select_action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "target"
+      ],
+      "properties": {
+        "kind": {
+          "const": "select"
+        },
+        "target": {
+          "$ref": "#/$defs/target_spec"
+        }
+      }
+    },
+    "set_checked_action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "target",
+        "checked"
+      ],
+      "properties": {
+        "kind": {
+          "const": "set_checked"
+        },
+        "target": {
+          "$ref": "#/$defs/target_spec"
+        },
+        "checked": {
+          "type": "boolean"
+        }
+      }
+    },
+    "hover_action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "target"
+      ],
+      "properties": {
+        "kind": {
+          "const": "hover"
+        },
+        "target": {
+          "$ref": "#/$defs/target_spec"
+        }
+      }
+    },
+    "upload_action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "target"
+      ],
+      "properties": {
+        "kind": {
+          "const": "upload"
+        },
+        "target": {
+          "$ref": "#/$defs/target_spec"
+        }
+      }
+    },
+    "scroll_action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "direction",
+        "amount",
+        "unit"
+      ],
+      "properties": {
+        "kind": {
+          "const": "scroll"
+        },
+        "target": {
+          "$ref": "#/$defs/target_spec"
+        },
+        "direction": {
+          "enum": [
+            "up",
+            "down",
+            "left",
+            "right"
+          ]
+        },
+        "amount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "unit": {
+          "enum": [
+            "pixel",
+            "viewport"
+          ]
+        }
+      }
+    },
+    "extract_text_action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "target",
+        "mode"
+      ],
+      "properties": {
+        "kind": {
+          "const": "extract"
+        },
+        "target": {
+          "$ref": "#/$defs/target_spec"
+        },
+        "mode": {
+          "const": "text"
+        }
+      }
+    },
+    "extract_attribute_action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "target",
+        "mode",
+        "attribute"
+      ],
+      "properties": {
+        "kind": {
+          "const": "extract"
+        },
+        "target": {
+          "$ref": "#/$defs/target_spec"
+        },
+        "mode": {
+          "const": "attribute"
+        },
+        "attribute": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "extract_table_action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "target",
+        "mode",
+        "columns"
+      ],
+      "properties": {
+        "kind": {
+          "const": "extract"
+        },
+        "target": {
+          "$ref": "#/$defs/target_spec"
+        },
+        "mode": {
+          "const": "table"
+        },
+        "columns": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/extract_column"
+          }
+        }
+      }
+    },
+    "extract_column": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "header"
+          ],
+          "properties": {
+            "name": {
+              "$ref": "#/$defs/identifier"
+            },
+            "header": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "index"
+          ],
+          "properties": {
+            "name": {
+              "$ref": "#/$defs/identifier"
+            },
+            "index": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      ]
+    },
+    "switch_page_action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "page_ref"
+      ],
+      "properties": {
+        "kind": {
+          "const": "switch_page"
+        },
+        "page_ref": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    },
+    "close_page_action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "close_page"
+        }
+      }
+    },
+    "agent_action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "instruction"
+      ],
+      "properties": {
+        "kind": {
+          "const": "agent"
+        },
+        "instruction": {
+          "type": "string",
+          "minLength": 1
+        },
+        "target": {
+          "$ref": "#/$defs/target_spec"
+        }
+      }
+    },
+    "data_binding": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/literal_binding"
+        },
+        {
+          "$ref": "#/$defs/skill_input_binding"
+        },
+        {
+          "$ref": "#/$defs/secret_binding"
+        },
+        {
+          "$ref": "#/$defs/variable_binding"
+        },
+        {
+          "$ref": "#/$defs/data_asset_binding"
+        }
+      ]
+    },
+    "literal_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "direction",
+        "kind",
+        "value",
+        "sensitive"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/identifier"
+        },
+        "direction": {
+          "const": "input"
+        },
+        "kind": {
+          "const": "literal"
+        },
+        "value": {
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "sensitive": {
+          "type": "boolean"
+        }
+      }
+    },
+    "skill_input_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "direction",
+        "kind",
+        "ref",
+        "sensitive"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/identifier"
+        },
+        "direction": {
+          "const": "input"
+        },
+        "kind": {
+          "const": "skill_input"
+        },
+        "ref": {
+          "$ref": "#/$defs/identifier"
+        },
+        "sensitive": {
+          "type": "boolean"
+        }
+      }
+    },
+    "secret_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "direction",
+        "kind",
+        "ref",
+        "sensitive"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/identifier"
+        },
+        "direction": {
+          "const": "input"
+        },
+        "kind": {
+          "const": "secret"
+        },
+        "ref": {
+          "$ref": "#/$defs/identifier"
+        },
+        "sensitive": {
+          "const": true
+        }
+      }
+    },
+    "variable_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "direction",
+        "kind",
+        "ref",
+        "sensitive"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/identifier"
+        },
+        "direction": {
+          "enum": [
+            "input",
+            "output"
+          ]
+        },
+        "kind": {
+          "const": "variable"
+        },
+        "ref": {
+          "$ref": "#/$defs/business_variable_ref"
+        },
+        "sensitive": {
+          "type": "boolean"
+        }
+      }
+    },
+    "data_asset_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "direction",
+        "kind",
+        "ref",
+        "sensitive"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/identifier"
+        },
+        "direction": {
+          "enum": [
+            "input",
+            "output"
+          ]
+        },
+        "kind": {
+          "const": "data_asset"
+        },
+        "ref": {
+          "$ref": "#/$defs/identifier"
+        },
+        "sensitive": {
+          "type": "boolean"
+        }
+      }
+    },
+    "browser_effect": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/navigation_effect"
+        },
+        {
+          "$ref": "#/$defs/new_page_effect"
+        },
+        {
+          "$ref": "#/$defs/download_effect"
+        },
+        {
+          "$ref": "#/$defs/dialog_effect"
+        }
+      ]
+    },
+    "navigation_effect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "navigation"
+        }
+      }
+    },
+    "new_page_effect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "page_ref"
+      ],
+      "properties": {
+        "kind": {
+          "const": "new_page"
+        },
+        "page_ref": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    },
+    "download_effect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "binding"
+      ],
+      "properties": {
+        "kind": {
+          "const": "download"
+        },
+        "binding": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    },
+    "dialog_effect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "dialog_type",
+        "response"
+      ],
+      "properties": {
+        "kind": {
+          "const": "dialog"
+        },
+        "dialog_type": {
+          "enum": [
+            "alert",
+            "confirm",
+            "prompt",
+            "beforeunload"
+          ]
+        },
+        "response": {
+          "enum": [
+            "accept",
+            "dismiss"
+          ]
+        },
+        "input_binding": {
+          "$ref": "#/$defs/identifier"
+        }
+      },
+      "if": {
+        "properties": {
+          "dialog_type": {
+            "not": {
+              "const": "prompt"
+            }
+          }
+        },
+        "required": [
+          "dialog_type"
+        ]
+      },
+      "then": {
+        "not": {
+          "required": [
+            "input_binding"
+          ]
+        }
+      }
+    },
+    "wait_condition": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/element_state_wait"
+        },
+        {
+          "$ref": "#/$defs/element_text_wait"
+        },
+        {
+          "$ref": "#/$defs/element_value_wait"
+        },
+        {
+          "$ref": "#/$defs/url_matches_wait"
+        }
+      ]
+    },
+    "element_state_wait": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "target",
+        "state"
+      ],
+      "properties": {
+        "kind": {
+          "const": "element_state"
+        },
+        "target": {
+          "$ref": "#/$defs/target_spec"
+        },
+        "state": {
+          "enum": [
+            "visible",
+            "hidden",
+            "enabled",
+            "disabled",
+            "checked",
+            "unchecked"
+          ]
+        }
+      }
+    },
+    "element_text_wait": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "target",
+        "operator"
+      ],
+      "properties": {
+        "kind": {
+          "const": "element_text"
+        },
+        "target": {
+          "$ref": "#/$defs/target_spec"
+        },
+        "operator": {
+          "$ref": "#/$defs/match_operator"
+        },
+        "expected": {
+          "type": "string"
+        },
+        "expected_binding": {
+          "$ref": "#/$defs/identifier"
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "expected"
+          ]
+        },
+        {
+          "required": [
+            "expected_binding"
+          ]
+        }
+      ]
+    },
+    "element_value_wait": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "target",
+        "operator"
+      ],
+      "properties": {
+        "kind": {
+          "const": "element_value"
+        },
+        "target": {
+          "$ref": "#/$defs/target_spec"
+        },
+        "operator": {
+          "$ref": "#/$defs/match_operator"
+        },
+        "expected": {
+          "type": "string"
+        },
+        "expected_binding": {
+          "$ref": "#/$defs/identifier"
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "expected"
+          ]
+        },
+        {
+          "required": [
+            "expected_binding"
+          ]
+        }
+      ]
+    },
+    "url_matches_wait": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "operator"
+      ],
+      "properties": {
+        "kind": {
+          "const": "url_matches"
+        },
+        "operator": {
+          "$ref": "#/$defs/match_operator"
+        },
+        "expected": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expected_binding": {
+          "$ref": "#/$defs/identifier"
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "expected"
+          ]
+        },
+        {
+          "required": [
+            "expected_binding"
+          ]
+        }
+      ]
+    },
+    "match_operator": {
+      "enum": [
+        "exact",
+        "contains",
+        "regex"
+      ]
+    }
+  }
+}

@@ -21,7 +21,9 @@
               class="w-64 bg-white/10 backdrop-blur-sm border border-white/10 rounded-lg pl-9 pr-3 py-2 text-sm text-white placeholder-white/30 focus:outline-none focus:bg-white/15 focus:border-white/25 focus:ring-1 focus:ring-white/20 transition-all duration-200">
           </div>
           <button
-            @click="router.push('/rpa/recorder')"
+            data-testid="record-skill"
+            :disabled="startingRecorder"
+            @click="startRecorder"
             class="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg flex items-center gap-2 font-bold transition-all"
           >
             <Video class="size-4" />
@@ -152,7 +154,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
 import { Search, Eye, EyeOff, Trash2, Box, Video } from 'lucide-vue-next';
-import { getSkills, blockSkill, deleteSkill as apiDeleteSkill } from '../api/agent';
+import { getSkills, blockSkill, createSession, deleteSkill as apiDeleteSkill } from '../api/agent';
 import { ExternalSkillItem } from '../types/response';
 import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
@@ -162,6 +164,18 @@ const router = useRouter();
 const searchQuery = ref('');
 const skills = ref<ExternalSkillItem[]>([]);
 const loading = ref(false);
+const startingRecorder = ref(false);
+
+const startRecorder = async () => {
+  if (startingRecorder.value) return;
+  startingRecorder.value = true;
+  try {
+    const host = await createSession({ mode: 'browser' });
+    await router.push({ path: '/rpa/recorder', query: { browserSessionRef: host.session_id } });
+  } finally {
+    startingRecorder.value = false;
+  }
+};
 
 const gradientPalette = [
   'linear-gradient(135deg, #8b5cf6, #a855f7)',

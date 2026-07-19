@@ -970,4 +970,12 @@ export default {
   'Harness Next NL Step': 'Next NL Step',
   'Failed to start Harness capture': 'Failed to start Harness capture',
   'Failed to mark Harness step': 'Failed to mark Harness step',
+  'RPA Agent Recorder': 'RPA Agent Recorder',
+  'Stop recording': 'Stop recording',
+  'Natural language operation': 'Natural language operation',
+  'Post-recording configuration': 'Post-recording configuration',
+  'Save configuration and compile': 'Save configuration and compile',
+  'Test replay': 'Test replay',
+  'Save SKILL': 'Save SKILL',
+  'Missing browserSessionRef': 'Missing browserSessionRef; recording cannot start.',
 }
