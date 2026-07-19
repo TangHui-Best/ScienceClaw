@@ -3,7 +3,7 @@ id: F026
 doc_kind: feature
 status: complete
 created: 2026-07-17
-updated: 2026-07-18
+updated: 2026-07-19
 ---
 
 # F026：RPA Agent 基于 ScienceClaw 宿主重构
@@ -104,6 +104,7 @@ Complete。独立 `backend/rpa_agent` 已实现创建态双通道、Settlement�
 - [EV-027 CoreTrace 到 SKILL 编译链路设计基线验证](../evidence/EV-027-coretrace-skill-compiler-design-baseline.md)（只证明设计规格已确认，不证明实现或回放）
 - [EV-028 首个 E2E CoreTrace 到 Playwright SKILL Golden Sample 验证](../evidence/EV-028-first-e2e-coretrace-to-playwright-skill-golden-sample.md)（只证明样例静态自洽，不证明动态回放）
 - [EV-029 新版 RPA Agent 首个阶段一纵向 Live E2E](../evidence/EV-029-rpa-agent-first-stage-one-live-e2e.md)（本 Feature 完成证据）
+- [EV-030 新版 RPA Agent 本地 CDP 宿主修复](../evidence/EV-030-rpa-agent-local-cdp-host-fix.md)（F026.1 修复与真实本地浏览器证据）
 
 ### Decisions / ADRs
 
@@ -120,6 +121,7 @@ Complete。独立 `backend/rpa_agent` 已实现创建态双通道、Settlement�
 
 - [RPA Agent 基于 ScienceClaw 宿主重构设计基线](../superpowers/specs/2026-07-17-rpa-agent-scienceclaw-host-rebuild-design.md)
 - [F026.1 新版 RPA Agent 本地 CDP 宿主修复设计](../superpowers/specs/2026-07-19-rpa-agent-local-cdp-host-fix-design.md)
+- [F026.1 新版 RPA Agent 本地 CDP 宿主修复实施计划](../superpowers/plans/2026-07-19-rpa-agent-local-cdp-host-fix.md)
 - [首个阶段一 E2E 验收场景设计基线](../superpowers/specs/2026-07-17-RPA-Agent首个阶段一E2E验收场景设计基线.md)
 - [业务变量绑定与录制态上下文设计基线](../superpowers/specs/2026-07-17-RPA-Agent业务变量绑定与录制态上下文设计基线.md)
 - [CoreTrace 到 SKILL 编译链路设计基线](../superpowers/specs/2026-07-17-RPA-Agent-CoreTrace到SKILL编译链路设计基线.md)
@@ -146,6 +148,7 @@ Complete。独立 `backend/rpa_agent` 已实现创建态双通道、Settlement�
 | CoreTrace 编译契约稳定 | Compiler 只消费 CoreTrace，RunContext、Page/Frame/Effect、Action Matrix、失败规则和 Skill 产物有明确规格 | EV-027、CoreTrace 到 SKILL 编译链路设计基线 | pass |
 | 首个 E2E 编译目标可检查 | Skill Definition、24 条 CoreTrace、双 Replay Input 与四文件 SKILL 构成静态自洽 Golden Sample | EV-028、首个 E2E 完整示例 | pass |
 | 双通道共享浏览器和变量 | 人工动作与 Browser-use 多 Action 进入同一 Settlement/CoreTrace，并使用 `purchase_order.*` | EV-029 | pass |
+| Windows local 模式可启动新版录制会话 | 默认 Provider 不访问 SessionRuntimeManager，真实本地 Chromium/CDP 路由返回 201 并完成 Registry/cleanup | EV-030 | pass |
 
 ## State Timeline
 
@@ -157,20 +160,21 @@ Complete。独立 `backend/rpa_agent` 已实现创建态双通道、Settlement�
 | 2026-07-17 | active / compiler contract accepted | 用户确认非兼容新链路、RunContext、Page/Frame/Effect、Action Matrix、校验失败规则和 Skill 产物边界 | CoreTrace 到 SKILL 编译链路设计基线 | 编译规格不再是未决项，后续 Goal 可进入首个纵向切片实现 |
 | 2026-07-17 | active / golden sample added | 用户要求用首个 E2E 串出完整 CoreTrace 到 Playwright SKILL 示例 | EV-028、首个 E2E 完整示例 | 形成静态目标样例；动态实现和双用例回放仍待完成 |
 | 2026-07-18 | complete | 两次连续真实创建、编译、Replay A/B 与隐藏 Oracle 全部通过 | EV-029 | 首个阶段一纵向切片完成；后续能力不并入本 Feature |
+| 2026-07-19 | complete / patched | Windows local 默认配置的新版录制会话恢复 | EV-030 | F026.1 以中立 Local CDP 宿主和模式矩阵回归封堵复发 |
 
 ## Patch History
 
 | Patch | Date | Commit | Symptom | Root Cause | Protection | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| F026.1 | 2026-07-19 | pending | Windows 本地模式点击录制时，新版会话返回 503 | 新版 Provider 未按 `STORAGE_BACKEND=local` 分流，把 CDP 宿主错误解析为 `http://sandbox:8080` | 中立 Local CDP 宿主层、local/非 local 模式回归和真实本地冒烟验收 | design accepted / implementation pending |
+| F026.1 | 2026-07-19 | `b5ee3149`, `389c4697`, `e6dc0710`, `745cc262` | Windows 本地模式点击录制时，新版会话返回 503 | 新版 Provider 未按 `STORAGE_BACKEND=local` 分流，把 CDP 宿主错误解析为 `http://sandbox:8080` | 中立 Local CDP 宿主层、local/非 local 模式回归和真实本地冒烟验收（EV-030） | verified / complete |
 
 ## Recovery Snapshot
 
 - Read first: ADR-006，然后阅读本 Feature、首个阶段一 E2E 验收场景、业务变量绑定与录制态上下文设计基线、CoreTrace 到 SKILL 编译规格和首个 E2E Golden Sample。
 - Current capability state: 新 `backend/rpa_agent` 纵向链路已实现；默认宿主、Compiler、Runtime、录制 UI、eval fixture 和同一 SKILL 双 Replay 均有验证证据。
-- Known risks: scripted model 证明的是 Browser-use Agent/Tools 集成而非外部 LLM 语义质量；完整 DataAsset、分页循环及运行期自愈不在本 Feature；F026.1 正在补齐 `STORAGE_BACKEND=local` 的真实产品启动覆盖；eval-app 仍有 EV-029 记录的两个非阻断 P2。
-- Next safe action: 按 F026.1 设计以 TDD 修复本地 CDP 宿主分流并形成独立 Evidence；其他后续需求仍须新建业务验收增量，不应在 F026 上堆叠完整 DataAsset、阶段二或兼容层。
-- Recovery evidence: 先阅读 EV-029；原始 Live JSON 与生成四文件产物位于其 Artifacts 所列 `.tmp/task13-agent-live-evidence*` 目录。
+- Known risks: scripted model 证明的是 Browser-use Agent/Tools 集成而非外部 LLM 语义质量；完整 DataAsset、分页循环及运行期自愈不在本 Feature；eval-app 仍有 EV-029 记录的两个非阻断 P2；仓库既有 CoreTrace schema 锁定哈希不一致独立记录于 EV-030，未混入本修复。
+- Next safe action: F026.1 已关闭；其他后续需求仍须新建业务验收增量，不应在 F026 上堆叠完整 DataAsset、阶段二或兼容层。若修改宿主模式选择，必须同时运行 local/非 local provider 回归和 opt-in local browser smoke。
+- Recovery evidence: 先阅读 EV-029 与 EV-030；原始 Live JSON 与生成四文件产物位于 EV-029 Artifacts 所列 `.tmp/task13-agent-live-evidence*` 目录。
 
 ## Evidence
 
@@ -178,6 +182,7 @@ Complete。独立 `backend/rpa_agent` 已实现创建态双通道、Settlement�
 - EV-027 只证明 CoreTrace 到 SKILL 的设计规格已经确认并可恢复，不证明新 Compiler、Runtime 或生成 Skill 已经实现。
 - EV-028 只证明首个 E2E Golden Sample 的 Schema、基础语义、语法、来源摘要和硬编码扫描通过，不证明它已经可执行。
 - EV-029 证明新链路已从实际人工事件与 Browser-use Agent/Tools 形成 CoreTrace，并以同一编译产物完成双用例回放和后端 Oracle；它不扩展证明非目标能力。
+- EV-030 证明 Windows local 默认配置使用中立本地 CDP 宿主启动新版录制会话，并保留非 local Session Runtime 路径；它不证明容器 runtime 的真实部署状态。
 
 ## Next Step
 

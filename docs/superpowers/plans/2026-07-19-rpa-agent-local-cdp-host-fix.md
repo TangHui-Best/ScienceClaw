@@ -1,5 +1,7 @@
 # RPA Agent Local CDP Host Fix Implementation Plan
 
+**Status:** completed（2026-07-19）；实现与验证证据见 [EV-030](../../evidence/EV-030-rpa-agent-local-cdp-host-fix.md)。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 让 `STORAGE_BACKEND=local` 且 `RUNTIME_MODE` 缺省的 ScienceClaw 直接使用本地 Chromium/CDP 创建新版 RPA Agent 会话，不再访问 `http://sandbox:8080`。
