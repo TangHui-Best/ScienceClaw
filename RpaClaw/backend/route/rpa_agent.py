@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -58,6 +59,7 @@ from backend.user.dependencies import User, require_user
 
 _SESSION_ID = re.compile(r"^rca_[a-z0-9]{24}$")
 _SENSITIVE_KEY = re.compile(r"(?i)(?:secret|token|password|passwd|pwd|credential|api[_-]?key)")
+logger = logging.getLogger(__name__)
 
 BrowserProvider = Callable[[str, str], Awaitable[BrowserSessionPort]]
 AgentInstructionExecutor = Callable[
@@ -86,6 +88,12 @@ async def _unavailable_browser(_owner_id: str, _browser_ref: str) -> BrowserSess
     raise RuntimeError("browser_host_unavailable")
 
 
+async def _resolve_local_cdp_url(_browser_ref: str, _owner_id: str) -> str:
+    from backend.runtime.local_cdp import local_cdp_connector
+
+    return await local_cdp_connector.get_cdp_url()
+
+
 async def _scienceclaw_browser_provider(
     owner_id: str, browser_ref: str
 ) -> BrowserSessionPort:
@@ -105,6 +113,11 @@ async def _scienceclaw_browser_provider(
         owner_id=owner_id,
         browser_ref=browser_ref,
         preview_registry=browser_preview_registry,
+        resolve_cdp_url=(
+            _resolve_local_cdp_url
+            if settings.storage_backend.strip().lower() == "local"
+            else None
+        ),
     )
     page = runtime_lease.page
     context = getattr(page, "context", None)
@@ -452,7 +465,12 @@ def build_router(services: RpaAgentApiServices) -> APIRouter:
             port = await services.browser_provider(owner_id, body.browser_session_ref)
         except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
             raise
-        except BaseException:
+        except BaseException as exc:
+            logger.error(
+                "rpa_agent browser host unavailable storage_backend=%s error_type=%s",
+                settings.storage_backend,
+                type(exc).__name__,
+            )
             raise _error(503, "rpa_agent.browser_host_unavailable") from None
         creation = SkillCreationSession(
             session_id="creation_" + hashlib.sha256(os.urandom(32)).hexdigest()[:16],

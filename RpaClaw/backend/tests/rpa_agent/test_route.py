@@ -14,6 +14,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+from backend.config import settings
 from backend.rpa_agent.browser_use import (
     NonSopActionClassification,
     RecordingRoundReport,
@@ -495,6 +496,35 @@ def test_agent_is_explicitly_unavailable_without_injected_executor(tmp_path: Pat
         )
         assert response.status_code == 503
         assert response.json()["detail"]["code"] == "rpa_agent.agent_unavailable"
+
+
+def test_start_logs_browser_host_failure_without_exception_details(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    secret = "do-not-log-this-runtime-detail"
+
+    async def unavailable(_owner_id: str, _browser_ref: str):
+        raise RuntimeError(secret)
+
+    services = RpaAgentApiServices(
+        artifact_root=tmp_path / "artifacts",
+        browser_provider=unavailable,
+    )
+    monkeypatch.setattr(settings, "storage_backend", "local")
+    caplog.set_level("ERROR", logger="backend.route.rpa_agent")
+
+    with _client(services) as client:
+        response = client.post(
+            "/api/v1/rpa-agent/sessions",
+            json={"browser_session_ref": "7browser"},
+        )
+
+    assert response.status_code == 503
+    assert "storage_backend=local" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+    assert secret not in caplog.text
 
 
 def test_start_accepts_an_opaque_host_ref_that_begins_with_a_digit(
@@ -1896,6 +1926,110 @@ def test_default_provider_resolves_popup_main_and_named_iframe_without_guessing(
         await services.store.close_all()
 
     asyncio.run(scenario())
+
+
+def test_default_provider_uses_neutral_local_cdp_resolver_in_local_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend import browser_preview
+    from backend.rpa_agent import host
+    from backend.rpa_agent.host import scienceclaw_browser
+    from backend.runtime import local_cdp, ownership
+
+    captured: dict[str, object] = {}
+
+    async def owned(_browser_ref: str, _owner_id: str) -> bool:
+        return True
+
+    class Page:
+        context = object()
+        main_frame = object()
+
+    class Lease:
+        page = Page()
+        cdp_url = "ws://127.0.0.1:19222/devtools/browser/local"
+
+        async def aclose(self) -> None:
+            return None
+
+    async def acquire(**kwargs):
+        captured.update(kwargs)
+        return Lease()
+
+    class Connector:
+        async def get_cdp_url(self) -> str:
+            captured["connector_called"] = True
+            return Lease.cdp_url
+
+    monkeypatch.setattr(settings, "storage_backend", "local")
+    monkeypatch.setattr(ownership, "user_owns_runtime_session", owned)
+    monkeypatch.setattr(local_cdp, "local_cdp_connector", Connector())
+    monkeypatch.setattr(
+        browser_preview.browser_preview_registry,
+        "get_active_page",
+        lambda _browser_ref: Lease.page,
+    )
+    monkeypatch.setattr(
+        scienceclaw_browser,
+        "acquire_browser_runtime_lease",
+        acquire,
+    )
+    monkeypatch.setattr(host, "PlaywrightBrowserSessionPort", lambda **kwargs: kwargs)
+
+    async def scenario() -> None:
+        await _scienceclaw_browser_provider("owner-1", "7browser")
+        resolver = captured.get("resolve_cdp_url")
+        assert callable(resolver)
+        assert await resolver("7browser", "owner-1") == Lease.cdp_url
+
+    asyncio.run(scenario())
+    assert captured["connector_called"] is True
+
+
+def test_default_provider_keeps_session_runtime_path_outside_local_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend import browser_preview
+    from backend.rpa_agent import host
+    from backend.rpa_agent.host import scienceclaw_browser
+    from backend.runtime import ownership
+
+    captured: dict[str, object] = {}
+
+    async def owned(_browser_ref: str, _owner_id: str) -> bool:
+        return True
+
+    class Page:
+        context = object()
+        main_frame = object()
+
+    class Lease:
+        page = Page()
+        cdp_url = "ws://runtime.test/devtools/browser/remote"
+
+        async def aclose(self) -> None:
+            return None
+
+    async def acquire(**kwargs):
+        captured.update(kwargs)
+        return Lease()
+
+    monkeypatch.setattr(settings, "storage_backend", "mongo")
+    monkeypatch.setattr(ownership, "user_owns_runtime_session", owned)
+    monkeypatch.setattr(
+        browser_preview.browser_preview_registry,
+        "get_active_page",
+        lambda _browser_ref: Lease.page,
+    )
+    monkeypatch.setattr(
+        scienceclaw_browser,
+        "acquire_browser_runtime_lease",
+        acquire,
+    )
+    monkeypatch.setattr(host, "PlaywrightBrowserSessionPort", lambda **kwargs: kwargs)
+
+    asyncio.run(_scienceclaw_browser_provider("owner-1", "7browser"))
+    assert captured.get("resolve_cdp_url") is None
 
 
 def test_agent_cancellation_preserves_identity_and_restores_human_control(tmp_path: Path) -> None:
