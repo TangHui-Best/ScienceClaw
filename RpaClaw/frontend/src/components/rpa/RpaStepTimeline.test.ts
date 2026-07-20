@@ -29,8 +29,12 @@ describe('RpaStepTimeline intent-first view model', () => {
     expect(root.textContent).toContain('可确定回放');
     expect(root.textContent).toContain('Playwright');
     expect(root.textContent).toContain('运行时 AI');
-    expect(root.textContent).toContain('打开项目详情');
     expect(root.querySelectorAll('article')).toHaveLength(2);
+    expect(root.textContent).not.toContain('打开项目详情');
+    root.querySelectorAll<HTMLButtonElement>('article > button')[1].click();
+    await nextTick();
+    expect(root.textContent).toContain('打开项目详情');
+    expect(root.querySelectorAll('[data-testid="timeline-details"]')).toHaveLength(1);
     app.unmount();
   });
 });

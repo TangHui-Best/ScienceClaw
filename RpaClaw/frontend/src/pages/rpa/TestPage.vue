@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
-import { saveRpaAgentSkill, testRpaAgentSkill } from '@/api/rpaAgent';
+import { rerecordRpaAgentSession, saveRpaAgentSkill, testRpaAgentSkill } from '@/api/rpaAgent';
 import SandboxPreview from '@/components/SandboxPreview.vue';
 import RpaFlowGuide from '@/components/rpa/RpaFlowGuide.vue';
 import RpaStepTimeline from '@/components/rpa/RpaStepTimeline.vue';
@@ -10,6 +10,7 @@ import { loadCreationSnapshot, saveCreationSnapshot } from '@/utils/rpaAgentSkil
 import type { RpaAgentCreationStepViewModel } from '@/utils/rpaAgentCreationProjection';
 
 const route = useRoute();
+const router = useRouter();
 const sessionId = computed(() => String(route.query.sessionId || ''));
 const { t } = useI18n();
 const snapshot = loadCreationSnapshot(sessionId.value);
@@ -114,6 +115,21 @@ const save = async () => {
     saving.value = false;
   }
 };
+
+const rerecord = async () => {
+  if (!sessionId.value || running.value || saving.value) return;
+  try {
+    const response = await rerecordRpaAgentSession(sessionId.value);
+    await router.push({ path: '/rpa/recorder', query: {
+      sessionId: response.session_id, browserSessionRef: response.browser_session_ref,
+      pageRef: response.page_ref, generation: response.generation,
+    } });
+  } catch {
+    error.value = '重新录制启动失败，当前测试结果未被修改。';
+  }
+};
+
+const primaryAction = () => passed.value ? save() : run();
 </script>
 
 <template>
@@ -124,6 +140,10 @@ const save = async () => {
       :recorded-step-count="snapshot?.recordingSteps?.length || 0"
       :test-state="running ? 'running' : passed ? 'success' : result || error ? 'failed' : 'idle'"
       :skill-name="snapshot?.configurationDraft?.skill.name || ''"
+      :primary-label="passed ? (savedRef ? '已保存' : '保存 SKILL') : '开始回放'"
+      :primary-disabled="running || saving || Boolean(savedRef)"
+      @go-record="rerecord"
+      @primary-action="primaryAction"
     />
     <p v-if="!snapshot?.artifactHash" role="alert" class="m-6 rounded-xl bg-rose-50 p-4 text-rose-700">未找到已编译产物。</p>
     <div v-else class="flex min-h-0 flex-1">

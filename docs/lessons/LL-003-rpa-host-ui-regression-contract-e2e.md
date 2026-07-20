@@ -10,7 +10,7 @@ applies_to:
   - RpaClaw/frontend/src/components/rpa
   - RpaClaw/backend/rpa_agent/host
 created: 2026-07-19
-updated: 2026-07-19
+updated: 2026-07-20
 ---
 
 # LL-003：RPA 宿主 UI 被最小联调页替换时必须用产品契约与 Live E2E 保护
@@ -35,6 +35,8 @@ Harness 主要保护了新领域模型、结算、Compiler 和回放事实，没
 
 - `RecorderPage.test.ts` 必须断言流程导航、左/中/右工作区、模型选择、对话结果和停止期间投影竞态。
 - `ConfigurePage.test.ts` 必须断言原双栏配置工作流，并继续使用新版精确 binding location。
+- `RpaStepTimeline.test.ts` 必须断言默认业务摘要、点击展开、执行/回放/编译三类独立状态和观察证据；“观察数组存在”但不可展开不算交互恢复。
+- Test 页面必须同时保护左侧逐步结果、中部独立浏览器、右侧输入/回放/保存，以及顶部主操作从回放到保存的状态转换。
 - `test_stop_draft_is_derived_from_exact_timeline_binding_locations` 必须断言停止响应包含最终 `creation_steps`。
 - `test_default_host_services.py` 必须在生成包加载边界保护官方 `backend.main` 启动方式和运行时类型身份。
 - 宿主租约必须提供并由录制入口启用 `isolated_context`，跨会话测试必须断言 BrowserContext/Page 身份不同且旧 Cookie/Storage 不可见；不得以新 session id 代替资源隔离证明。
@@ -44,7 +46,7 @@ Harness 主要保护了新领域模型、结算、Compiler 和回放事实，没
 
 ## Source
 
-来自 [F026.3/F026.4](../features/F026-rpa-agent-scienceclaw-host-rebuild.md) 的用户回归反馈、[EV-031](../evidence/EV-031-rpa-agent-scienceclaw-ui-live-e2e.md) 的 UI/真实模型闭环，以及 [EV-032](../evidence/EV-032-rpa-recording-session-browser-isolation.md) 的会话隔离修复与真实连续会话记录。
+来自 [F026.3/F026.4](../features/F026-rpa-agent-scienceclaw-host-rebuild.md) 的用户回归反馈、[EV-031](../evidence/EV-031-rpa-agent-scienceclaw-ui-live-e2e.md) 的 UI/真实模型闭环、[EV-032](../evidence/EV-032-rpa-recording-session-browser-isolation.md) 的会话隔离修复，以及 [EV-036](../evidence/EV-036-f028-upstream-ui-interaction-recovery.md) 对同类回归再次发生后的 donor 交互契约补强。
 
 ## Principle
 

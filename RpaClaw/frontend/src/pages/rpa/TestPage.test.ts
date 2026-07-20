@@ -4,24 +4,35 @@ import { createApp, nextTick } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { saveCreationSnapshot } from '@/utils/rpaAgentSkillConfiguration';
 
-const testRun = vi.fn(); const save = vi.fn(); const compile = vi.fn();
-vi.mock('vue-router', () => ({ useRoute: () => ({ query: { sessionId: 'rca_abcdefghijklmnopqrstuvwx' } }), useRouter: () => ({ push: vi.fn() }) }));
+const testRun = vi.fn(); const save = vi.fn(); const compile = vi.fn(); const rerecord = vi.fn(); const push = vi.fn();
+vi.mock('vue-router', () => ({ useRoute: () => ({ query: { sessionId: 'rca_abcdefghijklmnopqrstuvwx' } }), useRouter: () => ({ push }) }));
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (value: string) => value }) }));
 vi.mock('@/api/rpaAgent', () => ({
   testRpaAgentSkill: (...args: unknown[]) => testRun(...args),
   saveRpaAgentSkill: (...args: unknown[]) => save(...args),
   compileRpaAgentSkill: (...args: unknown[]) => compile(...args),
+  rerecordRpaAgentSession: (...args: unknown[]) => rerecord(...args),
 }));
 vi.mock('@/components/SandboxPreview.vue', () => ({ default: { props: ['sessionId'], template: '<div data-testid="test-browser">{{ sessionId }}</div>' } }));
 const flush = async () => { for (let index = 0; index < 6; index += 1) await Promise.resolve(); await nextTick(); };
 
 describe('TestPage compiled artifact replay', () => {
   beforeEach(() => {
-    sessionStorage.clear(); document.body.innerHTML = ''; testRun.mockReset(); save.mockReset(); compile.mockReset();
+    sessionStorage.clear(); document.body.innerHTML = ''; testRun.mockReset(); save.mockReset(); compile.mockReset(); rerecord.mockReset(); push.mockReset();
     saveCreationSnapshot({
       sessionId: 'rca_abcdefghijklmnopqrstuvwx', browserSessionRef: 'browser-host-1', artifactHash: 'artifact-hash', artifactFiles: ['SKILL.md', 'skill.manifest.json', 'skill.py', 'browser_segment.py'],
       configurationDraft: { schema_version: 'skill-configuration-draft/v0.1', skill: { name: '采购验收', description: '测试' }, inputs: [], secrets: [{ ref: 'erp_password', title: 'ERP 密码', required: true }], asset_inputs: [{ ref: 'source_file', title: '源文件', required: true }, { ref: 'optional_file', title: '可选文件', required: false }], outputs: [], asset_outputs: [], binding_promotions: [] },
     });
+  });
+
+  it('starts an isolated rerecord session from the restored flow action', async () => {
+    rerecord.mockResolvedValue({ session_id: 'rca_newabcdefghijklmnopqrstu', state: 'recording', browser_session_ref: 'bhs_new', page_ref: 'main', generation: 'gen-new' });
+    const { default: Page } = await import('./TestPage.vue'); const root = document.createElement('div'); document.body.appendChild(root); const app = createApp(Page); app.mount(root); await flush();
+    const button = [...root.querySelectorAll<HTMLButtonElement>('button')].find((item) => item.textContent?.includes('重新录制'))!;
+    button.click(); await flush();
+    expect(rerecord).toHaveBeenCalledWith('rca_abcdefghijklmnopqrstuvwx');
+    expect(push).toHaveBeenCalledWith({ path: '/rpa/recorder', query: { sessionId: 'rca_newabcdefghijklmnopqrstu', browserSessionRef: 'bhs_new', pageRef: 'main', generation: 'gen-new' } });
+    app.unmount();
   });
 
   it('never recompiles, shows exact failed step and prevents save after a failed run', async () => {

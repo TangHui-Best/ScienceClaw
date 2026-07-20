@@ -65,7 +65,7 @@ updated: 2026-07-20
 
 ## Current Status
 
-In Progress / implementation pending。设计边界已由用户确认并沉淀为 ADR-007；自包含权威实施规格已完成并通过独立冷启动可实施性复核；正式开发分支 `codex/rpa-agent-intent-first-dual-mode` 已从干净基线 `b8c3aedc` 建立。产品代码、Schema、API、UI 和运行 Harness 尚未按新方案实施，不能声称能力已恢复。
+Active / UI interaction contract recovered。F028 核心实现与自动化已落地；2026-07-20 的 F028.3 已把 Recorder、Configure、Test 从“仅保留粗粒度栏位”的最小工作台恢复为 upstream ScienceClaw 的交互骨架，同时保留 Intent-first 时间线、双模式编译、结构化输出和独立 BrowserHostSession。前端全量 224 项测试和生产构建通过，真实本地 UI 完成 Recorder → Configure → Test → 独立回放；完整真实 LLM 场景仍受 EV-035 记录的外部额度限制，Feature 因此保持 active。
 
 ## Links
 
@@ -73,6 +73,7 @@ In Progress / implementation pending。设计边界已由用户确认并沉淀�
 
 - [EV-034 F028 实施规格冷启动可实施性审阅](../evidence/EV-034-f028-implementation-spec-cold-start-review.md)
 - [EV-033 F027 录制结算与 Live UI 验证](../evidence/EV-033-rpa-recording-finalization-live-ui.md)
+- [EV-036 F028 upstream UI 交互恢复验证](../evidence/EV-036-f028-upstream-ui-interaction-recovery.md)
 
 ### Decisions / ADRs
 
@@ -124,6 +125,7 @@ In Progress / implementation pending。设计边界已由用户确认并沉淀�
 | 全局变量连续性 | 前序输出可被后续 AI 使用并继续写回 | EV-035；双步骤结构化输出回归 | pass |
 | 设计边界 | ADR 覆盖原因、数据流、原则、拒绝方案和修改检查 | ADR-007 | pass |
 | 实施可执行性 | 零背景工程师/Agent 能从单一规格得到模块、数据、API、迁移、回滚与验收契约 | 权威实施规格；EV-034 | pass |
+| upstream UI 交互 | Recorder 三栏、可展开步骤、对话助手；Configure 步骤复核与渐进配置；Test 浏览器/结果/保存 | EV-036；前端全量回归 | pass |
 
 ## State Timeline
 
@@ -133,6 +135,7 @@ In Progress / implementation pending。设计边界已由用户确认并沉淀�
 | 2026-07-20 | active / implementation branch ready | 当前已提交历史推送后，保存 pre-F028 源码/测试/文档快照，并从 `b8c3aedc` 创建不含旧工作区产品改动的正式分支 | `backup/rpa-agent-v1-coretrace-pre-f028-20260720@d7a01010`；`codex/rpa-agent-intent-first-dual-mode` | 新分支仅携带产品愿景和架构知识，等待影响面审计与实施计划 |
 | 2026-07-20 | active / implementation spec reviewed | 面向零背景 Coding Agent 补齐技术/数据架构、API/并发、会话所有权、迁移与验收；独立冷启动审阅发现并关闭 5 个 P0 | 权威实施规格；EV-034 | 规格可实施，不代表产品代码已实现 |
 | 2026-07-20 | active / implementation verified, live UI blocked | 核心实现与自动化完成；全新真实 UI 重录遭模型账户余额 403 | EV-035 | 补充额度后必须从新会话重跑附件 1–15，禁止复用旧结果 |
+| 2026-07-20 | active / upstream UI interaction recovered | 用户复核发现 F028 页面与 upstream 交互差异过大；按 donor 选择性移植交互骨架 | EV-036 | 不回滚 F028 数据模型，不带回旧 Trace/Runtime |
 
 ## Patch History
 
@@ -140,10 +143,16 @@ In Progress / implementation pending。设计边界已由用户确认并沉淀�
 | --- | --- | --- | --- | --- | --- | --- |
 | F028.1 | 2026-07-20 | pending | 实现与 Live UI 验收过程中暴露双模式分类、生产导入、运行提示、客户端超时和重跑状态缺口 | 原规格边界未被同一端到端 Harness 覆盖 | 自动化覆盖分类、导入、提示、超时与重跑；EV-035 保留真实额度阻塞和恢复步骤 | implementation verified; Live UI blocked |
 | F028.2 | 2026-07-20 | pending | 真实 glm-4.7 UI 续跑暴露 OpenAI 兼容响应仅返回 `reasoning_content`，且 TestPage 未展示结构化输出 | 结构化响应适配只读取 `message.content`；UI 只显示运行状态和失败信息 | 严格 schema 前增加 `content`/`reasoning_content` 选择；测试完成后直接展示 `run_result.outputs`，不把整份结果持久化到 sessionStorage；EV-035 记录真实成功轨迹与最新欠费阻断 | automated verified; latest Live UI blocked by Arrearage |
+| F028.3 | 2026-07-20 | pending | Recorder/Configure/Test 虽有栏位与新 API，但交互密度、步骤展开、对话反馈、渐进配置和流程主操作与 upstream 明显不一致 | Harness 只断言三栏 DOM 和 API 调用，没有把 donor 信息架构与关键状态转换写成可执行契约 | 选择性恢复 upstream 交互骨架；时间线新增展开证据与重新录制回归；全量 224 项前端测试、构建和真实 Recorder → Configure → Test → 独立回放验证 | verified；完整 LLM E2E 仍由 EV-035 阻塞 |
+
+## Patch Churn Review
+
+F028.1–F028.3 的连续补丁不是同一实现点反复试错：F028.1 关闭领域链路与运行 Harness，F028.2 关闭真实模型兼容与结构化输出，F028.3 关闭宿主 UI 契约缺口。重复暴露的共同原因是验收曾偏重 API/领域状态、缺少 donor 交互矩阵。新增保护已落到页面交互测试、可展开时间线断言和真实三页本地浏览器检查；后续不得再以“栏位存在”代替产品兼容性。
 
 ## Evidence
 
 - [EV-035 F028 实现验证与真实模型额度阻塞](../evidence/EV-035-f028-implementation-and-live-ui-blocker.md)
+- [EV-036 F028 upstream UI 交互恢复验证](../evidence/EV-036-f028-upstream-ui-interaction-recovery.md)
 
 EV-034 支撑设计可实施性；EV-035 支撑核心实现、自动化和真实后台回放，但明确不支撑最终 Live UI 通过声明。当前唯一验收缺口是外部模型账户余额不足导致全新录制 403。
 
@@ -151,12 +160,12 @@ EV-034 支撑设计可实施性；EV-035 支撑核心实现、自动化和真实
 
 - Implementation source of truth: `docs/superpowers/specs/2026-07-20-rpa-agent-intent-first-dual-mode-implementation-design.md`。新 Agent 应先阅读该文档，再阅读 ADR-007；不得仅依据 F028 摘要或当前代码推断方案。
 - Read first: ADR-007，然后阅读本 Feature、F027、ADR-006、旧 Trace-first Recording Design。
-- Development branch: `codex/rpa-agent-intent-first-dual-mode`；独立 worktree 为 `E:\RPA-Agent\.worktrees\rpa-agent-intent-first-dual-mode`。
+- Development branch: `codex/rpa-agent-intent-first-dual-mode`；用户指定的当前工作目录为 `E:\RPA-Agent\ScienceClaw`，不再使用旧 worktree。
 - Recovery branch: `backup/rpa-agent-v1-coretrace-pre-f028-20260720@d7a01010` 保存 pre-F028 源码、测试、UI 修复和已否决实验；不得整分支合并回正式分支。
 - Current capability state: F028 核心实现与自动化已落地；Feature 保持 `active`，因为附件要求的全新 Live UI E2E 尚未通过。
 - Known risks: 外部模型余额 `$0.025578` 低于关闭视觉后的单次最小请求 `$0.037968`；后台历史成功回放不能替代 UI 验收。
 - Next safe action: 补充足够覆盖至少四次真实 Agent 调用的额度，重启隔离服务，从全新 session/browser/page/generation 严格重走附件 1–15，并独立核对最终仓库和 Star。
-- Next safe action: 按权威实施规格“增量 0：契约与 Harness”开工，先建立数据 contract tests、Browser-use 构造参数守卫和迁移清单，再改生产热路径。
+- Next safe action: 保持 EV-036 的 donor 交互矩阵和自动化契约；额度恢复后按 EV-035 从全新会话补跑完整真实 LLM E2E。
 - Unblock condition: 不需要额外产品方向确认；进入实现前只需把 ADR-007 的契约转换为可验证增量和回滚点。
 
 ## Next Step
