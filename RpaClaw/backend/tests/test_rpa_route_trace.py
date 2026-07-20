@@ -871,7 +871,37 @@ async def test_chat_agent_done_reports_run_trace_count_not_session_total(monkeyp
         assert done_payloads[-1]["trace_count"] == 1
         assert done_payloads[-1]["session_trace_count"] == 4
         assert "total_steps" not in done_payloads[-1]
+        assert session.paused is False
+        assert session.id not in manager._recording_pause_tokens
     finally:
+        manager.sessions.pop(session.id, None)
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_cancellation_restores_recording_pause_owner(monkeypatch):
+    manager = ROUTE_MODULE.rpa_manager
+    session = RPASession(id="route-chat-cancel", user_id="u1", sandbox_session_id="sandbox")
+    manager.sessions[session.id] = session
+    page = type("Page", (), {"url": "https://example.test", "title": lambda self: None})()
+    monkeypatch.setattr(manager, "get_page", lambda target_session_id: page if target_session_id == session.id else None)
+
+    try:
+        response = await ROUTE_MODULE.chat_with_assistant(
+            session.id,
+            ROUTE_MODULE.ChatRequest(message="Open the highest-risk order"),
+            type("User", (), {"id": "u1"})(),
+        )
+        iterator = response.body_iterator
+
+        await iterator.__anext__()
+        assert session.paused is True
+        assert session.id in manager._recording_pause_tokens
+
+        await iterator.aclose()
+        assert session.paused is False
+        assert session.id not in manager._recording_pause_tokens
+    finally:
+        manager._recording_pause_tokens.pop(session.id, None)
         manager.sessions.pop(session.id, None)
 
 

@@ -877,7 +877,7 @@ const activateTab = async (tabId: string) => {
 };
 
 const submitAddressBar = async () => {
-  if (!sessionId.value || isNavigating.value) return;
+  if (!sessionId.value || isNavigating.value || agentRunning.value) return;
   const rawUrl = addressInput.value.trim();
   if (!rawUrl) {
     syncAddressBar(true);
@@ -1178,6 +1178,10 @@ function handleRegionSelectionDocumentMouse(e: MouseEvent) {
 }
 
 const sendInputEvent = (e: Event) => {
+  if (agentRunning.value) {
+    e.preventDefault();
+    return;
+  }
   if (selectingRegion.value) {
     if (e instanceof MouseEvent && !(e instanceof WheelEvent)) {
       handleRegionSelectionMouse(e);
@@ -1275,7 +1279,7 @@ const sendInputEvent = (e: Event) => {
 };
 
 const handlePaste = (e: ClipboardEvent) => {
-  if (selectingRegion.value) return;
+  if (selectingRegion.value || agentRunning.value) return;
   if (!screencastWs || screencastWs.readyState !== WebSocket.OPEN) return;
   const text = e.clipboardData?.getData('text');
   if (!text) return;
@@ -1593,7 +1597,7 @@ const sendMessage = async () => {
               <input
                 v-model="addressInput"
                 class="flex-1 bg-transparent text-[10px] text-gray-700 dark:text-gray-300 ml-2 outline-none placeholder:text-gray-400"
-                :disabled="!sessionId || isNavigating"
+                :disabled="!sessionId || isNavigating || agentRunning"
                 placeholder="输入网址并按回车跳转"
                 type="text"
                 spellcheck="false"

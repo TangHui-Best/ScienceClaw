@@ -561,10 +561,8 @@ class TraceSkillCompiler:
                 "        model_config=_runtime_ai_model_config(kwargs),",
                 "        cdp_url_resolver=lambda _page, _debug_context: cdp_url,",
                 "    )",
-                "    # Browser-use replay should be driven by the current page and current step.",
-                "    # Prior extracted outputs are noisy and can destabilize short UI actions.",
                 "    debug_context = {'cdp_target_id': cdp_target_id} if cdp_target_id else None",
-                "    outcome = await agent.run(page=page, instruction=instruction, runtime_results={}, debug_context=debug_context)",
+                "    outcome = await agent.run(page=page, instruction=instruction, runtime_results=results, debug_context=debug_context)",
                 "    if not outcome.success:",
                 "        detail = '; '.join(str(item.message) for item in outcome.diagnostics) or outcome.message",
                 "        raise RuntimeError(f'browser-use runtime instruction failed: {detail}')",
@@ -1218,9 +1216,6 @@ class TraceSkillCompiler:
         trace: RPAAcceptedTrace,
         used_output_keys: Dict[str, int],
     ) -> List[str]:
-        replay_lines = self._render_browser_use_action_replay_trace(index, trace, used_output_keys)
-        if replay_lines:
-            return replay_lines
         key = self._allocate_output_key(trace, trace.output_key or f"browser_use_result_{index}", used_output_keys)
         instruction = str(trace.user_instruction or trace.description or "").strip()
         return [
@@ -2311,8 +2306,8 @@ def _css_attr_selector(name: str, value: str) -> str:
 def trace_requires_runtime_ai_replay(trace: RPAAcceptedTrace) -> bool:
     if trace.trace_type != RPATraceType.AI_OPERATION:
         return False
-    if _trace_uses_browser_use(trace) and _browser_use_trace_has_replayable_actions(trace):
-        return False
+    if _trace_uses_browser_use(trace):
+        return True
     if _has_selected_region_text_extract(trace):
         return False
     if _snapshot_extract_is_selected_text_region_evidence(trace):

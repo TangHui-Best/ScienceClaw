@@ -175,6 +175,7 @@ class RPASessionManager:
         self._manual_harness_checkpoint_candidates: Dict[str, Dict[str, Dict[str, Any]]] = {}
         self._harness_page_baselines: Dict[str, Dict[str, HarnessCapturedPageState]] = {}
         self._suppressed_navigation_events: Dict[str, Dict[str, str]] = {}
+        self._recording_pause_tokens: Dict[str, str] = {}
 
     def touch_session(self, session_id: str) -> None:
         session = self.sessions.get(session_id)
@@ -214,6 +215,11 @@ class RPASessionManager:
             await asyncio.wait_for(self.wait_for_pending_events(session_id), timeout=2.0)
         except Exception as e:
             logger.warning(f"[RPA] Error waiting for pending events during cleanup: {e}")
+
+        self._recording_pause_tokens.pop(session_id, None)
+        session = self.sessions.get(session_id)
+        if session:
+            session.paused = False
 
         context = self._contexts.pop(session_id, None)
         self.detach_context(session_id)
@@ -1616,15 +1622,27 @@ class RPASessionManager:
             raise ValueError("Diagnostic did not resolve to trace")
         return trace
 
-    def pause_recording(self, session_id: str):
-        """Pause event recording (used during AI execution)."""
-        if session_id in self.sessions:
-            self.sessions[session_id].paused = True
+    def pause_recording(self, session_id: str) -> str:
+        """Pause manual trace ingestion and return the owning execution token."""
+        session = self.sessions.get(session_id)
+        if session is None:
+            raise ValueError(f"Session {session_id} not found")
+        if session_id in self._recording_pause_tokens:
+            raise RuntimeError("A browser-use recording command is already running for this session")
+        token = uuid.uuid4().hex
+        self._recording_pause_tokens[session_id] = token
+        session.paused = True
+        return token
 
-    def resume_recording(self, session_id: str):
-        """Resume event recording."""
-        if session_id in self.sessions:
-            self.sessions[session_id].paused = False
+    def resume_recording(self, session_id: str, token: str) -> bool:
+        """Resume trace ingestion only for the execution that acquired the pause."""
+        if not token or self._recording_pause_tokens.get(session_id) != token:
+            return False
+        self._recording_pause_tokens.pop(session_id, None)
+        session = self.sessions.get(session_id)
+        if session is not None:
+            session.paused = False
+        return True
 
     def get_page(self, session_id: str) -> Optional[Page]:
         active_page = self.get_active_page(session_id)

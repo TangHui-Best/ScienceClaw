@@ -3058,13 +3058,13 @@ def test_browser_use_runtime_trace_compiles_to_browser_use_executor():
     assert "BrowserUseRecordingOperator" in prelude
     assert "_execute_browser_use_instruction" in prelude
     assert "_execute_browser_use_instruction(current_page, _results, kwargs" in body
-    assert "runtime_results={}" in prelude
-    assert "runtime_results=results" not in prelude
+    assert "runtime_results=results" in prelude
+    assert "runtime_results={}" not in prelude
     assert trace_requires_runtime_ai_replay(trace) is True
     assert "page.locator('a.project').nth(0).click()" not in body
 
 
-def test_browser_use_trace_with_recorded_action_evidence_replays_without_llm():
+def test_browser_use_trace_with_recorded_action_evidence_still_compiles_original_instruction():
     trace = RPAAcceptedTrace(
         trace_type=RPATraceType.AI_OPERATION,
         source="browser_use",
@@ -3106,14 +3106,44 @@ def test_browser_use_trace_with_recorded_action_evidence_replays_without_llm():
     prelude = _execute_prelude(script)
     body = _execute_body(script)
 
-    assert "_browser_use_first_locator" in prelude
-    assert "_execute_browser_use_instruction(" not in body
-    assert "[id=\"open-modal\"]" in body
-    assert "[id=\"approval-comment\"]" in body
-    assert "await _loc.fill('agree')" in body
-    assert "[id=\"approve-button\"]" in body
-    assert "browser-use recorded action replay" in body
-    assert trace_requires_runtime_ai_replay(trace) is False
+    assert "_execute_browser_use_instruction(" in body
+    assert repr(trace.user_instruction) in body
+    assert "_browser_use_first_locator" not in prelude
+    assert "[id=\"open-modal\"]" not in body
+    assert "await _loc.fill('agree')" not in body
+    assert "browser-use recorded action replay" not in body
+    assert trace_requires_runtime_ai_replay(trace) is True
+
+
+def test_manual_browser_use_manual_traces_keep_recorded_order():
+    traces = [
+        RPAAcceptedTrace(
+            trace_id="manual-before",
+            trace_type=RPATraceType.NAVIGATION,
+            source="manual",
+            after_page=RPAPageState(url="https://example.test/before"),
+        ),
+        RPAAcceptedTrace(
+            trace_id="browser-use-middle",
+            trace_type=RPATraceType.AI_OPERATION,
+            source="browser_use",
+            user_instruction="Open the highest-risk order",
+            description="Open the highest-risk order",
+            signals={"browser_use": {"actions": [{"click": {"index": 7}}]}},
+            ai_execution=RPAAIExecution(language="browser_use", code=""),
+        ),
+        RPAAcceptedTrace(
+            trace_id="manual-after",
+            trace_type=RPATraceType.NAVIGATION,
+            source="manual",
+            after_page=RPAPageState(url="https://example.test/after"),
+        ),
+    ]
+
+    body = _execute_body(TraceSkillCompiler().generate_script(traces, is_local=False))
+
+    assert body.index("https://example.test/before") < body.index("Open the highest-risk order")
+    assert body.index("Open the highest-risk order") < body.index("https://example.test/after")
 
 
 def test_runtime_ai_preserve_signal_with_table_region_requires_runtime_context():

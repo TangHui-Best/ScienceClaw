@@ -198,6 +198,22 @@ class RPASessionManagerTabTests(unittest.IsolatedAsyncioTestCase):
         )
         self.manager.sessions[self.session.id] = self.session
 
+    async def test_recording_pause_token_rejects_overlap_and_only_owner_can_resume(self):
+        token = self.manager.pause_recording(self.session.id)
+
+        self.assertTrue(token)
+        self.assertTrue(self.session.paused)
+        await self.manager._handle_event(self.session.id, {"action": "click"})
+        self.assertEqual(self.session.steps, [])
+        self.assertEqual(self.session.traces, [])
+        with self.assertRaisesRegex(RuntimeError, "already running"):
+            self.manager.pause_recording(self.session.id)
+
+        self.assertFalse(self.manager.resume_recording(self.session.id, "not-the-owner"))
+        self.assertTrue(self.session.paused)
+        self.assertTrue(self.manager.resume_recording(self.session.id, token))
+        self.assertFalse(self.session.paused)
+
     async def test_session_stores_traces_and_runtime_results(self):
         trace = TRACE_MODELS_MODULE.RPAAcceptedTrace(
             trace_id="trace-1",

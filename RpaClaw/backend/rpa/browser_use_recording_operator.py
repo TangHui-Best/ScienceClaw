@@ -210,30 +210,34 @@ async def _run_browser_use_agent(
         temperature=0,
         max_completion_tokens=int(os.environ.get("BROWSER_USE_MAX_COMPLETION_TOKENS", "4096")),
     )
-    session = BrowserSession(cdp_url=cdp_url, keep_alive=False)
-    _disable_browser_use_screenshots_if_configured(session)
-    focus_diagnostics = await _focus_browser_use_target(
-        session,
-        target_id=cdp_target_id,
-        expected_url=current_url,
-    )
-    task = _build_browser_use_task(instruction, runtime_results, region_context)
-    agent = Agent(
-        task=task,
-        llm=llm,
-        browser_session=session,
-        available_file_paths=_available_file_paths(),
-        initial_actions=_initial_browser_use_actions(current_url),
-        max_actions_per_step=int(os.environ.get("BROWSER_USE_MAX_ACTIONS_PER_STEP", "5")),
-        use_vision=os.environ.get("BROWSER_USE_USE_VISION", "false").strip().lower() == "true",
-    )
-    _ensure_browser_use_agent_timing(agent)
-    history = await agent.run(max_steps=max_steps)
+    session = BrowserSession(cdp_url=cdp_url, keep_alive=True)
     try:
-        setattr(history, "_scienceclaw_focus_diagnostics", focus_diagnostics)
-    except Exception:
-        pass
-    return history
+        _disable_browser_use_screenshots_if_configured(session)
+        focus_diagnostics = await _focus_browser_use_target(
+            session,
+            target_id=cdp_target_id,
+            expected_url=current_url,
+        )
+        task = _build_browser_use_task(instruction, runtime_results, region_context)
+        agent = Agent(
+            task=task,
+            llm=llm,
+            browser_session=session,
+            available_file_paths=_available_file_paths(),
+            use_vision=os.environ.get("BROWSER_USE_USE_VISION", "false").strip().lower() == "true",
+        )
+        _ensure_browser_use_agent_timing(agent)
+        history = await agent.run(max_steps=max_steps)
+        try:
+            setattr(history, "_scienceclaw_focus_diagnostics", focus_diagnostics)
+        except Exception:
+            pass
+        return history
+    finally:
+        try:
+            await session.stop()
+        except Exception as exc:
+            logger.warning("Failed to detach browser-use session without closing host browser: %s", exc)
 
 
 async def _focus_browser_use_target(session: Any, *, target_id: str = "", expected_url: str = "") -> Dict[str, Any]:
@@ -363,12 +367,8 @@ def _build_browser_use_task(
 ) -> str:
     available_file_paths = _available_file_paths()
     lines = [
-        "Complete this single ScienceClaw recording instruction in the current browser tab.",
-        "Do not continue into unrelated workflow steps after the requested browser-visible goal is satisfied.",
-        "Preserve the current page state. Do not navigate, reload, or reopen the same URL unless the user explicitly asks you to navigate.",
-        "Use browser-use action schemas exactly. Use input with {index,text,clear} and click with {index} for indexed browser_state elements. For page text search, use search_page with {pattern}, not {query}. For scrolling upward, use scroll with {down:false, pages:1}; an empty scroll action scrolls downward. For native <select>, use select_dropdown with {index, text}. For JavaScript, use evaluate with {code}, not {script}; code must be a single wrapped IIFE expression, return a short string, and use only browser DOM APIs. For file inputs, use upload_file with {index, path}; never type a file path into the input and never click a file input to open a native dialog. There is no screenshot action.",
-        "If find_elements reports matching inputs or buttons, prefer input/click by browser_state index when available. If no index is available, use evaluate with an IIFE to set input values, dispatch input/change events, and click the matching button by textContent or id.",
-        "Treat tool results such as 'Typed ... into element' and 'Clicked button ...' as evidence that real browser actions executed. Do not repeat the same input/click pair more than once; after that, verify the DOM/status text with evaluate or call done if the requested visible goal is satisfied.",
+        "Complete this ScienceClaw instruction in the currently focused browser tab.",
+        "Stop when the requested browser-visible goal is satisfied; do not continue into unrelated workflow steps.",
         f"Instruction: {instruction}",
     ]
     if available_file_paths and _instruction_mentions_upload(instruction):
@@ -383,16 +383,6 @@ def _build_browser_use_task(
 def _instruction_mentions_upload(instruction: str) -> bool:
     lowered = instruction.lower()
     return any(token in lowered for token in ("upload", "上传", "附件", "file input", "选择文件"))
-
-
-def _initial_browser_use_actions(current_url: str) -> list[dict[str, dict[str, Any]]] | None:
-    enabled = os.environ.get("BROWSER_USE_INITIAL_NAVIGATE", "false").strip().lower()
-    if enabled not in {"1", "true", "yes", "on"}:
-        return None
-    url = str(current_url or "").strip()
-    if not url or url == "about:blank":
-        return None
-    return [{"navigate": {"url": url}}]
 
 
 def _available_file_paths() -> list[str]:

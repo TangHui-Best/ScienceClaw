@@ -549,6 +549,40 @@ describe('RecorderPage trace timeline convergence', () => {
     app.unmount();
   });
 
+  it('does not forward manual browser input while the natural-language agent is running', async () => {
+    get.mockResolvedValue({ data: { session: { timeline: [] } } });
+    const pendingRead = createDeferred<ReadableStreamReadResult<Uint8Array>>();
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
+      ok: true,
+      body: {
+        getReader: () => ({ read: () => pendingRead.promise }),
+      },
+    })));
+
+    const { app, root } = await mountRecorderPage();
+    await syncActiveScreencastTab();
+    const canvas = getCanvas(root);
+    const ws = MockWebSocket.instances[0];
+    ws.send.mockClear();
+
+    const textarea = root.querySelector<HTMLTextAreaElement>('textarea');
+    textarea!.value = 'Open the highest-risk order';
+    textarea!.dispatchEvent(new Event('input'));
+    await flushAsyncUpdates();
+    root.querySelector<HTMLButtonElement>('button.flex.h-8.w-8')?.click();
+    await flushAsyncUpdates();
+
+    dispatchCanvasMouse(canvas, 'mousedown', 40, 50);
+    dispatchCanvasMouse(canvas, 'mouseup', 40, 50);
+
+    expect(ws.send).not.toHaveBeenCalled();
+    expect(root.querySelector<HTMLInputElement>('input[placeholder="输入网址并按回车跳转"]')?.disabled).toBe(true);
+
+    pendingRead.resolve({ done: true, value: undefined });
+    await flushAsyncUpdates();
+    app.unmount();
+  });
+
   it('keeps pending region and shows a prompt when sending empty text', async () => {
     get.mockResolvedValue({ data: { session: { timeline: [] } } });
 

@@ -1052,8 +1052,9 @@ async def chat_with_assistant(
     steps = [step.model_dump() for step in session.steps]
 
     async def event_generator():
+        pause_token = ""
         try:
-            rpa_manager.pause_recording(session_id)
+            pause_token = rpa_manager.pause_recording(session_id)
 
             if request.mode == "legacy_react":
                 # Reuse existing agent for this session to preserve history across turns
@@ -1214,7 +1215,8 @@ async def chat_with_assistant(
             yield {"event": "error", "data": json.dumps({"message": str(e)}, ensure_ascii=False)}
             yield {"event": "done", "data": "{}"}
         finally:
-            rpa_manager.resume_recording(session_id)
+            if pause_token:
+                rpa_manager.resume_recording(session_id, pause_token)
 
     return EventSourceResponse(event_generator())
 

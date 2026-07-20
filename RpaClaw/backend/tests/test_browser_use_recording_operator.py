@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import sys
+from types import ModuleType
 from types import SimpleNamespace
 
 import pytest
@@ -10,7 +12,7 @@ from backend.rpa.browser_use_recording_operator import (
     _build_browser_use_task,
     _focus_browser_use_target,
     _history_model_actions,
-    _initial_browser_use_actions,
+    _run_browser_use_agent,
 )
 from backend.rpa.trace_models import RPATraceType
 
@@ -321,18 +323,18 @@ async def test_browser_use_operator_does_not_accept_navigation_only_without_succ
     assert "initial navigation" in result.message
 
 
-def test_browser_use_initial_actions_do_not_reload_current_page_by_default(monkeypatch):
-    monkeypatch.delenv("BROWSER_USE_INITIAL_NAVIGATE", raising=False)
+def test_browser_use_task_keeps_native_agent_semantics_and_only_adds_product_context():
+    task = _build_browser_use_task(
+        "打开风险最高的订单",
+        {"department": "华东"},
+        {"label": "异常订单区域"},
+    )
 
-    assert _initial_browser_use_actions("https://example.test/list") is None
-
-
-def test_browser_use_initial_actions_can_be_enabled_for_explicit_navigation(monkeypatch):
-    monkeypatch.setenv("BROWSER_USE_INITIAL_NAVIGATE", "true")
-
-    assert _initial_browser_use_actions("https://example.test/list") == [
-        {"navigate": {"url": "https://example.test/list"}}
-    ]
+    assert "Instruction: 打开风险最高的订单" in task
+    assert "Available prior runtime results: {'department': '华东'}" in task
+    assert "Selected region context: {'label': '异常订单区域'}" in task
+    assert "Use browser-use action schemas exactly" not in task
+    assert "evaluate with an IIFE" not in task
 
 
 def test_browser_use_task_omits_upload_paths_for_non_upload_instruction(monkeypatch):
@@ -351,3 +353,85 @@ def test_browser_use_task_includes_upload_paths_for_upload_instruction(monkeypat
 
     assert "Available upload file paths" in task
     assert "rpa-live-upload.txt" in task
+
+
+@pytest.mark.asyncio
+async def test_browser_use_runner_keeps_host_alive_avoids_planner_overrides_and_detaches(monkeypatch):
+    captured = SimpleNamespace(session=None, agent_kwargs=None)
+
+    class FakeBrowserSession(_FakeBrowserUseSession):
+        def __init__(self, *, cdp_url, keep_alive):
+            super().__init__()
+            self.cdp_url = cdp_url
+            self.keep_alive = keep_alive
+            self.stop_calls = 0
+            captured.session = self
+
+        async def stop(self):
+            self.stop_calls += 1
+
+    class FakeAgent:
+        def __init__(self, **kwargs):
+            captured.agent_kwargs = kwargs
+            self.task = kwargs["task"]
+
+        async def run(self, *, max_steps):
+            assert max_steps == 9
+            if "Force runner failure" in self.task:
+                raise RuntimeError("runner failed")
+            return _FakeBrowserUseHistory()
+
+    class FakeChatOpenAI:
+        def __init__(self, **_kwargs):
+            pass
+
+    browser_use_module = ModuleType("browser_use")
+    browser_use_module.Agent = FakeAgent
+    session_module = ModuleType("browser_use.browser.session")
+    session_module.BrowserSession = FakeBrowserSession
+    chat_module = ModuleType("browser_use.llm.openai.chat")
+    chat_module.ChatOpenAI = FakeChatOpenAI
+    monkeypatch.setitem(sys.modules, "browser_use", browser_use_module)
+    monkeypatch.setitem(sys.modules, "browser_use.browser.session", session_module)
+    monkeypatch.setitem(sys.modules, "browser_use.llm.openai.chat", chat_module)
+
+    await _run_browser_use_agent(
+        instruction="Open the highest-risk order",
+        cdp_url="ws://127.0.0.1:9222/devtools/browser/test",
+        model_config={
+            "model_name": "test-model",
+            "api_key": "test-key",
+            "base_url": "https://llm.example.test/v1",
+        },
+        runtime_results={"department": "华东"},
+        region_context={},
+        max_steps=9,
+        current_url="https://example.test/orders",
+        cdp_target_id="target-123",
+    )
+
+    assert captured.session.keep_alive is True
+    assert captured.session.stop_calls == 1
+    assert captured.agent_kwargs["browser_session"] is captured.session
+    assert "initial_actions" not in captured.agent_kwargs
+    assert "max_actions_per_step" not in captured.agent_kwargs
+    assert "Available prior runtime results: {'department': '华东'}" in captured.agent_kwargs["task"]
+
+    with pytest.raises(RuntimeError, match="runner failed"):
+        await _run_browser_use_agent(
+            instruction="Force runner failure",
+            cdp_url="ws://127.0.0.1:9222/devtools/browser/test",
+            model_config={
+                "model_name": "test-model",
+                "api_key": "test-key",
+                "base_url": "https://llm.example.test/v1",
+            },
+            runtime_results={},
+            region_context={},
+            max_steps=9,
+            current_url="https://example.test/orders",
+            cdp_target_id="target-123",
+        )
+
+    assert captured.session.keep_alive is True
+    assert captured.session.stop_calls == 1
