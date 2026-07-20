@@ -52,6 +52,20 @@ npm.cmd run build
 
 ## Limitations
 
+### 2026-07-20 续跑补充证据
+
+- 在隔离的本地前端 `127.0.0.1:5174` 与后端 `127.0.0.1:12011` 上，真实 UI 会话 `rca_fa8ff141a6e85f188c74b9f1` 完成了：手工打开 Trending、两条原文 AI 指令即时入时间线、配置 `star_count`、生成三段双模式计划、编译以及全新测试宿主回放。
+- 录制宿主为 `bhs_recording_b39a3a4168049b7dc09f5924`，测试宿主为 `bhs_test_5bbabce94b039658fa491698`；两者身份不同。重新录制后又创建了新的 recording host，时间线为 0 项，证明旧 Page/时间线未被沿用。
+- 编译产物哈希为 `0d2cb18a3c4d5cf27a447d0abe1f3c17348a8e7f52c275c03dadce7373510b2e`。测试 UI 显示 `测试通过`、`运行结果：succeeded` 和结构化输出 `star_count = 5348`。
+- 同次真实测试日志中的 GitHub DOM 明确给出 `repo-stars-counter-star`、`aria-label='5348 users starred this repository'` 与 `title='5,348'`，与 UI 输出一致。随后独立 GitHub API 读取为 `5350`，说明 Trending 仓库计数在核验窗口内继续增长；不把后读值反向改写为执行时 Oracle。
+- 最终仓库为 `bojieli/ai-agent-book` 根页。独立页面核验显示 README 的第 2 章包含 `Agent Skills` 与 `agent-skills-ppt`，满足 repo name/description/topic/README heading 至少一处含 `skill` 的客观 Oracle。
+- 续跑暴露并修复两项真实缺陷：OpenAI 兼容网关把结构化 JSON 放在 `reasoning_content` 且 `content` 为空；TestPage 未展示结构化输出。两者均已有回归测试。输出只在当前测试页直接呈现，不把整份 `run_result` 持久化到 sessionStorage，避免扩大敏感输出驻留面。
+- 修复后串行验证：后端 `500 passed, 2 skipped`；前端 `51 files / 223 tests passed`；生产构建成功。一次并行全量运行曾使两个无关 `SkillDetailPage` 用例超时/重复调用，串行重跑全部通过，归因为并行资源竞争而非 F028 回归。
+- 最新代码增加了更明确的 Browser-use 指导语，要求仓库根页加载后立即 `done`，但没有增加宿主侧 done/retry/成功改判门禁。曾尝试用 GitHub URL 后置条件强制改判，因违反 ADR-007 的 Browser-use 主体边界而在提交前撤回。
+- 最新代码的再次全新 UI 复验被外部模型账户 `Arrearage` 阻断；页面中两个 `glm-4.7` 配置均返回同一欠费错误。因此本证据仍保持 **partial / Live UI 最新提交复验阻塞**，不能用上述成功会话替代解阻后的最终新会话验收。
+
+续跑日志位于 `.tmp/live-e2e-continuation/`：`backend-reasoning-fix.stderr.log` 保存成功录制/测试轨迹，`backend-final.stderr.log` 保存两个模型配置的 `Arrearage` 阻断轨迹。`.tmp` 为本地临时证据目录，不提交 API Key 或模型明文凭据。
+
 本证据不能证明附件要求的最终 Live UI E2E 已通过，也不能用历史 session、后台 HTTP 200 或自动化测试替代该声明。外部额度恢复后必须新建录制身份完整重跑，并独立核验仓库根页与 Star。
 
 ## Notes

@@ -139,6 +139,7 @@ In Progress / implementation pending。设计边界已由用户确认并沉淀�
 | Patch | Date | Commit | Symptom | Root Cause | Protection | Status |
 | --- | --- | --- | --- | --- | --- | --- |
 | F028.1 | 2026-07-20 | pending | 实现与 Live UI 验收过程中暴露双模式分类、生产导入、运行提示、客户端超时和重跑状态缺口 | 原规格边界未被同一端到端 Harness 覆盖 | 自动化覆盖分类、导入、提示、超时与重跑；EV-035 保留真实额度阻塞和恢复步骤 | implementation verified; Live UI blocked |
+| F028.2 | 2026-07-20 | pending | 真实 glm-4.7 UI 续跑暴露 OpenAI 兼容响应仅返回 `reasoning_content`，且 TestPage 未展示结构化输出 | 结构化响应适配只读取 `message.content`；UI 只显示运行状态和失败信息 | 严格 schema 前增加 `content`/`reasoning_content` 选择；测试完成后直接展示 `run_result.outputs`，不把整份结果持久化到 sessionStorage；EV-035 记录真实成功轨迹与最新欠费阻断 | automated verified; latest Live UI blocked by Arrearage |
 
 ## Evidence
 

@@ -10,3 +10,6 @@
 {"ts":"2026-07-19T17:45:03Z","doc":"docs/lessons/LL-003-rpa-host-ui-regression-contract-e2e.md","doc_type":"lesson","task":"F028意图优先录制与双模式编译","impact":"changed_verification_gate"}
 {"ts":"2026-07-19T22:36:53Z","doc":"docs/features/F028-rpa-recording-intent-first-dual-mode-compilation.md","doc_type":"feature","task":"F028 intent-first dual-mode implementation and blocked Live UI handoff","impact":"shaped_change_narrative"}
 {"ts":"2026-07-19T22:36:53Z","doc":"docs/evidence/EV-035-f028-implementation-and-live-ui-blocker.md","doc_type":"evidence","task":"F028 intent-first dual-mode implementation and blocked Live UI handoff","impact":"shaped_change_narrative"}
+{"ts":"2026-07-20T02:12:08Z","doc":"docs/features/F028-rpa-recording-intent-first-dual-mode-compilation.md","doc_type":"feature","task":"F028 live UI compatibility and output evidence","impact":"shaped_change_narrative"}
+{"ts":"2026-07-20T02:12:09Z","doc":"docs/decisions/ADR-007-rpa-recording-intent-first-dual-mode-compilation.md","doc_type":"adr","task":"F028 live UI compatibility and output evidence","impact":"shaped_change_narrative"}
+{"ts":"2026-07-20T02:12:09Z","doc":"docs/evidence/EV-035-f028-implementation-and-live-ui-blocker.md","doc_type":"evidence","task":"F028 live UI compatibility and output evidence","impact":"shaped_change_narrative"}

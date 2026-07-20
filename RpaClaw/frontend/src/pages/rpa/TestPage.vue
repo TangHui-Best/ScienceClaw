@@ -25,6 +25,17 @@ const result = ref<Record<string, any> | null>(null);
 const error = ref('');
 const testBrowserRef = ref('');
 
+const runOutputs = computed<[string, unknown][]>(() => {
+  const outputs = result.value?.outputs;
+  if (!outputs || typeof outputs !== 'object' || Array.isArray(outputs)) return [];
+  return Object.entries(outputs as Record<string, unknown>);
+});
+
+const formatOutputValue = (value: unknown) => {
+  if (typeof value === 'string') return value;
+  return JSON.stringify(value);
+};
+
 const persistSnapshot = (updates: Partial<NonNullable<typeof snapshot>>) => {
   if (!creationSnapshot.value) return;
   const next = { ...creationSnapshot.value, ...updates };
@@ -143,6 +154,15 @@ const save = async () => {
         </section>
         <section v-if="result || error" class="mt-4 rounded-2xl bg-white p-4 shadow-sm dark:bg-[#272728]">
           <h2 class="font-extrabold">运行结果：{{ result?.status || 'failed' }}</h2>
+          <div v-if="runOutputs.length" class="mt-3" data-testid="run-outputs">
+            <h3 class="text-xs font-bold text-gray-500">输出</h3>
+            <dl class="mt-2 space-y-2">
+              <div v-for="[name, value] in runOutputs" :key="name" class="rounded-xl bg-gray-50 p-2 dark:bg-[#202022]">
+                <dt class="text-[10px] font-bold text-gray-500">{{ name }}</dt>
+                <dd class="mt-1 break-all font-mono text-sm">{{ formatOutputValue(value) }}</dd>
+              </div>
+            </dl>
+          </div>
           <p v-if="result?.failed_step" class="mt-2 text-xs">失败步骤 {{ result.failed_step.trace_id }} / sequence {{ result.failed_step.sequence }} / {{ result.failed_step.phase }}</p>
           <p v-if="result?.error || error" class="mt-2 text-xs text-rose-700">{{ result?.error || error }}</p>
         </section>

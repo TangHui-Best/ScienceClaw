@@ -129,6 +129,18 @@ def _validated_json_text(value: str) -> str:
     return text
 
 
+def _openai_structured_text(message: object) -> str:
+    """Read compatible reasoning output without weakening schema validation."""
+
+    content = getattr(message, "content", None)
+    if isinstance(content, str) and content.strip():
+        return content
+    reasoning_content = getattr(message, "reasoning_content", None)
+    if isinstance(reasoning_content, str) and reasoning_content.strip():
+        return reasoning_content
+    raise ValueError("browser_use_host.structured_output_missing")
+
+
 class _TextJSONChatOpenAI(ChatOpenAI):
     """Validate JSON fenced by OpenAI-compatible Anthropic gateways."""
 
@@ -166,10 +178,10 @@ class _TextJSONChatOpenAI(ChatOpenAI):
                 **model_params,
             )
             choice = response.choices[0] if response.choices else None
-            if choice is None or choice.message.content is None:
+            if choice is None:
                 raise ValueError("browser_use_host.structured_output_missing")
             parsed = output_format.model_validate_json(
-                _validated_json_text(choice.message.content)
+                _validated_json_text(_openai_structured_text(choice.message))
             )
             return ChatInvokeCompletion(
                 completion=parsed,
@@ -319,7 +331,9 @@ def _execution_guidance(instruction: str) -> str | None:
         return (
             "Inspect repositories visible on the current page, choose exactly one "
             "strongest semantic match, click its repository link, and finish only "
-            "after the repository root page is open. Do not use global site search."
+            "after the repository root page is open. Once the root page loads, do "
+            "not click any file, directory, README link, tab, or subpage; call done "
+            "immediately. Do not use global site search."
         )
     if "star" in instruction_lower or "星标" in instruction:
         return (

@@ -16,6 +16,7 @@ from rpa_agent.host import BrowserSession, HostBrowserEvent, PlaywrightBrowserSe
 from rpa_agent.host.browser_use_agent import (
     _TextFallbackChatAnthropic,
     _execution_guidance,
+    _openai_structured_text,
     _validated_json_text,
     _model_for,
     build_agent_task,
@@ -95,6 +96,28 @@ def test_openai_compatible_gateway_accepts_only_plain_or_fenced_json():
     assert _validated_json_text('```json\n{"ok":true}\n```') == '{"ok":true}'
     with pytest.raises(ValueError, match="structured_output_invalid"):
         _validated_json_text('Result: {"ok":true}')
+
+
+def test_openai_compatible_gateway_uses_reasoning_content_when_content_is_blank():
+    from types import SimpleNamespace
+
+    message = SimpleNamespace(content="", reasoning_content='{"ok":true}')
+    assert _validated_json_text(_openai_structured_text(message)) == '{"ok":true}'
+
+    preferred = SimpleNamespace(
+        content='{"source":"content"}',
+        reasoning_content='{"source":"reasoning"}',
+    )
+    assert _openai_structured_text(preferred) == '{"source":"content"}'
+
+    with pytest.raises(ValueError, match="structured_output_invalid"):
+        _validated_json_text(
+            _openai_structured_text(
+                SimpleNamespace(content="", reasoning_content="analysis only")
+            )
+        )
+    with pytest.raises(ValueError, match="structured_output_missing"):
+        _openai_structured_text(SimpleNamespace(content="", reasoning_content=""))
 
 
 @pytest.mark.asyncio

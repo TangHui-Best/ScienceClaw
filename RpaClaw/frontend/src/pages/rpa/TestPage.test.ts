@@ -42,12 +42,13 @@ describe('TestPage compiled artifact replay', () => {
   });
 
   it('disables rerun after success, restores tested state after reload, and saves only once', async () => {
-    testRun.mockResolvedValue({ state: 'tested', artifact_hash: 'artifact-hash', run_result: { status: 'succeeded', steps: [] } }); save.mockResolvedValue({ state: 'saved', skill_ref: 'skill-1', artifact_hash: 'artifact-hash' });
+    testRun.mockResolvedValue({ state: 'tested', artifact_hash: 'artifact-hash', run_result: { status: 'succeeded', steps: [], outputs: { star_count: 5343 } } }); save.mockResolvedValue({ state: 'saved', skill_ref: 'skill-1', artifact_hash: 'artifact-hash' });
     const { default: Page } = await import('./TestPage.vue'); const root = document.createElement('div'); document.body.appendChild(root); const app = createApp(Page); app.mount(root); await flush();
     const asset = root.querySelector<HTMLInputElement>('input[name="asset-source_file"]')!; asset.value = 'asset://source.csv'; asset.dispatchEvent(new Event('input'));
     const optional = root.querySelector<HTMLInputElement>('input[name="asset-optional_file"]')!; optional.value = '   '; optional.dispatchEvent(new Event('input'));
     const runButton = root.querySelector<HTMLButtonElement>('[data-testid="test-run"]')!; runButton.click(); await flush();
     expect(testRun).toHaveBeenCalledTimes(1); expect(testRun.mock.calls[0][1].data_assets).toEqual({ source_file: 'asset://source.csv' });
+    expect(root.querySelector('[data-testid="run-outputs"]')?.textContent).toContain('star_count'); expect(root.querySelector('[data-testid="run-outputs"]')?.textContent).toContain('5343');
     expect(runButton.disabled).toBe(true); runButton.click(); await flush(); expect(testRun).toHaveBeenCalledTimes(1);
     expect(JSON.parse(sessionStorage.getItem('rpa-agent:rca_abcdefghijklmnopqrstuvwx')!)).toMatchObject({ testPassed: true });
     app.unmount();
