@@ -8,9 +8,9 @@ import sys
 import time
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, Literal, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .recording_runtime_agent import RecordingAgentResult, _page_state
 from .trace_models import RPAAcceptedTrace, RPAAIExecution, RPATraceDiagnostic, RPATraceType
@@ -23,35 +23,22 @@ logger = logging.getLogger(__name__)
 
 BROWSER_USE_CAPTURE_EXTRACTION_SCHEMA: Dict[str, Any] = {
     "type": "object",
-    "properties": {
-        "key": {
-            "type": "string",
-            "description": (
-                "A concise semantic ASCII snake_case key for the extracted business data, "
-                "for example reimbursement_info or order_data."
-            ),
-        },
-        "data": {
-            "type": "object",
-            "description": "The extracted business data. Use the requested field names as object keys.",
-        },
-    },
-    "required": ["key", "data"],
+    "description": "Extracted business data. Use the requested field names as object keys.",
+    "additionalProperties": True,
 }
 
 
 class BrowserUseDoneOutput(BaseModel):
     """The application-owned payload inside browser-use's native structured done action."""
 
-    kind: Literal["capture", "action"] = Field(
-        description="capture when the user needs page data for later reuse; otherwise action."
-    )
-    key: str = Field(default="", description="Semantic ASCII snake_case key. Required only when kind is capture.")
+    model_config = ConfigDict(extra="forbid")
+
     value: Any = Field(
-        default_factory=dict,
-        description="JSON-serializable business data for a capture. Leave empty when kind is action.",
+        description=(
+            "The final JSON result. For data retrieval, first inspect the page and return every requested value "
+            "as an object. For an action-only task, return a message object."
+        ),
     )
-    message: str = Field(default="", description="Completion message for an action. Leave empty when kind is capture.")
 
 
 class BrowserUseTaskFailure(RuntimeError):
@@ -123,28 +110,20 @@ class BrowserUseRecordingOperator:
                     actions=actions,
                     action_results=action_results,
                 ) from exc
-            capture_output_key: Optional[str] = None
+            stable_output_key = str(output_key).strip() if output_key is not None else None
             if structured_done is None:
                 output = {
                     "extracted_content": extracted_content,
                     "action_count": len(actions),
                 }
-            elif structured_done.kind == "capture":
+            else:
                 output = structured_done.value
-                if output_key is not None:
-                    capture_output_key = str(output_key).strip()
-                else:
-                    capture_output_key = _normalize_capture_key(structured_done.key)
-                    if capture_output_key:
-                        capture_output_key = _deduplicate_capture_key(capture_output_key, runtime_results or {})
-                if not capture_output_key:
+                if not isinstance(output, dict) or not output:
                     raise BrowserUseTaskFailure(
-                        "browser-use structured done output returned an invalid semantic key.",
+                        "browser-use structured done output must contain a non-empty value object.",
                         actions=actions,
                         action_results=action_results,
                     )
-            else:
-                output = {"message": structured_done.message}
             trace = RPAAcceptedTrace(
                 trace_type=RPATraceType.AI_OPERATION,
                 source="browser_use",
@@ -170,7 +149,7 @@ class BrowserUseRecordingOperator:
                     },
                 },
                 region_context=dict(region_context or {}),
-                output_key=capture_output_key,
+                output_key=stable_output_key,
                 output=output,
                 ai_execution=RPAAIExecution(
                     language="browser_use",
@@ -181,7 +160,7 @@ class BrowserUseRecordingOperator:
             return RecordingAgentResult(
                 success=True,
                 trace=trace,
-                output_key=capture_output_key,
+                output_key=stable_output_key,
                 output=output,
                 message="browser-use recording command completed.",
             )
@@ -439,6 +418,24 @@ def _build_browser_use_task(
         "Complete this ScienceClaw instruction in the currently focused browser tab.",
         "Stop when the requested browser-visible goal is satisfied; do not continue into unrelated workflow steps.",
         f"Instruction: {instruction}",
+        (
+            "When the instruction asks to retrieve, extract, read, or copy page data, "
+            "return the requested data in the final value object."
+        ),
+        (
+            "Use the exact field labels explicitly named by the user as the value object keys. "
+            "Do not translate, abbreviate, rename, or replace them with synonyms."
+        ),
+        (
+            "Do not add an unrelated summary key or wrapper around requested data. "
+            "Keep every explicitly requested field; use null when a requested field is not found."
+        ),
+        "Keep values faithful to the page. Do not invent, infer, or summarize them.",
+        (
+            "For a data-retrieval instruction, do not finish with an empty value object or a generic completion message. "
+            "Inspect the page first, then return the requested data."
+        ),
+        "For a browser action that does not retrieve page data, return a value object containing a concise message field.",
     ]
     if available_file_paths and _instruction_mentions_upload(instruction):
         lines.append(f"Available upload file paths: {available_file_paths}")
@@ -595,28 +592,6 @@ def _history_structured_done_output(history: Any) -> Optional[BrowserUseDoneOutp
     if isinstance(value, dict):
         return BrowserUseDoneOutput.model_validate(value)
     raise ValueError("browser-use structured done output has an unsupported type.")
-
-
-def _normalize_capture_key(value: Any) -> Optional[str]:
-    text = str(value or "").strip().lower()
-    if not text:
-        return None
-    text = re.sub(r"[^a-z0-9_]+", "_", text)
-    text = re.sub(r"_+", "_", text).strip("_")
-    if not text:
-        return None
-    if text[0].isdigit():
-        text = f"result_{text}"
-    return text[:64]
-
-
-def _deduplicate_capture_key(key: str, runtime_results: Dict[str, Any]) -> str:
-    if key not in runtime_results:
-        return key
-    suffix = 2
-    while f"{key}_{suffix}" in runtime_results:
-        suffix += 1
-    return f"{key}_{suffix}"
 
 
 def _history_successful(history: Any) -> Optional[bool]:

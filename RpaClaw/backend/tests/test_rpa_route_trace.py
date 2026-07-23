@@ -1431,6 +1431,42 @@ async def test_apply_recording_agent_result_persists_trace_and_runtime_output():
 
 
 @pytest.mark.asyncio
+async def test_apply_recording_agent_result_assigns_stable_browser_use_result_keys():
+    manager = ROUTE_MODULE.rpa_manager
+    session = RPASession(id="route-browser-use-output-key", user_id="u1", sandbox_session_id="sandbox")
+    manager.sessions[session.id] = session
+    try:
+        first = RecordingAgentResult(
+            success=True,
+            trace=RPAAcceptedTrace(
+                trace_type=RPATraceType.AI_OPERATION,
+                source="browser_use",
+                output={"报销人": "张三"},
+            ),
+            output={"报销人": "张三"},
+        )
+        second = RecordingAgentResult(
+            success=True,
+            trace=RPAAcceptedTrace(
+                trace_type=RPATraceType.AI_OPERATION,
+                source="browser_use",
+                output={"message": "已填写搜索框"},
+            ),
+            output={"message": "已填写搜索框"},
+        )
+
+        await ROUTE_MODULE._apply_recording_agent_result(session.id, first)
+        await ROUTE_MODULE._apply_recording_agent_result(session.id, second)
+
+        assert first.output_key == "capture_data_step_1"
+        assert second.output_key == "capture_data_step_2"
+        assert [trace.output_key for trace in session.traces] == ["capture_data_step_1", "capture_data_step_2"]
+        assert session.runtime_results.resolve_ref("capture_data_step_1.报销人") == "张三"
+    finally:
+        manager.sessions.pop(session.id, None)
+
+
+@pytest.mark.asyncio
 async def test_apply_recording_agent_result_waits_for_paused_download_before_append():
     manager = ROUTE_MODULE.rpa_manager
     session = RPASession(id="route-trace-delayed-download", user_id="u1", sandbox_session_id="sandbox")

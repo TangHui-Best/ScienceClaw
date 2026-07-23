@@ -191,12 +191,10 @@ async def test_browser_use_operator_records_semantic_runtime_trace_with_action_h
 
 
 @pytest.mark.asyncio
-async def test_browser_use_operator_promotes_structured_done_capture_to_stable_runtime_result():
+async def test_browser_use_operator_returns_structured_done_value_without_an_llm_generated_key():
     async def fake_runner(**_kwargs):
         return _FakeStructuredDoneHistory(
             BrowserUseDoneOutput(
-                kind="capture",
-                key="Reimbursement Info",
                 value={"报销人": "张三", "部门编码": "D001"},
             )
         )
@@ -214,27 +212,22 @@ async def test_browser_use_operator_promotes_structured_done_capture_to_stable_r
     )
 
     assert result.success is True
-    assert result.output_key == "reimbursement_info"
+    assert result.output_key is None
     assert result.output == {"报销人": "张三", "部门编码": "D001"}
     assert result.trace is not None
-    assert result.trace.output_key == "reimbursement_info"
+    assert result.trace.output_key is None
     assert result.trace.output == {"报销人": "张三", "部门编码": "D001"}
     assert result.trace.ai_execution.output == {"报销人": "张三", "部门编码": "D001"}
     assert result.trace.signals["browser_use"]["done_output"] == {
-        "kind": "capture",
-        "key": "Reimbursement Info",
         "value": {"报销人": "张三", "部门编码": "D001"},
-        "message": "",
     }
 
 
 @pytest.mark.asyncio
-async def test_browser_use_operator_deduplicates_recording_key_but_replay_uses_frozen_key():
+async def test_browser_use_operator_replay_uses_scienceclaw_frozen_key():
     async def fake_runner(**_kwargs):
         return _FakeStructuredDoneHistory(
             BrowserUseDoneOutput(
-                kind="capture",
-                key="reimbursement_info",
                 value={"报销人": "张三", "部门编码": "D001"},
             )
         )
@@ -245,11 +238,6 @@ async def test_browser_use_operator_deduplicates_recording_key_but_replay_uses_f
         browser_use_runner=fake_runner,
     )
 
-    recording_result = await operator.run(
-        page=_FakePage(),
-        instruction="再次捕获报销人、部门编码",
-        runtime_results={"reimbursement_info": {"报销人": "李四"}},
-    )
     replay_result = await operator.run(
         page=_FakePage(),
         instruction="捕获报销人、部门编码",
@@ -257,18 +245,16 @@ async def test_browser_use_operator_deduplicates_recording_key_but_replay_uses_f
         output_key="recorded_reimbursement_data",
     )
 
-    assert recording_result.output_key == "reimbursement_info_2"
     assert replay_result.output_key == "recorded_reimbursement_data"
     assert replay_result.output == {"报销人": "张三", "部门编码": "D001"}
 
 
 @pytest.mark.asyncio
-async def test_browser_use_operator_does_not_create_runtime_key_for_structured_done_action():
+async def test_browser_use_operator_returns_action_message_inside_structured_value():
     async def fake_runner(**_kwargs):
         return _FakeStructuredDoneHistory(
             BrowserUseDoneOutput(
-                kind="action",
-                message="已点击登录按钮",
+                value={"message": "已点击登录按钮"},
             )
         )
 
@@ -292,13 +278,11 @@ async def test_browser_use_operator_does_not_create_runtime_key_for_structured_d
 
 
 @pytest.mark.asyncio
-async def test_browser_use_operator_preserves_list_value_from_structured_done_capture():
+async def test_browser_use_operator_preserves_list_data_inside_structured_value_object():
     async def fake_runner(**_kwargs):
         return _FakeStructuredDoneHistory(
             BrowserUseDoneOutput(
-                kind="capture",
-                key="order_rows",
-                value=[{"订单号": "A001"}, {"订单号": "A002"}],
+                value={"订单": [{"订单号": "A001"}, {"订单号": "A002"}]},
             )
         )
 
@@ -315,8 +299,50 @@ async def test_browser_use_operator_preserves_list_value_from_structured_done_ca
     )
 
     assert result.success is True
-    assert result.output_key == "order_rows"
-    assert result.output == [{"订单号": "A001"}, {"订单号": "A002"}]
+    assert result.output_key is None
+    assert result.output == {"订单": [{"订单号": "A001"}, {"订单号": "A002"}]}
+
+
+def test_browser_use_done_output_keeps_value_unconstrained_for_provider_schema_compatibility():
+    assert BrowserUseDoneOutput.model_validate({"value": "plain text"}).value == "plain text"
+    assert BrowserUseDoneOutput.model_validate({"value": {}}).value == {}
+    assert "type" not in BrowserUseDoneOutput.model_json_schema()["properties"]["value"]
+
+
+@pytest.mark.asyncio
+async def test_browser_use_operator_rejects_an_empty_structured_done_value():
+    class EmptyValueHistory(_FakeBrowserUseHistory):
+        def model_actions(self):
+            return [{"done": {"success": True, "data": {"value": {}}}}]
+
+        def action_results(self):
+            return [
+                SimpleNamespace(
+                    extracted_content='{"value": {}}',
+                    long_term_memory="Task completed",
+                    is_done=True,
+                    success=True,
+                )
+            ]
+
+        @property
+        def structured_output(self):
+            return {"value": {}}
+
+    async def fake_runner(**_kwargs):
+        return EmptyValueHistory()
+
+    operator = BrowserUseRecordingOperator(
+        model_config={"model_name": "test-model"},
+        cdp_url_resolver=lambda _page, _debug_context: "ws://127.0.0.1:9222/devtools/browser/test",
+        browser_use_runner=fake_runner,
+    )
+
+    result = await operator.run(page=_FakePage(), instruction="Extract stars", runtime_results={})
+
+    assert result.success is False
+    assert result.trace is None
+    assert "must contain a non-empty value object" in result.message
 
 
 @pytest.mark.asyncio
@@ -495,6 +521,10 @@ def test_browser_use_task_keeps_native_agent_semantics_and_only_adds_product_con
     assert "Instruction: 打开风险最高的订单" in task
     assert "Available prior runtime results: {'department': '华东'}" in task
     assert "Selected region context: {'label': '异常订单区域'}" in task
+    assert "Use the exact field labels explicitly named by the user" in task
+    assert "Do not translate, abbreviate, rename, or replace them with synonyms" in task
+    assert "use null when a requested field is not found" in task
+    assert "do not finish with an empty value object" in task
     assert "Use browser-use action schemas exactly" not in task
     assert "evaluate with an IIFE" not in task
 
@@ -578,8 +608,10 @@ async def test_browser_use_runner_keeps_host_alive_avoids_planner_overrides_and_
     assert "initial_actions" not in captured.agent_kwargs
     assert "max_actions_per_step" not in captured.agent_kwargs
     assert captured.agent_kwargs["output_model_schema"] is BrowserUseDoneOutput
-    assert captured.agent_kwargs["extraction_schema"]["required"] == ["key", "data"]
-    assert captured.agent_kwargs["extraction_schema"]["properties"]["data"]["type"] == "object"
+    assert "type" not in BrowserUseDoneOutput.model_json_schema()["properties"]["value"]
+    assert captured.agent_kwargs["extraction_schema"]["type"] == "object"
+    assert captured.agent_kwargs["extraction_schema"]["additionalProperties"] is True
+    assert "key" not in captured.agent_kwargs["extraction_schema"].get("properties", {})
     assert "Available prior runtime results: {'department': '华东'}" in captured.agent_kwargs["task"]
 
     with pytest.raises(RuntimeError, match="runner failed"):

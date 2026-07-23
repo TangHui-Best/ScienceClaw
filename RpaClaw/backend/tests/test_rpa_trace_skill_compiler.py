@@ -3066,13 +3066,13 @@ def test_browser_use_runtime_trace_compiles_to_browser_use_executor():
     assert "page.locator('a.project').nth(0).click()" not in body
 
 
-def test_browser_use_capture_trace_replays_with_recorded_stable_output_key():
+def test_browser_use_capture_trace_replays_with_scienceclaw_stable_output_key():
     trace = RPAAcceptedTrace(
         trace_type=RPATraceType.AI_OPERATION,
         source="browser_use",
         user_instruction="捕获报销人、部门编码",
         description="捕获报销人、部门编码",
-        output_key="reimbursement_info",
+        output_key="capture_data_step_1",
         output={"报销人": "张三", "部门编码": "D001"},
         signals={
             "runtime_ai": {"preserve": True, "reason": "browser_use_recording"},
@@ -3082,10 +3082,7 @@ def test_browser_use_capture_trace_replays_with_recorded_stable_output_key():
                         "done": {
                             "success": True,
                             "data": {
-                                "kind": "capture",
-                                "key": "reimbursement_info",
                                 "value": {"报销人": "张三", "部门编码": "D001"},
-                                "message": "",
                             },
                         }
                     }
@@ -3104,8 +3101,8 @@ def test_browser_use_capture_trace_replays_with_recorded_stable_output_key():
     body = _execute_body(script)
 
     assert "output_key=output_key" in prelude
-    assert "outcome.output if outcome.output_key else _normalize_runtime_ai_payload" in prelude
-    assert "'reimbursement_info'" in body
+    assert "payload = outcome.output" in prelude
+    assert "'capture_data_step_1'" in body
     assert "browser_use_result_0" not in body
 
 

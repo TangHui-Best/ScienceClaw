@@ -566,7 +566,7 @@ class TraceSkillCompiler:
                 "    if not outcome.success:",
                 "        detail = '; '.join(str(item.message) for item in outcome.diagnostics) or outcome.message",
                 "        raise RuntimeError(f'browser-use runtime instruction failed: {detail}')",
-                "    payload = outcome.output if outcome.output_key else _normalize_runtime_ai_payload(outcome.output, getattr(page, 'url', ''))",
+                "    payload = outcome.output",
                 "    if output_key:",
                 "        results[output_key] = payload",
                 "    return payload",

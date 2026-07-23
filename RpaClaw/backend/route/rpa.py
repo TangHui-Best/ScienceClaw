@@ -286,6 +286,10 @@ def _build_harness_capture_payload(session_id: str) -> dict[str, Any] | None:
 async def _apply_recording_agent_result(session_id: str, result: RecordingAgentResult) -> None:
     for diagnostic in result.diagnostics:
         await rpa_manager.append_trace_diagnostic(session_id, diagnostic)
+    if result.trace and result.trace.source == "browser_use" and not result.output_key:
+        output_key = rpa_manager.allocate_browser_use_output_key(session_id)
+        result.trace.output_key = output_key
+        result.output_key = output_key
     if result.trace:
         await rpa_manager.finalize_trace_side_effects(session_id, result.trace)
         await rpa_manager.append_trace(session_id, result.trace)

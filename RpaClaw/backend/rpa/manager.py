@@ -133,6 +133,7 @@ class RPASession(BaseModel):
     traces: List[RPAAcceptedTrace] = Field(default_factory=list)
     trace_diagnostics: List[RPATraceDiagnostic] = Field(default_factory=list)
     runtime_results: RPARuntimeResults = Field(default_factory=RPARuntimeResults)
+    next_browser_use_output_index: int = 1
     skill_config_draft: Optional[RPASkillConfigDraft] = None
     llm_model_config: Optional[Dict[str, Any]] = None
     pending_download_events: List[Dict[str, Any]] = Field(default_factory=list)
@@ -181,6 +182,31 @@ class RPASessionManager:
         session = self.sessions.get(session_id)
         if session:
             session.last_activity_at = datetime.now()
+
+    def allocate_browser_use_output_key(self, session_id: str) -> str:
+        """Allocate a session-stable result slot for a browser-use recording trace."""
+        session = self.sessions.get(session_id)
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+        used_keys = set(session.runtime_results.values)
+        used_keys.update(str(trace.output_key) for trace in session.traces if trace.output_key)
+        existing_indexes = [
+            int(match.group(1))
+            for key in used_keys
+            if (match := re.fullmatch(r"capture_data_step_(\d+)", key))
+        ]
+        index = max(
+            1,
+            int(session.next_browser_use_output_index or 1),
+            max(existing_indexes, default=0) + 1,
+        )
+        key = f"capture_data_step_{index}"
+        while key in used_keys:
+            index += 1
+            key = f"capture_data_step_{index}"
+        session.next_browser_use_output_index = index + 1
+        self.touch_session(session_id)
+        return key
 
     def update_skill_config_draft(
         self,
