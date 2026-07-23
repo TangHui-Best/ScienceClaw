@@ -562,11 +562,11 @@ class TraceSkillCompiler:
                 "        cdp_url_resolver=lambda _page, _debug_context: cdp_url,",
                 "    )",
                 "    debug_context = {'cdp_target_id': cdp_target_id} if cdp_target_id else None",
-                "    outcome = await agent.run(page=page, instruction=instruction, runtime_results=results, debug_context=debug_context)",
+                "    outcome = await agent.run(page=page, instruction=instruction, runtime_results=results, debug_context=debug_context, output_key=output_key)",
                 "    if not outcome.success:",
                 "        detail = '; '.join(str(item.message) for item in outcome.diagnostics) or outcome.message",
                 "        raise RuntimeError(f'browser-use runtime instruction failed: {detail}')",
-                "    payload = _normalize_runtime_ai_payload(outcome.output, getattr(page, 'url', ''))",
+                "    payload = outcome.output if outcome.output_key else _normalize_runtime_ai_payload(outcome.output, getattr(page, 'url', ''))",
                 "    if output_key:",
                 "        results[output_key] = payload",
                 "    return payload",
@@ -1216,7 +1216,7 @@ class TraceSkillCompiler:
         trace: RPAAcceptedTrace,
         used_output_keys: Dict[str, int],
     ) -> List[str]:
-        key = self._allocate_output_key(trace, trace.output_key or f"browser_use_result_{index}", used_output_keys)
+        key = self._allocate_output_key(trace, trace.output_key, used_output_keys) if trace.output_key else None
         instruction = str(trace.user_instruction or trace.description or "").strip()
         return [
             "",

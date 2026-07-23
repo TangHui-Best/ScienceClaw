@@ -3060,8 +3060,53 @@ def test_browser_use_runtime_trace_compiles_to_browser_use_executor():
     assert "_execute_browser_use_instruction(current_page, _results, kwargs" in body
     assert "runtime_results=results" in prelude
     assert "runtime_results={}" not in prelude
+    assert "browser_use_result_0" not in body
+    assert ", None)" in body
     assert trace_requires_runtime_ai_replay(trace) is True
     assert "page.locator('a.project').nth(0).click()" not in body
+
+
+def test_browser_use_capture_trace_replays_with_recorded_stable_output_key():
+    trace = RPAAcceptedTrace(
+        trace_type=RPATraceType.AI_OPERATION,
+        source="browser_use",
+        user_instruction="捕获报销人、部门编码",
+        description="捕获报销人、部门编码",
+        output_key="reimbursement_info",
+        output={"报销人": "张三", "部门编码": "D001"},
+        signals={
+            "runtime_ai": {"preserve": True, "reason": "browser_use_recording"},
+            "browser_use": {
+                "actions": [
+                    {
+                        "done": {
+                            "success": True,
+                            "data": {
+                                "kind": "capture",
+                                "key": "reimbursement_info",
+                                "value": {"报销人": "张三", "部门编码": "D001"},
+                                "message": "",
+                            },
+                        }
+                    }
+                ]
+            },
+        },
+        ai_execution=RPAAIExecution(
+            language="browser_use",
+            code="",
+            output={"报销人": "张三", "部门编码": "D001"},
+        ),
+    )
+
+    script = TraceSkillCompiler().generate_script([trace], is_local=False)
+    prelude = _execute_prelude(script)
+    body = _execute_body(script)
+
+    assert "output_key=output_key" in prelude
+    assert "outcome.output if outcome.output_key else _normalize_runtime_ai_payload" in prelude
+    assert "'reimbursement_info'" in body
+    assert "browser_use_result_0" not in body
 
 
 def test_browser_use_trace_with_recorded_action_evidence_still_compiles_original_instruction():

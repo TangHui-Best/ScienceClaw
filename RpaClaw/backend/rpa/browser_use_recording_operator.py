@@ -3,11 +3,14 @@ from __future__ import annotations
 import inspect
 import logging
 import os
+import re
 import sys
 import time
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Literal, Optional
+
+from pydantic import BaseModel, Field
 
 from .recording_runtime_agent import RecordingAgentResult, _page_state
 from .trace_models import RPAAcceptedTrace, RPAAIExecution, RPATraceDiagnostic, RPATraceType
@@ -16,6 +19,39 @@ from .trace_models import RPAAcceptedTrace, RPAAIExecution, RPATraceDiagnostic, 
 BrowserUseRunner = Callable[..., Awaitable[Any]]
 CdpUrlResolver = Callable[[Any, Optional[Dict[str, Any]]], Awaitable[str] | str]
 logger = logging.getLogger(__name__)
+
+
+BROWSER_USE_CAPTURE_EXTRACTION_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "key": {
+            "type": "string",
+            "description": (
+                "A concise semantic ASCII snake_case key for the extracted business data, "
+                "for example reimbursement_info or order_data."
+            ),
+        },
+        "data": {
+            "type": "object",
+            "description": "The extracted business data. Use the requested field names as object keys.",
+        },
+    },
+    "required": ["key", "data"],
+}
+
+
+class BrowserUseDoneOutput(BaseModel):
+    """The application-owned payload inside browser-use's native structured done action."""
+
+    kind: Literal["capture", "action"] = Field(
+        description="capture when the user needs page data for later reuse; otherwise action."
+    )
+    key: str = Field(default="", description="Semantic ASCII snake_case key. Required only when kind is capture.")
+    value: Any = Field(
+        default_factory=dict,
+        description="JSON-serializable business data for a capture. Leave empty when kind is action.",
+    )
+    message: str = Field(default="", description="Completion message for an action. Leave empty when kind is capture.")
 
 
 class BrowserUseTaskFailure(RuntimeError):
@@ -55,6 +91,7 @@ class BrowserUseRecordingOperator:
         runtime_results: Optional[Dict[str, Any]] = None,
         debug_context: Optional[Dict[str, Any]] = None,
         region_context: Optional[Dict[str, Any]] = None,
+        output_key: Optional[str] = None,
     ) -> RecordingAgentResult:
         before = await _page_state(page)
         try:
@@ -78,10 +115,36 @@ class BrowserUseRecordingOperator:
                 raise BrowserUseTaskFailure(failure_reason, actions=actions, action_results=action_results)
             after = await _page_state(page)
             extracted_content = _history_extracted_content(history)
-            output = {
-                "extracted_content": extracted_content,
-                "action_count": len(actions),
-            }
+            try:
+                structured_done = _history_structured_done_output(history)
+            except ValueError as exc:
+                raise BrowserUseTaskFailure(
+                    str(exc),
+                    actions=actions,
+                    action_results=action_results,
+                ) from exc
+            capture_output_key: Optional[str] = None
+            if structured_done is None:
+                output = {
+                    "extracted_content": extracted_content,
+                    "action_count": len(actions),
+                }
+            elif structured_done.kind == "capture":
+                output = structured_done.value
+                if output_key is not None:
+                    capture_output_key = str(output_key).strip()
+                else:
+                    capture_output_key = _normalize_capture_key(structured_done.key)
+                    if capture_output_key:
+                        capture_output_key = _deduplicate_capture_key(capture_output_key, runtime_results or {})
+                if not capture_output_key:
+                    raise BrowserUseTaskFailure(
+                        "browser-use structured done output returned an invalid semantic key.",
+                        actions=actions,
+                        action_results=action_results,
+                    )
+            else:
+                output = {"message": structured_done.message}
             trace = RPAAcceptedTrace(
                 trace_type=RPATraceType.AI_OPERATION,
                 source="browser_use",
@@ -102,10 +165,12 @@ class BrowserUseRecordingOperator:
                         "actions": actions,
                         "action_results": action_results,
                         "extracted_content": extracted_content,
+                        "done_output": structured_done.model_dump(mode="json") if structured_done else None,
                         "max_steps": self.max_steps,
                     },
                 },
                 region_context=dict(region_context or {}),
+                output_key=capture_output_key,
                 output=output,
                 ai_execution=RPAAIExecution(
                     language="browser_use",
@@ -116,6 +181,7 @@ class BrowserUseRecordingOperator:
             return RecordingAgentResult(
                 success=True,
                 trace=trace,
+                output_key=capture_output_key,
                 output=output,
                 message="browser-use recording command completed.",
             )
@@ -138,7 +204,7 @@ async def _execute_browser_use_runtime_instruction(
     results: Dict[str, Any],
     kwargs: Dict[str, Any],
     instruction: str,
-    output_key: str,
+    output_key: Optional[str],
 ) -> Any:
     runtime_context = kwargs.get("_runtime_context") if isinstance(kwargs, dict) else {}
     browser_use_context = runtime_context.get("browser_use") if isinstance(runtime_context, dict) else {}
@@ -155,6 +221,7 @@ async def _execute_browser_use_runtime_instruction(
         instruction=instruction,
         runtime_results=results,
         debug_context=debug_context,
+        output_key=output_key,
     )
     if not outcome.success:
         detail = "; ".join(str(item.message) for item in outcome.diagnostics) or outcome.message
@@ -225,6 +292,8 @@ async def _run_browser_use_agent(
             browser_session=session,
             available_file_paths=_available_file_paths(),
             use_vision=os.environ.get("BROWSER_USE_USE_VISION", "false").strip().lower() == "true",
+            output_model_schema=BrowserUseDoneOutput,
+            extraction_schema=BROWSER_USE_CAPTURE_EXTRACTION_SCHEMA,
         )
         _ensure_browser_use_agent_timing(agent)
         history = await agent.run(max_steps=max_steps)
@@ -507,6 +576,47 @@ def _history_action_results(history: Any) -> list[Dict[str, Any]]:
                 )
             )
     return results
+
+
+def _history_structured_done_output(history: Any) -> Optional[BrowserUseDoneOutput]:
+    """Read browser-use's final native structured done output, if the runner provides it."""
+    try:
+        value = getattr(history, "structured_output", None)
+    except Exception as exc:
+        raise ValueError(f"browser-use structured done output is invalid: {exc}") from exc
+    if callable(value):
+        value = value()
+    if value is None:
+        return None
+    if isinstance(value, BrowserUseDoneOutput):
+        return value
+    if hasattr(value, "model_dump"):
+        value = value.model_dump(mode="json")
+    if isinstance(value, dict):
+        return BrowserUseDoneOutput.model_validate(value)
+    raise ValueError("browser-use structured done output has an unsupported type.")
+
+
+def _normalize_capture_key(value: Any) -> Optional[str]:
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+    text = re.sub(r"[^a-z0-9_]+", "_", text)
+    text = re.sub(r"_+", "_", text).strip("_")
+    if not text:
+        return None
+    if text[0].isdigit():
+        text = f"result_{text}"
+    return text[:64]
+
+
+def _deduplicate_capture_key(key: str, runtime_results: Dict[str, Any]) -> str:
+    if key not in runtime_results:
+        return key
+    suffix = 2
+    while f"{key}_{suffix}" in runtime_results:
+        suffix += 1
+    return f"{key}_{suffix}"
 
 
 def _history_successful(history: Any) -> Optional[bool]:
