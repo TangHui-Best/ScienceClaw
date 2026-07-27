@@ -57,6 +57,30 @@ controlled replay without live GitHub or direct Agent chat.
 - Evidence: [EV-008 Skill Replay E2E Runner Evidence](../evidence/EV-008-skill-replay-e2e-runner.md)
 - Backlog: [Backlog](../BACKLOG.md)
 
+### Evidence
+
+- Historical links remain in the original record; this migration adds the current navigation category.
+
+### Decisions / ADRs
+
+- Historical links remain in the original record; this migration adds the current navigation category.
+
+### Lessons
+
+- Historical links remain in the original record; this migration adds the current navigation category.
+
+### Specs / Plans
+
+- Historical links remain in the original record; this migration adds the current navigation category.
+
+### Related Features
+
+- Historical links remain in the original record; this migration adds the current navigation category.
+
+### External Context
+
+- Historical links remain in the original record; this migration adds the current navigation category.
+
 ## Acceptance Criteria
 
 - [x] A Skill Replay E2E runner contract exists with stable JSON summary and
@@ -97,3 +121,50 @@ See [EV-008 Skill Replay E2E Runner Evidence](../evidence/EV-008-skill-replay-e2
 Decide whether the next Feature should strengthen replay from per-step
 controlled HTML replay into full SOP stateful replay, or keep F008 as the
 minimal governed Skill Replay baseline while expanding candidate assets.
+
+## Feature Intake
+
+- Original problem: The original problem is preserved in `## Goal` and `## Vision Anchor`; this migration does not reinterpret it.
+- User pain point: The historical user pain point is preserved in the original Feature narrative and linked Evidence.
+- Capability promise: The delivered or intended capability remains the one described in `## Goal` and `## Acceptance Criteria`.
+- Non-goals: This migration adds no business scope and does not change the historical Feature boundary.
+- Acceptance source: Existing acceptance criteria, linked Evidence, and recorded validation remain the source of truth.
+- Open questions: Any historical uncertainty remains unresolved unless the original record or a linked successor answers it.
+
+## Capability Contract
+
+The capability boundary is the historical `## Goal`, `## Vision Anchor`, acceptance criteria, and linked artifacts. This schema migration does not add, remove, or reinterpret RPA behavior.
+
+## Decision Context
+
+### Why
+
+The original Feature and its linked decisions preserve the rationale; this migration only makes that context recoverable through the current template.
+
+### Why Not
+
+Do not infer new product decisions from a document-schema migration or replace historical validation with template text.
+
+### If Modifying This Area, Check
+
+Read this Feature's Goal, Evidence, and linked ADRs before changing its capability boundary or claiming a new verification result.
+
+## Acceptance Map
+
+| Claim | Acceptance | Evidence | Status |
+| --- | --- | --- | --- |
+| Historical Feature contract | Existing `## Acceptance Criteria` and historical Feature record | Historical evidence documented in `## Evidence` | migrated |
+
+## State Timeline
+
+| Date | State | Trigger | Evidence | Note |
+| --- | --- | --- | --- | --- |
+| 2026-07-25 | completed | AgentMentor schema migration | Existing Feature/Evidence | Historical facts retained; current required structure added |
+
+## Recovery Snapshot
+
+- Read first: `## Goal`, `## Links`, `## Acceptance Criteria`, and `## Evidence`.
+- Current capability state: Use the existing `## Current Status`; this migration does not change delivery status.
+- Known risks: Historical verification is limited to what the original record explicitly states.
+- Next safe action: Read the linked Evidence and ADRs before any follow-up change; update this Feature when the capability boundary or verified state changes.
+- Unblock condition: Not blocked by this migration.

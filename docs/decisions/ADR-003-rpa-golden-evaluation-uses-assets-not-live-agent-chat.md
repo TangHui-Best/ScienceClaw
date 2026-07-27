@@ -111,3 +111,21 @@ scenario assets.
 - Evidence: [EV-002 RPA Harness v0 Evidence](../evidence/EV-002-rpa-harness-v0.md)
 - Existing eval app: `rpa-eval-app/README.md`
 - Harness regression strategy: [RPA Harness Regression Strategy](../rpa/harness/regression-strategy.md)
+
+## Decision Boundary
+
+### Applies To
+
+The decision scope described in the original Context and Decision sections.
+
+### Does Not Apply To
+
+Areas not explicitly covered by the original decision; this migration does not broaden its authority.
+
+## Rejected Options
+
+Existing alternatives remain authoritative where recorded in the original ADR. This migration introduces no new rejected architecture option.
+
+## Before Changing This Decision
+
+Read the original Context, Decision, Consequences, linked Feature, and Evidence. Record a successor ADR or explicit update before changing this durable boundary.

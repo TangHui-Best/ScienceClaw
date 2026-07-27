@@ -68,7 +68,7 @@ catalog, validation, snapshot, compiler, and blast-radius tests.
 Harness knowledge validation:
 
 ```powershell
-python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
+python C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
 ```
 
 ## Results
@@ -203,3 +203,19 @@ components without evaluating every draft capture.
   - Skill Replay E2E remains out of scope until governed offline assets exist.
   - Independent review is recommended for this non-trivial Harness feature but
     was not run because subagent dispatch requires explicit user authorization.
+
+## Supports Claim
+
+This record supports only the historical implementation and validation claims explicitly documented in its Results and source material. The migration does not add a new completion claim.
+
+## Verification Scope
+
+The original `## Scope`, commands, results, and artifacts define the verification boundary. Unrecorded environments or workflows remain outside scope.
+
+## Checks
+
+The commands, test runs, manual checks, and other proof are preserved in the original sections of this record. This heading makes the check boundary explicit without inventing new execution.
+
+## Limitations
+
+This is a migrated historical record. It proves only the results explicitly recorded at the time; absent checks, environments, or product acceptance must not be inferred as passing.

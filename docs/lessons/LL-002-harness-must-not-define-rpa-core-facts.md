@@ -62,3 +62,11 @@ asset report 或前端补丁成为第二事实源。
 ## Principle
 
 Harness 暴露问题，但不能拥有主链路语义；主链路先正确记录事实，Harness 再做资产治理和验证。
+
+## Case
+
+The observed failure case is preserved in `## Pitfall`, `## Root Cause`, and any Trigger or Source section. This migration does not create a new incident.
+
+## Resolution
+
+The historical resolution and prevention mechanism are preserved in `## Fix` and `## Protection`. Follow-up work must validate those mechanisms rather than treating this migration as proof.

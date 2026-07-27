@@ -14,12 +14,12 @@ Internal/onboarding agents SHOULD read `docs/project/agent-architecture-onboardi
 
 ## Harness Entry
 
-- Scope: Harness/RPA architecture work, asset governance, promotion, regression baseline, handoff, readiness claims, or any task involving Harness assets.
-- Requirement: agents MUST use `docs/rpa/harness/README.md` as the human-readable Harness entry point, then follow the linked detailed guide that matches the task.
-- Requirement: for non-trivial or multi-slice Harness/RPA work, agents MUST preserve Feature/Evidence closeout per `docs/lessons/LL-001-harness-feature-evidence-closeout-miss.md`; if closeout is missing, report `implementation done, harness closeout pending`.
+- Scope: 直接变更 Harness 资产、资产晋级、回归基线、Harness 交接/就绪声明，或跨越 RPA Core 与 Harness 所有权边界的任务。
+- Requirement: agents MUST read `docs/rpa/harness/README.md` for work in scope, then open only the linked guide and Feature Index entries that match the task; do not expand the entire Harness guide set by default.
+- Requirement: agents MUST create or update Feature/Evidence before completion for a new durable Harness capability, a cross-boundary behavior change, a high-risk change, or a release/handoff. A bounded local fix MUST reuse the owning Feature and record the smallest relevant verification; it MUST NOT be expanded into per-slice full closeout without a matching risk trigger. If required closeout is missing, report `implementation done, AgentMentor closeout pending`.
 - Requirement: agents MUST NOT treat `runtime_status=success`, `candidate-lite`, historical reports, or full-live generated artifacts as blocking baseline acceptance; `candidate` / `golden` promotion still requires human-reviewed expected signals and sensitivity.
 - Requirement: Harness/RPA changes MUST NOT let Harness assets, expected signals, controlled fixtures, or reports define product recording facts. If a Harness/RPA change touches Core files (`recording_runtime_agent.py`, `manager.py`, `trace_models.py`, `trace_recorder.py`, `trace_skill_compiler.py`, `route/rpa.py`, or RPA timeline/configure/test UI), agents MUST run focused Core SOP->SKILL regression tests in addition to Harness tests. Source: `docs/decisions/ADR-004-rpa-core-owns-recording-facts-harness-adapts-only.md`, `docs/lessons/LL-002-harness-must-not-define-rpa-core-facts.md`.
-- Rationale: keeps `AGENTS.md` as a short behavioral entry while the operational flow lives in the Harness README and linked guides.
+- Rationale: keeps `AGENTS.md` as a short behavioral entry while the operational flow, Feature recall, and historical rationale live in the Harness guides and AgentMentor artifacts. Source: `docs/features/F030-agentmentor-schema-migration-and-fast-path.md`, `docs/decisions/ADR-009-agentmentor-schema-migration-and-retrieval-fast-path.md`.
 
 ## Project Stack
 

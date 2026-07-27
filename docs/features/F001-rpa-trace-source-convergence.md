@@ -34,6 +34,30 @@ Active。公共 session 投影、trace/diagnostic 删除修复、生成/测试/�
 - Legacy plan: `docs/superpowers/plans/2026-05-16-rpa-trace-source-final-convergence.md`
 - Legacy spec: `docs/superpowers/specs/2026-05-12-rpa-sso-redirect-chain-compile-design.md`
 
+### Evidence
+
+- Historical links remain in the original record; this migration adds the current navigation category.
+
+### Decisions / ADRs
+
+- Historical links remain in the original record; this migration adds the current navigation category.
+
+### Lessons
+
+- Historical links remain in the original record; this migration adds the current navigation category.
+
+### Specs / Plans
+
+- Historical links remain in the original record; this migration adds the current navigation category.
+
+### Related Features
+
+- Historical links remain in the original record; this migration adds the current navigation category.
+
+### External Context
+
+- Historical links remain in the original record; this migration adds the current navigation category.
+
 ## Acceptance Criteria
 
 - [x] accepted timeline 的公共新路径只消费 `session.traces` / `trace_diagnostics` / `runtime_results`。
@@ -66,3 +90,50 @@ F001 已经进入明显的 patch chain。复盘后可以看到，这些 follow-u
 ## Next Step
 
 先检查 `origin/codex/rpa-region-selection-optimization-v2` 最近一次 GitHub Actions / review 结果，并把结果写回 `EV-001`。如果没有新增 blocker，就把 F001 剩余的全链路 smoke 和 MCP/export 收口验证补齐；如果有新增失败，要继续归因到现有 patch chain，而不是重新引入 step、legacy metadata 或站点特化 fallback。
+
+## Feature Intake
+
+- Original problem: The original problem is preserved in `## Goal` and `## Vision Anchor`; this migration does not reinterpret it.
+- User pain point: The historical user pain point is preserved in the original Feature narrative and linked Evidence.
+- Capability promise: The delivered or intended capability remains the one described in `## Goal` and `## Acceptance Criteria`.
+- Non-goals: This migration adds no business scope and does not change the historical Feature boundary.
+- Acceptance source: Existing acceptance criteria, linked Evidence, and recorded validation remain the source of truth.
+- Open questions: Any historical uncertainty remains unresolved unless the original record or a linked successor answers it.
+
+## Capability Contract
+
+The capability boundary is the historical `## Goal`, `## Vision Anchor`, acceptance criteria, and linked artifacts. This schema migration does not add, remove, or reinterpret RPA behavior.
+
+## Decision Context
+
+### Why
+
+The original Feature and its linked decisions preserve the rationale; this migration only makes that context recoverable through the current template.
+
+### Why Not
+
+Do not infer new product decisions from a document-schema migration or replace historical validation with template text.
+
+### If Modifying This Area, Check
+
+Read this Feature's Goal, Evidence, and linked ADRs before changing its capability boundary or claiming a new verification result.
+
+## Acceptance Map
+
+| Claim | Acceptance | Evidence | Status |
+| --- | --- | --- | --- |
+| Historical Feature contract | Existing `## Acceptance Criteria` and historical Feature record | Historical evidence documented in `## Evidence` | migrated |
+
+## State Timeline
+
+| Date | State | Trigger | Evidence | Note |
+| --- | --- | --- | --- | --- |
+| 2026-07-25 | active | AgentMentor schema migration | Existing Feature/Evidence | Historical facts retained; current required structure added |
+
+## Recovery Snapshot
+
+- Read first: `## Goal`, `## Links`, `## Acceptance Criteria`, and `## Evidence`.
+- Current capability state: Use the existing `## Current Status`; this migration does not change delivery status.
+- Known risks: Historical verification is limited to what the original record explicitly states.
+- Next safe action: Read the linked Evidence and ADRs before any follow-up change; update this Feature when the capability boundary or verified state changes.
+- Unblock condition: Not blocked by this migration.

@@ -51,3 +51,21 @@ compiler strategy 由 trace 上的证据画像决定，而不是由输出长相�
 - Evidence: `docs/evidence/EV-011-rpa-region-scoped-snapshot.md`
 - Generalization notes: `docs/rpa/trace-skill-compiler-generalization.md`
 - Legacy design: `docs/superpowers/specs/2026-05-26-rpa-selected-region-text-extract-design.md`
+
+## Decision Boundary
+
+### Applies To
+
+The decision scope described in the original Context and Decision sections.
+
+### Does Not Apply To
+
+Areas not explicitly covered by the original decision; this migration does not broaden its authority.
+
+## Rejected Options
+
+Existing alternatives remain authoritative where recorded in the original ADR. This migration introduces no new rejected architecture option.
+
+## Before Changing This Decision
+
+Read the original Context, Decision, Consequences, linked Feature, and Evidence. Record a successor ADR or explicit update before changing this durable boundary.

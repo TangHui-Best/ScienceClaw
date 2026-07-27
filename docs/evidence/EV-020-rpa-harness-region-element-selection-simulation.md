@@ -129,7 +129,7 @@ $env:PYTEST_DEBUG_TEMPROOT='E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-cu
 Harness structure and diff check:
 
 ```powershell
-python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py `
+python C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\knowledge_check.py `
   --root E:\Work-Project\OtherWork\ScienceClaw `
   --docs-path docs `
   --strict
@@ -213,7 +213,7 @@ Final verification for F020.2-F020.4:
 .\.venv\Scripts\python.exe -m pytest -q RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py -k "compact_region_context or passes_region_context_to_planner"
 3 passed, 83 deselected in 0.15s
 
-python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
+python C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
 Scanned 231 markdown file(s). Checked 44 knowledge artifact(s). Errors: 0. Warnings: 0.
 
 git diff --check
@@ -259,3 +259,19 @@ ADR: not triggered. This follows existing Trace-first and asset-driven Harness d
 Lesson: not triggered. The failure mode is now protected by focused regression tests and EV-020.
 
 Check: pass. Harness structural check and diff check pass; unrelated dirty workspace state remains outside F020.
+
+## Supports Claim
+
+This record supports only the historical implementation and validation claims explicitly documented in its Results and source material. The migration does not add a new completion claim.
+
+## Verification Scope
+
+The original `## Scope`, commands, results, and artifacts define the verification boundary. Unrecorded environments or workflows remain outside scope.
+
+## Checks
+
+The commands, test runs, manual checks, and other proof are preserved in the original sections of this record. This heading makes the check boundary explicit without inventing new execution.
+
+## Limitations
+
+This is a migrated historical record. It proves only the results explicitly recorded at the time; absent checks, environments, or product acceptance must not be inferred as passing.

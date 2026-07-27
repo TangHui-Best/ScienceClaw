@@ -236,7 +236,7 @@ Final closeout run:
 - `python -m pytest -q --basetemp E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-current RpaClaw/backend/tests/test_rpa_harness_skill_replay.py::test_skill_replay_injects_explicit_model_config_into_generated_skill RpaClaw/backend/tests/test_rpa_harness_stateful_sop.py::test_stateful_sop_injects_explicit_model_config_into_generated_skill RpaClaw/backend/tests/test_rpa_harness_governed_regression.py::test_governed_offline_regression_passes_model_config_to_replay_runners RpaClaw/backend/tests/test_rpa_harness_governed_regression.py::test_governed_offline_regression_cli_loads_model_config_file RpaClaw/backend/tests/test_rpa_harness_profile_runner.py::test_profile_cli_passes_model_config_file_to_deterministic_profile RpaClaw/backend/tests/test_rpa_harness_profile_runner.py::test_profile_interpretation_without_runner_signals_is_insufficient_evidence`
   - Result: `6 passed in 10.76s`
 - Broader runner suite note: `test_rpa_harness_skill_replay.py test_rpa_harness_stateful_sop.py test_rpa_harness_governed_regression.py test_rpa_harness_profile_runner.py` produced `37 passed, 3 failed`; two failures were pre-existing real candidate fixture deletions under `data/rpa_harness_assets_bootstrap/hcap-4be6265f43eb42dfa259182207aa64cc`, and one mock-signature failure was fixed by F022.3.
-- `python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict`
+- `python C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict`
   - Result: `Scanned 237 markdown file(s). Checked 48 knowledge artifact(s). Errors: 0. Warnings: 0.`
 - `git diff --check -- <F022 touched files>`
   - Result: exit 0; only existing LF/CRLF normalization warnings.
@@ -264,3 +264,19 @@ Final closeout run:
 ## Notes
 
 Raw assets remain the evidence source of record. Sanitized assets are derived replay/test artifacts.
+
+## Supports Claim
+
+This record supports only the historical implementation and validation claims explicitly documented in its Results and source material. The migration does not add a new completion claim.
+
+## Verification Scope
+
+The original `## Scope`, commands, results, and artifacts define the verification boundary. Unrecorded environments or workflows remain outside scope.
+
+## Checks
+
+The commands, test runs, manual checks, and other proof are preserved in the original sections of this record. This heading makes the check boundary explicit without inventing new execution.
+
+## Limitations
+
+This is a migrated historical record. It proves only the results explicitly recorded at the time; absent checks, environments, or product acceptance must not be inferred as passing.

@@ -6,9 +6,9 @@ scope: project
 source_feature_ids: [F002]
 feature_refs:
   - docs/features/F002-rpa-harness-v0.md
-applies_to: [harness-closeout, multi-slice-feature, evidence-gate]
+applies_to: [harness-closeout, durable-capability, high-risk-change, evidence-gate]
 created: 2026-05-18
-updated: 2026-05-22
+updated: 2026-07-25
 ---
 
 # LL-001: Harness Feature Evidence Closeout Miss
@@ -33,9 +33,9 @@ F0-F14 开发过程中，执行者把 `docs/superpowers/plans/2026-05-17-rpa-har
 - `docs/evidence/EV-002-rpa-harness-v0.md` 记录 F0-F14、post-F14 fixes、系统级 validator 路径/输出和残留风险。
 - 本 Lesson 保留过程事故根因和防复发机制。
 - `docs/BACKLOG.md` 记录 F002 active 状态和下一步。
-- 后续使用系统级 bundled validator：`C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py`。
+- 后续使用系统级 bundled validator：`C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\knowledge_check.py`。
 
-## Protection
+## Historical Protection (Superseded)
 
 后续 multi-slice / high-risk 工作必须遵守：
 
@@ -44,6 +44,18 @@ F0-F14 开发过程中，执行者把 `docs/superpowers/plans/2026-05-17-rpa-har
 3. 每个 slice 完成后，在 Evidence 记录 commit、验证命令、结果、review 状态和 residual risk，再进入下一 slice。
 4. 如果 closeout 缺失，只能报告 `implementation done, harness closeout pending`，不能继续声明 ready/completed。
 5. 使用系统级 bundled scripts/templates；不要求项目先复制 Harness scripts/templates，除非未来接 CI、GitHub Actions 或离线策略。
+
+## Protection
+
+后续新建持久能力、跨 Core/Harness 所有权边界、高风险变更、发布或交接必须遵守：
+
+1. 开始前通过 `docs/features/INDEX.md` 定位 owning Feature；没有匹配 Feature 时创建或更新 active Feature page。
+2. 在 Feature 交付边界、发布或交接前记录 Evidence：commit、验证命令、结果、review 状态和 residual risk。
+3. 有明确 owning Feature 的局部修复，只记录最小相关验证和必要 Patch History；不得因为工作被拆成多个 slice 而机械重复完整 Feature/Evidence closeout。
+4. 如果要求的 closeout 缺失，只能报告 `implementation done, AgentMentor closeout pending`，不能继续声明 ready/completed。
+5. 使用当前系统级 `using-agentmentor` bundled scripts/templates；不要要求项目复制 AgentMentor scripts/templates，除非未来接 CI、GitHub Actions 或离线策略。
+
+该规则更新自 F030/ADR-009：原保护机制解决了“未沉淀交付”的真实问题，但按每个 slice 强制完整收尾会把历史治理债务引入普通开发热路径。
 
 ## Recurrence
 
@@ -77,3 +89,11 @@ Additional protection:
 ## Principle
 
 Harness 的门禁必须留下可验证的项目记忆。计划、测试和 commit 都是证据输入，但 Feature/Evidence closeout 才是后续 agent 能恢复目标、验收状态和残留风险的入口。
+
+## Case
+
+The observed failure case is preserved in `## Pitfall`, `## Root Cause`, and any Trigger or Source section. This migration does not create a new incident.
+
+## Resolution
+
+The historical resolution and prevention mechanism are preserved in `## Fix` and `## Protection`. Follow-up work must validate those mechanisms rather than treating this migration as proof.

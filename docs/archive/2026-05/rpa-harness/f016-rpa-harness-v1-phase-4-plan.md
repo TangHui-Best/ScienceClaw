@@ -233,7 +233,7 @@ python -m backend.rpa.harness.run_user_input_replay --assets data\rpa_harness_as
 $env:PYTHONPATH='RpaClaw'
 python -m backend.rpa.harness.run_user_input_replay --assets data\rpa_harness_assets_bootstrap --format summary --lang zh --output docs\rpa\harness\reports\2026-05-28-f016-user-input-replay.md --machine-report docs\rpa\harness\reports\2026-05-28-f016-user-input-replay.json
 
-python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
+python C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
 ```
 
 Update EV-016 with command output, report paths, residual risk, and Phase 5

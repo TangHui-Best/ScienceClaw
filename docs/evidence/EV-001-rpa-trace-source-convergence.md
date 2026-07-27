@@ -20,7 +20,7 @@ Evidence for F001: remove `step` / `recorded_actions` / `recording_diagnostics` 
 ## Commands
 
 ```text
-python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root . --docs-path docs --strict
+python C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\knowledge_check.py --root . --docs-path docs --strict
 $env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_manual_recording_normalizer.py -q
 $env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_manager.py -q
 $env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q
@@ -40,7 +40,7 @@ Partial。F001 的历史 task bundles 与 7M/7N follow-up patches 都已有本�
 ## Harness Validation
 
 ```text
-python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root . --docs-path docs --strict
+python C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\knowledge_check.py --root . --docs-path docs --strict
 ```
 
 Result: `Scanned 151 markdown file(s). Checked 6 knowledge artifact(s). Errors: 0. Warnings: 0.`
@@ -966,3 +966,19 @@ Manual smoke:
 Closeout verdict: conditional.
 
 Completion claim allowed: no for whole-feature closeout in this migration pass. Historical task bundles below may individually be closed, but `F001` as a whole remains active until the latest remote CI / PR evidence and full-chain smoke are observed.
+
+## Supports Claim
+
+This record supports only the historical implementation and validation claims explicitly documented in its Results and source material. The migration does not add a new completion claim.
+
+## Verification Scope
+
+The original `## Scope`, commands, results, and artifacts define the verification boundary. Unrecorded environments or workflows remain outside scope.
+
+## Checks
+
+The commands, test runs, manual checks, and other proof are preserved in the original sections of this record. This heading makes the check boundary explicit without inventing new execution.
+
+## Limitations
+
+This is a migrated historical record. It proves only the results explicitly recorded at the time; absent checks, environments, or product acceptance must not be inferred as passing.

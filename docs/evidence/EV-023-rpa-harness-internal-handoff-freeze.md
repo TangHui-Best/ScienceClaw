@@ -73,7 +73,7 @@ rg "docs/rpa/harness/f0(13|14|15|16|17|18)|rpa/harness/f0(13|14|15|16|17|18)" do
 ```powershell
 $env:PYTHONPATH='RpaClaw'
 python -m pytest -q --basetemp E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-current RpaClaw/backend/tests/test_rpa_harness_catalog.py RpaClaw/backend/tests/test_rpa_harness_asset_pool_doctor.py
-python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
+python C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
 git diff --check
 ```
 
@@ -128,3 +128,19 @@ Knowledge Capture:
 ## Notes
 
 本轮不修复 `TraceSkillCompiler` 泛化问题；只把风险归属和验收路径写清楚，避免后续在 Harness 里加入站点特例或 expected-signal 例外。
+
+## Supports Claim
+
+This record supports only the historical implementation and validation claims explicitly documented in its Results and source material. The migration does not add a new completion claim.
+
+## Verification Scope
+
+The original `## Scope`, commands, results, and artifacts define the verification boundary. Unrecorded environments or workflows remain outside scope.
+
+## Checks
+
+The commands, test runs, manual checks, and other proof are preserved in the original sections of this record. This heading makes the check boundary explicit without inventing new execution.
+
+## Limitations
+
+This is a migrated historical record. It proves only the results explicitly recorded at the time; absent checks, environments, or product acceptance must not be inferred as passing.

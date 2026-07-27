@@ -152,7 +152,7 @@ $env:PYTHONPATH='RpaClaw'; python -m pytest --basetemp .pytest-tmp-pr59-nav-rout
 Harness structure:
 
 ```powershell
-python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
+python C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
 ```
 
 ## Results
@@ -221,3 +221,19 @@ python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --
 ## Notes
 
 本次修复明确拒绝三类路径：不从 Harness expected signals 合成产品 trace，不恢复 legacy step 作为事实源，不为单一站点或文件列表补关键词规则。Core 负责捕获真实浏览器下载事件；Harness 负责验证和治理。
+
+## Supports Claim
+
+This record supports only the historical implementation and validation claims explicitly documented in its Results and source material. The migration does not add a new completion claim.
+
+## Verification Scope
+
+The original `## Scope`, commands, results, and artifacts define the verification boundary. Unrecorded environments or workflows remain outside scope.
+
+## Checks
+
+The commands, test runs, manual checks, and other proof are preserved in the original sections of this record. This heading makes the check boundary explicit without inventing new execution.
+
+## Limitations
+
+This is a migrated historical record. It proves only the results explicitly recorded at the time; absent checks, environments, or product acceptance must not be inferred as passing.

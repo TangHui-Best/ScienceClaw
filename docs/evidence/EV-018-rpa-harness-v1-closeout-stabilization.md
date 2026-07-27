@@ -1,4 +1,4 @@
-﻿---
+---
 id: EV-018
 doc_kind: evidence
 title: RPA Harness v1 Closeout / Stabilization Evidence
@@ -400,7 +400,7 @@ Warning: langchain_core Pydantic V1 compatibility warning on Python 3.14.
 Strict Harness knowledge validation:
 
 ```powershell
-python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py `
+python C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\knowledge_check.py `
   --root E:\Work-Project\OtherWork\ScienceClaw `
   --docs-path docs `
   --strict
@@ -450,7 +450,7 @@ all source-map links exist
 F018.1 strict Harness validation:
 
 ```powershell
-python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py `
+python C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\knowledge_check.py `
   --root E:\Work-Project\OtherWork\ScienceClaw `
   --docs-path docs `
   --strict
@@ -644,3 +644,19 @@ review signals, not as the sole closeout authority.
 
 F018 should move to human review. Further enhancement should be v1.1/backlog or PR
 review work rather than continuing to expand v1.
+
+## Supports Claim
+
+This record supports only the historical implementation and validation claims explicitly documented in its Results and source material. The migration does not add a new completion claim.
+
+## Verification Scope
+
+The original `## Scope`, commands, results, and artifacts define the verification boundary. Unrecorded environments or workflows remain outside scope.
+
+## Checks
+
+The commands, test runs, manual checks, and other proof are preserved in the original sections of this record. This heading makes the check boundary explicit without inventing new execution.
+
+## Limitations
+
+This is a migrated historical record. It proves only the results explicitly recorded at the time; absent checks, environments, or product acceptance must not be inferred as passing.

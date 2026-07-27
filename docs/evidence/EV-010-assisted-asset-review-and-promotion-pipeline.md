@@ -77,7 +77,7 @@ python -m backend.rpa.harness.run_governed_regression --assets data\rpa_harness_
 Planned Harness knowledge validation:
 
 ```powershell
-python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
+python C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
 ```
 
 ## Results
@@ -308,11 +308,11 @@ pytest -q --basetemp E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-current R
 
 52 passed in 52.75s
 
-python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
+python C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
 Errors: 0
 Warnings: 0
 
-python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\harness_closeout_check.py --file docs\evidence\EV-010-assisted-asset-review-and-promotion-pipeline.md
+python C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\closeout_check.py --file docs\evidence\EV-010-assisted-asset-review-and-promotion-pipeline.md
 Harness closeout block structure: pass
 
 $env:PYTHONPATH='RpaClaw'
@@ -487,5 +487,21 @@ Feature: updated
 completed.
 
 Check: passed; `knowledge_check.py --strict` reported Errors 0 and Warnings 0,
-and `harness_closeout_check.py --file docs\evidence\EV-010-assisted-asset-review-and-promotion-pipeline.md`
+and `closeout_check.py --file docs\evidence\EV-010-assisted-asset-review-and-promotion-pipeline.md`
 reported closeout block structure pass.
+
+## Supports Claim
+
+This record supports only the historical implementation and validation claims explicitly documented in its Results and source material. The migration does not add a new completion claim.
+
+## Verification Scope
+
+The original `## Scope`, commands, results, and artifacts define the verification boundary. Unrecorded environments or workflows remain outside scope.
+
+## Checks
+
+The commands, test runs, manual checks, and other proof are preserved in the original sections of this record. This heading makes the check boundary explicit without inventing new execution.
+
+## Limitations
+
+This is a migrated historical record. It proves only the results explicitly recorded at the time; absent checks, environments, or product acceptance must not be inferred as passing.

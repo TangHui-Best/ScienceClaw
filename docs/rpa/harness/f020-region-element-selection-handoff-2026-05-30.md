@@ -64,7 +64,7 @@ $env:PYTEST_DEBUG_TEMPROOT='E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-cu
 Harness 结构检查：
 
 ```powershell
-python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py `
+python C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\knowledge_check.py `
   --root E:\Work-Project\OtherWork\ScienceClaw `
   --docs-path docs `
   --strict

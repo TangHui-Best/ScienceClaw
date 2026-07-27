@@ -100,3 +100,7 @@ ADR-005 和 F025 已经证明 Browser-use 能通过 CDP 复用 ScienceClaw 当�
 - Trace 边界：[ADR-001](ADR-001-rpa-trace-is-single-accepted-timeline.md)、[ADR-002](ADR-002-trace-evidence-driven-compiler-strategy.md)
 - 实施规格：[2026-07-20 Browser-use Hybrid V1](../superpowers/specs/2026-07-20-rpa-browser-use-hybrid-v1-implementation-design.md)
 - 分支基线：`3aa97568b78426b75711cff4f9f76ec765b71f99`
+
+## Rejected Options
+
+Existing alternatives remain authoritative where recorded in the original ADR. This migration introduces no new rejected architecture option.

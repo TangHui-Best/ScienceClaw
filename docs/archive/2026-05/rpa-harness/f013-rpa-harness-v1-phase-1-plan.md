@@ -206,7 +206,7 @@ python -m backend.rpa.harness.run_harness_profile --assets data\rpa_harness_asse
 Attempt Harness knowledge check:
 
 ```powershell
-python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
+python C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
 ```
 
 If knowledge check fails because of existing old document structure, record the exact failure category in EV-013 and do not perform broad cleanup in this feature.

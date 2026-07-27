@@ -35,7 +35,7 @@ Active。PR #55 的 review blockers 已经被修掉，主线 region-scoped snaps
 - `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py -q`
 - `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_region_context.py RpaClaw/backend/tests/test_rpa_assistant_snapshot_runtime.py RpaClaw/backend/tests/test_rpa_snapshot_compression.py RpaClaw/backend/tests/test_rpa_snapshot_compression_structured.py RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py RpaClaw/backend/tests/test_rpa_trace_models.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py -q`
 - `git diff --check -- RpaClaw/backend/rpa/trace_locator_utils.py RpaClaw/backend/rpa/recording_runtime_agent.py RpaClaw/backend/rpa/trace_skill_compiler.py RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py RpaClaw/backend/tests/test_rpa_trace_skill_compiler.py docs/features/F011-rpa-region-scoped-snapshot.md docs/evidence/EV-011-rpa-region-scoped-snapshot.md`
-- `python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root . --docs-path docs --strict`
+- `python C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\knowledge_check.py --root . --docs-path docs --strict`
 - `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_region_context.py::test_region_context_builds_scope_from_evidence RpaClaw/backend/tests/test_rpa_region_context.py::test_region_scope_omits_standalone_evidence_payload RpaClaw/backend/tests/test_rpa_trace_models.py::test_accepted_trace_carries_region_scope_evidence -q`
 - `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_assistant_snapshot_runtime.py -q`
 - `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_snapshot_compression.py RpaClaw/backend/tests/test_rpa_snapshot_compression_structured.py -q`
@@ -62,8 +62,8 @@ Active。PR #55 的 review blockers 已经被修掉，主线 region-scoped snaps
 - `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_parse_json_object_wraps_top_level_run_python_code RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_parse_json_object_rejects_top_level_python_without_runtime_context RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_parse_json_object_rejects_run_python_without_runner -q`
 - `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_parse_json_object_accepts_fenced_json RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_parse_json_object_rejects_run_python_without_runner RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_parse_json_object_wraps_top_level_run_python_code RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_parse_json_object_rejects_top_level_python_without_runtime_context RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_parse_json_object_accepts_plan_with_extra_planner_output RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_parse_json_object_ignores_analysis_and_evidence_json_before_plan RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_parse_json_object_finds_unfenced_plan_after_evidence_json RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_planner_json_parse_failure_returns_agent_diagnostic -q`
 - `$env:PYTHONPATH='RpaClaw'; python -m pytest RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_recording_runtime_agent_dumps_planner_failure_when_debug_dir_is_enabled RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_recording_runtime_agent_dumps_repair_planner_failure_when_debug_dir_is_enabled RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_recording_runtime_agent_passes_region_context_to_planner RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_recording_runtime_agent_omits_region_context_when_absent -q`
-- `python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root . --docs-path docs/features`
-- `python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root . --docs-path docs`
+- `python C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\knowledge_check.py --root . --docs-path docs/features`
+- `python C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\knowledge_check.py --root . --docs-path docs`
 - `Test-Path 'RpaClaw\frontend\node_modules'`
 - `git diff --check`
 - `$env:PYTHONPATH='RpaClaw'; E:\Work-Project\OtherWork\ScienceClaw\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_recording_runtime_agent_uses_region_scoped_snapshot_for_region_planner RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_recording_runtime_agent_region_repair_payload_excludes_full_page_snapshot RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_recording_runtime_agent_accepts_planner_selected_region_extract_field RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py::test_recording_runtime_agent_reasks_planner_when_region_extract_snapshot_missing_fields -q`
@@ -96,8 +96,8 @@ Active。PR #55 的 review blockers 已经被修掉，主线 region-scoped snaps
 - `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_recording_runtime_agent.py -q`
 - `$env:PYTHONPATH='RpaClaw'; .\.venv\Scripts\python.exe -m pytest RpaClaw/backend/tests/test_rpa_snapshot_compression.py -q`
 - `cd rpa-eval-app/frontend; npm.cmd run build`
-- `python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root . --docs-path docs/features`
-- `python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root . --docs-path docs/evidence`
+- `python C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\knowledge_check.py --root . --docs-path docs/features`
+- `python C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\knowledge_check.py --root . --docs-path docs/evidence`
 
 ## Results
 
@@ -170,7 +170,7 @@ Current summary:
 ## Harness Validation
 
 ```text
-python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root . --docs-path docs --strict
+python C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\knowledge_check.py --root . --docs-path docs --strict
 ```
 
 Result: `Scanned 152 markdown file(s). Checked 6 knowledge artifact(s). Errors: 0. Warnings: 0.`
@@ -235,3 +235,19 @@ Result: `Scanned 152 markdown file(s). Checked 6 knowledge artifact(s). Errors: 
 - `region_context.py` 只新增 scope conversion，没有扩展为第二套 snapshot/compression/compiler 系统。
 - `RecordingRuntimeAgent` 不再把 top-level `region_context` 作为 planner 主输入；兼容性信号仍进入 debug/trace evidence。
 - Replay/compile 路径未引入坐标执行逻辑。
+
+## Supports Claim
+
+This record supports only the historical implementation and validation claims explicitly documented in its Results and source material. The migration does not add a new completion claim.
+
+## Verification Scope
+
+The original `## Scope`, commands, results, and artifacts define the verification boundary. Unrecorded environments or workflows remain outside scope.
+
+## Checks
+
+The commands, test runs, manual checks, and other proof are preserved in the original sections of this record. This heading makes the check boundary explicit without inventing new execution.
+
+## Limitations
+
+This is a migrated historical record. It proves only the results explicitly recorded at the time; absent checks, environments, or product acceptance must not be inferred as passing.

@@ -107,6 +107,7 @@ Partial。第一阶段已打通 browser-use 复用 local 录制浏览器并生�
 
 ### Evidence
 
+- [EV-028 Browser-use Recording Operator POC Historical Evidence](../evidence/EV-028-browser-use-recording-operator-poc-2026-07-05.md)
 - [EV-025 Browser-use Live UI E2E](../evidence/EV-025-browser-use-live-ui-e2e.md)
 - [EV-026 Browser-use 真实业务矩阵 Live UI E2E](../evidence/EV-026-browser-use-live-ui-business-matrix.md)
 

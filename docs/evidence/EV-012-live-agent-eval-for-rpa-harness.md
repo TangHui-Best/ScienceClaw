@@ -63,13 +63,13 @@ $env:PYTHONPATH='RpaClaw'
 Knowledge check:
 
 ```powershell
-.\.venv\Scripts\python.exe C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root . --docs-path docs
+.\.venv\Scripts\python.exe C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\knowledge_check.py --root . --docs-path docs
 ```
 
 Closeout structure check:
 
 ```powershell
-.\.venv\Scripts\python.exe C:\Users\HUAWEI\.codex\skills\using-harness\scripts\harness_closeout_check.py --file .\tmp-harness-live-agent-closeout.txt
+.\.venv\Scripts\python.exe C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\closeout_check.py --file .\tmp-harness-live-agent-closeout.txt
 ```
 
 ## Results
@@ -170,3 +170,19 @@ Evidence level: standard
 Feature: [F012 Live Agent Eval For RPA Harness](../features/F012-live-agent-eval-for-rpa-harness.md) is completed.
 
 Check: passed; `knowledge_check.py --root . --docs-path docs` reported Errors 0 and Warnings 0 during implementation closeout, and this Evidence will be rechecked after the documentation patch.
+
+## Supports Claim
+
+This record supports only the historical implementation and validation claims explicitly documented in its Results and source material. The migration does not add a new completion claim.
+
+## Verification Scope
+
+The original `## Scope`, commands, results, and artifacts define the verification boundary. Unrecorded environments or workflows remain outside scope.
+
+## Checks
+
+The commands, test runs, manual checks, and other proof are preserved in the original sections of this record. This heading makes the check boundary explicit without inventing new execution.
+
+## Limitations
+
+This is a migrated historical record. It proves only the results explicitly recorded at the time; absent checks, environments, or product acceptance must not be inferred as passing.

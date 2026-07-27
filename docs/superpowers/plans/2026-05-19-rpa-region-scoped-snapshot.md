@@ -1065,7 +1065,7 @@ Replace the pending sections in `EV-011` with the commands actually run and thei
 Run:
 
 ```powershell
-python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root . --docs-path docs\features
+python C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\knowledge_check.py --root . --docs-path docs\features
 ```
 
 Expected for changed F011/EV-011: no new F011/EV-011 errors. Existing F001 format errors may remain and should be recorded separately instead of fixed in this feature slice.

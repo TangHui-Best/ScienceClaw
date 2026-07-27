@@ -200,7 +200,7 @@ schema_version remains rpa-harness-governed-offline-regression-v0
 Harness knowledge validation:
 
 ```powershell
-python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
+python C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
 ```
 
 Result:
@@ -219,7 +219,7 @@ Attribution:
 Phase 2 recheck:
 
 ```powershell
-python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
+python C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
 ```
 
 Result:
@@ -290,3 +290,19 @@ Review follow-up:
 Implementation done. Harness closeout is conditional because independent review is still pending and Phase 2 report/closeout interpretation hardening is tracked by F014. The earlier strict metadata blocker no longer reproduces in the current workspace.
 
 Recommendation for Phase 2: proceed with F014 report interpretation and Markdown closeout generation for Agents. Do not expand full/live profile before the deterministic evidence path is considered stable.
+
+## Supports Claim
+
+This record supports only the historical implementation and validation claims explicitly documented in its Results and source material. The migration does not add a new completion claim.
+
+## Verification Scope
+
+The original `## Scope`, commands, results, and artifacts define the verification boundary. Unrecorded environments or workflows remain outside scope.
+
+## Checks
+
+The commands, test runs, manual checks, and other proof are preserved in the original sections of this record. This heading makes the check boundary explicit without inventing new execution.
+
+## Limitations
+
+This is a migrated historical record. It proves only the results explicitly recorded at the time; absent checks, environments, or product acceptance must not be inferred as passing.

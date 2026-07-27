@@ -176,3 +176,19 @@ Pattern-based scanning can miss novel secrets or over-report public web noise. H
 ## Notes
 
 `run_asset_sensitivity_scan` is a deterministic evidence generator. `--confirm-sensitivity` remains a human governance confirmation and should be based on the scan report plus any required manual review.
+
+## Supports Claim
+
+This record supports only the historical implementation and validation claims explicitly documented in its Results and source material. The migration does not add a new completion claim.
+
+## Verification Scope
+
+The original `## Scope`, commands, results, and artifacts define the verification boundary. Unrecorded environments or workflows remain outside scope.
+
+## Checks
+
+The commands, test runs, manual checks, and other proof are preserved in the original sections of this record. This heading makes the check boundary explicit without inventing new execution.
+
+## Limitations
+
+This is a migrated historical record. It proves only the results explicitly recorded at the time; absent checks, environments, or product acceptance must not be inferred as passing.

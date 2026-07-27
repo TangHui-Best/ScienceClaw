@@ -343,3 +343,19 @@ Current real bootstrap run:
 ## Closeout
 
 Implementation done. Focused tests, real bootstrap reports, JSON parse checks, strict knowledge validation, and independent review follow-up pass. F015 is ready for human review; Phase 4 may start after accepting the Phase 3 governance guardrails.
+
+## Supports Claim
+
+This record supports only the historical implementation and validation claims explicitly documented in its Results and source material. The migration does not add a new completion claim.
+
+## Verification Scope
+
+The original `## Scope`, commands, results, and artifacts define the verification boundary. Unrecorded environments or workflows remain outside scope.
+
+## Checks
+
+The commands, test runs, manual checks, and other proof are preserved in the original sections of this record. This heading makes the check boundary explicit without inventing new execution.
+
+## Limitations
+
+This is a migrated historical record. It proves only the results explicitly recorded at the time; absent checks, environments, or product acceptance must not be inferred as passing.

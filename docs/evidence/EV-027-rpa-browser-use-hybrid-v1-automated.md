@@ -62,3 +62,19 @@ python C:\Users\HUAWEI\.codex\plugins\cache\personal\agentmentor\0.2.0+codex.202
 - `keep_alive=True` 配合 `BrowserSession.stop()` 只释放 Browser-use 自身 CDP/session/event 资源；是否在真实产品环境中持续保留宿主 Page，仍需 Live UI E2E 观察。
 - Browser-use 执行期间前端禁止地址栏和 screencast 鼠标、键盘、粘贴输入；后端 execution token 防止并发自然语言请求提前恢复另一个请求的监听状态。
 - `.pytest-f029-run` 是本次权限规避产生的本地测试临时产物，不属于提交内容。
+
+## Supports Claim
+
+This record supports only the historical implementation and validation claims explicitly documented in its Results and source material. The migration does not add a new completion claim.
+
+## Verification Scope
+
+The original `## Scope`, commands, results, and artifacts define the verification boundary. Unrecorded environments or workflows remain outside scope.
+
+## Checks
+
+The commands, test runs, manual checks, and other proof are preserved in the original sections of this record. This heading makes the check boundary explicit without inventing new execution.
+
+## Limitations
+
+This is a migrated historical record. It proves only the results explicitly recorded at the time; absent checks, environments, or product acceptance must not be inferred as passing.

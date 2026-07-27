@@ -149,7 +149,7 @@ python -m backend.rpa.harness.run_harness_profile --assets data\rpa_harness_asse
 Run strict Harness knowledge validation:
 
 ```powershell
-python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
+python C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
 ```
 
 If strict validation still fails because of pre-existing metadata outside F014, record the exact attribution in EV-014 and keep readiness conditional.

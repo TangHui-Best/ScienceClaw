@@ -96,7 +96,7 @@ python -m pytest -q RpaClaw/backend/tests/test_rpa_harness_sensitivity_scan.py R
 - [ ] **Step 2: Run Harness knowledge check**
 
 ```powershell
-python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
+python C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\knowledge_check.py --root E:\Work-Project\OtherWork\ScienceClaw --docs-path docs --strict
 ```
 
 - [ ] **Step 3: Run diff check**

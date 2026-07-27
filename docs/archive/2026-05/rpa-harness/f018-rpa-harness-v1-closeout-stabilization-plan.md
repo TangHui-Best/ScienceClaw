@@ -1,4 +1,4 @@
-﻿# F018 RPA Harness v1 Closeout / Stabilization Plan
+# F018 RPA Harness v1 Closeout / Stabilization Plan
 
 ## Goal
 
@@ -119,7 +119,7 @@ pytest -q --basetemp E:\Work-Project\OtherWork\ScienceClaw\.pytest-tmp-current `
 Run strict Harness validation:
 
 ```powershell
-python C:\Users\HUAWEI\.codex\skills\using-harness\scripts\knowledge_check.py `
+python C:\Users\HUAWEI\.codex\skills\using-agentmentor\scripts\knowledge_check.py `
   --root E:\Work-Project\OtherWork\ScienceClaw `
   --docs-path docs `
   --strict

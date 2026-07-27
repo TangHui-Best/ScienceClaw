@@ -40,3 +40,21 @@ RPA 录制一度同时维护 `session.steps`、`recorded_actions`、`session.tra
 - Legacy spec: `docs/superpowers/specs/2026-04-28-rpa-trace-first-full-migration-design.md`
 - Legacy plan: `docs/superpowers/plans/2026-04-28-rpa-trace-first-full-migration.md`
 - Legacy plan: `docs/superpowers/plans/2026-05-16-rpa-trace-source-final-convergence.md`
+
+## Decision Boundary
+
+### Applies To
+
+The decision scope described in the original Context and Decision sections.
+
+### Does Not Apply To
+
+Areas not explicitly covered by the original decision; this migration does not broaden its authority.
+
+## Rejected Options
+
+Existing alternatives remain authoritative where recorded in the original ADR. This migration introduces no new rejected architecture option.
+
+## Before Changing This Decision
+
+Read the original Context, Decision, Consequences, linked Feature, and Evidence. Record a successor ADR or explicit update before changing this durable boundary.

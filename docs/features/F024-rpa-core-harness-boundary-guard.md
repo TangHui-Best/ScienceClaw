@@ -33,6 +33,30 @@ updated: 2026-06-03
 - Existing ADR: [ADR-001 RPA Trace Is The Single Accepted Timeline](../decisions/ADR-001-rpa-trace-is-single-accepted-timeline.md)
 - Existing ADR: [ADR-002 Trace Evidence Drives Compiler Strategy](../decisions/ADR-002-trace-evidence-driven-compiler-strategy.md)
 
+### Evidence
+
+- Historical links remain in the original record; this migration adds the current navigation category.
+
+### Decisions / ADRs
+
+- Historical links remain in the original record; this migration adds the current navigation category.
+
+### Lessons
+
+- Historical links remain in the original record; this migration adds the current navigation category.
+
+### Specs / Plans
+
+- Historical links remain in the original record; this migration adds the current navigation category.
+
+### Related Features
+
+- Historical links remain in the original record; this migration adds the current navigation category.
+
+### External Context
+
+- Historical links remain in the original record; this migration adds the current navigation category.
+
 ## Acceptance Criteria
 
 - [x] `RecordingRuntimeAgent` 的 simple `click` plan 能捕获真实 Playwright download event，并写入当前 accepted trace 的 `signals.download`。
@@ -77,3 +101,50 @@ F024 已出现 7 个补丁，但这些补丁不是同一站点规则的堆叠，
 ## Next Step
 
 进入人工 review。后续任何 Harness/RPA 变更若触碰 Core 文件，必须按 ADR-004 和 AGENTS.md 规则同时运行 Core SOP->SKILL focused regression。
+
+## Feature Intake
+
+- Original problem: The original problem is preserved in `## Goal` and `## Vision Anchor`; this migration does not reinterpret it.
+- User pain point: The historical user pain point is preserved in the original Feature narrative and linked Evidence.
+- Capability promise: The delivered or intended capability remains the one described in `## Goal` and `## Acceptance Criteria`.
+- Non-goals: This migration adds no business scope and does not change the historical Feature boundary.
+- Acceptance source: Existing acceptance criteria, linked Evidence, and recorded validation remain the source of truth.
+- Open questions: Any historical uncertainty remains unresolved unless the original record or a linked successor answers it.
+
+## Capability Contract
+
+The capability boundary is the historical `## Goal`, `## Vision Anchor`, acceptance criteria, and linked artifacts. This schema migration does not add, remove, or reinterpret RPA behavior.
+
+## Decision Context
+
+### Why
+
+The original Feature and its linked decisions preserve the rationale; this migration only makes that context recoverable through the current template.
+
+### Why Not
+
+Do not infer new product decisions from a document-schema migration or replace historical validation with template text.
+
+### If Modifying This Area, Check
+
+Read this Feature's Goal, Evidence, and linked ADRs before changing its capability boundary or claiming a new verification result.
+
+## Acceptance Map
+
+| Claim | Acceptance | Evidence | Status |
+| --- | --- | --- | --- |
+| Historical Feature contract | Existing `## Acceptance Criteria` and historical Feature record | Historical evidence documented in `## Evidence` | migrated |
+
+## State Timeline
+
+| Date | State | Trigger | Evidence | Note |
+| --- | --- | --- | --- | --- |
+| 2026-07-25 | review | AgentMentor schema migration | Existing Feature/Evidence | Historical facts retained; current required structure added |
+
+## Recovery Snapshot
+
+- Read first: `## Goal`, `## Links`, `## Acceptance Criteria`, and `## Evidence`.
+- Current capability state: Use the existing `## Current Status`; this migration does not change delivery status.
+- Known risks: Historical verification is limited to what the original record explicitly states.
+- Next safe action: Read the linked Evidence and ADRs before any follow-up change; update this Feature when the capability boundary or verified state changes.
+- Unblock condition: Not blocked by this migration.

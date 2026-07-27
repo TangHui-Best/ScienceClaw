@@ -50,3 +50,21 @@ RPA Core 拥有录制事实，Harness 只能适配和验证事实。
 - Existing decision: `docs/decisions/ADR-001-rpa-trace-is-single-accepted-timeline.md`
 - Existing decision: `docs/decisions/ADR-002-trace-evidence-driven-compiler-strategy.md`
 - Related Feature: `docs/features/F019-rpa-harness-controlled-download-side-effects.md`
+
+## Decision Boundary
+
+### Applies To
+
+The decision scope described in the original Context and Decision sections.
+
+### Does Not Apply To
+
+Areas not explicitly covered by the original decision; this migration does not broaden its authority.
+
+## Rejected Options
+
+Existing alternatives remain authoritative where recorded in the original ADR. This migration introduces no new rejected architecture option.
+
+## Before Changing This Decision
+
+Read the original Context, Decision, Consequences, linked Feature, and Evidence. Record a successor ADR or explicit update before changing this durable boundary.
