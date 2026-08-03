@@ -74,6 +74,9 @@ services:
       MONGODB_USER: scienceone
       MONGODB_PASSWORD: Yp51Bi1eEjC77sAt
       TASK_SERVICE_API_KEY: ${TASK_SERVICE_API_KEY:-}
+      # Keep per-session Docker runtimes on the same explicit bridge as backend.
+      # Do not depend on Compose's project-name-derived implicit network.
+      DOCKER_RUNTIME_NETWORK: ${DOCKER_RUNTIME_NETWORK:-rpaclaw_default}
       # 诊断模式：记录每步 LLM 调用的完整上下文，用于质量分析（设为空或删除此行关闭）
       DIAGNOSTIC_MODE: "1"
     ports:
@@ -154,3 +157,7 @@ volumes:
   rpaclaw_mongo_data:
   rpaclaw_frontend_node_modules:
   rpaclaw_frontend_npm_cache:
+
+networks:
+  default:
+    name: ${DOCKER_RUNTIME_NETWORK:-rpaclaw_default}

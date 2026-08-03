@@ -2,7 +2,7 @@ fastapi==0.128.7
 uvicorn[standard]==0.40.0
 pydantic==2.12.5
 pydantic-settings==2.12.0
-python-dotenv==1.2.1
+python-dotenv==1.2.2
 sse-starlette==3.2.0
 loguru==0.7.3
 python-json-logger==4.0.0
@@ -22,13 +22,15 @@ truststore>=0.10.0
 tavily-python==0.7.21
 pyyaml>=6.0
 deepagents==0.4.4
+langchain-anthropic==1.4.6
+anthropic==0.96.0
 langchain-mcp-adapters
 tooluniverse
 lark-oapi
 qrcode>=8.0
 websockets>=11.0
 playwright>=1.40
-browser-use==0.13.2
+./vendor/sciclaw-browser-use
 docker>=7.1
 kubernetes>=30.1.0
 reportlab>=4.0.0

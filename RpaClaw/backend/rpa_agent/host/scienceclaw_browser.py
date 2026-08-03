@@ -16,6 +16,12 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 
 
+def _is_browser_cdp_path(path: str) -> bool:
+    """Accept the native CDP path and the AIO reverse-proxy variant."""
+
+    return path.startswith(("/devtools/browser/", "/cdp/devtools/browser/"))
+
+
 def rewrite_cdp_url(cdp_url: str, *, rest_base_url: str) -> str:
     """Route an opaque CDP websocket path through the runtime REST host."""
 
@@ -24,7 +30,7 @@ def rewrite_cdp_url(cdp_url: str, *, rest_base_url: str) -> str:
     if (
         cdp.scheme not in {"ws", "wss"}
         or not cdp.netloc
-        or not cdp.path.startswith("/devtools/browser/")
+        or not _is_browser_cdp_path(cdp.path)
         or runtime.scheme not in {"http", "https"}
         or not runtime.netloc
     ):
@@ -126,7 +132,7 @@ async def acquire_browser_runtime_lease(
                 parsed_cdp is None
                 or parsed_cdp.scheme not in {"ws", "wss"}
                 or not parsed_cdp.netloc
-                or not parsed_cdp.path.startswith("/devtools/browser/")
+                or not _is_browser_cdp_path(parsed_cdp.path)
             ):
                 raise RuntimeError("browser_runtime.cdp_url_invalid")
         else:

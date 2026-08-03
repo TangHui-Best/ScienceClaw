@@ -1,0 +1,15 @@
+# Explicit opt-in for the RPA Agent Next edge Docker runtime.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose-edge-runtime.yml up -d --build backend
+#
+# This is deliberately an override instead of part of docker-compose.yml:
+# mounting the Docker socket grants the backend control over local containers.
+services:
+  backend:
+    environment:
+      RUNTIME_MODE: docker
+      RPA_AGENT_NEXT_RUNTIME_MODE: docker
+      DOCKER_RUNTIME_NETWORK: ${DOCKER_RUNTIME_NETWORK:-rpaclaw_default}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock

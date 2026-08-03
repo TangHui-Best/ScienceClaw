@@ -31,6 +31,7 @@ from backend.route.rpa_agent import (
     router as rpa_agent_router,
     rpa_agent_default_services,
 )
+from backend.route.rpa_agent_next import router as rpa_agent_next_router
 from backend.route.credential import router as credential_router
 from backend.route.mcp import router as mcp_router
 from backend.route.rpa_mcp import router as rpa_mcp_router
@@ -206,6 +207,7 @@ def create_app() -> FastAPI:
     app.include_router(statistics_router, prefix="/api/v1")
     app.include_router(rpa_router, prefix="/api/v1/rpa")
     app.include_router(rpa_agent_router, prefix="/api/v1/rpa-agent")
+    app.include_router(rpa_agent_next_router, prefix="/api/rpa-agent-next")
     app.include_router(runtime_proxy_router, prefix="/api/v1")
     app.include_router(credential_router, prefix="/api/v1")
     app.include_router(mcp_router, prefix="/api/v1")

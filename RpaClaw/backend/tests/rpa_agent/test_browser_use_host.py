@@ -267,6 +267,10 @@ def test_cdp_url_rewrites_only_the_runtime_network_location():
         "ws://127.0.0.1:9222/devtools/browser/opaque-token",
         rest_base_url="https://sandbox-runtime.example",
     ).startswith("wss://sandbox-runtime.example/")
+    assert rewrite_cdp_url(
+        "ws://localhost:18080/cdp/devtools/browser/opaque-token",
+        rest_base_url="http://sandbox-runtime:8080",
+    ) == "ws://sandbox-runtime:8080/cdp/devtools/browser/opaque-token"
 
     with pytest.raises(ValueError, match="browser_runtime.cdp_url_invalid"):
         rewrite_cdp_url("http://runtime.test/not-websocket", rest_base_url="http://x")

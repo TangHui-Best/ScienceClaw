@@ -24,6 +24,10 @@ from .classifiers import classify_candidate_action, classify_non_sop
 
 
 BROWSER_USE_BASELINE_VERSION = "0.13.2"
+BROWSER_USE_COMPATIBILITY_DISTRIBUTION_VERSION = "0.13.2+sciclaw.1"
+_SUPPORTED_BROWSER_USE_DISTRIBUTIONS = frozenset(
+    {BROWSER_USE_BASELINE_VERSION, BROWSER_USE_COMPATIBILITY_DISTRIBUTION_VERSION}
+)
 _IDENTIFIER = re.compile(r"^[A-Za-z][A-Za-z0-9._-]{0,127}$")
 _NON_SOP_ACTIONS = frozenset({
     "done", "wait", "observe", "search_page", "find_elements", "find_text",
@@ -998,7 +1002,7 @@ def assert_browser_use_version(
     *,
     version_provider: object | None = None,
 ) -> str:
-    """有本地源码基线时精确校验 0.13.2；纯离线不要求安装包。"""
+    """Accept the upstream API baseline or the audited ScienceClaw distribution."""
 
     configured = repo_path if repo_path is not None else os.environ.get("BROWSER_USE_REPO_PATH")
     if configured is not None:
@@ -1018,6 +1022,6 @@ def assert_browser_use_version(
             version = importlib.metadata.version("browser-use")
         except importlib.metadata.PackageNotFoundError as exc:
             raise ValueError("browser_use.version_distribution_missing") from exc
-    if version != BROWSER_USE_BASELINE_VERSION:
+    if version not in _SUPPORTED_BROWSER_USE_DISTRIBUTIONS:
         raise ValueError(f"browser_use.version_unsupported:{version}")
     return version

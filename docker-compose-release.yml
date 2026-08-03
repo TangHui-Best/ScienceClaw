@@ -66,6 +66,7 @@ services:
       MONGODB_USER: scienceone
       MONGODB_PASSWORD: Yp51Bi1eEjC77sAt
       TASK_SERVICE_API_KEY: ${TASK_SERVICE_API_KEY:-}
+      DOCKER_RUNTIME_NETWORK: ${DOCKER_RUNTIME_NETWORK:-rpaclaw_default}
     ports:
     - 12001:8000
     command: 'python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
@@ -132,3 +133,7 @@ volumes:
   rpaclaw_mongo_data: null
   rpaclaw_frontend_node_modules: null
   rpaclaw_frontend_npm_cache: null
+
+networks:
+  default:
+    name: ${DOCKER_RUNTIME_NETWORK:-rpaclaw_default}

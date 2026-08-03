@@ -2,6 +2,7 @@
 
 from .adapter import (
     BROWSER_USE_BASELINE_VERSION,
+    BROWSER_USE_COMPATIBILITY_DISTRIBUTION_VERSION,
     ActualToolAction,
     BrowserUseRecordingAdapter,
     NonSopActionClassification,
@@ -19,6 +20,7 @@ from .invocation import BrowserUseInvocationNormalizer
 __all__ = [
     "ActualToolAction",
     "BROWSER_USE_BASELINE_VERSION",
+    "BROWSER_USE_COMPATIBILITY_DISTRIBUTION_VERSION",
     "BrowserUseContextRequest",
     "BrowserPageState",
     "BrowserUseInvocationNormalizer",

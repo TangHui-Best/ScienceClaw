@@ -242,3 +242,7 @@ volumes:
   rpaclaw_mongo_data:
   rpaclaw_frontend_node_modules:
   rpaclaw_frontend_npm_cache:
+
+networks:
+  default:
+    name: ${DOCKER_RUNTIME_NETWORK:-rpaclaw_default}

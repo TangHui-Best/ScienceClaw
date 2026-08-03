@@ -442,6 +442,30 @@ async def test_docker_runtime_provider_refresh_reports_health_status():
 
 
 @pytest.mark.asyncio
+async def test_docker_runtime_provider_refresh_keeps_http_ready_runtime_ready():
+    client = _FakeDockerClient()
+    client.containers._container = _FakeContainer(
+        name="rpaclaw-sess-http-ready",
+        status="running",
+        health_status="",
+    )
+    provider = DockerRuntimeProvider(_DockerSettings(), client=client)
+    runtime = SessionRuntimeRecord(
+        session_id="sess-http-ready",
+        user_id="user-1",
+        namespace="local",
+        pod_name="rpaclaw-sess-http-ready",
+        service_name="rpaclaw-sess-http-ready",
+        rest_base_url="http://rpaclaw-sess-http-ready:8080",
+        status="ready",
+    )
+
+    refreshed = await provider.refresh_runtime(runtime)
+
+    assert refreshed.status == "ready"
+
+
+@pytest.mark.asyncio
 async def test_docker_runtime_provider_refresh_reports_missing_container():
     client = _FakeDockerClient()
     client.containers.get_error = Exception(

@@ -19,6 +19,7 @@ from .browser_run_session import (
     new_host_identity,
 )
 from .default_services import publish_compiled_skill, run_compiled_skill
+from .recording_listener_gate import ManualRecordingListenerGate
 from .manual_input import (
     ManualInputCommand,
     ManualInputPort,
@@ -40,6 +41,7 @@ __all__ = [
     "ManualInputPort",
     "ManualInputProducer",
     "ManualInputResult",
+    "ManualRecordingListenerGate",
     "ManualTarget",
     "PlaywrightBrowserSessionPort",
     "SessionState",

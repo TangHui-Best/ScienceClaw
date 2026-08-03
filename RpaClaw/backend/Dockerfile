@@ -24,6 +24,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 # Install all Python dependencies (BuildKit cache)
 COPY ./requirements.txt .
+COPY ./vendor/sciclaw-browser-use ./vendor/sciclaw-browser-use
 RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     pip install -r requirements.txt
 

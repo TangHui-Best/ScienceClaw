@@ -3,7 +3,7 @@ id: F028
 doc_kind: feature
 status: active
 created: 2026-07-20
-updated: 2026-07-20
+updated: 2026-08-02
 ---
 
 # F028：RPA 录制意图优先与双模式编译
@@ -77,6 +77,7 @@ Active / UI interaction contract recovered。F028 核心实现与自动化已落
 
 ### Decisions / ADRs
 
+- [ADR-008 RPA Agent Next 架构基线与能力迁移边界](../decisions/ADR-008-rpa-agent-next-architecture-baseline.md)：本 Feature 中被新主线继承或收敛的边界，以该 ADR 为准。
 - [ADR-007 RPA 录制采用 Action-first / Intent-first 双通道与双模式编译](../decisions/ADR-007-rpa-recording-intent-first-dual-mode-compilation.md)
 - [ADR-006 在 ScienceClaw 宿主内绿地重建 RPA Agent 领域核心](../decisions/ADR-006-rpa-agent-scienceclaw-host-greenfield-core.md)
 - [ADR-002 Trace Evidence Drives Compiler Strategy](../decisions/ADR-002-trace-evidence-driven-compiler-strategy.md)

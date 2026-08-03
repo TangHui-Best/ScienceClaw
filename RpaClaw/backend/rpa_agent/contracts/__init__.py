@@ -37,6 +37,14 @@ from .models import (
     TargetHint,
     TraceCandidate,
 )
+from .identity import (
+    ArtifactIdentity,
+    ArtifactIngressError,
+    ArtifactKind,
+    ArtifactProducer,
+    RPA_AGENT_NEXT_NAMESPACE,
+    require_next_identity,
+)
 from .validators import (
     find_architecture_violations,
     validate_trace,
@@ -45,6 +53,10 @@ from .validators import (
 )
 
 __all__ = [
+    "ArtifactIdentity",
+    "ArtifactIngressError",
+    "ArtifactKind",
+    "ArtifactProducer",
     "AIExecutionAttempt",
     "AIExecutionState",
     "AIInstructionStep",
@@ -75,6 +87,7 @@ __all__ = [
     "RejectedSettlement",
     "ReplayAssessment",
     "RuntimeModelPolicy",
+    "RPA_AGENT_NEXT_NAMESPACE",
     "SettlementResult",
     "SkillDefinition",
     "SkillManifest",
@@ -84,4 +97,5 @@ __all__ = [
     "validate_trace",
     "validate_timeline",
     "validate_timeline_payload",
+    "require_next_identity",
 ]

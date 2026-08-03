@@ -162,6 +162,9 @@ class Settings(BaseSettings):
     browser_use_repo_path: str = os.environ.get("BROWSER_USE_REPO_PATH", "")
     browser_use_max_steps: int = int(os.environ.get("BROWSER_USE_MAX_STEPS", "12"))
     rpa_harness_capture_enabled: bool = os.environ.get("RPA_HARNESS_CAPTURE_ENABLED", "false").strip().lower() == "true"
+    rpa_agent_next_runtime_mode: str = os.environ.get(
+        "RPA_AGENT_NEXT_RUNTIME_MODE", "disabled"
+    ).strip().lower() or "disabled"
     rpa_harness_assets_dir: str = _sub(
         "RPA_HARNESS_ASSETS_DIR",
         _resolve_home(),

@@ -894,8 +894,12 @@ def test_browser_use_dependency_is_exactly_pinned() -> None:
     requirements = (
         Path(__file__).resolve().parents[2] / "requirements.txt"
     ).read_text(encoding="utf-8").splitlines()
-    pins = [line.strip() for line in requirements if line.strip().startswith("browser-use")]
-    assert pins == ["browser-use==0.13.2"]
+    assert "./vendor/sciclaw-browser-use" in [line.strip() for line in requirements]
+    vendor = Path(__file__).resolve().parents[2] / "vendor" / "sciclaw-browser-use"
+    metadata = (vendor / "pyproject.toml").read_text(encoding="utf-8")
+    notice = (vendor / "NOTICE.md").read_text(encoding="utf-8")
+    assert 'version = "0.13.2+sciclaw.1"' in metadata
+    assert "2454d3e2551705232333c906ded8fc31ab0fc9f2" in notice
 
 
 def test_playwright_port_observes_navigation_and_download_on_new_pages() -> None:

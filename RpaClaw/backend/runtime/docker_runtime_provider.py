@@ -174,6 +174,12 @@ class DockerRuntimeProvider:
             runtime_record.status = "ready"
         elif health_status == "unhealthy":
             runtime_record.status = "unhealthy"
+        elif container_status == "running" and runtime_record.status == "ready":
+            # A session runtime without a Docker HEALTHCHECK is still ready once
+            # create_runtime has completed its HTTP readiness probe.  Do not
+            # discard that stronger fact merely because Docker reports only
+            # the generic running state on a later refresh.
+            runtime_record.status = "ready"
         elif container_status in {"running", "created", "restarting"}:
             runtime_record.status = container_status
         elif container_status:
